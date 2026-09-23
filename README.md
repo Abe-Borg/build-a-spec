@@ -586,8 +586,9 @@ built too: its backend is in v1.21.0, and its Export-menu item and *Open
 redline in Word* are on `master`, with no release entry yet — which release
 announces the redline is the owner's pick. So are fixes for the two losses
 Phase 1 recorded in the formatted export (links, and the level of a new
-sub-provision — below). Word's own "Moved" marks come next, so the program
-is still in progress.
+sub-provision — below). Phase 2 lands as two pull requests: first real
+Microsoft Word as the redline's judge (PR #197, below), then Word's own "Moved"
+marks, so the program is still in progress.
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)
 
@@ -748,6 +749,38 @@ release-note draft.
   numbering properties: its number is right, and whether Word draws it at
   the level's indent or the style's depends on how the master defines them.
   `docs/RELEASE_WINDOWS.md` has the row that checks it in Word.
+
+### Real Word as the judge (Phase 2, first half)
+
+Developer tooling, nothing in the app changes. The redline has always proven
+its own promise with the app's own resolver before handing a file over; now
+real Word can check it too.
+
+- **Word resolves the redline both ways.** `tests/test_redline_word_judge.py`
+  (Windows with Microsoft Word, opt-in with `BUILD_A_SPEC_WORD_JUDGE=1`) has
+  a hidden Word the harness starts and owns open each redline read-only, run
+  Accept All Changes or Reject All Changes, and save the result. It covers
+  every markup shape the redline writes and every corpus master under the
+  corpus sweep's scripted edits. Word must read every change as
+  Build-a-Spec's, leave none behind, and give the formatted export after
+  Accept All and your original after Reject All.
+- **Compared fairly.** Word also re-saves the formatted export and the
+  original, and each result is compared with Word's own save of its
+  reference, so everything a Word save rewrites on both sides cancels out.
+  Only four things a save writes on its own are ignored, each named,
+  explained and tested: rsid save stamps, proofing marks, the rendered
+  page-break cache, and Word's `_GoBack` bookmark. The app's own check
+  ignores none of them.
+- **A report you can read.** `artifacts\word-judge\report.json` names every
+  case and, for a failure, shows both sides of the first difference. The
+  cases are placeholder text.
+- **Word's own tracked moves, as evidence.** The corpus's Word fixture
+  producer gains a `TrackedMove` recipe: Word moves two paragraphs (one with
+  a bookmark) with Track Changes on, under a placeholder author, and the
+  judge checks the app's resolver agrees with how Word resolves them. That
+  sample is what Word's own "Moved" marks will be built against. The recipe
+  sets a placeholder Word user name and restores yours when it finishes, and
+  refuses to keep a file that names you anywhere.
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -2318,6 +2351,16 @@ verification commands are documented in
 [`docs/DOCX_FIDELITY.md`](docs/DOCX_FIDELITY.md). Renderer-backed visual tests
 must be reported by the renderer/version actually exercised; their absence is
 not equivalent to a visual pass.
+
+The real-Word judge of the redline on your original is opt-in too, but costs
+nothing: it needs Windows and Microsoft Word, not an API key. Setup and what
+it tolerates are in
+[`docs/DOCX_RENDERER_WINDOWS.md`](docs/DOCX_RENDERER_WINDOWS.md):
+
+```
+$env:BUILD_A_SPEC_WORD_JUDGE = "1"
+.\.venv\Scripts\python -m pytest -q tests\test_redline_word_judge.py
+```
 
 ## Relationship to Spec Critic
 

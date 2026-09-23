@@ -25,3 +25,7 @@ packaging/windows/MicrosoftEdgeWebview2Setup.exe
 # packaging/windows/render_release_notes.py) — regenerated per build.
 /release-notes.txt
 /release-body.md
+
+# The real-Word judge's report and the files it hands Word (tests/word_judge.py;
+# BUILD_A_SPEC_WORD_JUDGE_DIR moves it) — local evidence, never committed.
+/artifacts/

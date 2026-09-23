@@ -64,9 +64,14 @@ still to run. A follow-up (PR #193) fixed the two losses Phase 1 recorded in
 the formatted export: a provision holding a hyperlink is spliced instead of
 rebuilt from its first run (every fallback in the corpus sweep had been a
 link — none are now), and a new sub-provision in a Word-numbered master takes
-its own numbering level. Phase 2 (native Word "Moved" marks, real Word as the
-judge) is next and not started; a fresh session starts from the plan's two
-Phase 1 as-built notes and the follow-up's. The program adds a
+its own numbering level. **Phase 2 lands as two PRs** (a deviation: the plan
+sized it as one). PR A (PR #197) makes real Word the redline's judge — an optional
+Windows suite where a hidden Word accepts and rejects every change and the
+result must match Word's own save of the formatted export or the upload —
+plus a corpus recipe that records Word's own tracked moves as evidence;
+its as-built note is "Phase 2 (PR A) — as built". PR B, native Word "Moved"
+marks, starts after PR A merges and the owner has run the judge on Windows.
+The program adds a
 tracked-changes copy of the Word file you imported: every non-body part stays
 byte-identical, Reject All gives back the upload, and Accept All gives
 *Export Word (keeps your formatting)*. The export checks both halves itself

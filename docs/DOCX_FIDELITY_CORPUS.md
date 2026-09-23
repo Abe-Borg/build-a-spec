@@ -13,7 +13,8 @@ expand the supported edit surface by itself. The committed source of truth is:
 - `tests/fixtures/docx_corpus/external/` — immutable, checksum-pinned outputs
   actually saved by Word or LibreOffice from placeholder-only source material.
 - `generate_word_fixtures.ps1` and `sanitize_external_fixtures.py` — the Word
-  producer workflow and narrow post-save core-properties privacy rewrite.
+  producer workflow (including the TrackedMove recipe, below) and narrow
+  post-save core-properties privacy rewrite.
 
 The repository does not check in binaries for reproducible synthetic recipes.
 It does check in immutable external-producer fixtures because their
@@ -60,6 +61,66 @@ byte remains from the Word output. The LibreOffice fixture required no
 post-producer member rewrite. All four packages passed the decompressed privacy
 scan plus raw ZIP-envelope surface scanning before their checksums were pinned.
 
+## Word's own tracked moves (the TrackedMove recipe)
+
+Redline on your original, Phase 2 writes Word's native "Moved" marks, and
+settles how against a file Word itself saved with tracked moves. The producer
+script has a fourth recipe for it, `TrackedMove`. It opens the synthetic
+`tracked_move_source` case — a placeholder spec whose second provision is
+wrapped in a bookmark — turns on Track Changes and Track Moves, cuts and
+pastes two whole paragraphs (one plain, one carrying the bookmark), and saves
+the result as `microsoft-word-16-tracked-move.docx`.
+
+A tracked change records the Word user name as its author **in
+`word/document.xml`**, which `sanitize_external_fixtures.py` never rewrites
+(it touches `docProps/core.xml` only). So the recipe:
+
+- sets a placeholder Office identity (`Build-a-Spec Corpus`, initials `BASC`)
+  and "Always use these values regardless of sign in to Office" before it
+  opens anything, and restores your own name, initials and setting in a
+  `finally` block whatever happens (if a run is killed outright, check them in
+  Word under File > Options > General; the next run warns if it finds the
+  placeholder still set);
+- checks what Word recorded **before saving anything**: every change by the
+  placeholder, both cut-and-pastes recorded as moves (moved-from and moved-to
+  revisions, not a deletion and an insertion), the bookmark still there;
+- then scans every XML part of the saved package: no local Office or Windows
+  identity (as a whole word), no user-folder path, every `w:author` and
+  `w15:author` the placeholder, and no signed-in account's presence
+  information in `word/people.xml`. Any finding deletes the file.
+
+Your identity is compared and restored, and never printed. The recipe uses
+the clipboard (a cut and a paste is how Word records a move), and refuses to
+run while any Word window is open, like the other recipes.
+
+Independently of the recipe, `tests/test_docx_corpus.py` checks every corpus
+package against a **positive** list of placeholder identities, wherever a
+producer records a person (a change's or comment's author and initials,
+`word/people.xml`, the core properties): a real name fails however it is
+spelled. It also pins that the recipe's text names the same paragraphs,
+bookmark and placeholder as the Python side, and runs the recipe's own
+package scan — lifted out of the script — under PowerShell 7 against
+hand-built packages.
+
+To produce it (Windows, Microsoft Word, every Word window closed):
+
+```powershell
+.\.venv\Scripts\python -m tests.docx_corpus .\artifacts\docx-corpus-source
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\fixtures\docx_corpus\generate_word_fixtures.ps1 -SourceRoot .\artifacts\docx-corpus-source -OutputRoot .\artifacts\word-fixtures -Recipes TrackedMove
+.\.venv\Scripts\python -m tests.fixtures.docx_corpus.sanitize_external_fixtures .\artifacts\word-fixtures\microsoft-word-16-tracked-move.docx
+Copy-Item .\artifacts\word-fixtures\microsoft-word-16-tracked-move.docx .\tests\fixtures\docx_corpus\external\
+```
+
+`-Recipes` names only the fixtures to produce: every committed fixture is
+pinned by its SHA-256, so producing one again changes its bytes. Run the
+sanitizer as a module from the repo root, as above; run as a script it
+cannot import the app. The fixture joins the manifest as
+`actual_word_16_tracked_move` with its checksum pinned, expecting what any
+package with pending tracked changes gets: importable as the Accept-All view,
+exact-original only (`tracked_changes`), and refused by the redline on your
+original (`pending_revisions`). `tests/test_docx_corpus.py` already proves a
+hand-built Word-shaped sample meets exactly that entry.
+
 ## Current coverage
 
 The manifest covers:
@@ -80,6 +141,8 @@ The manifest covers:
 - Manually wired comments OOXML in opaque appendix content.
 - Manually wired footnote and endnote parts with separator notes, matched body
   references, relationships, content types, and referential-integrity checks.
+- A placeholder spec with a bookmarked provision: the source of the
+  TrackedMove recipe, and an ordinary ready case in its own right.
 - Actual Microsoft Word package output for rich and consultant-template-shaped
   placeholder documents.
 - An actual Word 97–2003 binary `.doc` round-trip and DOCX conversion.
@@ -96,7 +159,8 @@ All cases must:
 6. keep every untouched OPC member and ZIP-envelope field stable through a
    representative supported mutation; and
 7. contain no local usernames, workspace paths, client data, or proprietary
-   template content.
+   template content, and name only placeholder identities wherever a producer
+   records a person.
 
 ## Adversarial complements
 

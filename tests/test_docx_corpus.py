@@ -6,6 +6,7 @@ from dataclasses import replace
 import hashlib
 import io
 import json
+import os
 import re
 import struct
 import zipfile
@@ -110,7 +111,25 @@ _REQUIRED_CASE_CATEGORIES = {
         "odt-docx-conversion",
         "producer-saved",
     },
+    "tracked_move_source": {"tracked-move-source", "bookmarks"},
 }
+#: Every identity a corpus package may name, anywhere a producer records a
+#: person: a change's or comment's author, its initials, people.xml, and the
+#: core properties. A positive list, so a real name fails however it is
+#: spelled — no denylist can know every one.
+_PLACEHOLDER_IDENTITIES = {
+    "Build-a-Spec Synthetic Corpus",
+    "Build-a-Spec Sanitized Corpus",
+    "Build-a-Spec Corpus",
+    "BASC",
+}
+_IDENTITY_FIELDS = (
+    re.compile(r'\bw(?:15)?:author="([^"]*)"'),
+    re.compile(r'\bw:initials="([^"]*)"'),
+    re.compile(r'\bw15:userId="([^"]*)"'),
+    re.compile(r"<dc:creator>([^<]*)</dc:creator>"),
+    re.compile(r"<cp:lastModifiedBy>([^<]*)</cp:lastModifiedBy>"),
+)
 _EXTERNAL_PRODUCER_FIELDS = {
     "product",
     "version",
@@ -884,3 +903,426 @@ def test_materializer_emits_checksummed_resolved_manifest(tmp_path):
         payload = materialized.read_bytes()
         assert metadata["size_bytes"] == len(payload)
         assert metadata["sha256"] == hashlib.sha256(payload).hexdigest()
+
+
+def _identities(payload: bytes) -> set[str]:
+    found: set[str] = set()
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
+        for name in archive.namelist():
+            if not name.endswith((".xml", ".rels")):
+                continue
+            text = archive.read(name).decode("utf-8", errors="ignore")
+            for field in _IDENTITY_FIELDS:
+                found.update(field.findall(text))
+    return found
+
+
+def test_every_recorded_identity_is_a_placeholder(corpus):
+    """A producer writes a person wherever a change, a comment or a save is
+    attributed. Every corpus package names only placeholders there — which
+    is what keeps a Word user name out of a fixture's word/document.xml,
+    the part sanitize_external_fixtures.py never touches."""
+    for case_id, (_case, payload) in corpus.items():
+        assert _identities(payload) <= _PLACEHOLDER_IDENTITIES, case_id
+    leaked = _package_with(
+        corpus["tracked_move_source"][1],
+        {"word/people.xml": _people_xml("Pat Example", "None", "Pat Example")},
+    )
+    assert _identities(leaked) - _PLACEHOLDER_IDENTITIES == {"Pat Example"}
+
+
+# ---------------------------------------------------------------------------
+# The Word producer's TrackedMove recipe (Redline on your original, Phase 2)
+# ---------------------------------------------------------------------------
+
+_PRODUCER = docx_corpus_module._MANIFEST_DIR / "generate_word_fixtures.ps1"
+_W15_NS = "http://schemas.microsoft.com/office/word/2012/wordml"
+
+
+def _producer_text() -> str:
+    return _PRODUCER.read_text(encoding="utf-8")
+
+
+def _package_with(payload: bytes, members: dict[str, bytes]) -> bytes:
+    """``payload`` with ``members`` replaced, or added when absent."""
+    from tests.docx_fidelity_helpers import rewrite_zip_members
+
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
+        names = set(archive.namelist())
+    return rewrite_zip_members(
+        payload,
+        replacements={name: data for name, data in members.items() if name in names},
+        additions=[(name, data) for name, data in members.items() if name not in names],
+    )
+
+
+def _people_xml(author: str, provider: str, user: str) -> bytes:
+    return (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<w15:people xmlns:w15="{_W15_NS}"><w15:person w15:author="{author}">'
+        f'<w15:presenceInfo w15:providerId="{provider}" w15:userId="{user}"/>'
+        "</w15:person></w15:people>"
+    ).encode("utf-8")
+
+
+def _word_shaped_tracked_moves(source: bytes, *, author: str) -> bytes:
+    """What Word saves after the recipe's two moves, hand-built: each moved
+    paragraph a moveFrom/moveTo pair with range markers and a moved mark,
+    the bookmark on the moved-to copy, Track Changes still on."""
+    stamp = f'w:author="{author}" w:date="2026-09-23T10:00:00Z"'
+
+    def plain(text: str) -> str:
+        return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+
+    def moved(kind: str, text: str, ids: int, name: str, bookmark: bool = False) -> str:
+        opened = (
+            f'<w:bookmarkStart w:id="0" w:name="{docx_corpus_module.TRACKED_MOVE_BOOKMARK}"/>'
+            if bookmark
+            else ""
+        )
+        closed = '<w:bookmarkEnd w:id="0"/>' if bookmark else ""
+        return (
+            f'<w:p><w:pPr><w:rPr><w:{kind} w:id="{ids}" {stamp}/></w:rPr></w:pPr>'
+            f'<w:{kind}RangeStart w:id="{ids + 1}" {stamp} w:name="{name}"/>'
+            f'<w:{kind} w:id="{ids + 2}" {stamp}>{opened}<w:r><w:t>{text}</w:t></w:r>'
+            f"{closed}</w:{kind}><w:{kind}RangeEnd w:id=\"{ids + 1}\"/></w:p>"
+        )
+
+    (alpha, charlie), (bravo, delta) = docx_corpus_module.TRACKED_MOVES
+    with zipfile.ZipFile(io.BytesIO(source), "r") as archive:
+        root = etree.fromstring(archive.read("word/document.xml"))
+        settings = etree.fromstring(archive.read("word/settings.xml"))
+    body = root.find(f"{{{_W_NS}}}body")
+    section_properties = body.find(f"{{{_W_NS}}}sectPr")
+    moved_body = etree.fromstring(
+        f'<w:body xmlns:w="{_W_NS}">'
+        + "".join(
+            [
+                plain("SECTION 21 13 19"),
+                plain("PLACEHOLDER TRACKED MOVE SOURCE"),
+                plain("PART 1 - GENERAL"),
+                plain("1.1 SUMMARY"),
+                moved("moveFrom", f"A. {alpha}", 10, "move1"),
+                moved("moveFrom", f"B. {bravo}", 20, "move2"),
+                plain(f"C. {charlie}"),
+                moved("moveTo", f"A. {alpha}", 30, "move1"),
+                plain(f"D. {delta}"),
+                moved("moveTo", f"B. {bravo}", 40, "move2", bookmark=True),
+                plain("1.2 QUALITY ASSURANCE"),
+                plain("A. Placeholder provision echo."),
+                plain("END OF SECTION 21 13 19"),
+            ]
+        )
+        + "</w:body>"
+    )
+    moved_body.append(section_properties)
+    root.replace(body, moved_body)
+    settings.insert(0, etree.Element(f"{{{_W_NS}}}trackRevisions"))
+
+    def serialize(element) -> bytes:
+        return etree.tostring(
+            element, encoding="UTF-8", xml_declaration=True, standalone=True
+        )
+
+    return _package_with(
+        source,
+        {
+            "word/document.xml": serialize(root),
+            "word/settings.xml": serialize(settings),
+            "word/people.xml": _people_xml(author, "None", author),
+        },
+    )
+
+
+def test_the_tracked_move_source_is_what_the_word_recipe_looks_for(corpus, tmp_path):
+    """The recipe finds each paragraph it moves, and each it lands after, by
+    text — so every one appears exactly once — and the moved bookmark wraps
+    the second paragraph it moves. The script names the same text, bookmark
+    and placeholder author as the Python side."""
+    from tests.word_judge import TRACKED_MOVE_AUTHOR, TRACKED_MOVE_BOOKMARK
+
+    payload = corpus["tracked_move_source"][1]
+    document = _xml_part(payload, "word/document.xml")
+    paragraphs = document.findall(f".//{{{_W_NS}}}p")
+    texts = ["".join(p.itertext()) for p in paragraphs]
+    for move, after in docx_corpus_module.TRACKED_MOVES:
+        for needle in (move, after):
+            assert sum(needle in text for text in texts) == 1, needle
+    (bookmarked,) = [
+        p
+        for p in paragraphs
+        if p.find(f"{{{_W_NS}}}bookmarkStart") is not None
+    ]
+    assert docx_corpus_module.TRACKED_MOVES[1][0] in "".join(bookmarked.itertext())
+    assert (
+        bookmarked.find(f"{{{_W_NS}}}bookmarkStart").get(f"{{{_W_NS}}}name")
+        == docx_corpus_module.TRACKED_MOVE_BOOKMARK
+        == TRACKED_MOVE_BOOKMARK
+    )
+
+    script = _producer_text()
+    moves = re.findall(r'@\{ Move = "([^"]+)"; After = "([^"]+)" \}', script)
+    assert tuple(moves) == docx_corpus_module.TRACKED_MOVES
+    assert f'$trackedMoveBookmark = "{TRACKED_MOVE_BOOKMARK}"' in script
+    assert f'$trackedMoveAuthor = "{TRACKED_MOVE_AUTHOR}"' in script
+    assert re.search(r'\$trackedMoveInitials = "([^"]+)"', script).group(1) in (
+        _PLACEHOLDER_IDENTITIES
+    )
+    assert '"tracked-move-source.docx"' in script
+    assert '"microsoft-word-16-tracked-move.docx"' in script
+
+    # The source imports as an ordinary spec: one article, four provisions.
+    path = tmp_path / "tracked-move-source.docx"
+    path.write_bytes(payload)
+    summary = parse_master_docx(path).section.parts[0].articles[0]
+    assert [p.text for p in summary.paragraphs] == [
+        "Placeholder provision alpha.",
+        "Placeholder provision bravo.",
+        "Placeholder provision charlie.",
+        "Placeholder provision delta.",
+    ]
+
+
+def test_the_recipe_records_moves_under_a_placeholder_and_restores_the_user(corpus):
+    """The recipe never runs here (it needs Word), so its text is pinned:
+    the placeholder identity is set before the source is opened and put back
+    in a finally block; Track Changes and Track Moves are on; what Word
+    recorded is checked BEFORE anything is saved; and the user's own
+    identity never reaches a message."""
+    script = _producer_text()
+    recipe = script[script.index("function Invoke-TrackedMoveRecipe") :]
+    recipe = recipe[: recipe.index("\n$sourcePath =")]
+    opened = recipe.index("$Word.Documents.Open(")
+    assert recipe.index("$Word.UserName = $trackedMoveAuthor") < opened
+    assert recipe.index("$Word.UserInitials = $trackedMoveInitials") < opened
+    assert recipe.index("$Word.Options.UseLocalUserInfo = $true") < opened
+    restore = recipe[recipe.index("    finally {") :]
+    for line in (
+        "$Word.UserName = $originalUserName",
+        "$Word.UserInitials = $originalUserInitials",
+        "$Word.Options.UseLocalUserInfo = $originalUseLocal",
+    ):
+        assert line in restore, line
+    for line in (
+        "[ref]$readOnly",
+        "[ref]$addToRecentFiles",
+        "$document.TrackRevisions = $true",
+        "$document.TrackMoves = $true",
+        "$saveFormat = 16",
+        "[ref]$saveAddToRecentFiles",
+    ):
+        assert line in recipe, line
+    assert "$readOnly = $true" in recipe and "$addToRecentFiles = $false" in recipe
+    saved = recipe.index("$document.SaveAs2(")
+    for check in (
+        "$revision.Author -cne $trackedMoveAuthor",
+        "14 { $movedFrom++ }",
+        "15 { $movedTo++ }",
+        "$document.Bookmarks.Exists($trackedMoveBookmark)",
+    ):
+        assert recipe.index(check) < saved, check
+    # After the save: the package scan, and the file deleted on any finding.
+    scanned = recipe.index("Get-TrackedMovePackageProblem -Path $OutputPath")
+    assert saved < scanned < recipe.index("Remove-Item -LiteralPath $OutputPath")
+    # The user's identity is compared and restored, never printed: no line
+    # that names it builds a string, writes output or throws.
+    for line in script.splitlines():
+        if "$originalUserName" in line or "$originalUserInitials" in line:
+            assert '"' not in line and "Write-" not in line and "throw" not in line, line
+    assert "Get-Process -Name WINWORD" in script  # never another Word
+
+
+def _run_package_scan(tmp_path, cases: dict[str, tuple[bytes, list[str]]]) -> dict:
+    """Run the recipe's own ``Get-TrackedMovePackageProblem`` — lifted out
+    of the script by its syntax tree — over each package."""
+    import shutil
+    import subprocess
+
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell 7 (pwsh) is not installed; CI's Linux runner has it")
+    listing = []
+    for name, (payload, identities) in cases.items():
+        path = tmp_path / f"{name}.docx"
+        path.write_bytes(payload)
+        listing.append({"name": name, "path": str(path), "identities": identities})
+    cases_path = tmp_path / "cases.json"
+    cases_path.write_text(json.dumps({"cases": listing}), encoding="utf-8")
+    harness = r"""
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $env:BUILD_A_SPEC_PS_SCRIPT, [ref]$tokens, [ref]$errors
+)
+$function = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq "Get-TrackedMovePackageProblem"
+}, $true)
+$author = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left.Extent.Text -eq '$trackedMoveAuthor'
+}, $false)
+. ([scriptblock]::Create($author.Extent.Text + "`n" + $function.Extent.Text))
+$listing = Get-Content -Raw -LiteralPath $env:BUILD_A_SPEC_PS_CASES | ConvertFrom-Json
+$results = [ordered]@{}
+foreach ($case in $listing.cases) {
+    $identities = [string[]]@($case.identities)
+    $results[$case.name] = Get-TrackedMovePackageProblem -Path $case.path -Identities $identities
+}
+ConvertTo-Json -Compress -InputObject $results
+"""
+    completed = subprocess.run(
+        [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", harness],
+        env={
+            **os.environ,
+            "BUILD_A_SPEC_PS_SCRIPT": str(_PRODUCER),
+            "BUILD_A_SPEC_PS_CASES": str(cases_path),
+        },
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
+def test_the_recipe_refuses_a_package_that_names_a_real_person(corpus, tmp_path):
+    """The recipe's last line of defence, run for real: after Word saves,
+    any local identity, user folder path, other author or signed-in
+    presence deletes the file. A short user name must not match inside an
+    attribute name (w15:userId)."""
+    author = "Build-a-Spec Corpus"
+    clean = _word_shaped_tracked_moves(corpus["tracked_move_source"][1], author=author)
+    other_author = _word_shaped_tracked_moves(
+        corpus["tracked_move_source"][1], author="Pat Example"
+    )
+    signed_in = _package_with(clean, {"word/people.xml": _people_xml(author, "AD", "S::pat@example.invalid")})
+    stranger_in_people = _package_with(
+        clean, {"word/people.xml": _people_xml("Pat Example", "None", "Pat Example")}
+    )
+    with zipfile.ZipFile(io.BytesIO(clean), "r") as archive:
+        core = archive.read("docProps/core.xml").decode("utf-8")
+        rels = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+    named_in_core = _package_with(
+        clean,
+        {
+            "docProps/core.xml": re.sub(
+                r"<cp:lastModifiedBy>[^<]*</cp:lastModifiedBy>",
+                "<cp:lastModifiedBy>Pat Example</cp:lastModifiedBy>",
+                core,
+            ).encode("utf-8")
+        },
+    )
+    local_path = _package_with(
+        clean,
+        {
+            "word/_rels/document.xml.rels": rels.replace(
+                "</Relationships>",
+                '<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships/attachedTemplate" Target="file:///'
+                'C:\\Users\\pat\\AppData\\Roaming\\Microsoft\\Templates\\Normal.dotm" '
+                'TargetMode="External"/></Relationships>',
+            ).encode("utf-8")
+        },
+    )
+    results = _run_package_scan(
+        tmp_path,
+        {
+            "clean": (clean, ["Pat Example", "pexample"]),
+            "clean-short-user-name": (clean, ["user"]),
+            "other-author": (other_author, []),
+            "signed-in": (signed_in, []),
+            "stranger-in-people": (stranger_in_people, []),
+            "named-in-core": (named_in_core, ["Pat Example"]),
+            "local-path": (local_path, []),
+        },
+    )
+    assert results == {
+        "clean": "",
+        "clean-short-user-name": "",
+        "other-author": (
+            "a change in word/document.xml is attributed to someone other than "
+            "the placeholder author"
+        ),
+        "signed-in": "word/people.xml carries presence information for a signed-in account",
+        "stranger-in-people": (
+            "a change in word/people.xml is attributed to someone other than the "
+            "placeholder author"
+        ),
+        "named-in-core": "the local Office or Windows identity appears in docProps/core.xml",
+        "local-path": "a local user folder path appears in word/_rels/document.xml.rels",
+    }
+
+
+#: What the Word-saved sample's manifest entry will promise, once the fixture
+#: is produced and pinned (docs/DOCX_FIDELITY_CORPUS.md).
+_TRACKED_MOVE_EXPECTATIONS = {
+    "importable": True,
+    "exact_noop": True,
+    "source_mode": "pass_through_only",
+    "mutation_blockers": ["tracked_changes"],
+}
+
+
+def test_a_word_shaped_tracked_move_sample_meets_its_future_manifest_entry(
+    corpus, tmp_path
+):
+    """Pre-validates the entry the real fixture lands with: a package holding
+    Word's own pending moves imports as the Accept-All view, is exact-original
+    only (the pending changes are its one blocker), keeps its exact no-op,
+    and the redline on your original refuses it by name."""
+    from backend.spec_doc.source_render import (
+        REDLINE_PENDING_REVISIONS,
+        SourceRedlineError,
+        render_preserving_redline,
+    )
+
+    sample = _word_shaped_tracked_moves(
+        corpus["tracked_move_source"][1], author="Build-a-Spec Corpus"
+    )
+    assert _identities(sample) <= _PLACEHOLDER_IDENTITIES
+    path = tmp_path / "sample.docx"
+    path.write_bytes(sample)
+    imported = parse_master_docx(path)
+    summary = imported.section.parts[0].articles[0]
+    assert [p.text for p in summary.paragraphs] == [
+        "Placeholder provision charlie.",
+        "Placeholder provision alpha.",
+        "Placeholder provision delta.",
+        "Placeholder provision bravo.",
+    ]
+    context = build_source_patch_context(
+        source_bytes=sample, source_map=imported.source_map, baseline=imported.section
+    )
+    blockers = {
+        *imported.source_map.global_blockers,
+        *(issue.blocker for issue in context.runtime_mutation_issues),
+    }
+    assert sorted(blockers) == _TRACKED_MOVE_EXPECTATIONS["mutation_blockers"]
+    assert (
+        build_source_preserving_docx(
+            source_bytes=sample,
+            source_map=imported.source_map,
+            baseline=imported.section,
+            current=imported.section,
+            context=context,
+        )
+        == sample
+    )
+    edited, _ = apply_edits(
+        imported.section,
+        [{"action": "replace", "target_id": summary.paragraphs[0].uid, "text": "Changed."}],
+    )
+    with pytest.raises(SourceRedlineError) as refused:
+        render_preserving_redline(
+            source_bytes=sample,
+            format_map=imported.format_map,
+            baseline=imported.section,
+            current=edited,
+            author="Build-a-Spec",
+            date="2026-09-23T12:00:00Z",
+        )
+    assert refused.value.reason == REDLINE_PENDING_REVISIONS

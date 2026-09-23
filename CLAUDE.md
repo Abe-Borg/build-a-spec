@@ -1798,6 +1798,15 @@ frontend/src/
                            tooltip that works on a DISABLED control — a
                            native title never fires on a disabled button)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
+tools/research_cost_profile.py
+                           [Research/QC cost Tier 1, Chunk 1] read-only: saved
+                           .baspec / legacy .json / .basproject in, per-round
+                           per-area usage + list-price cost + the uncached
+                           share of the input side out (counts, ids, dates
+                           and section numbers only; files named by a hash).
+                           Rounds deduped by round_id, else by the engine's
+                           own legacy_round_key hash (copied, never imported:
+                           the research engine loads the API client)
 tests/
   conftest.py              hermetic env + fresh session per test
   fakes.py                 scripted fake streaming client (text + tool_use turns)
@@ -2211,6 +2220,16 @@ tests/
   frontend/tests/reviewQueue.test.ts
                            siblingRefs against that fixture, the queue's
                            order, and no ref shared by two paragraphs
+  test_research_cost_profile.py
+                           [Research/QC cost Tier 1, Chunk 1] the research
+                           cost profiler over files the app really writes
+                           (the production save and brief-export paths): per
+                           area per round, a failed area still billed, a
+                           round a brief shares counted once (a legacy round
+                           carried under its hash too), the legacy cumulative
+                           round, golden pricing against the table and the
+                           ledger, no text/names/paths in the report, and
+                           the client never loaded (a subprocess)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -15378,6 +15397,374 @@ drafts"). The contract changes are in `docs/DOCX_FIDELITY.md`; the plan's
   3. "Non-spec uploads" describes the honest framing as panel, lint and
      model context only. The formatting-preserving export and the redline on
      the original now follow it too, under the same condition.
+
+## Research cost is measurable — implemented notes (Research/QC cost Tier 1, Chunk 1)
+
+Chunk 1 of `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` (where the
+program stands is `docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`, and only
+there). `tools/research_cost_profile.py` is the sibling of
+`tools/qc_export_cost_profile.py`: a read-only developer tool that reports
+what saved research rounds cost. It is the before-and-after instrument for
+the program's Chunks 4 and 5, and measurement M1 is its first run. No route,
+SSE event, dependency, env knob, project-format change, version bump or
+release note: the tool is not part of the app.
+
+- **Why a tool was needed.** `DimensionStatus` has persisted usage per
+  research area per round since Batch 2 (uncached input, cache read, cache
+  write, output, searches, fetches), and nothing read it back as a cost
+  report. Research rounds append (see "Research rounds"), so a saved
+  project's `rounds[]` is a per-round ledger waiting to be summed.
+- **The headline is the UNCACHED share**, `input / (input + cache read +
+  cache write)`, over every round read — deliberately not the QC profiler's
+  read share. It is the number Chunk 4 exists to move (a continuation that
+  reads its own cache turns full-price input into cache reads), so a
+  before-and-after compares one figure. Per area per round the report also
+  gives every token class, the estimated cost and output's share of it; per
+  round, a total; and — beyond the spec — an **all rounds, by research
+  area** table, because Chunk 4's M3 pass compares "comparable dimensions",
+  plus an **Artifacts** list saying how many rounds each file held and how
+  many were already counted.
+- **It never imports `backend.research.engine`**, which loads the API
+  client (verified: the engine pulls `backend.llm.client` and `anthropic`;
+  `backend.settings` and `project_package.parse_project_file` do not). The
+  few lines it needs are COPIED — `_round_id_from_raw`, the round-index read
+  and `legacy_round_key` — and `project_brief.PROJECT_BRIEF_KIND` is a
+  literal, each pinned equal to the app's by a test, so a drift fails the
+  suite instead of silently mis-keying rounds.
+- **Rounds are deduplicated the way the app identifies them, which is a
+  deliberate refinement of the spec's key.** The spec said key a round with
+  no `round_id` by `(section, research_date, round_index)`. But when a brief
+  merges research, `merge_research_profiles` replays a legacy round under
+  `legacy_round_key(...)` — a hash of exactly that tuple — as its new
+  `round_id`, and RENUMBERS it. A bare tuple would count that round twice
+  (the brief's copy has a different index and an id); hashing the section's
+  copy the engine's way makes the two meet.
+  `test_a_legacy_round_a_brief_carried_under_its_hash_counts_once` builds
+  that case with the real merge.
+- **A profile with no `rounds` is one "legacy, cumulative" round**, built
+  the way `RequirementsProfile.from_dict` synthesizes it (round 1, the
+  profile's date, no section). So its key is the same one a newer build's
+  re-save of that file carries, and the two count once (pinned).
+- **Pricing mirrors `usage_ledger.estimate_usage_cost` term for term.**
+  Research writes only 5-minute entries, so every cache write takes
+  `cache_write`; web search is $10 per 1,000; web fetch carries no fee. The
+  arithmetic test checks the table term by term AND the ledger's own
+  function. Rounds are priced at `settings.RESEARCH_MODEL`'s current list
+  rates (the model that ran a round is not saved); `--model` prices at
+  another and refuses an unpriced one with exit 2; an unpriced configured
+  research model falls back to Sonnet 5 exactly as `usage_ledger._rates`
+  does, and the report says so.
+- **Privacy is structural, not a convention.** Every value printed is a
+  count, a token total, a rate, a ratio, or matches a shape: a research-area
+  id (`^[a-z][a-z0-9_]*$`), a section number (digits, spaces, dots,
+  hyphens), an ISO date, a hex round id. Anything else a hand-edited file
+  puts in those places prints as `unrecognized-<hash>`, "not a section
+  number", "undated" or "id not recognized". Status prints as completed or
+  failed, never as saved; error messages and titles never print. Files are
+  named by a SHA-256 prefix of their bytes; the stderr console line names
+  them locally. The privacy test puts the probes in the filename, the
+  requirement text, a source URL, the client name, AND a hostile file's ids,
+  section, date, status and error.
+- **Tests read files the app really writes.** The `.baspec` comes from
+  `sessions.project_package` after a research round driven over
+  `/api/research/start` with `SequencedFakeClient` and known usage per area;
+  the brief comes from `GET /api/project/brief`; the legacy `.json` from
+  `sessions.project_payload`. Hand-built brief envelopes are used only where
+  no production path produces the case on demand (a merged legacy round, a
+  hostile file). A reply that never calls the output tool fails an area on
+  its first billed response and is not retried, which is how the failed-area
+  fixture pins exactly one response's usage on the row.
+- **Tests: `tests/test_research_cost_profile.py` (12)** — the spec's seven
+  by name, plus a failed area billed and included, the legacy-hash case, the
+  two copied constants (the brief-kind test also reads a brief re-saved with
+  a BOM), and the unpriced-model fallback; and `tests/test_docs_consistency.py`
+  now scans the script's usage docstring. Revert matrix, each mechanism
+  disabled in place and restored from its exact text:
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | legacy rounds keyed by the bare tuple, not the engine's hash | 2 |
+  | no deduplication across files | 1 |
+  | the same bytes named twice read twice | 1 |
+  | no legacy cumulative round | 1 |
+  | area id / section / date / round id printed as saved (each) | 1 |
+  | web search fee dropped | 2 |
+  | cache writes at the 1-hour rate | 2 |
+  | `--model` accepting an unpriced model | 1 |
+  | no fallback for an unpriced research model | 1 |
+  | a BOM-led brief not read as a brief | 1 |
+  | nothing readable exiting 0 | 1 |
+  | the brief kind not recognized | 8 |
+  | the research engine imported | 1 |
+
+- **Errata** (these notes are append-only):
+  1. "Windows commands run as written in PowerShell" says the pin reads "the
+     four profilers" (three profilers and the fetch canary, then). It now
+     also reads `tools/research_cost_profile.py`, and its comment in
+     `tests/test_docs_consistency.py` says four profilers and the canary.
+  2. The Layout gains its first `tools/` entry. The other profilers are
+     still described only in their implemented-notes sections.
+
+## Comments on the changes — implemented notes (redline Phase 3)
+
+Phase 3 of `docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`, decided by the
+owner on 2026-09-23 (Decisions 9–13): of the phase's four ideas only the
+comments were wanted — always on, no choice at export, with clickable
+source links; the redline against any version is dropped, header/footer
+redlining declined, layering on pending revisions skipped. Every change the
+redline on your original marks that has a recorded basis now carries a Word
+comment by "Build-a-Spec" saying what it rests on. No new route, no SSE
+event, no dependency; one env knob; one additive `.baspec` key; no VERSION
+bump and no `release_notes.py` entry (the draft is in the plan). The
+contract is in `docs/DOCX_FIDELITY.md` → "Build-a-Spec's comments on the
+changes"; the clauses behind the markup and what Word should check first
+are in the plan's "Phase 3 (comments on changes) — as built". This section
+is the why and the traps.
+
+- **The QC half needed a record that did not exist.** An applied fix left
+  only a disposition event on its finding, and the next successful Final QC
+  run replaces the retained result outright — so after the ordinary "apply
+  the fixes, then re-run QC", nothing could say which change a fix made or
+  why. `backend/qc/fix_log.py` is the durable record:
+  `SessionState.qc_fix_log`, one entry per finding, written in BOTH places
+  `mark_applied` is called with the same ids (the panel route after its
+  `mark_applied`; the chat commit block for `surviving_ids` only, so a
+  rolled-back turn writes nothing and a fix voided later in its own turn is
+  never logged). The panel route had to start capturing the fix-survival
+  evidence the chat path already computed (`capture_fix_evidence` +
+  `finding_evidence_keys`, taken before `commit_turn`). Optional project key
+  `qc_fix_log`, lenient load assigned unconditionally, reset clears it (the
+  wipe sweep declares it), never in a project brief, never in the QC input
+  manifest — both pinned. **Fixes applied before this build have no entry,
+  so their changes get no QC comment.**
+- **An entry speaks only while the element reads as the fix left it**
+  (`entry_covers`): a paragraph's text, an article/PART's title, the
+  section's number and title (said on the upload's header line too, since
+  "sec" is one element in the tree but a header line in the redline), a
+  deletion's absence, and for a move ALSO the exact parent and index — the
+  same strictness the chat commit's survival check uses. Status and
+  `source_item_id` are ignored, so confirming a fixed provision in the
+  review walk keeps its comment. Undo takes it away, redo brings it back.
+  The newest record of a finding speaks.
+- **`backend/redline_basis.py` is the pure turn from captured data into
+  comment text.** The export captures, under the guard it already holds,
+  the research profile reference, the attached documents' `{rid, title,
+  filename}` and a deep copy of the fix record into `_ExportInputs`; the
+  bases are built outside it and passed as `render_preserving_redline(
+  comments=)` only while `settings.REDLINE_COMMENTS`. `spec_doc` reads no
+  settings and knows no session. A grounded item cites what grounding
+  ACCEPTED; an ungrounded one is labelled a lead and lists what it CITED as
+  not verified (the research trust model's `[UNVERIFIED]` in words). An
+  attached document is named, never linked. At most five links per
+  heading, then "+N more"; ~500-character trims with "…"; every string
+  through `xml_safe_text`.
+- **Which changes get one is the redline's own records, not a second
+  diff.** `_RedlineBuilder.render` builds `changes` aligned with the
+  rendered body (move range ends → None): the moved-to copy is `moved`,
+  a removed-kind record `deleted` (unless moved), an inserted record
+  `inserted`, a spliced one `edited`, an emptied break holder `deleted`
+  unless its provision lives on. `plan_comments` then applies the rules: a
+  research/attached basis speaks for NEW words only (inserted, or
+  edited/moved with text differing from the import — `_element_texts`
+  compares the baseline and current tree), so a relettered provision is not
+  commented; a QC basis applies to any covered change; a locked block is
+  skipped; a source id that resolves to nothing is counted
+  (`unresolved_source`), not described; neighbouring paragraphs whose
+  comments read the same share one comment spanning them (adjacent body
+  indexes, so a move range end between them splits them).
+- **The pass is ADDITIVE and runs after the proof it cannot disturb.** It
+  runs after `_self_check` and `_check_move_ranges`, which are unchanged, on
+  deep copies, and proves its own output: `_check_body` (removing exactly its
+  anchors gives the proved body element for element), `_check_pairing` (each
+  id: start, end, reference, in that order, each a direct child of a `w:p`
+  — which is itself the proof it is outside every tracked change, since
+  `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo` hold runs, never paragraphs; a
+  separate wrapper test was written, found unreachable by the revert matrix,
+  and deleted — and exactly one `w:comment`), `_check_part` (each rewritten
+  part minus the pass's
+  additions equals the upload's, canonically; a new part holds only
+  additions), then `rewrite_raw_zip_members` and the streaming audit with
+  `expected_parts`. **Any failure hands over the redline without comments,
+  Moved marks kept, counted as `redline.comments.fallback` — never a
+  refusal.** A switch-off render never enters the pass.
+- **The anchors sit outside every tracked change, on purpose.** Word writes
+  a comment inside a `w:del` too (LibreOffice's `redline-range-comment.docx`)
+  and outside wrappers beside a deleted mark (`tdf154478.docx`); no source
+  says what Word's Accept/Reject does to an anchor inside a wrapper, and
+  the only reading from the spec is "orphaned". Outside, both resolutions
+  keep it — the app's resolver proves it on every row, and the judge now
+  checks real Word does.
+- **Ids come from the redline's own counter** (`RevisionMarks.take_id`, not
+  counted as a revision), above every `w:id` in the package: Word numbers
+  comments, bookmarks and revisions from one sequence in every save
+  inspected.
+- **The package writer grew, with the same discipline.**
+  `raw_zip.rewrite_raw_zip_members` replaces several members and appends new
+  ones (deflated, flags 0, no data descriptor, ASCII-printable names that
+  collide with nothing, version 20, the document part's timestamps and
+  attributes); `audit_raw_zip_rewrite` checks every unchanged record byte
+  for byte, the replaced ones' header shape, the appended ones' shape, the
+  EOCD with its counts masked, and every payload through `zipfile`.
+  `replace_raw_zip_member`/`audit_raw_zip_replacement` delegate and stay byte
+  for byte what they were. `audit_package_preservation_streaming` takes
+  `expected_parts`: the named parts may differ (and must hold exactly the
+  given bytes); anything unnamed is refused as before. `parse_raw_zip_archive`
+  gained `mutable_member=None` so an index can be taken without naming a
+  member to mutate.
+- **Styles: never touch `styles.xml`.** The upload's own comment-text,
+  comment-reference and hyperlink styles are used when defined (by id or by
+  Word's built-in names — python-docx's `add_style("annotation text")`
+  mints the id `annotationtext`, which is why the name match exists);
+  otherwise Word's look as direct formatting (10 pt text on every run, an
+  8 pt reference mark in the comment and the body, `0563C1` + single
+  underline for a link, single line spacing). A dangling `w:pStyle` would be
+  conformant (no style applies, §17.3.1.27) but would lose all three.
+- **Existing comments and Word 2013+'s parts.** An upload's comments part
+  (found through the document relationship) is appended to — never a second
+  part (one `Override` per part name, Part 2 §7.2.3.2.1). An orphan
+  `word/comments.xml` nothing registers, an external or duplicate comments
+  relationship, or an existing `Override` for a part the pass would add are
+  `parts_unreadable` fallbacks: extending or shadowing them would be a
+  guess. `commentsExtended`/`commentsIds`/`commentsExtensible`/`people` are
+  left alone — every child there is `minOccurs=0` ([MS-DOCX]) — and that
+  mixed state (the one LibreOffice writes) is on the unverified list.
+- **The switch.** `BUILD_A_SPEC_REDLINE_COMMENTS`, on, read per request,
+  ast-pinned. Switch off is the redline byte for byte: proven once against a
+  copy of `master`'s modules (`df4d55f`) on **4,348 renders** — the corpus
+  sweep's own mixes (108), 18 corpus masters × 60 wider mixes (2,160) and
+  the suite's 26 hand-built masters × 40 mixes (2,080), Moved marks on and
+  off — identical, none refused. The suite keeps the cheap half: switch off
+  writes no comment parts and no anchors, and no basis at all is the plain
+  redline byte for byte.
+- **The judge sets the comments aside by id, never by tolerance.**
+  `tests/word_judge.py` gives every element a basis (`judge_comment_bases`)
+  so every commentable change carries one, adds `targeted/commented-master`
+  (a reviewer's comment already there), strips Build-a-Spec's anchors from
+  the RESOLVED side only, by the ids read from the comments part Word saved
+  (author `Build-a-Spec`), and fails a Word that loses one of them on Accept
+  All or Reject All. Its strip is its own code, sharing nothing with the
+  app's pass. The gated suite still skips.
+- **Two test traps.** (1) Inclusive C14N of a deep-copied `w:body` compares
+  namespace declarations: a detached copy keeps only the namespaces it uses,
+  so the additivity checks in the tests canonicalize with
+  `exclusive=True`. (2) `_comments_root` in the test module is the
+  payload reader; a helper that shadowed it broke 19 tests at once.
+- **Copy moved with the file.** `SOURCE_OUTPUT_GUIDANCE`'s redline entry,
+  Help's recipe and the trust dossier's export card each said every part
+  outside the body is "your upload's, byte for byte"; each now says the
+  file carries Build-a-Spec's comments with research text and source links
+  and may go to a client, and `sourceCapabilities.test.ts` pins that. No
+  capability or tour change.
+- **Unverified in Word** (the plan's list): no repair prompt with and
+  without an existing comments part and beside extension parts carrying no
+  entry; the Reviewing Pane and margin; anchors kept through Accept All and
+  Reject All (the judge checks); a range spanning paragraphs and one on a
+  deleted or moved-away paragraph; the direct formatting.
+- **Tests.** `tests/test_redline_comments.py` (40), `tests/test_qc_fix_log.py`
+  (10), `tests/test_raw_zip_rewrite.py` (19), two new in
+  `tests/test_source_audit_streaming.py`, one in `tests/test_diagnostics.py`
+  (the stats pin), the wipe-sweep probe, and in the judge's own suite five new
+  tests, six cases (`tests/test_word_judge.py`) with the coverage test requiring
+  `commentRangeStart@p`/`commentRangeEnd@p`; frontend, the guidance pin in
+  `sourceCapabilities.test.ts`. Every row of the corpus sweep with comments
+  proves additivity, both resolutions with the anchors set aside and the
+  package, and asserts the fallback never fires.
+- **Revert matrix.** Each mechanism reverted in place, one at a time, the
+  exact text restored after and the tree checked clean; the count is failing
+  tests in its own suites. The first run found four rows with no red test —
+  a pure move taking its research basis, non-adjacent twins sharing a
+  comment, the range start before `w:pPr`, and the wrapper test above — and
+  three of those got tests (the fourth was deleted). Every row below is red:
+
+  | Mechanism reverted | Red |
+  |---|---|
+  | raw_zip: additions appended | 6 |
+  | raw_zip: appended shape audited | 1 |
+  | raw_zip: appended name checked | 2 |
+  | raw_zip: appended name collision | 1 |
+  | source_audit: appended parts checked | 1 |
+  | source_audit: rewritten named parts checked | 1 |
+  | fix log: panel apply records | 2 |
+  | fix log: chat commit records | 1 |
+  | fix log: chat logs survivors only | 1 |
+  | fix log: status/source ignored | 6 |
+  | fix log: position compared | 1 |
+  | fix log: text compared | 3 |
+  | fix log: saved | 1 |
+  | fix log: loaded | 2 |
+  | fix log: reset clears | 3 |
+  | fix log: in the project payload | 1 |
+  | fix log: reader bounded | 1 |
+  | basis: attached documents | 1 |
+  | basis: unresolved flagged | 1 |
+  | basis: grounded cites accepted sources | 1 |
+  | basis: ungrounded named a lead | 1 |
+  | basis: link cap | 1 |
+  | basis: text trimmed | 1 |
+  | basis: newest record wins | 1 |
+  | basis: header fix on the header line | 1 |
+  | basis: fix only while it covers | 2 |
+  | link: only http(s) clickable | 2 |
+  | plan: relettered not commented | 1 |
+  | plan: locked skipped | 1 |
+  | plan: research only with new words | 1 |
+  | plan: neighbours share a comment | 1 |
+  | plan: only identical comments shared | 1 |
+  | plan: only adjacent paragraphs shared | 1 |
+  | anchor: range start after pPr | 7 |
+  | format: reference mark 8 pt | 1 |
+  | format: comment text 10 pt | 1 |
+  | format: link blue underlined | 1 |
+  | styles: found by built-in name | 1 |
+  | styles: used when defined | 1 |
+  | parts: existing comments part extended | 3 |
+  | parts: content type registered | 1 |
+  | parts: document relationship target | 1 |
+  | parts: document relationship type | 1 |
+  | parts: link relationship external | 1 |
+  | xml: text made XML-safe | 1 |
+  | comment: initials | 15 |
+  | comment: annotation reference mark | 1 |
+  | proof: body check | 1 |
+  | proof: pairing order | 1 |
+  | proof: one comment per id | 1 |
+  | proof: part check | 1 |
+  | proof: package audit | 1 |
+  | fallback: never a refusal | 1 |
+  | ids: from the redline's counter | 15 |
+  | sites: new words detected | 1 |
+  | sites: emptied holder is a deletion | 1 |
+  | sites: native move destination | 2 |
+  | sites: deletion | 5 |
+  | sites: insertion | 7 |
+  | sites: edit | 13 |
+  | stats: skips counted | 3 |
+  | switch: ships on | 5 |
+  | switch: the route honours it | 1 |
+  | capture: fix record | 2 |
+  | capture: research profile | 2 |
+  | judge: our anchors left out | 9 |
+  | judge: ids read from Word's file | 1 |
+  | judge: every comment survives | 2 |
+  | judge: renders with the switch | 5 |
+  | judge: an emptied reference run removed | 1 |
+
+- **Errata** (the notes are append-only, so corrections to earlier sections
+  go here):
+  1. "Redline on your original — implemented notes (Phase 1, backend PR)"
+     and the Phase 0 / PR B notes say every package part except
+     `word/document.xml` is the upload's byte for byte. Since this phase the
+     comment parts (`word/comments.xml`, `word/_rels/comments.xml.rels`,
+     `word/_rels/document.xml.rels`, `[Content_Types].xml`) may differ too,
+     by additions only; with the switch off, or no change with a basis, the
+     old statement holds exactly.
+  2. "Real Word as the judge (Phase 2, PR A)" says the body is what is
+     compared because every other part is the upload's byte for byte; the
+     comment parts' additions aside, and the judge now sets Build-a-Spec's
+     comment anchors aside by id before comparing.
+  3. Any earlier note describing `raw_zip` as rebuilding exactly one member:
+     `rewrite_raw_zip_members` now replaces several and appends new ones;
+     the single-member entry points delegate to it unchanged.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

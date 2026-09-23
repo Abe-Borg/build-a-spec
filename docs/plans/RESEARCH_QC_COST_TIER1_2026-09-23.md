@@ -575,7 +575,102 @@ is about 0 read and 4 wrote.
 
 #### As built
 
-*(Filled in by the session that builds this chunk.)*
+Built on 2026-09-23 from `master` at `df4d55f`. No gate. No measurement was
+supplied (the session's prompt left the M1 placeholder unfilled, read as
+"none"). The switch ships **on** (default 45 s), as the spec's F5 reasoning
+allows: the guarantee is documented, and a follower that finds nothing
+readable writes exactly as before.
+
+Files: `backend/qc/engine.py`, `backend/settings.py`, the new
+`tests/test_qc_warm_launch.py`, one knowing change in
+`tests/test_qc_live_events.py`, README, CLAUDE.md, `docs/RELEASE_WINDOWS.md`
+and the trust dossier (`frontend/src/components/TrustDeepDiveModal.tsx`).
+
+Deviations and additions, each recorded because the spec text is not
+rewritten:
+
+1. **`_launch_staggered` takes no `pool`.** Its `submit(item, first_output)`
+   closure owns the pool and returns the `Future`, so the launcher is a pure
+   scheduling function a test can drive with already-done futures. The
+   spec's signature was "for example".
+2. **A fourth release point: a done-callback on each leader's `Future`.**
+   `_run_lens` checks `should_stop` and returns before it ever calls
+   `_run_streaming_call`, so on that path none of the spec's three release
+   points fires, and the followers would sit out a wait slice or the bound.
+   The callback releases them the moment the leader's task ends for any
+   reason. The function-level `finally` in `_run_streaming_call` stays: the
+   consolidation calls reach it directly, and it is pinned on its own
+   (`test_a_call_stopped_before_its_first_request_still_releases`).
+3. **The pieces are a frozen `_CallPieces`**, built by `_lens_call_pieces` /
+   `_consolidation_call_pieces` and passed INTO `_run_lens` /
+   `_run_consolidation_call`, which no longer build them. Both keep their
+   names and their other parameters. `_CallPieces.cache_ttl` rides with
+   the pieces so the key and the call read the same TTL (`""`, the 5-minute
+   default, passed explicitly now).
+4. **`run_final_qc(..., warm_wait_seconds=None)`**, `None` meaning
+   `settings.QC_WARM_WAIT_SECONDS`, pinned once per run and handed to both
+   phase 1 and consolidation (the `batch_verification` precedent), so the
+   two stagger alike even if the environment changes mid-run.
+   `_consolidate_candidates` defaults to 0 for a direct caller.
+5. **Per-lineage release.** The wait releases each lineage the moment its
+   own leader fires, against one deadline shared by all leaders (they are
+   sent together). Phase 1 and consolidation each have one shared lineage
+   today, but Chunk 3 reuses this.
+6. **The log's `warm` outcome also covers a leader released by the end of
+   a request or of its task.** The event cannot say which fired, and the
+   line reports that the followers were released, not that a cache entry
+   exists. Stated in the README.
+7. **`_WARM_WAIT_SLICE_SECONDS` (1.0)** is a module constant: how late a
+   Stop is noticed during the wait. The stop test lowers it; the wait itself
+   still returns the instant its leader releases.
+8. **Knowing test change:**
+   `test_parallel_lens_activity_interleaves_without_breaking_worker_order`.
+   The spec listed it as "keep green, unchanged … (per-worker order, never
+   global)". But it asserts a global order, engineered by a rendezvous
+   between `completeness` and `coordination_consistency`, which now share a
+   lineage: the follower cannot be sent until the leader has already
+   emitted, so the rendezvous times out and the order assertion fails
+   (reproduced). The test now pairs the leader with `code_compliance`, a
+   lineage of its own that still starts alongside it, so it keeps proving
+   what its name says under the shipped default. The lens ids are the only
+   change.
+9. **Tests beyond the spec's list:** a one-worker pool keeps the lineage
+   together (see 12); `warm_wait_seconds=None` reads the setting; the relay counts the
+   first frame after `message_start`, not `message_start` itself (the fakes
+   never emit one, so only a direct test can pin it); a call stopped before
+   its first request still releases; the done-callback; one eligible
+   consolidation bucket never waits; and the default read from the source
+   with `ast`. The F3 test also compares the two runs' input fingerprints.
+10. **Not built: staggering the streamed verifier transport.** With
+    `BUILD_A_SPEC_QC_BATCH_VERIFICATION=0`, verifier seats share two
+    lineages and still start together. The spec scopes this chunk to phase 1
+    and consolidation. The default transport is batched, and Chunk 3 is the
+    one that addresses it.
+11. **The trust dossier overclaimed caching before this chunk.** Its model
+    paragraph said every later call in a stage reads the cached copy. In
+    phase 1 all four lenses used to start together and write, and calls whose
+    tools differ can never share a copy. It now says what happens, and stage
+    1 says one lens goes a few seconds first.
+
+12. **Review finding (Codex, PR #210): a single-call lineage never waits in
+    the queue ahead of released followers.** The spec's order — leaders,
+    then every single-call lineage, then the wait — let a small pool
+    (`QC_MAX_WORKERS=1`) queue `code_compliance` behind the leader and ahead
+    of its followers, so the sole worker ran the long web-tooled lens in
+    between, long enough for the leader's 5-minute entry to expire and a
+    follower to pay a second write: worse than the declared order the
+    stagger replaced. `_launch_staggered` now takes the pool's `capacity`
+    and submits a single-call lineage ahead of the wait only while a worker
+    is free for it; the rest go after the followers. With the default 8
+    workers nothing changes (`code_compliance` still starts at once and
+    never waits). `test_a_one_worker_pool_sends_the_leader_first` became
+    `test_a_one_worker_pool_keeps_the_lineage_together`, and
+    `test_a_single_call_goes_ahead_of_the_wait_only_while_a_worker_is_free`
+    pins the rule directly.
+
+Every mechanism was reverted in place and turned its own test red; the
+matrix is in CLAUDE.md ("Final QC's calls that share a cache start
+staggered").
 
 ---
 
@@ -1129,8 +1224,10 @@ is on in the release that carries it.
   Four of Final QC's five reviewers read the same copy of your section.
   They used to start at the same moment, so each paid to store its own
   copy. Now one starts a few seconds ahead and the other three reuse its
-  copy. The reviewers, their instructions and what they find are
-  unchanged; the review simply starts a few seconds later.
+  copy. The step that groups duplicate findings does the same when it has
+  several groups to check. The reviewers, their instructions and what they
+  find are unchanged, and a Final QC result you already have stays
+  current; the review simply starts a few seconds later.
 - **Chunk 3 *(conditional)* — Batched verification reuses what it already
   paid for.** When many of Final QC's verifying reviewers work from the
   same copy of your section, one of them now starts first, at full price,

@@ -673,7 +673,11 @@ and title (said on the upload's header line), a deletion still absent, and a
 move also still at exactly the position the fix put it (the same parent and
 index — the chat commit's own strictness). Status and source link are
 ignored, so confirming a fixed provision in the review walk keeps its
-comment; an undo takes the comment away, a redo brings it back. The newest
+comment; an undo takes the comment away, a redo brings it back. The other
+way round, a fix whose own operations only re-statused or re-pointed the
+source of an element (`set_status`, or a `replace` carrying nothing else)
+covers nothing there: it wrote no words, so it is never credited with
+words an earlier edit wrote. The newest
 record of a finding speaks. The record rides the project file (an optional
 `qc_fix_log` key, read leniently), is cleared by a new session, and is never
 carried in a project brief nor an input to Final QC. A fix applied before

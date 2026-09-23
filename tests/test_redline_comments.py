@@ -1311,3 +1311,21 @@ def test_every_corpus_master_keeps_the_promise_with_comments(tmp_path):
                 continue
             added += stats["redline"]["comments"]["added"]
     assert added
+
+
+def test_a_status_only_fix_does_not_claim_an_earlier_edit(client):
+    """Codex, PR #211: the provision was reworded by hand, then a Final QC fix
+    only confirmed it. The redline shows the edit — and must not say a QC fix
+    made it, because the fix wrote nothing a reader sees."""
+    _import(client, _master_bytes())
+    uid = _first_provision(client)
+    assert client.post(
+        "/api/doc/edit",
+        json={"ops": [{"action": "replace", "target_id": uid, "text": "Reworded by hand."}]},
+    ).json()["ok"]
+    _install_fix(client, uid, [{"action": "set_status", "target_id": uid, "status": "confirmed"}])
+    assert sessions.get_session().qc_fix_log  # the fix is recorded...
+    lines = _redline_comment_lines(_export_redline(client))
+    assert not any(
+        line.startswith("Changed by a Final QC fix") for comment in lines for line in comment
+    )  # ...and credits nothing

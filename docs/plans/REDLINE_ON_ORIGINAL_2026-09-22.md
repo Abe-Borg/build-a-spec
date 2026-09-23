@@ -1703,7 +1703,9 @@ called (the panel's apply route and the chat commit block, for the same ids
 — survivors only in chat); an entry covers an element only while it reads as
 the fix left it (text or title; absence for a deletion; for a move also the
 exact parent and index — **the chosen strictness**, the same as the chat
-commit's own survival check; status and source link ignored). Project key
+commit's own survival check; status and source link ignored). A fix that
+only re-statused or re-sourced an element covers nothing there (a review
+finding on PR #211: it would otherwise claim an earlier edit's words). Project key
 `qc_fix_log`, lenient load, reset clears it, never in a brief or the QC
 manifest. **Fixes applied before this build have no entry and get no
 comment.**

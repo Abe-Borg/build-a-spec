@@ -98,6 +98,7 @@ def test_the_panel_apply_logs_each_applied_finding_and_nothing_else():
                 "status": "confirmed",
                 "source_item_id": "",
             },
+            "content": True,
         }
     ]
 
@@ -282,8 +283,20 @@ def test_the_reader_is_lenient_and_bounded():
     assert [entry["finding_id"] for entry in loaded] == ["qc-a"]
     assert loaded[0]["sources"] == [{"url": "https://a.example/", "title": "A"}]
     assert loaded[0]["evidence"] == [
-        {"key": ["field", "pt1.a1.p1"], "value": ["tuple", "as", "list"]}
+        # An entry that does not say reads as content (the conservative way
+        # for a record written before the flag existed).
+        {"key": ["field", "pt1.a1.p1"], "value": ["tuple", "as", "list"], "content": True}
     ]
+    flagged = sanitize_fix_log(
+        [
+            {
+                "finding_id": "qc-b",
+                "evidence": [{"key": ["field", "x"], "value": None, "content": False}],
+            }
+        ]
+    )
+    assert flagged[0]["evidence"][0]["content"] is False
+    assert covered_uids(flagged[0]) == []
     assert sanitize_fix_log({"not": "a list"}) == []
     assert MAX_FIX_LOG_ENTRIES == 500  # a runaway guard, pinned
     many = [{"finding_id": f"qc-{i}"} for i in range(MAX_FIX_LOG_ENTRIES + 5)]
@@ -412,3 +425,39 @@ def test_an_entry_covers_an_element_only_while_it_reads_as_the_fix_left_it():
         ]
     )[0]
     assert covered_uids(standards) == []
+
+
+def test_a_status_or_source_only_fix_never_claims_the_element():
+    """Codex, PR #211: a QC fix that only confirms a provision (``set_status``)
+    or re-points its source writes nothing a reader sees. Its evidence still
+    guards survival, but the entry must not cover the element — else a
+    redline would credit an earlier, unrelated edit to that fix. (A fix that
+    rewrites the words still claims them: the panel test above.)"""
+    fixes = (
+        _finding(
+            "qc-status0fix",
+            [{"action": "set_status", "target_id": "pt1.a1.p1", "status": "confirmed"}],
+        ),
+        _finding(
+            "qc-source0fix",
+            [
+                {
+                    "action": "replace",
+                    "target_id": "pt1.a1.p1",
+                    "source_item_id": "r-1",
+                    "status": "confirmed",
+                }
+            ],
+        ),
+    )
+    for fix in fixes:
+        client = _client()
+        _seed_and_install(client, [fix])
+        response = client.post("/api/qc/apply", json={"finding_ids": [fix.finding_id]})
+        assert response.status_code == 200, response.text
+        assert response.json()["outcomes"] == {fix.finding_id: "applied"}
+        entry = sessions.get_session().qc_fix_log[-1]
+        assert entry["finding_id"] == fix.finding_id
+        assert [item["content"] for item in entry["evidence"]] == [False]
+        assert covered_uids(entry) == []
+        assert not entry_covers(entry, sessions.get_session().doc.doc, "pt1.a1.p1")

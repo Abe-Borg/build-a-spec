@@ -80,6 +80,43 @@ def _finding_sources(finding) -> list[dict[str, str]]:
     return sources
 
 
+#: The fields an operation writes that are NOT what a reader sees: a fix made
+#: of nothing else never claims the element's words as its own.
+_METADATA_FIELDS = frozenset({"status", "source_item_id"})
+_OP_ENVELOPE = frozenset({"action", "target_id", "position"})
+
+
+def _writes_content(op: Any) -> bool:
+    """Does this operation write something a reader sees at its target? A
+    ``set_status`` never does; a ``replace`` does only when it carries more
+    than status or a source link. Every other action (add, delete, move)
+    changes content by definition."""
+    if not isinstance(op, dict):
+        return True
+    action = str(op.get("action", "") or "")
+    if action == "set_status":
+        return False
+    if action == "replace":
+        written = {k for k, v in op.items() if v is not None} - _OP_ENVELOPE
+        return bool(written - _METADATA_FIELDS)
+    return True
+
+
+def _metadata_only_uids(finding) -> set[str]:
+    """The elements this finding's own operations touched without writing any
+    content — a status confirmation, a re-pointed source. Its evidence for
+    them still guards survival, but it must never be read as the author of
+    those elements' words (Codex, PR #211)."""
+    metadata: set[str] = set()
+    content: set[str] = set()
+    for op in getattr(finding, "proposed_ops", None) or []:
+        target = str(op.get("target_id", "") or "") if isinstance(op, dict) else ""
+        if not target:
+            continue
+        (content if _writes_content(op) else metadata).add(target)
+    return metadata - content
+
+
 def fix_log_entries(
     result,
     finding_ids: list[str],
@@ -106,6 +143,7 @@ def fix_log_entries(
         if finding is None:
             continue
         keys = evidence_keys.get(finding_id, [])
+        metadata_only = _metadata_only_uids(finding)
         entries.append(
             {
                 "finding_id": finding_id,
@@ -118,7 +156,13 @@ def fix_log_entries(
                 "applied_at": str(applied_at or ""),
                 "run_id": str(getattr(result, "run_id", "") or ""),
                 "evidence": [
-                    {"key": [kind, ref], "value": normalized(evidence.get((kind, ref)))}
+                    {
+                        "key": [kind, ref],
+                        "value": normalized(evidence.get((kind, ref))),
+                        # Did the fix write what a reader sees here? Only
+                        # then may a redline comment credit it.
+                        "content": not (kind == "field" and ref in metadata_only),
+                    }
                     for kind, ref in keys
                 ],
             }
@@ -156,7 +200,13 @@ def _sanitize_entry(raw: Any) -> dict[str, Any] | None:
             and len(key) == 2
             and all(isinstance(part, str) for part in key)
         ):
-            evidence.append({"key": list(key), "value": normalized(item.get("value"))})
+            evidence.append(
+                {
+                    "key": list(key),
+                    "value": normalized(item.get("value")),
+                    "content": item.get("content") is not False,
+                }
+            )
     entry["evidence"] = evidence
     return entry
 
@@ -180,14 +230,18 @@ def _comparable(value: Any) -> Any:
 
 
 def covered_uids(entry: dict[str, Any]) -> list[str]:
-    """The body elements an entry's fix wrote (its ``field`` keys), in the
-    order the fix wrote them. Standards, identity and profile keys name no
-    body element, so a metadata-only fix covers nothing."""
+    """The body elements whose CONTENT an entry's fix wrote (its ``field``
+    keys), in the order the fix wrote them. Standards, identity and profile
+    keys name no body element, and an element the fix only re-statused or
+    re-sourced is not the fix's to claim — so a metadata-only fix covers
+    nothing."""
     return list(
         dict.fromkeys(
             item["key"][1]
             for item in entry.get("evidence", ())
-            if item["key"][0] == "field" and item["key"][1]
+            if item["key"][0] == "field"
+            and item["key"][1]
+            and item.get("content") is not False
         )
     )
 
@@ -207,6 +261,8 @@ def entry_covers(entry: dict[str, Any], section, uid: str) -> bool:
         kind, ref = item["key"]
         if ref != uid:
             continue
+        if kind == "field" and item.get("content") is False:
+            return False  # re-statused or re-sourced: not the fix's words
         if kind == "field":
             field = item
         elif kind == "pos":

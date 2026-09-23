@@ -15545,7 +15545,19 @@ is the why and the traps.
   same strictness the chat commit's survival check uses. Status and
   `source_item_id` are ignored, so confirming a fixed provision in the
   review walk keeps its comment. Undo takes it away, redo brings it back.
-  The newest record of a finding speaks.
+  The newest record of a finding speaks. **The converse was a review
+  finding (Codex, PR #211):** a fix whose operations only re-status an
+  element (`set_status`) or re-point its source (a `replace` with nothing
+  else) still records whole-element evidence, and ignoring exactly the
+  field it wrote made it "cover" whatever words an EARLIER edit left there —
+  so the redline credited a hand edit to a status-only fix. Each field
+  evidence item now carries `content` (`_metadata_only_uids` over the
+  finding's own ops: an element only non-content ops touched is `False`);
+  `covered_uids` and `entry_covers` never credit a `False` item, while the
+  evidence still guards survival. A record without the flag reads as
+  content. Pinned by `test_a_status_or_source_only_fix_never_claims_the_
+  element` and `test_a_status_only_fix_does_not_claim_an_earlier_edit`; the
+  revert turns both red.
 - **`backend/redline_basis.py` is the pure turn from captured data into
   comment text.** The export captures, under the guard it already holds,
   the research profile reference, the attached documents' `{rid, title,

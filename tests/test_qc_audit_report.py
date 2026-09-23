@@ -2152,6 +2152,80 @@ def test_a_cost_basis_with_an_unknown_rate_key_is_still_refused() -> None:
     assert QCResult.from_dict(payload) is None
 
 
+# ---------------------------------------------------------------------------
+# Opus 5.5's cache-read rate (corrected 2026-09-23)
+# ---------------------------------------------------------------------------
+#
+# Anthropic prices a Claude Opus 5.5 cache hit at 0.05x base input
+# ($0.20/MTok). From v1.20.0 until the correction the table said $0.40, so
+# every report written in between persisted that rate in its cost basis.
+
+
+def test_a_new_opus_5_5_report_prices_cache_reads_at_0_20_per_mtok(
+    monkeypatch,
+) -> None:
+    # Pinned: _run uses settings.QC_MODEL, which an operator may override.
+    monkeypatch.setattr(settings, "QC_MODEL", settings.MODEL_OPUS_55)
+    store = _section()
+    scripts = _scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                summary="No candidate recorded.",
+                findings=[],
+                tokens={"cache_read": 1_000_000},
+            )
+        ]
+    )
+    result = _run(SequencedFakeClient(scripts), store)
+
+    assert result.cost_basis["requested_model"] == settings.MODEL_OPUS_55
+    assert result.cost_basis["rates_per_token"]["cache_read"] == 0.20 / 1_000_000
+    (lens,) = [s for s in result.lens_statuses if s.lens_id == "code_compliance"]
+    assert lens.usage_totals["cache_read_input_tokens"] == 1_000_000
+    # 1M reads at $0.20/MTok. The table before the correction said 0.4.
+    assert lens.estimated_cost_usd == 0.2
+    # The corrected rate reconciles like any other, so the report survives
+    # a save/load round trip.
+    assert QCResult.from_dict(copy.deepcopy(result.to_dict())) is not None
+
+
+def test_a_report_priced_before_the_opus_5_5_read_fix_keeps_its_own_rate(
+    monkeypatch,
+) -> None:
+    # A cost basis is an immutable claim about how its run was priced. A
+    # report written at $0.40 must load, keep that rate, and reproduce the
+    # estimate it was saved with. It is never re-priced at today's table
+    # and never refused for disagreeing with it.
+    monkeypatch.setattr(settings, "QC_MODEL", settings.MODEL_OPUS_55)
+    _store, result = _rich_audit_result()
+    payload = copy.deepcopy(result.to_dict())
+    assert payload["cost_basis"]["requested_model"] == settings.MODEL_OPUS_55
+    payload["cost_basis"]["rates_per_token"]["cache_read"] = 0.40 / 1_000_000
+    lens = payload["lens_statuses"][0]
+    for record in (lens["usage_totals"], payload["usage_totals"]):
+        record["cache_read_input_tokens"] = (
+            record.get("cache_read_input_tokens", 0) + 1_000_000
+        )
+    # What the pre-correction build computed and saved.
+    lens["estimated_cost_usd"] = _rates_estimate(
+        payload["cost_basis"], lens["usage_totals"]
+    )
+    payload["estimated_cost_usd"] = _rates_estimate(
+        payload["cost_basis"], payload["usage_totals"]
+    )
+
+    restored = QCResult.from_dict(copy.deepcopy(payload))
+    assert restored is not None
+    assert restored.cost_basis["rates_per_token"]["cache_read"] == 0.40 / 1_000_000
+    assert restored.to_dict()["cost_basis"] == payload["cost_basis"]
+    assert restored.estimated_cost_usd == payload["estimated_cost_usd"]
+    # The live table moved on; the saved report did not follow it.
+    assert settings.PRICING[settings.MODEL_OPUS_55]["cache_read"] == (
+        0.20 / 1_000_000
+    )
+
+
 def test_current_schema_top_level_identity_agrees_with_hashed_input_manifest() -> None:
     _store, result = _rich_audit_result()
     baseline = result.to_dict()

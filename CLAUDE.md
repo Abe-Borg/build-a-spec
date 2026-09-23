@@ -113,7 +113,9 @@ backend/
                            cache-write rates per model (cache_write = 1.25×
                            input for the 5m entry, cache_write_1h = 2.0× for
                            the 1h one) — a new model must land with both or
-                           every 1h write on it is silently underpriced;
+                           every 1h write on it is silently underpriced; its
+                           cache_read is looked up, never assumed 0.1× (Opus
+                           5.5's is 0.05×; test_usage pins every row's);
                            HARVEST_EFFORT (Project workspace Phase 4, default
                            medium — the fact harvest extracts, it drafts
                            nothing); ELIDE_FETCHED_PAGE_TEXT
@@ -1238,7 +1240,11 @@ backend/
                            _STANDARDS_POLICY/_PROVENANCE/FULL_DRAFT_DIRECTIVE
                            to stay true for pinless modules
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
-                           lint event + standards_payload; PROJECT CONTEXT begins
+                           lint event + standards_payload (the event lints
+                           exactly as the doc payload does:
+                           SessionState.preserved_chrome() is the one
+                           header/footer/cover-page derivation every lint
+                           surface reads); PROJECT CONTEXT begins
                            with versioned discipline/project type identity, using
                            legacy session discipline only when identity is absent;
                            Batch 7 adds
@@ -1629,6 +1635,11 @@ tests/
   test_standards.py        pins, overrides, rendering helpers
   test_spec_modules.py     registry-validation failure modes
   test_linting.py          every lint rule + suppression + override interplay
+  test_preserved_chrome_lint.py
+                           every lint surface (doc payload, readiness, the
+                           turn's PROJECT CONTEXT, the post-commit `lint`
+                           SSE event) reads SessionState.preserved_chrome();
+                           the event matches the payload behind it
   test_qc.py               [Batch 4] lens fan-out, adversarial verification (tie
                            kills, median severity), ops validation, apply (one undo
                            step + stale skip), dismiss memory, runner lifecycle,
@@ -14087,6 +14098,179 @@ the owner's call, and the release-note draft is below.
      never reach the fifth level, so its count is unaffected (it measures
      29 per master kind either way — the "23" recorded there predates this
      change).
+
+## Opus 5.5 cache reads cost a twentieth of input — implemented notes
+
+`PRICING[MODEL_OPUS_55]["cache_read"]` was `0.40 / 1_000_000`: 0.1× of
+Opus 5.5's $4 input, the multiple every other row uses. Anthropic's pricing
+page lists Claude Opus 5.5 cache hits at **$0.20/MTok**, and its footnote 2
+says they are priced at 0.05× base input. The page was re-fetched on
+2026-09-23 before the change, and every other row and rate in the table
+checked out. The row is now `0.20 / 1_000_000`. No route, SSE event,
+dependency, env knob, schema, protocol or project-format change.
+
+- **What it overstated.** Opus 5.5 has been the Final QC default since
+  v1.20.0, so from then on every QC figure priced its cache-read line at
+  twice the real rate. That covers the session meter's `qc` and
+  `qc_batched` buckets, and through them the header ticker, the QC drawer's
+  session cost line and launch confirmation, and Settings → Usage. It also
+  covers each new report's `estimated_cost_usd` and the `cost_basis` it
+  persists. The "prompt caching saved" figure was too LOW for QC by the
+  same slice, because it is `reads × (input − cache_read)`. The provider
+  bill was never affected; only the app's estimate was. The interview,
+  research, harvest, compaction and templates run on Sonnet 5 by default,
+  whose row was right. An env override that put one of them on Opus 5.5
+  was overstated the same way.
+- **Why nothing caught it.** `test_final_qc_defaults_to_opus_5_5_priced_and_strict`
+  pinned input and output. `test_every_priced_model_configures_both_cache_write_rates`
+  pinned the two write multiples, which really are the same on every row.
+  The read multiple is the one rate that is NOT uniform, and it was the one
+  rate no test pinned. The comment above `PRICING` also said "Cache read is
+  0.1× input", which is how the row was filled in.
+- **The fix is one number plus the comment**, which now says the read rate
+  is per model and must be looked up on the pricing page. Claude Fable 5.1,
+  if it is ever added, is 0.025×. `_PUBLISHED_CACHE_READ_MULTIPLIERS` in
+  `tests/test_usage.py` names every row's multiple and is exhaustive on
+  purpose: a new model fails there until someone declares its read rate.
+- **Persisted reports are not rewritten, by construction.** A `cost_basis`
+  is the immutable claim about how its run was priced (see "Per-TTL
+  cache-write pricing"). `_persisted_cost_basis` checks a basis's shape and
+  never compares its rates with the live table, and
+  `_audit_accounting_consistent` reconciles every record against the SAVED
+  basis. So a report written at $0.40 loads, keeps $0.40, and reproduces
+  the estimate it was saved with. Only reports written from now on carry
+  $0.20. Pricing is not in the hashed input manifest, so no retained Final
+  QC result reads stale because of this and there is nothing to re-run.
+- **The profiler inherits the old rate for old reports.**
+  `tools/qc_export_cost_profile.py` prices each report from its own basis.
+  For an Opus 5.5 report written between v1.20.0 and this fix, its
+  cache-read dollars are doubled and "output as a share of estimated cost"
+  reads low. Token totals and the token-weighted cache-read share are
+  unaffected, and those are what step 2's decision rule reads. The
+  execution record's step 2 now says so. The tool itself is unchanged.
+- **The trust dossier stated the old rate too.** Its Final QC card, which
+  names Claude Opus 5.5, said every later call in a stage reads the cached
+  document "at a tenth of the price". It now says a twentieth. The README's
+  cost-meter paragraph gains one sentence on per-model read pricing, and
+  loses a claim PR #142 had already made false: it still said the table
+  priced Sonnet 5 "at the post-intro rate".
+- **Release note.** The GitHub Releases API lists v1.20.0 (2026-09-22) as
+  the latest published release on 2026-09-23, so the 1.21.0 entry is
+  unreleased and not frozen. It gains a "What a review costs" section
+  saying QC cost estimates were overstated and are now correct. The fix and
+  its note are in the same commit, so whichever commit is tagged 1.21.0,
+  the build and its note agree.
+- **Tests: 4 new.** In `tests/test_usage.py`: every row's read multiple
+  (exhaustive), and the Opus 5.5 rate through both meter buckets,
+  `cache_saved_usd` and the snapshot a new report persists. In
+  `tests/test_qc_audit_report.py`: a new run's basis and lens estimate at
+  $0.20, and a report saved at $0.40 keeping its own rate and estimate.
+  Revert matrix: the row back at 0.40 → all 4 red. A simulated load path
+  that re-priced a saved basis at the live table → 1 red, the keeps-its-rate
+  test, while the existing legacy-basis test stayed green.
+- **Errata.** These notes are append-only, so corrections to earlier
+  sections are recorded here:
+  1. "Final QC moves to Opus 5.5" says it is "priced $4/$20 (cache read
+     0.40, 5m write 5.00, 1h write 8.00 — the 0.1× / 1.25× / 2.0×
+     multipliers every other row uses)". The cache read is 0.20, which is
+     0.05×. Only the two write multiples are shared with the other rows.
+  2. Batch 2's "cache read 0.1×" summary of `settings.PRICING` described
+     the table as it stood then. Today it is true of every row except Opus
+     5.5.
+
+## Every lint surface reads the same preserved chrome — implemented notes
+
+The `lint` SSE event that a doc-changing chat turn emits after it commits
+linted the document without the preserved header, footer and cover-page
+lines. The other three places that lint the live document passed them. So
+on an imported master whose preserved header or footer still names another
+section number, the `stale_document_identifier` finding was missing from
+the event. This change adds no route, SSE event type, dependency or env
+knob, changes no project format, and bumps no version. **It does change the
+`lint` event's findings**: the event now carries the stale-identifier
+finding the doc payload always had.
+
+- **What the user saw.** `App.tsx` handles the event with
+  `setLintIssues(evt.items)`, so the finding vanished from the Issues drawer
+  after every doc-changing turn. The `refreshDoc()` that follows
+  `turn_complete` put it back, so it flickered, and the stream disagreed
+  with the payload right behind it. When the turn itself renumbered the
+  section, the finding did not appear until that refetch.
+- **Why it happened.** The rule arrived with the formatting-preserving
+  import (v1.14.0, PR #141), and v1.15.0 added cover-page lines to what it
+  reads. Three of the four lint callers passed those lines, each deriving
+  them itself: `app._doc_payload` and `app._readiness_payload` through
+  `app._preserved_chrome`, and `conversation._turn_context_text` through an
+  inline copy of the same gate. The post-commit event was a fourth call
+  site, and it was missed.
+- **One derivation now.** `SessionState.preserved_chrome()` sits beside
+  `import_is_unstructured()`. It returns the format map's
+  `preserved_chrome()` (header and footer lines, then front matter) when
+  the session holds both the map and the retained upload, and `()`
+  otherwise, exactly the gate both copies applied. All four callers read
+  it. `app._preserved_chrome` is gone, along with its fallback for a format
+  map without the method: every assignment of `source_format_map` is a real
+  `SourceFormatMap` (the import, project load, the tutorial's staged
+  import) or None, so the fallback could never run. The event is now built
+  with exactly the arguments `_doc_payload` passes, under the commit's own
+  guard, so it equals the payload that follows it item for item (pinned).
+- **The offline profiler keeps its mirror.** `tools/lint_block_profile.py`
+  reads a saved project file, not a live session, so it still derives the
+  lines itself, like its `import_is_unstructured` mirror. Its docstring
+  now names `SessionState.preserved_chrome` as the rule it mirrors, instead
+  of the turn-context builder's inline copy, which no longer exists.
+- **How this meets the per-version lint memo (PR #200).** PR #200 adds
+  `SessionState.document_lint`, a lint memo per committed version keyed
+  partly on the chrome tuple. It was open, not merged, when this landed,
+  and its notes leave the event's missing chrome alone as a suggested
+  follow-up. This is that follow-up. A trial merge of the two branches
+  (#200 at `f655369`) showed `app.py` and the turn context merging on
+  their own into `session.document_lint(..., preserved_chrome=
+  session.preserved_chrome())`. Two small code conflicts remain, both in
+  `conversation.py`. The two new methods sit side by side: keep both. The
+  event's call: take `session.document_lint(` and keep this change's
+  comment; its `preserved_chrome=session.preserved_chrome()` line carries
+  over by itself. `CLAUDE.md` conflicts too: keep both sections, in merge
+  order. Resolved that way, the trial passed `ruff` and the full backend
+  suite, and a count of lint passes showed the event and the
+  `GET /api/doc` behind it sharing one. With both merged, two sentences in
+  #200's notes stop being true: that the event passes no chrome, and that
+  an imported master with preserved header or footer lines costs two lint
+  passes per version. The event and the payload behind it pass equal
+  inputs, so the memo lints each committed version once.
+  `test_the_turn_lint_event_matches_the_payload_behind_it` fails any
+  resolution that drops the chrome from the event.
+- **Tests: `tests/test_preserved_chrome_lint.py` (4).**
+  - The method's gate: a fresh session, a map without the retained bytes,
+    and both.
+  - The event matching the next `GET /api/doc` lint item for item, on a
+    master whose footer reads 23 05 48, in two cases: the chat turn
+    renumbers the section itself, or the section was renumbered from the
+    panel and the turn changes something else.
+  - Readiness and the model's PROJECT CONTEXT reading the same chrome.
+    Nothing pinned those two before, and both moved onto the new method.
+
+  Revert matrix, each mechanism reverted in place and restored from the
+  exact text read:
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the event's chrome (the fix itself) | 2 |
+  | the method ignoring the retained-bytes gate | 1 |
+  | the method returning nothing | 6 |
+  | the turn context without chrome | 1 |
+  | readiness without chrome | 1 |
+  | the doc payload without chrome | 5 |
+
+  "The method returning nothing" also turns red the two stale-identifier
+  tests that already existed, in `test_preserving_export.py` and
+  `test_import_office_master.py`.
+- **Release note: owed, not written.** v1.21.0 is untagged, and whether it
+  is tagged at the closeout commit (`a273ab7`) or at a later `master` is
+  undecided, so its entry is left alone (the page-trim change's posture).
+  Draft line for whichever release next ships from `master`: "A section
+  number left behind in a preserved header, footer or cover page no longer
+  drops out of the issues list each time the assistant edits the document."
 
 ## A flush checkpoint is current when nothing is behind it — implemented notes
 

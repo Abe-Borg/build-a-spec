@@ -92,9 +92,12 @@ decides):
   recall check that gates the default (Phase 3 → Before it is on by
   default) buys little for now. Keep it off; the backstop covers the
   ceiling.
-- **D4's harvest wiring:** a summary exists only once a chat is condensed,
-  and the harvest already reads this whole conversation. The wiring would
-  matter only in chats far longer than this one.
+- **D4's harvest wiring stays outstanding.** The owner decided D4 (yes,
+  through the harvest), and it is half built. The measurement only bears
+  on its priority: a summary exists only once a chat is condensed, and the
+  harvest already reads this whole conversation, so the wiring pays off
+  only in chats far longer than this one. It stays owed unless the owner
+  reverses D4.
 - **Phase 5** is the one open item with a measurable payoff. A full draft
   of about 25 article-by-article edit calls writes each ~10.8k-token
   outline once and re-reads it on every later call. That is about $0.68
@@ -185,9 +188,10 @@ Phases 1 and 2 (the project-workspace closeout,
 `project-workspace/07_RELEASE_CLOSEOUT.md`), but it is not tagged. The owner decided D1–D4 on
 2026-09-22 (see the Decisions table). The owner supplied one real
 measurement on 2026-09-23 ("Measured on a real project", under "What
-actually fills the history"). It says what is left is optional, and it
-recommends keeping routine condensing off and D4's harvest wiring unbuilt
-for now.
+actually fills the history"). It supports keeping routine condensing off
+for now, and it puts a price on Phase 5. It does not change D4: that
+wiring stays decided and outstanding (below), with little payoff for
+projects this size.
 
 - **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, so
   the 1.21.0 closeout switched it off: `BUILD_A_SPEC_ELIDE_FETCHED_PAGES`

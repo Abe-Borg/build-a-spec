@@ -33,7 +33,7 @@ and recallable (Phase 3 — complete, PR #189; decisions D1–D4 made
 check; PR #192 also repairs citations that a condensed view had left
 pointing at the wrong page). A real project the owner measured on
 2026-09-23 confirmed the stale outlines were most of what an older build
-re-sent (75.5%), and left the remaining items optional. The plan's
+re-sent (75.5%). The plan's
 implementation record is the only authority on where each phase stands; this
 line is a summary of it. The file is the plan, the owner decisions (D1–D4)
 and the implementation record; its

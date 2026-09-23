@@ -28,7 +28,7 @@ built (PR #197):** a resolve mode for the hidden-Word automation, an optional Wi
 suite in which real Word accepts and rejects every targeted shape and every
 corpus master under the corpus sweep's edits, and a producer recipe that
 records Word's own tracked moves. It changes nothing in the app, so it needs
-no release note. **PR B, native "Moved" marks, is built** — without the
+no release note. **PR B (#204), native "Moved" marks, is built** — without the
 owner's Windows results. This plan made PR B wait for them and for Word's own
 tracked-move sample; the owner waived that gate on 2026-09-23 (Decision 8,
 the compaction plan's D5 is the precedent): it was waived, not passed. So the
@@ -1210,7 +1210,7 @@ groups too.
 
 #### Phase 2 (PR B) — as built
 
-**Built 2026-09-23 in PR B, without the owner's Windows results** — the gate
+**Built 2026-09-23 in PR B (#204), without the owner's Windows results** — the gate
 "What PR B inherits" set was waived by the owner that day (Decision 8), not
 passed: nobody has run `tests/test_redline_word_judge.py` or the corpus's
 TrackedMove recipe, so the Word-saved tracked-move sample this plan named does

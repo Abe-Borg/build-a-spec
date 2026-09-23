@@ -73,7 +73,7 @@ sized it as one). PR A (PR #197) makes real Word the redline's judge — an opti
 Windows suite where a hidden Word accepts and rejects every change and the
 result must match Word's own save of the formatted export or the upload —
 plus a corpus recipe that records Word's own tracked moves as evidence;
-its as-built note is "Phase 2 (PR A) — as built". PR B, native Word "Moved"
+its as-built note is "Phase 2 (PR A) — as built". PR B (#204), native Word "Moved"
 marks, is built too — without the owner's Windows run of the judge or Word's
 own tracked-move sample, which the plan had made its gate: the owner waived
 that gate on 2026-09-23 (the plan's Decision 8; waived, not passed). The

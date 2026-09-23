@@ -14670,7 +14670,7 @@ picks the release).
 ## Word's own "Moved" marks — implemented notes (redline Phase 2, PR B)
 
 The second of Phase 2's two pull requests in
-`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`. Since Phase 1 the redline on
+`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md` (PR #204). Since Phase 1 the redline on
 your original has shown a moved provision as a deletion where it was and an
 insertion where it is. Now a provision moved WITHOUT being changed is Word's
 own move: `w:moveFrom` where it was, `w:moveTo` where it is, the two ranges

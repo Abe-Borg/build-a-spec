@@ -111,7 +111,8 @@ def _revisions(body) -> list:
         element
         for element in body.iter()
         if isinstance(element.tag, str)
-        and element.tag in (qn("w:ins"), qn("w:del"), qn("w:pPrChange"))
+        and element.tag
+        in (qn("w:ins"), qn("w:del"), qn("w:pPrChange"), qn("w:rPrChange"))
     ]
 
 
@@ -132,6 +133,8 @@ def _assert_schema_order(body) -> None:
             mark_tags = [c.tag for c in mark if isinstance(c.tag, str)]
             flagged = [i for i, t in enumerate(mark_tags) if t in flags]
             assert flagged in ([], [0]), mark_tags  # the flag leads CT_ParaRPr
+            if qn("w:rPrChange") in mark_tags:  # ...and its change ends it
+                assert mark_tags[-1] == qn("w:rPrChange"), mark_tags
     for properties in body.iter(qn("w:trPr")):
         tags = [c.tag for c in properties if isinstance(c.tag, str)]
         flagged = [i for i, t in enumerate(tags) if t in flags]
@@ -250,6 +253,7 @@ def test_no_edits_means_no_tracked_changes(tmp_path):
     redline, stats = _verify(source, imported, imported.section)
     assert _revisions(_body(redline)) == []
     assert stats["redline"]["revisions"] == 0
+    assert stats["redline"]["last_mark_untracked"] == 0
 
 
 def test_a_one_word_edit(tmp_path):
@@ -530,6 +534,42 @@ def test_the_writer_never_deletes_a_mark_that_holds_a_section_break():
     marks = RevisionMarks(author=AUTHOR, date=DATE, first_id=10)
     with pytest.raises(AssertionError):
         mark_paragraph(paragraph, "w:del", marks)
+
+
+def test_neutralizing_the_last_paragraph_leaves_a_section_break_where_it_is():
+    """``neutralize_last_paragraph`` moves formatting, never a break: the
+    numbering goes into the ``w:pPrChange`` and the ``w:sectPr`` stays in
+    the current properties, ahead of it — and only a paragraph-mark
+    revision may ask. A paragraph that sets nothing is left alone and
+    spends no revision id."""
+    from backend.spec_doc.revision_marks import (
+        RevisionMarks,
+        neutralize_last_paragraph,
+    )
+
+    paragraph = etree.fromstring(
+        f'<w:p xmlns:w="{W}"><w:pPr><w:numPr><w:ilvl w:val="0"/>'
+        '<w:numId w:val="3"/></w:numPr><w:sectPr/></w:pPr>'
+        "<w:r><w:t>x</w:t></w:r></w:p>"
+    )
+    marks = RevisionMarks(author=AUTHOR, date=DATE, first_id=10)
+    neutralize_last_paragraph(paragraph, "w:del", marks)
+    properties = paragraph.find(qn("w:pPr"))
+    assert [etree.QName(c).localname for c in properties] == ["sectPr", "pPrChange"]
+    recorded = properties.find(f"{qn('w:pPrChange')}/{qn('w:pPr')}")
+    assert [etree.QName(c).localname for c in recorded] == ["numPr"]
+    with pytest.raises(ValueError):
+        neutralize_last_paragraph(paragraph, "w:moveTo", marks)
+    before = marks.count
+    for shape in ("", "<w:pPr><w:rPr/></w:pPr>"):
+        for tag in ("w:del", "w:ins"):
+            plain = etree.fromstring(
+                f'<w:p xmlns:w="{W}">{shape}<w:r><w:t>x</w:t></w:r></w:p>'
+            )
+            unchanged = etree.tostring(plain)
+            neutralize_last_paragraph(plain, tag, marks)
+            assert etree.tostring(plain) == unchanged
+    assert marks.count == before
     assert paragraph.find(f"{qn('w:pPr')}/{qn('w:rPr')}") is None
 
 
@@ -1010,11 +1050,151 @@ def test_a_deleted_last_paragraph_keeps_words_marks_and_mark(tmp_path):
     last = [c for c in _body(redline) if c.tag == qn("w:p")][-1]
     assert last.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:del')}") is None
     assert last.find(f".//{qn('w:delText')}") is not None
+    # A plain paragraph has no formatting to record.
+    assert last.find(f".//{qn('w:pPrChange')}") is None
+    assert last.find(f".//{qn('w:rPrChange')}") is None
+
+
+def _formatted_to_the_end_master(shape: str) -> bytes:
+    """A master with no END OF SECTION, so its last body paragraph is a
+    provision — one carrying formatting that an EMPTY paragraph still shows:
+    Word numbering (an empty numbered paragraph prints its number) or a page
+    break before it (a blank page), plus run formatting on its mark (the
+    height of the empty line)."""
+    from docx.oxml import OxmlElement
+
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    if shape == "numbered":
+        _define_numbering(
+            document, 50, {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3.")}
+        )
+        _numbered(document, "SUMMARY", 1, "50")
+        _numbered(document, "Section includes vibration isolation.", 2, "50")
+        last = _numbered(document, "Provide isolators as scheduled.", 2, "50")
+    else:
+        for line in ("1.1 SUMMARY", "A. Section includes vibration isolation."):
+            document.add_paragraph(line)
+        last = document.add_paragraph("B. Provide isolators as scheduled.")
+        last.paragraph_format.page_break_before = True
+    mark = OxmlElement("w:rPr")
+    mark.append(OxmlElement("w:b"))
+    size = OxmlElement("w:sz")
+    size.set(qn("w:val"), "28")
+    mark.append(size)
+    last._p.get_or_add_pPr().append(mark)
+    return _save(document)
+
+
+_SHOWN = {"numbered": "numPr", "page-break": "pageBreakBefore"}
+
+
+def _tail(body):
+    """The body's last paragraph."""
+    return [c for c in body if c.tag == qn("w:p")][-1]
+
+
+def _words(paragraph) -> str:
+    return "".join(
+        t.text or "" for t in paragraph.iter(qn("w:t"), qn("w:delText"))
+    )
+
+
+def _formatting(paragraph) -> list[str]:
+    """What a resolved paragraph still sets, by local name: its own
+    paragraph properties, then its mark's run formatting."""
+    properties = paragraph.find(qn("w:pPr"))
+    if properties is None:
+        return []
+    names = [
+        etree.QName(c).localname
+        for c in properties
+        if isinstance(c.tag, str) and c.tag != qn("w:rPr")
+    ]
+    mark = properties.find(qn("w:rPr"))
+    if mark is not None:
+        names += [etree.QName(c).localname for c in mark if isinstance(c.tag, str)]
+    return names
+
+
+@pytest.mark.parametrize("shape", ["numbered", "page-break"])
+def test_a_deleted_last_paragraph_accepts_to_a_plain_empty_one(tmp_path, shape):
+    """Codex, PR #187: Word cannot track the last paragraph mark, so Accept
+    All of a deleted last provision leaves its paragraph behind, empty — and
+    an empty paragraph that keeps its number or its page break is not
+    invisible. The redline records that formatting as a tracked change whose
+    current side is plain: Accept All leaves a plain empty paragraph, Reject
+    All the provision exactly as it was."""
+    source = _formatted_to_the_end_master(shape)
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section = _edit(
+        imported.section,
+        {"action": "delete", "target_id": article.paragraphs[-1].uid},
+    )
+    redline, stats = _verify(source, imported, section)
+    assert stats["redline"]["last_mark_untracked"] == 1
+    r_body = _body(redline)
+    shown = _SHOWN[shape]
+    tail = _tail(r_body)
+    assert tail.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:del')}") is None
+    assert tail.find(f"{qn('w:pPr')}/{qn('w:' + shown)}") is None
+    recorded = tail.find(f"{qn('w:pPr')}/{qn('w:pPrChange')}/{qn('w:pPr')}")
+    assert recorded is not None and recorded.find(qn("w:" + shown)) is not None
+    leftover = _tail(accept_all(r_body))
+    assert _words(leftover) == ""
+    assert _formatting(leftover) == []
+    restored = _tail(reject_all(r_body))
+    assert _words(restored).endswith("Provide isolators as scheduled.")
+    assert {shown, "b", "sz"} <= set(_formatting(restored))
+
+
+@pytest.mark.parametrize("shape", ["numbered", "page-break"])
+def test_an_appended_last_paragraph_rejects_to_a_plain_empty_one(tmp_path, shape):
+    """The mirror image: a provision added after the last one is the
+    document's new last paragraph, so Reject All leaves it behind, empty.
+    The formatting it took from its neighbour is recorded as a change FROM
+    nothing: Reject All leaves a plain empty paragraph, Accept All the
+    provision exactly as exported."""
+    source = _formatted_to_the_end_master(shape)
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section = _edit(
+        imported.section,
+        {
+            "action": "add_paragraph",
+            "target_id": article.uid,
+            "position": len(article.paragraphs),
+            "text": "Provide seismic restraints.",
+        },
+    )
+    redline, stats = _verify(source, imported, section)
+    assert stats["redline"]["last_mark_untracked"] == 1
+    r_body = _body(redline)
+    shown = _SHOWN[shape]
+    tail = _tail(r_body)
+    assert tail.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:ins')}") is None
+    recorded = tail.find(f"{qn('w:pPr')}/{qn('w:pPrChange')}/{qn('w:pPr')}")
+    assert recorded is not None and len(recorded) == 0
+    leftover = _tail(reject_all(r_body))
+    assert _words(leftover) == ""
+    assert _formatting(leftover) == []
+    exported = _tail(accept_all(r_body))
+    assert _words(exported).endswith("Provide seismic restraints.")
+    assert {shown, "b", "sz"} <= set(_formatting(exported))
 
 
 def test_revision_tags_are_the_oracle_vocabulary():
     """The writer only ever emits what the oracle resolves."""
-    assert {qn("w:ins"), qn("w:del"), qn("w:pPrChange")} <= REVISION_TAGS
+    assert {
+        qn("w:ins"),
+        qn("w:del"),
+        qn("w:pPrChange"),
+        qn("w:rPrChange"),
+    } <= REVISION_TAGS
 
 
 def _break_page_master() -> bytes:

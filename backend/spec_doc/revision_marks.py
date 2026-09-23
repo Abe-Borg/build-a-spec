@@ -26,6 +26,14 @@ What Word is strict about, and this module therefore owns:
 * **Deleted text is ``w:delText``** (``w:delInstrText`` for a field
   instruction) — except inside a text box, which is its own story: deleting
   the run that anchors it deletes the box whole.
+* **A document's last paragraph mark cannot be tracked.** Its words are
+  marked and its mark is left alone, so the resolution that should remove
+  the paragraph (Accept All of a deletion, Reject All of an insertion)
+  leaves it behind, empty. An empty paragraph still prints its number and
+  breaks the page before it, so its formatting is recorded as a tracked
+  change whose side in that resolution is EMPTY
+  (:func:`neutralize_last_paragraph`): what is left is plain, and the other
+  resolution still gets the paragraph exactly as it was.
 """
 
 from __future__ import annotations
@@ -62,6 +70,10 @@ _W_CUSTOM_XML = qn("w:customXml")
 _W_HYPERLINK = qn("w:hyperlink")
 _W_SECTPR = qn("w:sectPr")
 _W_PPR_CHANGE = qn("w:pPrChange")
+_W_RPR_CHANGE = qn("w:rPrChange")
+#: What may lead a paragraph mark's ``w:rPr`` as a revision flag
+#: (``EG_ParaRPrTrackChanges``) rather than as formatting.
+_MARK_FLAGS = frozenset({_W_INS, _W_DEL, qn("w:moveFrom"), qn("w:moveTo")})
 _W_BOOKMARK_START = qn("w:bookmarkStart")
 _W_BOOKMARK_END = qn("w:bookmarkEnd")
 _W_TXBX_CONTENT = qn("w:txbxContent")
@@ -237,14 +249,94 @@ def record_paragraph_properties(paragraph, original_properties, marks) -> None:
     change = marks.wrapper("w:pPrChange")
     old = etree.SubElement(change, _W_PPR)
     if original_properties is not None:
-        for child in original_properties:
-            if isinstance(child.tag, str) and child.tag not in (
-                _W_RPR,
-                _W_SECTPR,
-                _W_PPR_CHANGE,
-            ):
-                old.append(copy.deepcopy(child))
+        for child in _base_properties(original_properties):
+            old.append(copy.deepcopy(child))
     properties.append(change)
+
+
+def _base_properties(properties) -> list:
+    """A ``w:pPr``'s ``CT_PPrBase`` children: everything but the mark's
+    ``w:rPr``, a ``w:sectPr`` and a ``w:pPrChange``."""
+    return [
+        child
+        for child in properties
+        if isinstance(child.tag, str)
+        and child.tag not in (_W_RPR, _W_SECTPR, _W_PPR_CHANGE)
+    ]
+
+
+def _mark_formatting(mark) -> list:
+    """A paragraph mark's ``w:rPr`` children that are formatting: not a
+    revision flag, not a ``w:rPrChange``."""
+    return [
+        child
+        for child in mark
+        if isinstance(child.tag, str)
+        and child.tag not in _MARK_FLAGS
+        and child.tag != _W_RPR_CHANGE
+    ]
+
+
+def record_mark_properties(paragraph, original_mark, marks: RevisionMarks) -> None:
+    """Record ``original_mark`` (a paragraph mark's ``w:rPr``, or ``None``)
+    as what the mark's run formatting was: a ``w:rPrChange`` as the LAST
+    child of the mark's ``w:rPr`` (``CT_ParaRPr`` ends with it), holding the
+    formatting only — never a revision flag."""
+    mark = paragraph_mark_properties(paragraph)
+    change = marks.wrapper("w:rPrChange")
+    old = etree.SubElement(change, _W_RPR)
+    if original_mark is not None:
+        for child in _mark_formatting(original_mark):
+            old.append(copy.deepcopy(child))
+    mark.append(change)
+
+
+def neutralize_last_paragraph(paragraph, tag: str, marks: RevisionMarks) -> None:
+    """The document's LAST paragraph, deleted (``"w:del"``) or inserted
+    (``"w:ins"``), whose mark Word cannot track.
+
+    Its words are marked like any other paragraph's; its mark is not, so the
+    resolution that should remove the paragraph — Accept All of a deletion,
+    Reject All of an insertion — leaves it behind, empty. An empty paragraph
+    is not invisible: numbered, it prints its number; with a page break
+    before it, it makes a blank page; its style or border can draw; its
+    mark's run formatting sets the empty line's height. So the formatting is
+    recorded as a tracked change whose side in THAT resolution is empty:
+
+    * deleted — the formatting moves into ``w:pPrChange`` / ``w:rPrChange``
+      (Reject All restores it) and the paragraph's current properties become
+      empty (what Accept All keeps);
+    * inserted — the formatting stays (Accept All keeps it) and the changes
+      record that there was none (what Reject All restores).
+
+    Either way the leftover sets nothing, which is the only leftover the
+    self-check tolerates (``revisions._is_formatting_free_empty``); the other
+    resolution still gets the paragraph exactly as it was. A paragraph with
+    no formatting gets no change. A section break is never moved: a
+    paragraph holding one keeps it (it cannot be deleted, and a leftover
+    holding one is a difference the self-check reports).
+    """
+    if tag not in ("w:del", "w:ins"):
+        raise ValueError(f"not a paragraph-mark revision: {tag!r}")
+    properties = paragraph.find(_W_PPR)
+    if properties is None:
+        return
+    base = _base_properties(properties)
+    mark = properties.find(_W_RPR)
+    formatting = _mark_formatting(mark) if mark is not None else []
+    deleted = tag == "w:del"
+    if base:
+        original = copy.deepcopy(properties) if deleted else None
+        if deleted:
+            for child in base:
+                properties.remove(child)
+        record_paragraph_properties(paragraph, original, marks)
+    if formatting:
+        original_mark = copy.deepcopy(mark) if deleted else None
+        if deleted:
+            for child in formatting:
+                mark.remove(child)
+        record_mark_properties(paragraph, original_mark, marks)
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +488,8 @@ __all__ = [
     "insert_content",
     "mark_paragraph",
     "mark_table",
+    "neutralize_last_paragraph",
     "paragraph_mark_properties",
+    "record_mark_properties",
     "record_paragraph_properties",
 ]

@@ -42,8 +42,15 @@ Word splits text into runs — the one thing it re-does on every save anyway:
   exclude names — the one documented Reject-All limit: a moved provision's
   bookmarks stay with its new copy;
 * an empty hyperlink is dropped (Word shows nothing for it), and so are
-  empty paragraphs at the very end of the body: a document's last paragraph
-  mark cannot be tracked, so Word leaves an empty one behind.
+  FORMATTING-FREE empty paragraphs at the very end of the body: a document's
+  last paragraph mark cannot be tracked, so resolving a deletion or insertion
+  there leaves an empty paragraph behind. Only a formatting-free one is
+  invisible — an empty paragraph still prints its number, breaks the page
+  before it, draws its border, and takes its line height from its mark — so
+  one that sets anything (any paragraph property, any run formatting on its
+  mark, a section break) is a difference like any other. The redline writer
+  makes sure the one it leaves sets nothing
+  (``revision_marks.neutralize_last_paragraph``).
 """
 
 from __future__ import annotations
@@ -490,15 +497,13 @@ def _bookmark_names(root) -> dict[str, str]:
     }
 
 
-def _is_trailing_empty(canonical: tuple) -> bool:
-    if canonical[0] != _W_P:
-        return False
-    for child in canonical[2]:
-        if child[0] != _W_PPR:
-            return False
-        if any(grand[0] == _W_SECTPR for grand in child[2]):
-            return False
-    return True
+def _is_formatting_free_empty(canonical: tuple) -> bool:
+    """An empty paragraph that sets nothing Word shows: no content and — once
+    empty property containers are dropped — no properties at all (a section
+    break, numbering, a page break before it, a style, a border, its mark's
+    own run formatting: all differences). Attributes on ``w:p`` itself are
+    revision-session and paragraph ids, never formatting."""
+    return canonical[0] == _W_P and not canonical[2] and not canonical[3]
 
 
 def canonical_body(body, *, exclude_bookmarks=frozenset()) -> list[tuple]:
@@ -509,9 +514,10 @@ def canonical_body(body, *, exclude_bookmarks=frozenset()) -> list[tuple]:
         c for c in (canon.element(child) for child in body) if c is not None
     ]
     # Word cannot track a document's last paragraph mark, so an empty last
-    # paragraph is what a tracked insertion or deletion there leaves behind.
+    # paragraph is what a tracked insertion or deletion there leaves behind
+    # — tolerated only when it sets nothing (see the module docstring).
     tail = [children.pop()] if children and children[-1][0] == _W_SECTPR else []
-    while children and _is_trailing_empty(children[-1]):
+    while children and _is_formatting_free_empty(children[-1]):
         children.pop()
     return children + tail
 

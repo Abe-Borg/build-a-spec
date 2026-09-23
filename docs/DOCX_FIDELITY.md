@@ -251,6 +251,12 @@ two promises about it:
 * **Reject All gives back the upload's body**, with one exception: a moved
   provision's bookmarks stay with its new position (below).
 
+Both allow one thing more, which Word imposes: when the body's last paragraph
+is deleted or added, one of the two resolutions keeps an empty paragraph at
+the very end, because a document's last paragraph mark cannot be tracked. The
+export makes that paragraph plain (below), so it prints no number, breaks no
+page and draws nothing.
+
 "Exactly" means element for element, up to how Word splits text into runs
 (Word re-splits runs on every save anyway), with `w14:paraId`/`w14:textId`
 treated as identity rather than content. Every package part except
@@ -265,13 +271,18 @@ and Reject All transforms over the redline's body (`spec_doc/revisions.py`,
 which shares no code with the writer) and compares them canonically against
 the clean body and the upload's body: adjacent runs with identical properties
 merged, empty runs and containers dropped, XML comments and processing
-instructions ignored, bookmarks compared by name, and an empty last paragraph
-tolerated (Word cannot track a document's last paragraph mark, so a tracked
-change there leaves one behind). No bookmark name may appear twice in the
-redline, and every other package member must be byte-identical. If any check
-fails the route returns a 409 naming it, and the `export` diagnostics event
-records the check and the first mismatching element — its position and
-element names only, never text.
+instructions ignored, bookmarks compared by name, and a FORMATTING-FREE empty
+last paragraph tolerated. Word cannot track a document's last paragraph mark,
+so when the last paragraph is deleted or appended, one of the two resolutions
+leaves it behind, empty. An empty paragraph still shows whatever it sets (its
+number, a page break before it, a border, its line height), so the export
+records that paragraph's formatting as a tracked formatting change whose side
+in that resolution is empty: what is left sets nothing, and an empty last
+paragraph that sets anything is a difference like any other. No bookmark name
+may appear twice in the redline, and every other package member must be
+byte-identical. If any check fails the route returns a 409 naming it, and the
+`export` diagnostics event records the check and the first mismatching
+element — its position and element names only, never text.
 
 **Each element is decided against the upload, through the format map.** The
 plan the clean export renders (`_Assembler.plan()` — kept, spliced, inserted,
@@ -286,6 +297,7 @@ holder leaves) is the same plan the redline renders:
 | inserted | new paragraph | its runs inserted, its paragraph mark inserted |
 | deleted, dropped | nothing | its runs deleted (`w:t` → `w:delText`, `w:instrText` → `w:delInstrText`), its paragraph mark deleted |
 | a table inserted or deleted | the table / nothing | every row flagged (`w:trPr/w:ins` or `w:del`), every cell's content marked |
+| the body's LAST paragraph, inserted or deleted | as above | its runs marked; its paragraph mark cannot be tracked, so its formatting is recorded instead (`w:pPrChange`, and `w:rPrChange` on the mark) with the empty side where the paragraph goes, and the one empty paragraph Word leaves there is plain |
 
 The word-level changes are the splice's own edit script
 (`source_splice.render_redline` beside `render_clean`, over the same pieces),

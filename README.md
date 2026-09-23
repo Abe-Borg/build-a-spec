@@ -492,9 +492,13 @@ The export exists and is reachable through the API; its Export-menu item,
   are your upload's, byte for byte; Track Changes is not switched on in it.
 - **Accept All gives exactly *Export Word (keeps your formatting)*; Reject
   All gives your original back.** The export proves both on every file before
-  it hands it over, and refuses with a named reason if it cannot. The one
-  exception is invisible: a provision you moved keeps its bookmarks at its new
-  position, so Reject All does not restore them at the old one.
+  it hands it over, and refuses with a named reason if it cannot. Two
+  exceptions, both invisible: a provision you moved keeps its bookmarks at its
+  new position, so Reject All does not restore them at the old one; and when
+  the file's LAST paragraph is deleted or added, Word keeps one empty
+  paragraph at the very end (it cannot track a document's last paragraph
+  mark). That paragraph is left plain — the export records its formatting as
+  a tracked formatting change — so it prints no number and breaks no page.
 - **Changes are word by word, inside your runs.** An edited provision shows
   the words that went and the words that came, with the rest keeping its own
   formatting. In a master with typed letters, a provision relettered by an
@@ -1782,8 +1786,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          the redline's w:ins/w:del inside those same runs
     revisions.py         pure-XML Accept All / Reject All + the canonical
                          comparison: the redline's self-check and test oracle
-    revision_marks.py    the revision writer: w:ins/w:del/w:pPrChange in
-                         Word's schema order, ids above the package's own
+    revision_marks.py    the revision writer: w:ins/w:del/w:pPrChange/
+                         w:rPrChange in Word's schema order, ids above the
+                         package's own
     linting.py           deterministic lint: stale editions, placeholders, structure
                                                                   [ported from Spec Critic]
     diffing.py           deterministic version diff (uid join, word-level runs,

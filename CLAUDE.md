@@ -897,8 +897,10 @@ backend/
                            moved or deleted (an emptied holder deletes its
                            words, keeps its mark, and records a numbering
                            cancel as w:pPrChange); the last paragraph mark is
-                           never flagged; a moved old copy gives up its
-                           bookmarks and w14 ids. D-5 refuses a package with
+                           never flagged — its formatting is recorded instead
+                           (neutralize_last_paragraph), so the empty paragraph
+                           Word leaves there sets nothing; a moved old copy
+                           gives up its bookmarks and w14 ids. D-5 refuses a package with
                            pending revisions; untrackable blocks refuse by
                            name (SourceRedlineError.reason, a closed
                            vocabulary with server-authored sentences); the
@@ -948,8 +950,11 @@ backend/
                            runs/containers dropped, comments/PIs/xml:space and
                            w14 ids ignored, bookmarks by name (exclusions for
                            the moved-bookmark limit), trailing empty
-                           paragraphs tolerated (Word cannot track the last
-                           mark); duplicate_bookmark_names. Re-parses into
+                           paragraphs tolerated only when FORMATTING-FREE
+                           (Word cannot track the last mark, but an empty
+                           paragraph still prints its number or breaks its
+                           page — anything it sets is a difference);
+                           duplicate_bookmark_names. Re-parses into
                            plain lxml first (_plain) — python-docx's CT_P
                            overrides .text
   spec_doc/revision_marks.py
@@ -961,7 +966,13 @@ backend/
                            before w:sectPr/w:pPrChange; deleting a mark that
                            holds a section break raises), record_paragraph_
                            properties (w:pPrChange LAST, base properties
-                           only), delete_content / insert_content (group
+                           only), record_mark_properties (w:rPrChange LAST in
+                           the mark's w:rPr, formatting only),
+                           neutralize_last_paragraph (the document's last
+                           paragraph, deleted or inserted: its untrackable
+                           mark would leave it behind with its formatting, so
+                           the formatting becomes a tracked change whose side
+                           in that resolution is empty), delete_content / insert_content (group
                            wrappers over the wrappable children, descending
                            into a hyperlink; w:t → w:delText outside nested
                            text boxes), mark_table (w:trPr flag after the
@@ -11910,6 +11921,26 @@ export's QA rows) is the next PR and was deliberately not started.
   last provision (or Reject All of an appended one) leaves an empty
   paragraph behind. The plan did not know this; the first test that deleted
   the last provision did.
+- **That leftover must set nothing, and the writer makes sure it does**
+  (caught in review on PR #187, Codex). The first cut tolerated ANY empty
+  last paragraph without a section break — so a leftover that kept its Word
+  numbering printed a stray letter, one that kept `w:pageBreakBefore` made a
+  blank page, and the self-check passed both. An empty paragraph is only
+  invisible when it sets nothing, so the tolerance
+  (`_is_formatting_free_empty`) now requires no paragraph property and no
+  run formatting on the mark at all, once empty containers drop; the
+  attributes on `w:p` (rsids, `w14` ids) are not formatting. The writer
+  delivers that by construction (`revision_marks.neutralize_last_paragraph`,
+  from `_RedlineBuilder.render` for the last flagged element): a DELETED
+  last paragraph's formatting moves into a `w:pPrChange` and a mark
+  `w:rPrChange` (`record_mark_properties`, LAST in `CT_ParaRPr`), so Accept
+  All keeps the now-empty current side and Reject All restores it all; an
+  APPENDED last paragraph keeps its formatting and gains changes recording
+  that there was none. Word shows each as an ordinary "Formatted" change. A
+  paragraph with no formatting gets no change, and a section break is never
+  moved into one (a leftover still holding one would be a difference the
+  check reports). `render.redline.last_mark_untracked` counts it in the
+  export event.
 - **Move detection lives in the diff, and is reconciled at body level.**
   `diff_sections(detect_moves=True)` is the plan's per-sibling rule (the
   LONGEST increasing subsequence of base positions, ties to the most
@@ -12002,9 +12033,11 @@ export's QA rows) is the next PR and was deliberately not started.
   clean export, which renders once inside it). Corpus sweep, 17 masters ×
   60 edit mixes (1,020 renders): no refusal, no failed self-check, and a
   fallback rate of 230 of 525 edited provisions — every one `hyperlink`,
-  the next thing the splice should learn. Fixture sweep, 9 hand-built
-  masters × 200 mixes (1,800 renders): clean, with 118 emptied break holders
-  and 5 break-forced extra moves exercised.
+  the next thing the splice should learn. Fixture sweep, 11 hand-built
+  masters × 200 mixes (2,200 renders, the two ending in a formatted
+  provision included): clean under the formatting-free tolerance, with 118
+  emptied break holders, 5 break-forced extra moves and 347 untracked last
+  marks exercised.
 - **Found, not done.** A new provision nested deeper than any provision a
   Word-numbered master already has is cloned from kin at another depth and
   keeps its `w:ilvl`, so the formatted export (and, by construction, the
@@ -12012,18 +12045,27 @@ export's QA rows) is the next PR and was deliberately not started.
   in the plan with its likely fix. The re-import test therefore checks the
   TREE for typed-letter masters and "what the formatted export re-imports
   as" for every labelling kind.
-- **Tests.** `tests/test_revisions.py` (26 — the oracle on hand-built
-  revision XML); `tests/test_redline_original.py` (68 — the invariant
-  matrix, every row asserting both resolutions plus the package checks;
-  refusals; the weights and the writer's guards directly; re-import; the
-  corpus sweep; the API matrix); two in
+- **Tests.** `tests/test_revisions.py` (37 — the oracle on hand-built
+  revision XML, the formatting-free trailing rule included);
+  `tests/test_redline_original.py` (73 — the invariant matrix, every row
+  asserting both resolutions plus the package checks; refusals; the weights
+  and the writer's guards directly; the last paragraph deleted and appended
+  in a Word-numbered and a page-break master; re-import; the corpus sweep;
+  the API matrix); two in
   `test_source_splice.py`, five in `test_diffing.py`, two in
   `test_diagnostics.py`, and the frontend pins in `downloads.test.ts`.
   Every mechanism was reverted in place, each in an isolated copy of the
   tree, to prove a test goes red without it: a flagged paragraph mark not
   joining the next paragraph → 36; equal runs not merged → 31; the
-  trailing-empty-paragraph tolerance → 2; the mark flag appended instead of
-  first → 2; the writer's section-break guard → 1; no `w:pPrChange` → 1;
+  trailing-empty-paragraph tolerance → 11; that tolerance widened back to any
+  empty paragraph without a break → 5; the mark flag appended instead of
+  first → 2; the writer's section-break guard → 1; no `w:pPrChange` → 5;
+  the last paragraph not neutralized → 4; its mark formatting not recorded
+  → 4; its paragraph formatting not recorded → 4; an appended last
+  paragraph left as it was → 2; the mark's `w:rPrChange` first instead of
+  last → 2; `last_mark_untracked` not counted → 4; a section break counted
+  as formatting → 1; a tag other than `w:ins`/`w:del` accepted → 1; a
+  change recorded for a paragraph (or a mark) that sets nothing → 1 each;
   deleted text left as `w:t` → 3; a row flag ahead of the row's other
   properties → 1; ids not above the package's own → 2; breaks not pinned →
   1; the diff's movers weighing like its stayers → 2; the diff's moves

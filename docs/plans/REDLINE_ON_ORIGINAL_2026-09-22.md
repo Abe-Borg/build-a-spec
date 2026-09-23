@@ -695,7 +695,13 @@ Deviations from the text above:
    insertion or deletion of the body's last paragraph marks its words and
    leaves its mark alone, and the canonical comparison tolerates the empty
    last paragraph that leaves. The plan did not mention it; it came up the
-   first time a test deleted the last provision.
+   first time a test deleted the last provision. **Only a FORMATTING-FREE one
+   is tolerated** (Codex, PR #187): an empty paragraph that kept its Word
+   numbering prints a stray letter and one that kept `w:pageBreakBefore`
+   makes a blank page, and the first cut passed both. The writer records the
+   last paragraph's formatting as a tracked change whose side in the
+   resolution that leaves it behind is empty (`neutralize_last_paragraph`:
+   `w:pPrChange` plus a mark `w:rPrChange`), so the leftover sets nothing.
 5. **Deleted content keeps its bookmarks inside `w:del`; only a MOVED old
    copy gives them up** (with its `w14` ids), because the new copy carries
    them. The self-check excludes exactly the names a moved copy carries, and
@@ -722,9 +728,11 @@ Measured (recorded, not asserted):
   the fallback, **every one for `hyperlink`** — Word-saved masters put
   hyperlinks in provisions, and the splice does not descend into
   `w:hyperlink` yet (the writer already does).
-- **Fixture sweep** (the nine hand-built masters of the suites × 200 edit
-  mixes, 1,800 renders): no refusal and no failed self-check; 118 emptied
-  break holders and 5 extra moves forced by breaks among them.
+- **Fixture sweep** (the eleven hand-built masters of the suites × 200 edit
+  mixes, 2,200 renders — two of them ending in a formatted provision): no
+  refusal and no failed self-check under the formatting-free tolerance; 118
+  emptied break holders, 5 extra moves forced by breaks and 347 last
+  paragraphs whose untrackable mark was neutralized among them.
 
 What the UI PR starts from:
 

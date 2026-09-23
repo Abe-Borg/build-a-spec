@@ -90,6 +90,7 @@ from .revision_marks import (
     insert_content,
     mark_paragraph,
     mark_table,
+    neutralize_last_paragraph,
     record_paragraph_properties,
 )
 from .source_splice import (
@@ -1413,6 +1414,7 @@ class _RedlineBuilder:
             "moved": 0,
             "moves_added": 0,
             "leftovers": 0,
+            "last_mark_untracked": 0,
         }
 
     # -- helpers -------------------------------------------------------------
@@ -1650,10 +1652,18 @@ class _RedlineBuilder:
                 rendered.append(self._render_shared(record))
         last = len(rendered) - 1
         for index, (element, flag) in enumerate(rendered):
-            # Word cannot track a document's last paragraph mark: its words
-            # are marked, and the empty paragraph it leaves is Word's own.
-            if flag is not None and index != last:
+            if flag is None:
+                continue
+            if index != last:
                 mark_paragraph(element, flag, self.marks)
+                continue
+            # Word cannot track a document's last paragraph mark: its words
+            # are marked, and the resolution that should remove it leaves an
+            # empty paragraph behind — which must set nothing Word shows (a
+            # number, a page break), so its formatting becomes a tracked
+            # change whose side there is empty.
+            neutralize_last_paragraph(element, flag, self.marks)
+            self.stats["last_mark_untracked"] += 1
         return [element for element, _flag in rendered], moved_names
 
 

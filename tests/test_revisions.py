@@ -7,6 +7,7 @@ shape at a time, before anything is built on top of them.
 """
 from __future__ import annotations
 
+import pytest
 from lxml import etree
 
 from backend.spec_doc.revisions import (
@@ -282,6 +283,46 @@ def test_a_run_property_change_restores_the_old_properties_on_reject():
     assert rejected.find(f".//{{{W}}}b") is None
 
 
+def test_a_paragraph_mark_property_change_restores_the_mark_formatting():
+    """``w:pPr/w:rPr/w:rPrChange``: the paragraph mark's OWN run formatting,
+    tracked — what the redline records for a document's last paragraph."""
+    body = _body(
+        "<w:p><w:pPr><w:rPr><w:i/>"
+        f"<w:rPrChange {_rev(1)}><w:rPr><w:b/><w:sz w:val='28'/></w:rPr></w:rPrChange>"
+        "</w:rPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"
+    )
+    mark = f"{{{W}}}p/{{{W}}}pPr/{{{W}}}rPr"
+    accepted = accept_all(body).find(mark)
+    assert [etree.QName(c).localname for c in accepted] == ["i"]
+    rejected = reject_all(body).find(mark)
+    assert [etree.QName(c).localname for c in rejected] == ["b", "sz"]
+
+
+def test_a_deleted_last_paragraph_with_its_formatting_recorded_resolves_both_ways():
+    """The shape the redline writes when the document's LAST paragraph is
+    deleted: its words in ``w:del``, its mark unflagged (Word cannot track
+    it), and its formatting moved into property changes whose current side is
+    empty. Accept All leaves a formatting-free empty paragraph — the one
+    leftover the comparison tolerates; Reject All, the paragraph as it was."""
+    original = _body(
+        "<w:p><w:r><w:t>Kept.</w:t></w:r></w:p>"
+        "<w:p><w:pPr><w:numPr><w:ilvl w:val='0'/><w:numId w:val='3'/></w:numPr>"
+        "<w:rPr><w:b/></w:rPr></w:pPr><w:r><w:t>Last.</w:t></w:r></w:p><w:sectPr/>"
+    )
+    redline = _body(
+        "<w:p><w:r><w:t>Kept.</w:t></w:r></w:p>"
+        "<w:p><w:pPr><w:rPr>"
+        f"<w:rPrChange {_rev(2)}><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr>"
+        f"<w:pPrChange {_rev(1)}><w:pPr><w:numPr><w:ilvl w:val='0'/>"
+        "<w:numId w:val='3'/></w:numPr></w:pPr></w:pPrChange></w:pPr>"
+        f"<w:del {_rev(3)}><w:r><w:delText>Last.</w:delText></w:r></w:del></w:p>"
+        "<w:sectPr/>"
+    )
+    kept = _body("<w:p><w:r><w:t>Kept.</w:t></w:r></w:p><w:sectPr/>")
+    assert _equal(accept_all(redline), kept)
+    assert _equal(reject_all(redline), original)
+
+
 # ---------------------------------------------------------------------------
 # The canonical comparison
 # ---------------------------------------------------------------------------
@@ -366,6 +407,52 @@ def test_trailing_empty_paragraphs_are_not_differences_but_inner_ones_are():
         "<w:sectPr/>"
     )
     assert not _equal(short, held)
+
+
+@pytest.mark.parametrize(
+    "properties",
+    [
+        "<w:pPr><w:numPr><w:ilvl w:val='0'/><w:numId w:val='3'/></w:numPr></w:pPr>",
+        "<w:pPr><w:pageBreakBefore/></w:pPr>",
+        "<w:pPr><w:pStyle w:val='PR1'/></w:pPr>",
+        "<w:pPr><w:pBdr><w:top w:val='single' w:sz='4'/></w:pBdr></w:pPr>",
+        "<w:pPr><w:rPr><w:sz w:val='72'/></w:rPr></w:pPr>",
+    ],
+    ids=["numbered", "page-break-before", "styled", "bordered", "sized-mark"],
+)
+def test_a_trailing_empty_paragraph_that_still_shows_something_is_a_difference(
+    properties,
+):
+    """Codex, PR #187: an EMPTY paragraph is still visible when it sets
+    anything — a numbered one prints its number, a page break before it
+    makes a blank page, a style can do either, a border draws, and the
+    mark's own run formatting sets the empty line's height. Only a
+    formatting-free one is what the untrackable last paragraph mark may
+    leave behind, so only that one is tolerated, on either side."""
+    short = _body("<w:p><w:r><w:t>x</w:t></w:r></w:p><w:sectPr/>")
+    padded = _body(
+        f"<w:p><w:r><w:t>x</w:t></w:r></w:p><w:p>{properties}</w:p><w:sectPr/>"
+    )
+    assert not _equal(short, padded)
+    assert not _equal(padded, short)
+
+
+@pytest.mark.parametrize(
+    "plain",
+    [
+        "<w:p/>",
+        "<w:p><w:pPr/></w:p>",
+        "<w:p><w:pPr><w:rPr/></w:pPr></w:p>",
+        "<w:p w:rsidR='00AB12CD' w14:paraId='1A2B3C4D'/>",
+    ],
+    ids=["bare", "empty-properties", "empty-mark", "revision-session-ids"],
+)
+def test_a_formatting_free_trailing_paragraph_is_still_tolerated(plain):
+    """Empty property containers and revision-session / paragraph ids set
+    nothing Word shows."""
+    short = _body("<w:p><w:r><w:t>x</w:t></w:r></w:p><w:sectPr/>")
+    padded = _body(f"<w:p><w:r><w:t>x</w:t></w:r></w:p>{plain}{plain}<w:sectPr/>")
+    assert _equal(short, padded)
 
 
 def test_canonical_form_ignores_namespace_prefixes():

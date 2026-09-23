@@ -1200,6 +1200,22 @@ class DocumentStore:
         data["version"] = {"index": self.index, "count": len(self.versions)}
         return data
 
+    @property
+    def provisional(self) -> bool:
+        """True while a turn has edited ``doc`` and has neither committed
+        nor rolled back.
+
+        Otherwise — outside a turn, and inside one until its first edit —
+        ``doc`` is exactly ``versions[index]``. Every change of document
+        installs a new ``doc`` object (an edit replaces the tree, undo, redo,
+        rollback and load rebuild it, an import or a template adopts a fresh
+        one), and a commit only ends the provisional stretch of the tree the
+        turn's edits installed. So while this is False the tree object names
+        one committed version, which is what a memo of state derived from
+        the document can key on.
+        """
+        return self._dirty
+
     # -- turn lifecycle -----------------------------------------------------
 
     def begin_turn(self) -> None:

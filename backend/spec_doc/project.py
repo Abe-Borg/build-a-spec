@@ -761,6 +761,10 @@ def load_project(data: Any, session) -> None:
         session._capability_cache = None
     if hasattr(session, "_pending_capability_cache"):
         session._pending_capability_cache = None
+    if hasattr(session, "_lint_cache"):
+        # Lint of the outgoing document; keyed on its tree, so it could not
+        # match the loaded one either.
+        session._lint_cache = None
     if hasattr(session, "_capability_warm"):
         # A background sweep of the outgoing document settles into the
         # abandoned object; its publish guard refuses a stale memo write, and

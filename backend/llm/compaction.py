@@ -375,15 +375,18 @@ def compaction_payload(record: CompactionRecord | None) -> dict[str, Any] | None
 # The view
 # ---------------------------------------------------------------------------
 
-# The chat engine's own marker pattern, with a leading ``(?<!=)``. Without
-# it, a long run of ``=`` that never completes a marker is re-scanned from
-# every position inside the run (20,000 of them cost ~16 s — recorded as
-# found-not-fixed for ``conversation._CONTEXT_BOUNDARY_PATTERN`` in Project
-# workspace Phase 5A). The lookbehind changes no match: the leftmost match
-# always begins at a run's first ``=``. It matters more here than there,
-# because what this module frames is a whole summary or up to six recalled
-# turns of the user's own text.
-_CONTEXT_BOUNDARY_PATTERN = re.compile(
+# The PROJECT CONTEXT markers, as every channel that escapes them finds
+# them: the ONE definition, which the chat engine's own escape
+# (``conversation._join_and_neutralize``) uses too. The leading ``(?<!=)``
+# is what keeps it linear. Without it, a long run of ``=`` that never
+# completes a marker is re-scanned from every position inside the run:
+# 20,000 of them cost ~16 s at every turn start while the engine kept a copy
+# without it (found in Project workspace Phase 5A; the engine has used this
+# object since). The lookbehind changes no match: a match starting inside a
+# run implies one starting at the run's first ``=``, further left, so the
+# leftmost match always starts there. It lives here rather than in the
+# engine because this module is the leaf both can import.
+CONTEXT_BOUNDARY_PATTERN = re.compile(
     r"(?<!=)={2,}\s*(?:END\s+)?PROJECT\s+CONTEXT\b[^\n=]*={2,}", re.IGNORECASE
 )
 _FRAME_TAG_PATTERN = re.compile(
@@ -405,7 +408,7 @@ def neutralize_compaction_frames(text: str) -> str:
     text = _FRAME_TAG_PATTERN.sub(
         lambda m: f"[escaped tag: {m.group(1)}{m.group(2)}]", text
     )
-    return _CONTEXT_BOUNDARY_PATTERN.sub(
+    return CONTEXT_BOUNDARY_PATTERN.sub(
         lambda m: f"[escaped marker: {' '.join(m.group(0).strip('= ').split())}]",
         text,
     )

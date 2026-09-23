@@ -1350,14 +1350,17 @@ def test_api_doc_reads_one_state_not_a_mixture_of_two(monkeypatch):
     exactly the kind of disagreement the panel has no way to detect.
 
     The probe records the tree object each reader was handed: one guarded
-    state means one object.
+    state means one object. The lint pass is read through
+    ``SessionState.document_lint``, which is handed that tree explicitly (and
+    may answer from its memo, which is keyed on that very object).
     """
     import threading
 
     from backend import app as app_module
+    from backend.llm.conversation import SessionState
 
     real_open_questions = app_module.open_questions
-    real_lint = app_module.lint_document
+    real_lint = SessionState.document_lint
     # Keyed by thread: the concurrent edit builds a payload of its OWN, so a
     # single shared record would be overwritten by the wrong request.
     per_thread: dict[int, dict[str, int]] = {}
@@ -1378,10 +1381,10 @@ def test_api_doc_reads_one_state_not_a_mixture_of_two(monkeypatch):
             edited.wait(0.75)
         return real_open_questions(section)
 
-    def hooked_lint(section, module, **kwargs):
+    def hooked_lint(self, section, **kwargs):
         tid = threading.get_ident()
         per_thread.setdefault(tid, {})["lint"] = id(section)
-        return real_lint(section, module, **kwargs)
+        return real_lint(self, section, **kwargs)
 
     # Entered as a context manager on purpose: that starts a persistent
     # portal, so a request issued from another thread really does run
@@ -1397,7 +1400,7 @@ def test_api_doc_reads_one_state_not_a_mixture_of_two(monkeypatch):
         ).status_code == 200
 
         monkeypatch.setattr(app_module, "open_questions", hooked_open_questions)
-        monkeypatch.setattr(app_module, "lint_document", hooked_lint)
+        monkeypatch.setattr(SessionState, "document_lint", hooked_lint)
 
         def _edit() -> None:
             assert reached.wait(5)

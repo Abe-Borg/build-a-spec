@@ -769,7 +769,10 @@ condensing off while that happens.
   quadratic on a long run of `=` that never completes a marker (recorded
   found-not-fixed in project-workspace Phase 5A). This module's copy
   carries the `(?<!=)` that makes it linear without changing a match,
-  because it frames whole summaries and recalled turns.
+  because it frames whole summaries and recalled turns. *Fixed
+  2026-09-23:* the chat engine now escapes with this module's object
+  (`compaction.CONTEXT_BOUNDARY_PATTERN`), so there is one definition —
+  20,000 `=` went from ~16 s at every turn start to about a millisecond.
 - **Review fixes (PR #189, Codex).** Three findings, all real. Removing a
   reference now answers the record its truncation left, and the chat
   applies it, so the divider cannot outlive its summary. A condensed turn

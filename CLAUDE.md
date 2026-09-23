@@ -800,7 +800,12 @@ backend/
                            source_detached = the "Edit freely" decision, beside
                            baseline_index rather than in a version so undo/redo
                            can't flip it, cleared by adopt_imported, fail-closed
-                           on load — see "Import and actually edit it");
+                           on load — see "Import and actually edit it";
+                           provisional = a turn has edited doc and not yet
+                           committed or rolled back — otherwise doc IS
+                           versions[index], and every change of document
+                           installs a new doc object, which is what the
+                           session's lint memo keys on);
                            open_questions; outline; APPLY_SPEC_EDITS_TOOL schema.
                            Five paragraph levels (MAX_PARAGRAPH_DEPTH 5;
                            PARAGRAPH_LABEL_FORMS A. / 1. / a. / 1) / a),
@@ -875,7 +880,19 @@ backend/
                            Chunk 5.2 adds duplicate_provision (SIBLING paragraphs
                            only, ≥25 chars, numeric tokens must match before any
                            similarity ratio — a dimension or article number
-                           differing is decisive evidence AGAINST duplication)
+                           differing is decisive evidence AGAINST duplication).
+                           The ratio is still difflib's character-level one, but
+                           _RatioBounds settles first every pair it can PROVE
+                           below the bar — the length and character-count
+                           bounds (real_quick_ratio / quick_ratio, computed
+                           from per-provision profiles) and a bit-parallel
+                           character LCS that stops once the rows left cannot
+                           reach _matches_needed (spelled in _mask_symbols:
+                           characters at or above U+0100 share 256 masks, so
+                           the masks stay linear in the text's length
+                           whatever its alphabet) — so no finding moves and
+                           long number-free siblings stop costing seconds
+                           (see "The duplicate lint proves before it compares")
   spec_doc/source_format.py
                            the import→export formatting contract's ledger:
                            FormatAnchor (origin body-child index + label kind
@@ -1223,6 +1240,9 @@ backend/
                            CompactionRunner (one background summary per
                            session object; zombie-abandoned on reset / load
                            / reference delete; backoff in committed turns).
+                           CONTEXT_BOUNDARY_PATTERN is the ONE definition of
+                           the PROJECT CONTEXT markers, linear thanks to its
+                           (?<!=); the chat engine escapes with this object.
                            Leaf so project.py can import it
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
@@ -1308,7 +1328,16 @@ backend/
                            adopt_ready_compaction after every finalize, the
                            once-only "prompt is too long" retry, the
                            recall_conversation dispatch (appended LAST in
-                           _chat_tools) and the `compaction` SSE event
+                           _chat_tools) and the `compaction` SSE event.
+                           SessionState.document_lint is the ONE way the
+                           payload, readiness, a turn's PROJECT CONTEXT and
+                           the post-commit `lint` event lint the document:
+                           lint_document remembered per committed version
+                           (_lint_cache, keyed on the tree object + module by
+                           identity and the lint inputs by value; provisional
+                           trees are linted fresh and never kept; cleared on
+                           reset/load); the PROJECT CONTEXT escape uses
+                           compaction.CONTEXT_BOUNDARY_PATTERN
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -1941,7 +1970,10 @@ tests/
                            reference-delete abandonment, the backstop and its
                            last resort, the too-long retry, the tour and the
                            route's scope flag, save/load, payload, route,
-                           diagnostics, re-compaction, calibration, min-gain
+                           diagnostics, re-compaction, calibration, min-gain;
+                           the chat engine escaping with this module's very
+                           pattern object, and the lookbehind changing no
+                           match (a randomized span-for-span sweep)
   test_fifth_paragraph_level.py
                            SectionFormat's fifth level (a)) end to end: the
                            labels and the refused sixth, a five-level file
@@ -1955,6 +1987,15 @@ tests/
                            trip (typed: the no-op that used to reletter the
                            file), a relettered a), a new a) taking the list's
                            fifth level; the redline on the original; the route
+  test_lint_cost.py        the duplicate lint proves before it compares: no
+                           SequenceMatcher for forty long number-free
+                           siblings (counted, never timed), every finding
+                           held to the pre-bounds comparison around the bar,
+                           each bound against difflib and a plain LCS DP, the
+                           early exit, the masks linear for a large alphabet
+                           and still sound once folded; and one lint pass per
+                           committed version across payload, readiness, turn
+                           context and the lint event
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -14355,6 +14396,226 @@ checkpoint" right after the flush its own snapshot takes.
 - **Erratum** (append-only): "A live run.json read can be refused on
   Windows" counts 18 reads of a recorder's `run.json` through `_read_meta`.
   There are 19 now, all through it.
+
+## The duplicate lint proves before it compares — implemented notes
+
+Two scans ran before every chat reply and could take seconds. Owner
+request (Abraham, 2026-09-23; PR #200): make them cheap without moving a
+single finding. No route, SSE event, dependency, env knob, project-format change
+or VERSION bump; the user-facing note is a draft in the PR body (the owner
+picks the release).
+
+- **`duplicate_provision` was quadratic twice over.** It compared every pair
+  of sibling provisions with a character-level
+  `SequenceMatcher(autojunk=False).ratio()`, whose own cost grows with the
+  product of the two lengths. The numeric gate skips pairs whose numbers
+  differ, so it rescued spec sections full of dimensions; it could not
+  rescue prose without numbers. A memo imported as a non-spec upload is
+  exactly that: dozens of long paragraphs under the importer's one synthetic
+  article. Measured here, number-free prose, `_duplicate_siblings` called
+  directly: 10 × 1,220 chars 1.27 s, 20 × 1,250 5.63 s, 30 × 1,245 12.97 s,
+  40 × 1,245 23.34 s, 20 × 2,420 21.77 s (the owner's figures on `dd80972`
+  agree). The lint runs inside every `_doc_payload` — `GET /api/doc` builds
+  it holding `session_state_guard()`, so the stop button and new turns
+  waited behind it — in every turn's PROJECT CONTEXT before the first frame,
+  and again for a doc-changing turn's `lint` event.
+- **The exact bounds were tried first, as asked, and changed nothing.**
+  `real_quick_ratio()` (length) and `quick_ratio()` (character counts) are
+  upper bounds on `ratio()`, so they cannot move a finding — and on prose
+  they do not settle anything either: every one of the 780 pairs of the
+  40-sibling case read `quick_ratio()` 0.903–0.963, because two English
+  paragraphs share their character mix. With both bounds in place the
+  timings were 1.23 / 5.95 / 13.01 / 23.64 / 22.39 s.
+- **The fix is a third bound, still exact: the longest common
+  subsequence.** `ratio()` is `2·M/T`, where `M` counts the characters in
+  its matching blocks, and those blocks are common substrings taken in
+  order in both texts — so `M ≤ LCS(a, b)`, and an LCS below the needed
+  count PROVES the ratio is below 0.90. For unrelated prose it reads about
+  0.45 (0.440–0.493 on the 780 pairs), far from the bar. `_RatioBounds`
+  applies the three in order of cost; only a pair none of them settles pays
+  for `ratio()`, computed exactly as before. `_matches_needed(total)` turns
+  the float test `ratio() >= 0.90` into an integer count that every bound
+  compares against: the least `m` with `2.0 * m / total >= 0.90`, found by
+  climbing from just below it, so float rounding can never make a bound
+  stricter than the comparison it stands in for (checked exact for every
+  total up to 200,000).
+- **The LCS is bit-parallel and stops early.** `_lcs_upper_bound` is the
+  Allison–Dix / Hyyrö recurrence: one Python integer holds a row, so a row
+  costs four big-integer operations instead of a pass over the longer text.
+  Rows run over the shorter text (fewer Python iterations, and the smaller
+  slack stops it sooner). Every 16th row it asks whether what the rows so
+  far matched plus one per row left can still reach the needed count; once
+  it cannot, that sum is returned — still an upper bound, just not the
+  exact length. Unrelated paragraphs stop about a third of the way in. The
+  quick bounds are computed from per-provision `Counter`s, never by
+  building a `SequenceMatcher` per pair: building one indexes the second
+  text, which costs more than the bound it would answer. After:
+  0.01 / 0.03 / 0.07 / 0.11 / 0.08 s for the five cases above; a whole
+  `lint_document` on the 40-paragraph memo is ~130 ms, all of it the LCS
+  bound.
+- **The masks stay linear in the text, whatever its alphabet** (review
+  finding on PR #200, Codex). A position mask is as wide as its
+  character's last position, and there is one per distinct character, so
+  a provision of many distinct characters held masks that grew with the
+  SQUARE of its length — 1.8 MB for 5,000 distinct code points, 27 MB for
+  20,000, 108 MB for 40,000, about 670 MB extrapolated to Codex's 100,000
+  — and `_RatioBounds` keeps them for every sibling. `_mask_symbols` now
+  spells both texts of a pair in at most 512 symbols: a character below
+  U+0100 keeps its own, every other one shares one of 256 by the low byte
+  of its code point, and the same 100,000 characters hold 3.45 MB of
+  masks. Merging characters can only lengthen a common subsequence, so the
+  bound stays an upper bound, provided BOTH texts fold the same way: a
+  character folded in the masks but not in the rows would miss its own
+  mask, and that bound is too LOW, the unsound direction (pinned pair by
+  pair on an alphabet built to collide). ASCII and Latin-1 are spelled as
+  themselves, so English keeps exactly the bound it had and the timings
+  above do not move; typographic quotes and dashes share a mask with the
+  few rare letters that have their low byte. On large-alphabet text
+  difflib's own character-count bound usually settles unrelated pairs
+  first (0.55–0.76 on synthetic CJK-like paragraphs), and the folded LCS
+  reads 0.22–0.25 of their length on the rest. Two costs stay. At 100,000
+  distinct characters a pair still retains 27 MB, most of it the two exact
+  character counts — one entry per distinct character, so linear. And the
+  LCS takes time proportional to the product of the two lengths over the
+  word size, which only pays off where `ratio()` is the slower of the two:
+  on Codex's near-duplicate pair it takes 2.7 s where `ratio()` on
+  all-distinct text takes 0.17 s, while on English near-duplicates of
+  30,000 characters the bounds take 0.13 s and `ratio()` 10.3 s.
+- **Word-level comparison was ruled out, not measured.** A character-level
+  0.90 leaves 10% of the characters unmatched, and those can fall one per
+  word, so a pair can reach the bar with every word altered: no measure over
+  words can be a SOUND filter for this ratio, and a replacement metric would
+  move findings near the threshold. The brief allowed stopping to write up
+  that trade-off; an exact character-level bound made it unnecessary.
+- **The residual worst case is stated, not hidden.** A pair whose LCS is
+  high but whose Ratcliff/Obershelp matching is poor still pays for
+  `ratio()`: highly repetitive text, e.g. two 3,000-character runs of one
+  repeated word with 2% of the characters changed (ratio 0.40, yet an
+  LCS that clears the bar) costs 0.34 s per pair before and after. Genuine
+  near-duplicates also pay once each — they are findings, and the bar is
+  decided by `ratio()`. Random low-alphabet text, the other degenerate
+  case, is settled: ten 1,500-character siblings over a four-character
+  alphabet went from 6.46 s to 0.02 s.
+- **Proven three ways, all with the pre-change comparison as the oracle.**
+  (1) `tests/test_linting.py` untouched and green. (2) A sweep over every
+  fixture master under `tests/` — the 18 DOCX corpus cases, the 31
+  zero-argument master builders in the test modules, the three
+  `docx_fidelity_helpers` masters, both curated templates and the tutorial
+  showcase, 55 in all — comparing the full `lint_document` output of
+  master's `linting.py` (loaded verbatim under another module name) with
+  the new one, for both modules: identical. The masters hold no duplicates,
+  so the same sweep then injected near-duplicates into every sibling group
+  — reworded (1–12 words), reordered, a clause moved, a sentence added or
+  dropped, a number changed, 1–32 typos, case and spacing, and mixes —
+  3,718 group runs, every finding list identical; 2,777 pairs checked one
+  by one, all 842 at or above the bar kept by the bounds, 584 in
+  [0.85, 0.95) including pairs at 0.9000–0.9011. (3) Adversarial: the LCS
+  bound against a plain DP on 20,000 small-alphabet pairs (lengths either
+  side of the 16-row check, 1,156 early exits), never below the true LCS
+  and exact whenever it reaches the needed count; 19,260 random mutation
+  pairs at or above the bar all kept; the quick bounds bit-identical to
+  difflib's on 5,000 pairs. The sweep scripts were scratch work; the suite
+  keeps a smaller permanent version of (1)–(3).
+- **One lint pass per committed version.** `SessionState.document_lint`
+  is now the one way the four readers lint the document (`_doc_payload`,
+  `_readiness_payload`, `_turn_context_text` and the post-commit `lint`
+  event). It remembers the report for the store's live tree while the tree
+  is not provisional (`DocumentStore.provisional`: a turn has edited it and
+  not committed or rolled back), keyed on the tree object and the module by
+  identity and the two lint inputs (`unstructured_import`,
+  `preserved_chrome`) by value, and hands out copies. Every change of
+  document installs a new tree object — an edit replaces it, undo, redo,
+  rollback and load rebuild it, import and template adopt a fresh one — so
+  the tree is the version. It is the key rather than the version record
+  because the tutorial's `detached_practice_copy` rewrites its version
+  records IN PLACE and then rebuilds the tree: the record keeps its
+  identity, the tree does not (pinned). A doc-changing turn now costs one
+  pass for its new version, shared by the event, the panel refresh, the
+  readiness poll and the next turn's context.
+- **Each caller keeps exactly its old arguments**, so no finding moved
+  anywhere. As first written, that included one pre-existing oddity left
+  alone on purpose: the post-commit `lint` event passed no
+  `preserved_chrome`, so a preserved footer naming another section blinked
+  out of the Issues drawer until the refresh after `turn_complete`. PR #201
+  ("Every lint surface reads the same preserved chrome", above) fixed it
+  while this was in review; the merge routes all four callers through
+  `session.document_lint(..., preserved_chrome=session.preserved_chrome())`,
+  so every reader of a version now asks with the same inputs and shares one
+  pass.
+- **One test's observation seam moved.**
+  `test_api_doc_reads_one_state_not_a_mixture_of_two` recorded the tree the
+  lint pass was handed by patching `app.lint_document`; the payload now
+  lints through `SessionState.document_lint`, which is handed that tree
+  explicitly (and may answer from its memo, keyed on that very object), so
+  the hook moved there and the assertion is unchanged. `_lint_cache` is
+  classified in `test_session_wipe.py`'s field sweep (wiped) and cleared by
+  `_reset_while_locked` and `load_project`.
+- **The PROJECT CONTEXT escape shares compaction's pattern.**
+  `conversation._CONTEXT_BOUNDARY_PATTERN` had no `(?<!=)`, so a long run of
+  `=` that never completes a marker was rescanned from every position
+  inside it, at every turn start: 20,000 cost 9.7 s here (~16 s on the
+  owner's machine). `compaction.CONTEXT_BOUNDARY_PATTERN` is now the one
+  definition (public, in the leaf both can import) and the engine binds its
+  own name to that object — 20,000 `=` take 1.2 ms, 200,000 take 11 ms. The
+  lookbehind changes no match: a match starting inside a run implies one at
+  the run's first `=`, further left, so the leftmost match always starts
+  there; a randomized sweep of 20,000 forged, broken and doubled markers
+  pins the old and shared patterns span for span.
+- **Tests** (`tests/test_lint_cost.py`, 18, plus 2 in
+  `tests/test_chat_compaction.py`): forty ~1,150-character number-free
+  siblings build no `SequenceMatcher` and call no `ratio()` (counted with a
+  stub that never computes, so a regression fails in a second instead of
+  twenty), with the premise asserted too — difflib's quick bounds settle
+  none of those pairs; every finding held to `_reference_duplicate_siblings`
+  (the loop as it stood) across 396 near-duplicate groups; pair by pair
+  around the bar, with at least ten pairs on each side of it; the needed
+  count exact for every total to 20,000; the LCS bound against a DP and its
+  early exit (rows counted through a counting mask map); the quick bounds
+  equal to difflib's; the cheap bounds settling a pair before the costly
+  ones run; one pass per version across payload, readiness, turn context,
+  undo, and a doc-changing turn's event; provisional trees never kept; a
+  version record rewritten in place re-linted; copies on a hit and on a
+  miss; per-input reports; a module switch. And the engine's escape reading
+  compaction's very object, plus the span-for-span equivalence. After the
+  review: the masks of 5,000 distinct code points (at most 512, none wider
+  than the text); over a colliding alphabet, no pair at or above the bar
+  settled and the folded bound never below the exact LCS; Latin-1 spelled
+  as itself, and every other character folding the same way in every text.
+- **Revert matrix** (each mechanism reverted in place, the exact text
+  restored after, `git diff` clean after every row): the bounds not
+  consulted → 1 red (the forty-sibling pin); the LCS bound dropped → 1; the
+  early exit → 1; the needed count one too high → 4 (the soundness tests
+  among them); the needed count without its climb → 2; the length bound → 1
+  (the ordering test); the character-count bound → 2; the memo off → 5
+  (the wipe sweep among them); provisional trees remembered → 1; the tree
+  left out of the key → 4; the module → 1; the inputs ignored → 1; the
+  memo's own list handed out on a hit → 1, on a miss → 1; the payload, the
+  readiness check, the turn context or the lint event bypassing the memo →
+  2, 2, 2, 1; the engine keeping its own pattern → 1; the escape compiling a
+  pattern of its own → 1; the shared pattern losing its lookbehind → 1.
+  After the review: the fold removed → 1 (the memory pin); the masks built
+  from raw text → 2; the rows reading raw text → 2 (the colliding-alphabet
+  test among them: that bound is too low); Latin-1 folded too → 2; a fold
+  that differs per text → 3.
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "What each turn carries is measured (Project workspace Phase 5A)",
+     bullet "Found, not fixed (both pre-existing, both pathological-input
+     only)": both are fixed here, and "pathological-input only" was wrong
+     for the second. A memo imported as one article is an ordinary input —
+     the non-spec-upload path produces that shape — and 40 paragraphs of
+     ~1,200 characters took 22–23 s; "Realistic sections stay in
+     milliseconds" held for spec sections, not for imports. Its figure of
+     ~10 s for two long siblings was not reproducible on spec-like prose (a
+     single pair of 3,000-character paragraphs cost 0.17 s here); the cost
+     that bit was the number of pairs. Its first item is fixed the way it
+     proposed, by sharing the lookbehind pattern rather than editing a copy.
+  2. "A long conversation is condensed, never deleted (compaction Phase 3)"
+     says this module's marker pattern "carries the `(?<!=)` that Phase 5A
+     found missing from `conversation._CONTEXT_BOUNDARY_PATTERN`": they are
+     one object now, `compaction.CONTEXT_BOUNDARY_PATTERN`.
+  3. "Phase 3 — implemented notes" → Lint: it still recomputes on demand,
+     now through `SessionState.document_lint`, once per committed version.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

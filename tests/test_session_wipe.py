@@ -49,6 +49,10 @@ _STATE_PROBES = {
     "_pending_capability_cache": lambda s: s._pending_capability_cache,
     "_capability_warm": lambda s: s._capability_warm,
     "_capability_warm_next": lambda s: s._capability_warm_next,
+    # The lint memo holds the discarded document's tree. Its key could never
+    # match the reset store, but holding it would keep the old document alive
+    # for nothing.
+    "_lint_cache": lambda s: s._lint_cache,
     "import_report": lambda s: s.import_report,
     "template_origin": lambda s: s.template_origin,
     "project_context": lambda s: s.project_context,
@@ -152,6 +156,7 @@ def _dirty(session: SessionState) -> None:
     session._pending_capability_cache = (("state",), object())
     session._capability_warm = object()
     session._capability_warm_next = ("queued",)
+    session.document_lint(session.doc.doc)  # fills the lint memo
     session.import_report = {"filename": "office-master.docx", "warnings": []}
     session.template_origin = {"template_id": "tpl-1", "name": "Starter"}
     session.project_context = "an old project's primer"

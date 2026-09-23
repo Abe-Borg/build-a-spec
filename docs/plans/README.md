@@ -24,10 +24,13 @@ section, not here.
 opened 2026-09-22. Keep the chat history the model re-reads every turn
 bounded without losing what only the conversation holds: stop saving data
 stored elsewhere (Phase 1, stale edit outlines — complete, PR #182; Phase 2,
-fetched page text — in review, PR #183, its live canary still to run), then
-condense the conversation rarely between turns with the full transcript kept
-and recallable (Phase 3 — next; decisions D1–D4 made 2026-09-22). The file is the
-plan, the owner decisions (D1–D4) and the implementation record; its
+fetched page text — complete, PR #183, its paid live canary still owed by the
+owner before the release), then condense the conversation rarely between
+turns with the full transcript kept and recallable (Phase 3 — in review, PR
+#189; decisions D1–D4 made 2026-09-22; routine condensing stays off by default
+until a paid recall check). The plan's implementation record is the only
+authority on where each phase stands; this line is a summary of it. The file
+is the plan, the owner decisions (D1–D4) and the implementation record; its
 "promote before prune" phase is handed to the project workspace's harvest.
 Ships with the project workspace's release (same release policy).
 

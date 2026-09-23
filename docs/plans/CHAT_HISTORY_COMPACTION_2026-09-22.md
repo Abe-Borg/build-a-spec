@@ -663,7 +663,8 @@ The claude-api skill's `build-eval` guide is the method.
   it. The fix is `backend/llm/citations.repair_document_citations`, run on
   every chat request and on the summary call: a citation that no longer
   fits the document it lands on is re-pointed at the earlier document it
-  fits (matched by title and quoted text), or dropped with its words kept.
+  fits (matched by its quoted text, or by title where it quotes nothing),
+  or dropped with its words kept.
   It keeps no record of which request numbered what (a reply answered
   under one view carries that view's numbers), looks only backwards (so
   the cached prefix never moves, and the summary call's copy of the view

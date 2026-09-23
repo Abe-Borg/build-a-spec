@@ -27,8 +27,8 @@ under a citation that was valid when the model wrote it:
 
 :func:`repair_document_citations` fixes the outgoing request rather than
 the history, and needs no record of which request numbered what, because a
-citation says what it cites: the document's title, and the quoted text at
-its span. Each citation is checked against the document its index lands on,
+citation says what it cites: the quoted text at its span, and the
+document's title. Each citation is checked against the document its index lands on,
 among the documents that come BEFORE it in the request. One that does not
 fit there is re-pointed at the preceding document it does fit (the nearest
 to its old index), or dropped when none does: the reply's text stays, and
@@ -122,29 +122,33 @@ def documents_in_block(block: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _titles_agree(citation: dict[str, Any], document: dict[str, Any]) -> bool:
+    title = citation.get("document_title")
+    document_title = document.get("title")
+    if not (isinstance(title, str) and title):
+        return True
+    if not (isinstance(document_title, str) and document_title):
+        return True
+    return title == document_title
+
+
 def citation_fits(citation: dict[str, Any], document: dict[str, Any]) -> bool:
     """Whether ``citation`` can point at ``document`` and be accepted.
 
-    The document's title must agree when both sides carry one. The span
-    must lie inside the document, and the document must be the kind the
-    citation addresses: text for character spans, a PDF for page spans,
-    custom content for block spans. A character span with a quoted passage
-    must also quote that document (:func:`same_passage`). Page spans cannot
-    be checked against the pages themselves without reading the PDF, so a
-    PDF is enough there. That is also what rules a fetched PDF out once its
-    turn is saved: the saved copy is a plain-text note.
+    The span must lie inside the document, and the document must be the
+    kind the citation addresses: text for character spans, a PDF for page
+    spans, custom content for block spans. A character span that quotes
+    must quote that document (:func:`same_passage`), and the quote alone
+    decides. The quote is the strong evidence, and if a document's title
+    were ever written differently in the citation than on the document,
+    requiring both would drop valid citations from ordinary requests. The
+    title decides only where there is no quote to compare: a character span
+    without one, and page and block spans. Page spans cannot be checked
+    against the pages without reading the PDF, so a PDF is enough there.
+    That is also what rules a fetched PDF out once its turn is saved: the
+    saved copy is a plain-text note.
     """
     kind = citation.get("type")
-    title = citation.get("document_title")
-    document_title = document.get("title")
-    if (
-        isinstance(title, str)
-        and title
-        and isinstance(document_title, str)
-        and document_title
-        and title != document_title
-    ):
-        return False
     source = document.get("source")
     if not isinstance(source, dict):
         return False
@@ -160,20 +164,30 @@ def citation_fits(citation: dict[str, Any], document: dict[str, Any]) -> bool:
         cited = citation.get("cited_text")
         if isinstance(cited, str) and cited.strip():
             return same_passage(cited, data[start:end])
-        return True
+        return _titles_agree(citation, document)
     if kind == "page_location":
         start = citation.get("start_page_number")
         end = citation.get("end_page_number")
         if source_type in {"text", "content"}:
             return False
-        return _is_index(start) and _is_index(end) and 1 <= start <= end
+        return (
+            _is_index(start)
+            and _is_index(end)
+            and 1 <= start <= end
+            and _titles_agree(citation, document)
+        )
     if kind == "content_block_location":
         content = source.get("content")
         start = citation.get("start_block_index")
         end = citation.get("end_block_index")
         if source_type != "content" or not isinstance(content, list):
             return False
-        return _is_index(start) and _is_index(end) and 0 <= start <= end <= len(content)
+        return (
+            _is_index(start)
+            and _is_index(end)
+            and 0 <= start <= end <= len(content)
+            and _titles_agree(citation, document)
+        )
     return False
 
 

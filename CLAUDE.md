@@ -1146,9 +1146,9 @@ backend/
                            their pages with them), a reply numbered under
                            another view, or a saved PDF note breaks it. A
                            citation that does not fit is re-pointed at the
-                           EARLIER document it fits (title + span + quoted
-                           text, whitespace-tolerant), or dropped with its
-                           words kept. Looks only backwards, so it is
+                           EARLIER document it fits (span + quoted text,
+                           whitespace-tolerant; the title only where there
+                           is no quote), or dropped with its words kept. Looks only backwards, so it is
                            prefix-stable (the cached prefix never moves);
                            same list object when nothing needed repair.
                            citation_fits is shared with the page trim. Leaf
@@ -12837,13 +12837,18 @@ dependency or env knob, changes no project format, and bumps no version.
   on the compaction summary call. It runs after `sanitize_messages_for_resend`,
   which can itself turn an oversized PDF into a note. It needs no record of
   which request numbered a citation, because a citation carries what it
-  cites: `document_title` and the quoted text at its span. `citation_fits`
-  checks four things:
-  - the title, when both sides carry one;
+  cites: the quoted text at its span, and `document_title`. `citation_fits`
+  checks three things:
   - that the span is inside the document;
   - the document's kind: text for character spans, a PDF for page spans,
     custom content for block spans;
-  - for a character span that quotes, `same_passage`.
+  - for a character span that quotes, `same_passage`, which decides on its
+    own. Otherwise (a character span without a quote, or a page or block
+    span), the title decides, when both sides carry one.
+  The quote beats the title on purpose: a title written differently on the
+  citation than on the document would otherwise drop valid citations from
+  ordinary requests. Two documents with the same text at the same span are
+  interchangeable anyway.
   A citation that fits the document it lands on is left exactly as it is.
   One that does not is re-pointed at the nearest earlier document it does
   fit, or dropped. A dropped citation's text block keeps its words and
@@ -12897,7 +12902,7 @@ dependency or env knob, changes no project format, and bumps no version.
 - **Tests.** `tests/test_citation_repair.py` has 18 tests, and
   `test_fetch_elision_canary.py` gains 1.
   `test_fetched_page_elision.py` was updated on purpose, because a saved
-  turn no longer keeps the citation. Revert matrix: eighteen mechanisms
+  turn no longer keeps the citation. Revert matrix: nineteen mechanisms
   were reverted in place, and each turned its own tests red:
 
   | Mechanism reverted | Tests red |
@@ -12908,7 +12913,8 @@ dependency or env knob, changes no project format, and bumps no version.
   | earlier documents only | 2 |
   | the whitespace-tolerant match | 1 |
   | the quoted-text check | 1 |
-  | the title check | 1 |
+  | the title rule where there is no quote | 1 |
+  | a matching quote deciding on its own | 1 |
   | a page span needing a PDF | 2 |
   | removing the emptied key | 2 |
   | the same list when nothing changes | 2 |

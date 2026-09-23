@@ -192,20 +192,27 @@ def test_a_citation_fits_only_the_document_it_describes():
     page = _A_PAGE
     citation = _citation(page, _A_CITED, _A_TITLE, 0)
     assert citation_fits(citation, _document(page, _A_TITLE))
-    # Another title, another page's text, a note too short for the span.
-    assert not citation_fits(citation, _document(page, _B_TITLE))
+    # Another page's text, or a note too short for the span.
     assert not citation_fits(citation, _document(_B_PAGE, _A_TITLE))
     assert not citation_fits(citation, _document(FETCHED_PAGE_NOTE.format(url=_A_URL), _A_TITLE))
-    # A document without a title does not rule a match out.
+    # A quote that matches decides on its own: a title written differently
+    # must not cost an ordinary request its valid citations.
+    assert citation_fits(citation, _document(page, _B_TITLE))
+    # Without a quote the title decides, and a missing one rules nothing out.
+    unquoted = {k: v for k, v in citation.items() if k != "cited_text"}
+    assert citation_fits(unquoted, _document(page, _A_TITLE))
+    assert not citation_fits(unquoted, _document(page, _B_TITLE))
     untitled = _document(page, _A_TITLE)
     del untitled["title"]
-    assert citation_fits(citation, untitled)
+    assert citation_fits(unquoted, untitled)
 
     pdf = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
                                           "data": "JVBERi0x"}}
     page_citation = {"type": "page_location", "cited_text": "x", "document_index": 0,
                      "start_page_number": 2, "end_page_number": 3}
     assert citation_fits(page_citation, pdf)
+    assert not citation_fits({**page_citation, "document_title": "b.pdf"},
+                             {**pdf, "title": "a.pdf"})
     pdf_note = resend_sanitizer._ELISION_NOTE.format(detail="this document is 3 pages.", limit=600)
     assert not citation_fits(page_citation, _document(pdf_note, "guide.pdf"))
 

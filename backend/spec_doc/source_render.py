@@ -63,11 +63,21 @@ import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
 
+from docx import Document
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph as DocxParagraph
 from lxml import etree
 
-from .importer import _accept_all_paragraph_text, _element_has_tracked_changes
+from .importer import (
+    _accept_all_paragraph_text,
+    _default_paragraph_style_id,
+    _effective_numbering,
+    _element_has_tracked_changes,
+    _load_numbering_catalog,
+    _load_style_numbering,
+    _promoted_heading_kind,
+)
 from .model import (
     Article,
     Paragraph,
@@ -113,6 +123,7 @@ _W_RPR = qn("w:rPr")
 _W_SECTPR = qn("w:sectPr")
 _W_NUMPR = qn("w:numPr")
 _W_NUMID = qn("w:numId")
+_W_ILVL = qn("w:ilvl")
 _W_VAL = qn("w:val")
 _W14_PARA_ID = "{http://schemas.microsoft.com/office/word/2010/wordml}paraId"
 _W14_TEXT_ID = "{http://schemas.microsoft.com/office/word/2010/wordml}textId"
@@ -219,12 +230,8 @@ def _strip_identity(element) -> None:
             del element.attrib[attribute]
 
 
-def _cancel_numbering(element) -> None:
-    """``w:numId 0`` — "no numbering", whatever the paragraph style says.
-
-    Word prints the number of an empty numbered paragraph, so an empty
-    paragraph left holding a section break must not stay in the list.
-    """
+def _numbering_properties(element):
+    """``element``'s own ``w:numPr``, created at its schema position."""
     properties = element.find(_W_PPR)
     if properties is None:
         properties = etree.Element(_W_PPR)
@@ -240,9 +247,39 @@ def _cancel_numbering(element) -> None:
             properties.append(numbering)
         else:
             successor.addprevious(numbering)
+    return numbering
+
+
+def _cancel_numbering(element) -> None:
+    """``w:numId 0`` — "no numbering", whatever the paragraph style says.
+
+    Word prints the number of an empty numbered paragraph, so an empty
+    paragraph left holding a section break must not stay in the list.
+    """
+    numbering = _numbering_properties(element)
     for child in list(numbering):
         numbering.remove(child)
     etree.SubElement(numbering, _W_NUMID).set(_W_VAL, "0")
+
+
+def _set_numbering_level(element, num_id: int, ilvl: int) -> None:
+    """Number ``element`` at level ``ilvl`` of numbering instance ``num_id``.
+
+    Its own ``w:numPr`` takes the level (``w:ilvl`` first, then ``w:numId``:
+    ``CT_NumPr``'s order) and names the instance explicitly — even when the
+    paragraph style names it too — so Word and the importer read one answer.
+    """
+    numbering = _numbering_properties(element)
+    level = numbering.find(_W_ILVL)
+    if level is None:
+        level = etree.Element(_W_ILVL)
+        numbering.insert(0, level)
+    level.set(_W_VAL, str(ilvl))
+    instance = numbering.find(_W_NUMID)
+    if instance is None:
+        instance = etree.Element(_W_NUMID)
+        level.addnext(instance)
+    instance.set(_W_VAL, str(num_id))
 
 
 def _write_paragraph_text(paragraph_element, text: str) -> None:
@@ -291,6 +328,8 @@ class _Item:
     mode: str  # "text" | "verbatim" | "locked" | "new"
     text: str = ""
     template: int | None = None
+    #: A new provision's nesting depth (0 = directly under its article).
+    depth: int | None = None
 
 
 def _classify(uid: str) -> tuple[str, int | None]:
@@ -360,6 +399,8 @@ class _Walker:
         self._last_any: int | None = None
         self._first: dict[tuple, int] = {}
         self._kind_at: dict[int, str] = {}
+        #: The nesting depth of every provision a new one may be cloned from.
+        self._depth_at: dict[int, int] = {}
         for anchor in sorted(format_map.anchors, key=lambda a: a.origin_index):
             index = anchor.origin_index
             if anchor.label_kind and 0 <= index < len(children):
@@ -368,7 +409,10 @@ class _Walker:
                 continue
             if children[index].tag != _W_P:
                 continue
-            for key in self._keys(*_classify(anchor.uid)):
+            kind, depth = _classify(anchor.uid)
+            if kind == "paragraph":
+                self._depth_at.setdefault(index, depth)
+            for key in self._keys(kind, depth):
                 self._first.setdefault(key, index)
 
     @staticmethod
@@ -391,6 +435,11 @@ class _Walker:
     def label_kind(self, uid: str) -> str:
         anchor = self._map.anchor(uid)
         return anchor.label_kind if anchor is not None else ""
+
+    def depth_at(self, index: int) -> int | None:
+        """The nesting depth of the provision at upload index ``index``
+        (``None``: not a provision a new one is cloned from)."""
+        return self._depth_at.get(index)
 
     def _label_kind_at(self, index: int) -> str:
         recorded = self._kind_at.get(index)
@@ -497,6 +546,7 @@ class _Walker:
                 "new",
                 text,
                 template=self.template_for(kind, depth),
+                depth=depth if kind == "paragraph" else None,
             )
         )
 
@@ -710,6 +760,10 @@ class Record:
     fallback: str = ""
     #: ``inserted``: the kin the new element is cloned from.
     template: int | None = None
+    #: ``inserted``: ``(numId, ilvl)`` — the Word numbering level the clone
+    #: takes instead of its kin's, when the kin sits at another depth
+    #: (:meth:`_Assembler._nesting_level`); ``None`` keeps the kin's.
+    level: tuple[int, int] | None = None
     #: Redline only: this record is one copy of a MOVED element — an
     #: ``inserted`` copy at its new position or a ``deleted`` copy at its
     #: old one (Phase 1, D-1/D-3).
@@ -722,6 +776,52 @@ class Record:
     pinned: bool = False
 
 
+class _NumberingTables:
+    """The upload's Word numbering, read exactly the way the importer reads
+    it (its own helpers, over its own python-docx view of the package).
+
+    Loaded lazily — only a new provision cloned from kin at another depth
+    ever asks — and degrading like the importer: a package whose numbering
+    or styles cannot be read has none, and nothing is renumbered.
+    """
+
+    def __init__(self, source_bytes: bytes):
+        self._source_bytes = source_bytes
+        self._loaded = False
+        self.catalog: dict[tuple[int, int], tuple[str, str]] = {}
+        self.style_numbering: dict[str, tuple[int, int]] = {}
+        self.default_style_id = ""
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        try:
+            document = Document(BytesIO(self._source_bytes))
+            self.catalog = _load_numbering_catalog(document)
+            self.style_numbering = _load_style_numbering(document)
+            self.default_style_id = _default_paragraph_style_id(document)
+        except Exception:  # noqa: BLE001 - unreadable numbering is no numbering
+            self.catalog, self.style_numbering, self.default_style_id = {}, {}, ""
+
+    def numbering(self, element) -> tuple[int, int] | None:
+        """``(numId, ilvl)`` of ``element`` the way Word resolves it: its
+        own ``w:numPr``, else its style's (the importer's
+        ``_effective_numbering``)."""
+        self._load()
+        return _effective_numbering(
+            DocxParagraph(element, None), self.style_numbering, self.default_style_id
+        )
+
+    def draws_a_provision(self, num_id: int, ilvl: int) -> bool:
+        """The instance defines level ``ilvl``, and not as a PART or article
+        heading (whose label grammar the importer promotes to structure)."""
+        self._load()
+        return (num_id, ilvl) in self.catalog and not _promoted_heading_kind(
+            self.catalog, num_id, ilvl
+        )
+
+
 class _Assembler:
     def __init__(
         self,
@@ -729,9 +829,11 @@ class _Assembler:
         format_map: SourceFormatMap,
         walker: _Walker,
         section: SpecSection,
+        numbering: _NumberingTables,
     ):
         self._children = children
         self._walker = walker
+        self._numbering = numbering
         self.items = walker.items
         self.stats: dict = {
             "cloned": 0,
@@ -741,6 +843,11 @@ class _Assembler:
             "preserved": 0,
             "break_leftovers": 0,
             "not_used_dropped": 0,
+            # New provisions cloned from Word-numbered kin at another depth:
+            # renumbered to their own level, or — the master's numbering
+            # defines no provision level there — left at their kin's.
+            "level_offset": 0,
+            "level_kept": 0,
         }
         anchored: dict[int, str] = {}
         for anchor in format_map.anchors:
@@ -917,7 +1024,13 @@ class _Assembler:
             )
         if item.mode == "new":
             self.stats["inserted"] += 1
-            return Record(RECORD_INSERTED, NO_ORIGIN, item, template=item.template)
+            return Record(
+                RECORD_INSERTED,
+                NO_ORIGIN,
+                item,
+                template=item.template,
+                level=self._nesting_level(item),
+            )
         source = self._children[item.origin]
         source_text = _accept_all_paragraph_text(source)
         revised = _element_has_tracked_changes(source)
@@ -955,6 +1068,43 @@ class _Assembler:
             strip_break=strip_break,
             fallback=reason,
         )
+
+    def _nesting_level(self, item: _Item) -> tuple[int, int] | None:
+        """The Word numbering level a NEW provision takes, when its kin sits
+        at another depth: ``(numId, ilvl)``, or ``None`` to keep the kin's.
+
+        A new provision is cloned from kin of its own kind, preferring kin
+        at its own depth — but a master may have no provision at that depth
+        (the first sub-provision anywhere under an "A."), and then the kin
+        sits shallower. Cloning its ``w:ilvl`` drew the new provision one
+        level up, and the importer read it back as its parent's sibling.
+
+        ``ilvl`` is a level RELATIVE to the article's list — that is how the
+        importer reads it (``_TreeBuilder.numbered_paragraph``) — so the
+        clone's level is the kin's offset by the depth difference, in the
+        kin's own numbering instance, resolved the way Word resolves it.
+        Only a level the instance defines, and draws as a provision rather
+        than a PART or article heading, is taken; otherwise the clone keeps
+        its kin's level — one level up in Word, never a number the master's
+        numbering cannot draw — and the export event counts it
+        (``level_kept``).
+        """
+        if item.kind != "paragraph" or item.template is None or item.depth is None:
+            return None
+        template_depth = self._walker.depth_at(item.template)
+        if template_depth is None or template_depth == item.depth:
+            return None
+        if self._walker._label_kind_at(item.template) != LABEL_AUTO:
+            return None  # a typed label carries its own level
+        numbering = self._numbering.numbering(self._children[item.template])
+        if numbering is not None:
+            num_id, ilvl = numbering
+            target = ilvl + item.depth - template_depth
+            if target >= 0 and self._numbering.draws_a_provision(num_id, target):
+                self.stats["level_offset"] += 1
+                return num_id, target
+        self.stats["level_kept"] += 1
+        return None
 
     def _removed_records(self) -> list[Record]:
         """What the upload holds and the clean export does not, in upload
@@ -1043,7 +1193,8 @@ class _Assembler:
         return self._walker.label_kind(uid) == LABEL_AUTO
 
     def render_inserted(self, record: Record):
-        """A new element: its kin's formatting, never its identity."""
+        """A new element: its kin's formatting, never its identity — and,
+        when its kin sits at another depth, its own numbering level."""
         if record.template is None:
             element = _blank_template(False)
         else:
@@ -1051,6 +1202,8 @@ class _Assembler:
             # Clone hygiene: the kin's formatting, never its identity.
             _strip_break(element)
             _strip_identity(element)
+            if record.level is not None:
+                _set_numbering_level(element, *record.level)
         _write_paragraph_text(element, record.item.text)
         return element
 
@@ -1087,6 +1240,9 @@ class _LoadedBody:
     body: object
     content: list
     trailing_sect_pr: object | None
+    #: The upload the body was read from (its numbering is read from it
+    #: only when a new provision needs a level of its own).
+    source_bytes: bytes = b""
 
 
 def _load_body(source_bytes: bytes, format_map: SourceFormatMap) -> _LoadedBody:
@@ -1136,7 +1292,7 @@ def _load_body(source_bytes: bytes, format_map: SourceFormatMap) -> _LoadedBody:
         children[-1] if children and children[-1].tag == _W_SECTPR else None
     )
     content = children[:-1] if trailing_sect_pr is not None else children
-    return _LoadedBody(root, body, content, trailing_sect_pr)
+    return _LoadedBody(root, body, content, trailing_sect_pr, source_bytes)
 
 
 def _serialize(loaded: _LoadedBody, elements: list) -> bytes:
@@ -1156,7 +1312,13 @@ def _serialize(loaded: _LoadedBody, elements: list) -> bytes:
 def _plan_for(loaded: _LoadedBody, format_map: SourceFormatMap, current: SpecSection):
     walker = _Walker(loaded.content, format_map)
     _render_body(current, walker, format_map)
-    return _Assembler(loaded.content, format_map, walker, current)
+    return _Assembler(
+        loaded.content,
+        format_map,
+        walker,
+        current,
+        _NumberingTables(loaded.source_bytes),
+    )
 
 
 def render_preserving_docx(

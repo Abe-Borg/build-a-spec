@@ -151,7 +151,10 @@ export interface QcStageLiveState {
 
  *  Present only when verification is running on the Message Batches API.
  *  Every number here is the provider's own request_counts — the board must
- *  not invent per-seat motion for a transport that does not stream. */
+ *  not invent per-seat motion for a transport that does not stream. A
+ *  streamed lead seat (cost Tier 1, Chunk 3) is not invented motion: it
+ *  really streams, and its own verifier_* frames fold into its seat the way
+ *  any streamed seat's do. */
 export interface QcBatchLiveState {
   status: "submitted" | "polling" | "ended" | "cancelled" | "timeout" | "failed";
   round: number;

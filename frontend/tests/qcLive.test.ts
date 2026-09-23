@@ -1081,3 +1081,104 @@ test("a batched run still resolves its candidates from seat events", () => {
   assert.equal(live.resolved.length, 1);
   assert.equal(live.inReview.length, 0);
 });
+
+test("a streamed lead seat folds its own frames on the batch transport", () => {
+  // Cost Tier 1, Chunk 3: one seat per large cache lineage is streamed ahead
+  // of the batch, at list price, so the rest of its lineage can read its
+  // cached copy. Its activity is real, so it lands on THAT seat's card and
+  // no other; the batch line still renders the phase-level count its frames
+  // report; and every verdict — the lead's included — arrives only after the
+  // phase returns.
+  const roster = {
+    ...(batchRoster(1) as Record<string, unknown>),
+    candidates: [
+      ...(batchRoster(1) as { candidates: Record<string, unknown>[] }).candidates,
+      {
+        candidate_id: "candidate-2",
+        title: "Second batched finding",
+        original_severity: "medium",
+        lens_id: "code_compliance",
+        panel_size: 2,
+        uphold_requires: 2,
+        rule: "final-qc/4",
+        evidence_gated: false,
+        outcomes: ["upheld", "disputed", "refuted", "inconclusive"],
+      },
+    ],
+    total_candidates: 2,
+    total_seats: 4,
+  } as QcEvent;
+  const seatStarts = [
+    ["candidate-1", 1],
+    ["candidate-1", 2],
+    ["candidate-2", 1],
+    ["candidate-2", 2],
+  ] as const;
+  const frames = [
+    started(),
+    roster,
+    ...seatStarts.map(([candidate_id, reviewer_index], offset) => ({
+      type: "verifier_started",
+      seq: 2 + offset,
+      candidate_id,
+      reviewer_index,
+    })),
+    // The lead streams before the batch is submitted.
+    { type: "verifier_activity", seq: 6, candidate_id: "candidate-1", reviewer_index: 1, kind: "searching" },
+    { type: "verifier_search", seq: 7, candidate_id: "candidate-1", reviewer_index: 1, query: "NFPA 13 hanger spacing" },
+    { type: "verification_batch", seq: 8, status: "submitted", round: 1, submitted: 3, total: 4, settled: 0 },
+    // The lead finished; the batch has not.
+    { type: "verification_batch", seq: 9, status: "polling", round: 1, processing: 3, succeeded: 0, errored: 0, total: 4, settled: 1 },
+  ] as QcEvent[];
+
+  const midway = foldQcLiveState(frames, { status: "running", error: "" });
+  assert.equal(midway.transport, "batch");
+  const lead = midway.candidates[0].seats[0];
+  assert.equal(lead.activity, "searching");
+  assert.deepEqual(
+    lead.recent.map((item) => [item.kind, item.text]),
+    [["search", "NFPA 13 hanger spacing"]],
+  );
+  // Every other seat stayed quiet: only its verifier_started reached it.
+  for (const seat of [
+    midway.candidates[0].seats[1],
+    ...midway.candidates[1].seats,
+  ]) {
+    assert.equal(seat.activity, "");
+    assert.deepEqual(seat.recent, []);
+  }
+  // The batch line counts the finished lead against the whole phase.
+  assert.equal(midway.batch?.total, 4);
+  assert.equal(midway.batch?.settled, 1);
+  // No verdict has landed yet, the lead's included.
+  assert.equal(
+    midway.candidates.flatMap((candidate) => candidate.seats).some(
+      (seat) => seat.status === "upheld",
+    ),
+    false,
+  );
+
+  const ended = foldQcLiveState(
+    [
+      ...frames,
+      { type: "verification_batch", seq: 10, status: "ended", total: 4, settled: 4 },
+      ...seatStarts.map(([candidate_id, reviewer_index], offset) => ({
+        type: "verifier_complete",
+        seq: 11 + offset,
+        candidate_id,
+        reviewer_index,
+        status: "completed",
+        upholds: true,
+      })),
+    ] as QcEvent[],
+    { status: "running", error: "" },
+  );
+  assert.equal(ended.batch?.status, "ended");
+  assert.equal(ended.batch?.settled, 4);
+  const seats = ended.candidates.flatMap((candidate) => candidate.seats);
+  assert.equal(seats.length, 4);
+  assert.ok(seats.every((seat) => seat.status === "upheld"));
+  // The lead's search stays on its card as history; its live activity ended.
+  assert.equal(ended.candidates[0].seats[0].activity, "");
+  assert.equal(ended.candidates[0].seats[0].recent.length, 1);
+});

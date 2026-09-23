@@ -140,6 +140,11 @@ backend/
                            SECONDS, default 45, floor 0 — cost Tier 1 Chunk 2's
                            staggered-launch bound; 0 = every QC call at once;
                            pinned once per run by run_final_qc, never in the
+                           QC input manifest); QC_BATCH_WARM_LEAD
+                           (BUILD_A_SPEC_QC_BATCH_WARM_LEAD, default OFF —
+                           cost Tier 1 Chunk 3's streamed lead seat; flips on
+                           only on a recorded M3 pass; inert at a zero
+                           QC_WARM_WAIT_SECONDS; pinned per run, never in the
                            QC input manifest);
                            REDLINE_COMMENTS (BUILD_A_SPEC_REDLINE_COMMENTS,
                            default ON — redline Phase 3, owner decision 9;
@@ -472,7 +477,22 @@ backend/
                            any request of _run_streaming_call ends, on its
                            every return, and by a done-callback — then its
                            followers; the engine's first logger,
-                           buildaspec.qc, writes one INFO line per wait
+                           buildaspec.qc, writes one INFO line per wait.
+                           Chunk 3: _await_leaders is that wait, extracted and
+                           shared; with QC_BATCH_WARM_LEAD on, _run_batch_calls
+                           (warm_leads=, warm_wait_seconds=) streams ONE seat
+                           of each lineage of at least _WARM_LEAD_MIN_SEATS_WEB
+                           / _NO_WEB seats (20 each, never below
+                           _WARM_LEAD_SEAT_FLOOR = 8; _pick_warm_leads, keyed by
+                           _spec_lineage_key, typed by _spec_lineage_kind from
+                           the tools) on a small qc-lead pool through
+                           _run_streaming_call, waits for its first output,
+                           then batches the rest (batch_pending() never holds a
+                           lead); leads are folded on this thread at every
+                           round and poll, and joined by finish() — every
+                           terminal path — before the last frame and the
+                           outcome; _BatchPhaseOutcome.streamed_keys makes
+                           run_final_qc record them at cost_multiplier 1.0
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
@@ -1243,7 +1263,11 @@ backend/
                            + redline_filename; Redline on your original adds
                            upload_redline_filename ("<upload name> - REDLINE
                            .docx", scrubbed like export_filename, falling back
-                           to the section-derived name)
+                           to the section-derived name); cost Tier 1 Chunk 3
+                           adds qc_streamed_lead_seats (a list-price verifier
+                           record in a run with discounted ones) and renders
+                           QC_WARM_LEAD_METHODOLOGY_NOTE as a "Streamed lead
+                           seat" methodology step ONLY for a run that sent one
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
                            module_id + legacy discipline fallback (the versioned
                            document project_identity is authoritative) + audit_result +
@@ -1563,7 +1587,10 @@ frontend/src/
                            telemetry, operations/dispositions, usage and cost;
                            qcResearchCoverage mirrors docx_export's
                            qc_research_coverage so both projections read the
-                           CAPTURED research manifest the same way
+                           CAPTURED research manifest the same way;
+                           qcStreamedLeadSeats + QC_WARM_LEAD_METHODOLOGY_NOTE
+                           mirror docx_export's (cost Tier 1 Chunk 3), the
+                           modal's methodology step gated on it
   lib/capabilities.ts      END_USER_CAPABILITIES: the one vocabulary of end-user
                            capability ids. Production controls declare them via
                            data-capability; tour.ts steps reference them; the
@@ -2270,6 +2297,29 @@ tests/
                            same request multiset either way, a retained
                            result current with the switch in either position,
                            and the default read from the source
+  test_qc_batch_warm_lead.py
+                           [Research/QC cost Tier 1, Chunk 3] the streamed lead
+                           seat, every wait an event: one lead per lineage at
+                           its minimum, streamed before the batch exists and
+                           the batch sent only after its first output; none
+                           below the minimum (19 vs 20 at the shipped values);
+                           a fast-failing or raising lead still releasing it;
+                           a lead stopped before its first request priced
+                           with the unsent seats, never as a lead;
+                           a retry backoff not holding it; a Stop in the wait
+                           sending no batch and joining the lead; the join on
+                           a refused submission, the wall-clock and the round
+                           ceiling (each with the terminal frame counting the
+                           lead); the fold at every poll and round; list price
+                           for the lead and the batch rate for the rest
+                           through the meter, the accounting check and a
+                           reload; parity with and without a lead and
+                           streamed; its own frames, the batch's none; the
+                           switch off = today's batch byte for byte (and inert
+                           at a zero wait); F3; the methodology sentence equal
+                           in both projections and only for a run that sent a
+                           lead; the QC profiler's seat:list-price row; the
+                           floor of 8; and the default read from the source
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -15964,6 +16014,180 @@ is the why and the traps.
   3. Any earlier note describing `raw_zip` as rebuilding exactly one member:
      `rewrite_raw_zip_members` now replaces several and appends new ones;
      the single-member entry points delegate to it unchanged.
+
+## Final QC's batched phase can stream a lead seat first — implemented notes (Research/QC cost Tier 1, Chunk 3)
+
+Chunk 3 of `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` (where the
+program stands is `docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`, and only
+there). **It ships switched off.** No route, SSE event type, dependency,
+project-format change, version bump or `release_notes.py` entry; one env knob.
+The plan's Chunk 3 **As built** carries the deviations; this section is the
+why and the traps.
+
+- **The gate said build, at the fallback.** No M2 (the QC profiler on a real
+  batched export) was recorded, so both lineage minimums sit at the plan's
+  fallback of 20 seats (`_WARM_LEAD_MIN_SEATS_WEB` / `_NO_WEB`), recorded as
+  owner decision O2 in the progress file. The default is the gate's SECOND
+  decision and waits for an M3 pass: a lead pays only if a batch request can
+  read the cache entry a separately STREAMED request wrote, and nothing
+  documents that the two transports share it. M2 cannot show it, because no
+  lead ran.
+- **Why a real seat, not a `max_tokens: 0` pre-warm.** A pre-warm cannot run
+  inside the batch, and it is billed without being a seat — it would need a
+  new record type in `QCResult` and new report rows. A streamed lead is an
+  ordinary seat whose record is priced at `cost_multiplier` 1.0, which the
+  mixed-rate accounting has handled since v1.12.0. What a lead costs is its
+  own batch discount.
+- **One wait, shared.** Chunk 2's wait loop was lifted out of
+  `_launch_staggered` into `_await_leaders(leaders, wait_seconds,
+  should_stop, on_release)`, and the lead calls the same function: bounded by
+  `QC_WARM_WAIT_SECONDS`, stop-aware in `_WARM_WAIT_SLICE_SECONDS` slices, on
+  the calling thread. A lead releases the batch on its first output, when its
+  first request ends (Chunk 2's `finally` in `_run_streaming_call`), or when
+  its task ends (a done-callback on its `Future`). The switch is inert when
+  the wait is 0.
+- **The round loop assumed every unsettled seat is in the batch, and five
+  places would have treated a streaming lead as one.** `batch_pending()`
+  (unsettled minus leads) feeds the submission list, the `submitted=` set
+  handed to `_consume_batch_results`, the `unread` list and the top-of-round
+  stop and deadline settlements; when only leads are left, the loop breaks
+  rather than calling `batches.create` with an empty list. The refused-
+  submission retry restarts only the seats that were submitted. `settle_all`
+  skips a lead.
+- **Every exit goes through `finish()`, which joins the leads FIRST.** Then it
+  emits the terminal `verification_batch` frame, then builds the outcome — so
+  "ended" (or "failed", "timeout", "cancelled") counts every seat, the leads
+  included, and the lead's billed record reaches the report on every path:
+  the stop at the top of a round, the deadline there, a refused or id-less
+  submission, the settlement window (`settle_open_batch`), a failed results
+  read, and the round ceiling. `results()` joins again as a backstop. A lead
+  is the one seat the settlement window does not bound; it is bounded the way
+  every streamed seat is — `should_stop` between its requests, the SDK timeout
+  within one.
+- **Two mechanisms are defence in depth, and nothing can observe them.** The
+  `settle_all` skip: every settlement a phase-wide path writes onto an
+  unfolded lead is overwritten by the join that always follows, which assigns
+  the lead's own `_CallResult` unconditionally. The `results()` backstop:
+  every path already joined in `finish()`. The spec asks for the skip, and
+  both stay; the revert matrix records both at 0 red by design.
+- **Folded on the coordinator thread, at every round and every poll.** A lead
+  thread runs its streamed call and returns a `_CallResult`; nothing else
+  crosses threads. `fold_leads()` sets `states[key].settled` for each finished
+  lead, so the batch line's phase-level `settled` counts it from the next
+  frame on. A lead that raises (never, by contract) is recorded as a failed
+  seat with the exception text rather than escaping the phase.
+- **Priced at list, by its record.** `_BatchPhaseOutcome.streamed_keys` makes
+  `run_final_qc` pass `cost_multiplier` 1.0 for a lead and
+  `settings.BATCH_COST_MULTIPLIER` for everyone else, instead of hard-coding
+  the batch rate. Everything downstream already reads the record:
+  `usage_by_meter_category` files the lead under `qc` (with phase 1),
+  `_run_estimated_cost` and `_audit_accounting_consistent` sum records once any
+  is discounted, and `batch_usage_capture` is unaffected (a lead has no
+  uncollected requests, and a run with a lead always has batched seats too).
+- **Live events: no new key.** `verification_started` is pinned by an
+  exact-dict test and gains nothing. The lead streams its own real
+  `verifier_activity` / `_search` / `_fetch` / `_retry` frames under its
+  candidate id and reviewer index — `_run_streaming_call` with
+  `event_prefix="verifier"` and the seat's `event_fields` — which the frontend
+  fold already routed to a seat on either transport, so `qcLive.ts` changed
+  only its doc comment (and `QCDrawer`'s `QcBatchLine` its own). Every
+  `verifier_complete`, the lead's included, still lands after the phase
+  returns.
+- **The methodology describes the run, never the defaults.**
+  `QC_WARM_LEAD_METHODOLOGY_NOTE` (the same literal in `docx_export` and
+  `qcReport.ts`, pinned equal) renders as a "Streamed lead seat" step only for
+  a run that sent one — the PR #159 lesson. "Sent one" is read off the
+  records, by mirrors: `qc_streamed_lead_seats` / `qcStreamedLeadSeats` count
+  verifier records at 1.0 in a run where some other record is below 1.0, and
+  read anything that is not a finite number (a bool — `False` is 0.0 as a
+  number — NaN, a string) as list price. `QcReportVerdict` gained the
+  `cost_multiplier` it was already carrying on the wire.
+- **A lead that sent nothing was not streamed** (caught in review on PR #213,
+  Codex). A Stop landing after the roster but before the lead's first request
+  makes `_run_streaming_call` return cancelled with nothing sent — yet the
+  first cut keyed every picked lead as streamed, so that seat was priced at
+  1.0 beside cancelled seats at the batch rate, and both report projections
+  claimed a streamed lead the run never sent. `streamed_keys` now holds only
+  leads whose own `_CallResult` made at least one request
+  (`api_request_count > 0`, which the streamed call increments immediately
+  before `client.messages.stream`); a lead stopped first is priced with the
+  seats that were never batched. A lead that sent a request and then failed
+  is still a lead: it really went out, at list.
+- **F3.** How one seat is sent is not a review input: nothing about the lead
+  reaches the input manifest, so a retained Final QC result stays current with
+  the switch in either position (pinned, with the fingerprints compared).
+- **The batch-contract tests pin the switch off.** The four tests the spec
+  named stay as they were (none of their lineages reaches any minimum);
+  `tests/test_qc_batch_verification.py`'s `_run` now passes
+  `batch_warm_lead=False`, so the whole file keeps meaning "every seat rides
+  the batch" whichever way the switch ships. Each lead-side counterpart lives
+  in the new file.
+- **Flip readiness, measured once.** With the switch on and both minimums
+  temporarily at the floor of 8, every QC test outside the new file (369)
+  passed. A later flip will not break the existing suites.
+- **Test traps.** (1) The lead streams before the batch is created, so it
+  always takes its title's FIRST scripted turn — which is what lets a test
+  script the lead alone. (2) To prove a fold happens at a given boundary, the
+  lead has to be held past every earlier fold: `_watch_lead_pool` subclasses
+  the engine's `ThreadPoolExecutor` to add a done-callback on the `qc-lead`
+  pool's futures, so a test can wait for the exact state a fold looks for.
+  (3) A paused seat needs a continuation turn scripted, or the next round's
+  `batches.create` raises the fake's exhausted-script `AssertionError`, which
+  the engine reads as a refused submission. (4) `_LeapClock` jumps past every
+  ceiling at the first reading after it is armed — armed from inside
+  `batches.results`, so that reading is the next round's deadline check.
+- **Tests: `tests/test_qc_batch_warm_lead.py` (25)**, plus a lead-frames fold
+  test in `frontend/tests/qcLive.test.ts` and three mirror tests in
+  `frontend/tests/qcReport.test.ts`. Revert matrix — each mechanism reverted in
+  place, one at a time, restored from the exact text it read, and the file
+  checked clean after every row (the new file, the batch-verification suite
+  and the warm-launch suite run each time):
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the submission list built from `unsettled()`, a lead batched too | 5 |
+  | `finish()` joining after the terminal frame, not before | 3 |
+  | no fold at the poll boundary | 1 |
+  | no fold at the round boundary | 1 |
+  | a raising lead not caught at the fold | 1 |
+  | no done-callback on the lead's `Future` | 1 |
+  | the batch not waiting for the leads | 5 |
+  | a zero wait not making the switch inert | 1 |
+  | the lead priced at the batch rate | 9 |
+  | the outcome carrying no `streamed_keys` | 9 |
+  | a lead that sent nothing keyed as streamed (the review fix) | 1 |
+  | the runtime floor of 8 not enforced | 1 |
+  | the lead being the lineage's LAST seat | 13 |
+  | the lineage kind ignoring the tools | 2 |
+  | the lineage key ignoring the tools | 3 |
+  | `run_final_qc` not passing the switch | 19 |
+  | `run_final_qc` not passing the wait | 19 |
+  | `batch_warm_lead=None` ignoring the setting | 1 |
+  | the lead streaming without its seat's event fields | 1 |
+  | the lead streaming without `first_output` | 5 |
+  | the shipped default on | 1 |
+  | the memo stating the lead unconditionally | 1 |
+  | the memo never stating it | 1 |
+  | the memo reading a non-finite multiplier as itself | 1 |
+  | the memo reading a bool as a number | 1 |
+  | the memo's sentence drifting from the modal's | 1 |
+  | the modal stating the lead unconditionally | 1 |
+  | `settle_all` no longer skipping a lead | 0 — by design, above |
+  | `results()` without its backstop join | 0 — by design, above |
+
+  Two rows are slow on purpose: without the done-callback, or without
+  `first_output`, the wait can only end at the 45-second bound.
+
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Final QC phase 2 is batched" (v1.12.0) says a batched seat is not
+     streamed, so "there is no `verifier_activity`/`_search`/`_fetch` to
+     relay — and none is synthesized". Still none is synthesized; but with
+     `QC_BATCH_WARM_LEAD` on, one seat per large lineage IS streamed and
+     relays its own real frames.
+  2. README's `BUILD_A_SPEC_QC_BATCH_VERIFICATION` row and the trust dossier's
+     stage 2 still said phase 2 is "one" batch; both now say one per round, the
+     correction the v1.18.0 notes recorded for the Layout and the release copy.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

@@ -913,7 +913,142 @@ the run that happened.
 
 #### As built
 
-*(Filled in by the session that builds this chunk.)*
+Built on 2026-09-23 from `master` at `ed75f7a`. **Gate, first decision:
+build.** No M2 was supplied (the session's prompt left the measurements
+placeholder unfilled, read as "none"), so the gate's "No M2" branch holds:
+both lineage minimums sit at the fallback of 20 seats, and the chunk ships
+**switched off**. Recorded as O2 in the progress file. The second decision
+(the default) is untouched: it waits for an M3 pass of this chunk's own
+test.
+
+Files: `backend/qc/engine.py`, `backend/settings.py`,
+`backend/spec_doc/docx_export.py`, `frontend/src/lib/qcReport.ts`,
+`frontend/src/components/QCReportModal.tsx`, doc comments in
+`frontend/src/lib/qcLive.ts` and `frontend/src/components/QCDrawer.tsx`, the
+new `tests/test_qc_batch_warm_lead.py`, one knowing change in
+`tests/test_qc_batch_verification.py`, new cases in
+`frontend/tests/qcLive.test.ts` and `frontend/tests/qcReport.test.ts`,
+README, CLAUDE.md, `docs/RELEASE_WINDOWS.md` and the trust dossier
+(`frontend/src/components/TrustDeepDiveModal.tsx`).
+
+Deviations and additions, each recorded because the spec text is not
+rewritten:
+
+1. **One wait, not two.** Chunk 2's wait loop was lifted out of
+   `_launch_staggered` into `_await_leaders(leaders, wait_seconds,
+   should_stop, on_release)`, and both the staggered launch and the lead
+   seat call it, so the two cannot drift into two different waits. Chunk 2's
+   tests pass unchanged against the extraction.
+2. **The join is `finish()`, plus a backstop in `results()`, not a
+   `try/finally`** (the spec allowed either). Every return path of the round
+   loop — and `settle_open_batch` — now ends in `finish(status, ...)`, which
+   joins the leads FIRST, then emits the terminal `verification_batch`
+   frame, then builds the outcome, so "ended" (or "failed", "timeout",
+   "cancelled") counts every seat, the leads included. `results()` joins
+   again as a backstop for any future path that skips `finish()`. A
+   `try/finally` around ~350 lines would have re-indented the whole round
+   loop for no additional guarantee. What neither covers: an exception that
+   escapes `_run_batch_calls` (a `KeyboardInterrupt` re-raised from
+   `batches.create`, or an event sink that raises). The lead then runs out
+   on its own thread, bounded like any streamed seat, and the interpreter
+   joins its non-daemon worker at exit.
+3. **The fold is every-poll and every-round, as specified, and both are
+   observable.** A finished lead is folded at the top of each round and at
+   each poll; `verification_batch`'s `settled` counts it from then on
+   (`test_a_finished_lead_counts_toward_the_batch_line_at_the_next_poll` /
+   `_at_the_next_round`, each deterministic: the lead is held until the
+   point that only that fold can catch).
+4. **`settle_all` skips a lead, and the `results()` backstop joins — both
+   defence in depth that no test can observe.** Every settlement a phase-wide
+   path writes onto an unfolded lead is overwritten by the join that always
+   follows (the join assigns the lead's own `_CallResult` unconditionally),
+   and every path joins in `finish()` before `results()` runs. The spec asks
+   for the skip; it stays. The revert matrix records both as 0 red by
+   design.
+5. **The floor is enforced at runtime, not only pinned.**
+   `_warm_lead_minimum(kind)` returns `max(_WARM_LEAD_SEAT_FLOOR, constant)`
+   (`_WARM_LEAD_SEAT_FLOOR = 8`), so a later gate that lowers a constant
+   below 8 cannot slip under the floor.
+6. **A lineage's type is read from the tools the seats send** (a
+   `web_search` or `web_fetch` tool → `web-tooled`), the same split the QC
+   profiler reports by, rather than from a lens list. The lineage itself is
+   Chunk 2's `_prefix_lineage_key`, computed from each seat's `_CallSpec`
+   (`_spec_lineage_key`), the one object both transports send.
+7. **`run_final_qc(..., batch_warm_lead=None)`**, `None` meaning
+   `settings.QC_BATCH_WARM_LEAD`, pinned once per run beside
+   `warm_wait_seconds` (the `batch_verification` precedent). The switch is
+   inert when the wait is 0, as specified. Not in the input manifest (F3).
+8. **A lead that raises is recorded, not lost.** `_run_streaming_call`
+   never raises by contract; if it ever did, the fold records a failed seat
+   with the exception text rather than letting it escape the phase, and the
+   done-callback on the lead's `Future` (Chunk 2's fourth release point,
+   reused) releases the wait. Pinned by
+   `test_a_lead_that_raises_is_recorded_failed_and_releases_the_batch`.
+9. **The methodology line is rendered only for a run that sent a lead**,
+   in both projections, rather than always: a methodology describing a
+   mechanism the run never used describes a review that did not happen (the
+   PR #159 lesson). "A lead" is read off the records —
+   `docx_export.qc_streamed_lead_seats` / `qcReport.qcStreamedLeadSeats`,
+   mirrors: a verifier record at `cost_multiplier` 1.0 in a run where some
+   other record is below 1.0; anything that is not a finite number (a bool,
+   NaN, a string) reads as list price. The sentence is
+   `QC_WARM_LEAD_METHODOLOGY_NOTE`, the same literal in both, pinned equal.
+   `QcReportVerdict` gained the optional `cost_multiplier` it was already
+   carrying on the wire.
+10. **The four named tests were not rewritten in place.** They pin the
+    batch contract itself, and none of their lineages reaches any minimum.
+    Following the spec's own rule for batch-contract tests, the knowing
+    change is in `tests/test_qc_batch_verification.py`'s `_run` helper, which
+    now passes `batch_warm_lead=False`, so every test in that file keeps
+    meaning what it says whichever way the switch ships. The lead-side
+    version of each lives in the new file:
+    - "every non-lead seat" →
+      `test_one_lead_per_large_lineage_streams_before_the_batch_is_created`
+      (the batch carries every non-lead seat, each under its own custom_id);
+    - no live frames →
+      `test_the_lead_streams_its_own_frames_and_the_batch_stays_quiet`;
+    - still lowers the cost → `test_a_lead_still_lowers_the_reported_run_cost`
+      (batched < with a lead < streamed; the fake has no cache, so the lead
+      can only cost its discount there);
+    - parity → `test_a_run_with_a_lead_reaches_the_same_verdicts` (with a
+      lead, without one, and streamed).
+11. **The return-path test is three tests**, one per path
+    (`test_every_return_path_joins_the_leads_on_a_refused_submission`,
+    `_at_the_wall_clock_ceiling`, `_at_the_round_ceiling`), each holding the
+    lead past the last non-blocking fold so only the join can record it, and
+    each asserting the terminal frame's `settled == total`.
+12. **Tests beyond the spec's list:** a lead in its retry backoff does not
+    hold the batch; a lead that raises; the two fold-boundary tests; the
+    lineage key and kind; the setting reaching the run; the profiler showing
+    the lead as its own `seat:list-price:no-web` row (the M3 path, run on the
+    real tool); and malformed multipliers read the same by both mirrors.
+13. **Flip readiness, measured once.** With the switch on and both minimums
+    temporarily at the floor of 8, every QC test outside the new file
+    (`-k "qc or QC or final"`, 369 tests) passed. So a later flip does not
+    break the existing suites.
+14. **The fake needed nothing.** A lead reaches `SequencedFakeClient.stream`
+    and the batch reaches `_FakeBatches.create`, both over the same scripts;
+    since the lead streams before the batch is created, it always takes its
+    title's first scripted turn, which is what lets a test script the lead
+    alone.
+15. **Docs corrected in passing.** README's
+    `BUILD_A_SPEC_QC_BATCH_VERIFICATION` row and the trust dossier's stage 2
+    still said "one batch"; both now say one per round (the v1.18.0 erratum,
+    applied where it had not reached).
+
+16. **Review finding (Codex, PR #213): only a lead that sent a request is
+    priced as one.** The spec says `_BatchPhaseOutcome.streamed_keys` names
+    the leads; the first cut named every PICKED lead. A Stop landing after
+    the roster but before the lead's first request leaves it cancelled with
+    nothing sent, and priced at 1.0 it made both report projections claim a
+    streamed lead the run never sent. `streamed_keys` now holds only leads
+    whose own call made at least one request; the rest are priced with the
+    seats that were never batched.
+    `test_a_lead_stopped_before_its_first_request_is_not_reported_as_streamed`
+    pins it, and fails against the first cut.
+
+Every mechanism was reverted in place; the matrix is in CLAUDE.md ("Final
+QC's batched phase can stream a lead seat first").
 
 ---
 

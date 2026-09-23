@@ -983,7 +983,8 @@ where it stands is
 [`docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`](docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md),
 and nowhere else. It is being built one chunk at a time. So far a user sees
 one change: Final QC's first stage starts a few seconds later (Chunk 2,
-below).
+below). Chunk 3 is built but ships switched off, so it changes nothing until
+a measured run says it pays.
 
 ### Measure what research costs (Chunk 1)
 
@@ -1058,6 +1059,59 @@ to check.
   (Settings → Developer tools → Activity log tail): how many calls share the
   copy, whether they were released by the first output (`warm`), the time
   limit (`timeout`) or a Stop (`stopped`), and how long they waited.
+
+### Final QC's batched review can warm its own copy first (Chunk 3, switched off)
+
+Final QC's verifying reviewers run as a Message Batches request at half
+price, and most of them read the same cached copy of your section: every
+reviewer checking a finding from a lens without web tools reads one copy,
+and every reviewer checking a code-compliance finding (they carry web search
+and fetch) reads another. Inside a batch, how many of them read a stored
+copy and how many pay to store their own is up to how the provider
+schedules the batch. With this switch on, when one of those groups has at
+least 20 reviewers, one of them is sent first, on its own and at full
+price, and the batch goes out only once it has started answering, so the
+rest can read the copy it stored.
+
+- **Off by default, deliberately.** It pays only if a batch request can read
+  a copy a separately streamed request stored, and the provider does not
+  document that either way. It stays off until a measured run shows it does
+  (the plan's M3). `BUILD_A_SPEC_QC_BATCH_WARM_LEAD=1` switches it on for a
+  trial. In PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "1"`; in
+  Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=1`.
+- **What changes when it is on:** only how one reviewer per large group is
+  sent. Its request is byte for byte what it would have been inside the
+  batch, and its verdict counts exactly like any other seat's, so the
+  review, its findings and a Final QC result you already have (it stays
+  current) are unchanged. In the Review Room that reviewer's card shows its
+  live activity while the rest wait on the batch. The report prices its
+  record at list and the batched ones at the batch rate, so the cost it
+  shows stays exact, and the report's methodology says "Streamed lead seat"
+  only for a run that actually sent one.
+- **When the batch goes out:** as soon as the first reviewer produces its
+  first output, or its first request ends, or after
+  `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` (45 s by default; `0` makes this switch
+  do nothing). A Stop during that wait sends no batch at all: the lead
+  finishes the request it has in flight, is recorded, and the other
+  reviewers are recorded as cancelled.
+- **What it costs, and saves:** the lead gives up its own batch discount,
+  roughly $0.20–0.35 on a section whose shared copy is about 40k tokens. What
+  it saves depends on how much of that copy the batch already reads without
+  it: a net $1.80 or so on a 20-reviewer group that reads 30% of it today,
+  and less than it costs on a small group that already reads nearly all of
+  it. That is why only groups of 20 or more qualify (the plan's fallback,
+  used because no measurement of a real batch was recorded); the app never
+  lets that minimum fall below 8.
+- **Measured, not modelled:** on a Final QC made with the switch on,
+  `tools\qc_export_cost_profile.py` shows the lead as its own
+  `seat:list-price:<group>` row, and the batched row beside it should read
+  nearly its whole shared copy (Cache read against 1h write). If there is no
+  `seat:list-price` row, no group was large enough and the run says nothing
+  about this switch.
+- **Where to see it:** each lead writes one line to the activity log: how
+  many reviewers share the copy, which group, and whether the wait ended on
+  the lead's first output (`warm`), the time limit (`timeout`) or a Stop
+  (`stopped`).
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -1855,8 +1909,9 @@ actions.
 - **The session's Final QC cost is both halves of the bill.** Verification
   runs through the Message Batches API at half token price — one submission
   per round, and `_run_batch_calls` adds a round whenever a seat pauses or has
-  to retry — while the rest of the review runs at list price, so the meter
-  keeps them in separate buckets —
+  to retry — while the rest of the review runs at list price (and so does a
+  streamed lead seat, when `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` is on), so the
+  meter keeps them in separate buckets —
   one bucket can only carry one rate. The drawer's "This session's QC" line and
   the launch confirmation sum **both**; reading only the list-priced one
   reported a fraction of a batched review, or nothing at all.
@@ -2550,7 +2605,8 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding can never be `disputed` and a single reviewer's refusal deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |
-| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | `1` | Submit phase 2 (every verifier seat) as one Message Batches request at 50% of standard token prices — same prompts, seats, adjudication and audit records; no live per-seat frames. `0` streams the seats through the thread pool instead. |
+| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | `1` | Submit phase 2 (the verifier seats) through the Message Batches API at 50% of standard token prices — one batch per round, a round added whenever a seat pauses or retries — same prompts, seats, adjudication and audit records; no live per-seat frames, except a streamed lead seat's when `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` is on. `0` streams the seats through the thread pool instead. |
+| `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` | `0` | Streamed lead seat (Chunk 3 of the cost program, **off** until a measured run shows it pays): when one cache group in the batched phase has at least 20 verifier seats (never fewer than 8), one of them is sent first, on its own at list price, and the batch goes out only after it starts answering, so the rest can read the copy it stored. Same request bytes and verdict rules; the report prices that seat at list and says so in its methodology; a retained Final QC result stays current either way. Inert when `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` is `0`. |
 | `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |
 | `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` | `7200` | Wall-clock ceiling on the batched phase (floor 60). A runaway guard, not a target: unsettled seats fail and the run reads partial. |
 | `BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS` | `20` | Ceiling on batch rounds (each carries the seats that still need a continuation or a retry). |

@@ -92,7 +92,7 @@ full provision subtree.
 
 ## Current Status — SectionFormat's fifth paragraph level
 
-On `master`, with no release entry yet: which release carries it is the
+PR #199, with no release entry yet: which release carries it is the
 owner's call, and the release-note draft is in CLAUDE.md ("The fifth
 paragraph level").
 

@@ -13955,9 +13955,9 @@ PROTECTION SYSTEMS master: a pending-tracked-changes notice, the section
 title read from the cover page, five lines of "nesting deeper than 4 levels —
 clamped to level 4 (at 2.18.B.3.b.2, id …)", and seven blocks of front
 matter. Three of those are the importer working as designed. The clamp is
-the bug. No new route, SSE event, dependency, env knob or project-format
-change, and no VERSION bump: which release carries it is the owner's call,
-and the release-note draft is below.
+the bug (PR #199). No new route, SSE event, dependency, env knob or
+project-format change, and no VERSION bump: which release carries it is
+the owner's call, and the release-note draft is below.
 
 - **SectionFormat has five paragraph levels, and the model had four.** CSI
   SectionFormat nests a provision `A.` / `1.` / `a.` / `1)` / `a)` under its

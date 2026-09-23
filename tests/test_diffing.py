@@ -420,3 +420,113 @@ def test_diff_letters_skip_preserved_blocks_like_the_panel_does():
     assert labels[(article.paragraphs[0].uid, "unchanged")] == "A."
     assert labels[(table.uid, "unchanged")] == ""
     assert labels[(deleted.uid, "deleted")] == "B."
+
+
+# ---------------------------------------------------------------------------
+# Move detection (Redline on your original, Phase 1) — an opt-in
+# ---------------------------------------------------------------------------
+
+
+def _move(store: DocumentStore, uid: str, position: int) -> None:
+    store.begin_turn()
+    store.apply_edits([{"action": "move", "target_id": uid, "position": position}])
+    store.commit_turn()
+
+
+def test_move_detection_is_opt_in_and_off_changes_nothing():
+    """With the flag off the compare view and the normalized redline read
+    exactly what they always have: no ``moved`` key anywhere, the same four
+    stats, and a reordered survivor emitted once, unmarked, at its current
+    position."""
+    store = _seed()
+    base = _section(store)
+    first, second = _paras(store)
+    _move(store, second, 0)
+
+    default = diff_sections(base, store.doc)
+    assert default.to_dict() == diff_sections(
+        base, store.doc, detect_moves=False
+    ).to_dict()
+    data = default.to_dict()
+    assert set(data) == {"elements", "status_changes", "stats"}
+    assert set(data["stats"]) == {"inserted", "deleted", "changed", "unchanged"}
+    assert all("moved" not in row for row in data["elements"])
+    assert default.moved is None
+    paragraph_rows = [
+        (row["uid"], row["kind"]) for row in data["elements"]
+        if row["node_type"] == "paragraph"
+    ]
+    assert paragraph_rows[:2] == [(second, "unchanged"), (first, "unchanged")]
+    assert not default.has_changes()
+
+
+def test_a_reordered_survivor_is_a_move_with_its_old_copy_where_it_was():
+    store = _seed()
+    base = _section(store)
+    first, second = _paras(store)
+    _move(store, second, 0)
+
+    diff = diff_sections(base, store.doc, detect_moves=True)
+
+    assert diff.moved == [second]
+    rows = [
+        (row.uid, row.kind, row.moved)
+        for row in diff.elements
+        if row.node_type == "paragraph"
+    ]
+    # The moved provision at its new place, the survivor, then the old copy
+    # right after the nearest preceding survivor that did not move.
+    assert rows[:3] == [
+        (second, "unchanged", "to"),
+        (first, "unchanged", ""),
+        (second, "deleted", "from"),
+    ]
+    assert diff.stats["moved"] == 1
+    assert diff.stats["deleted"] == 0  # the old copy of a move is not a deletion
+    assert diff.has_changes()
+    assert diff.to_dict()["moved"] == [second]
+
+
+def test_a_moved_article_carries_its_whole_subtree():
+    store = _seed()
+    summary, references = [a.uid for a in store.doc.parts[0].articles]
+    (reference,) = [p.uid for p in store.doc.parts[0].articles[1].paragraphs]
+    base = _section(store)
+    _move(store, references, 0)
+
+    diff = diff_sections(base, store.doc, detect_moves=True)
+
+    assert diff.moved == [references]
+    flags = {}
+    for row in diff.elements:
+        flags.setdefault(row.uid, []).append(row.moved)
+    assert flags[references] == ["to", "from"]
+    assert flags[reference] == ["to", "from"]
+    assert flags[summary] == [""]
+
+
+def test_a_swap_keeps_the_heavier_subtree_in_place():
+    """Two articles swap. Either one "moved" is a correct redline; the one
+    reported is the one whose whole subtree is smaller, so the redline
+    tracks as little as a longest-order-preserving choice allows."""
+    store = _seed()  # SUMMARY has two paragraphs, REFERENCES one
+    summary, references = [a.uid for a in store.doc.parts[0].articles]
+    base = _section(store)
+    _move(store, summary, 1)  # [REFERENCES, SUMMARY]
+
+    diff = diff_sections(base, store.doc, detect_moves=True)
+
+    assert diff.moved == [references]
+
+
+def test_heaviest_increasing_subsequence():
+    from backend.spec_doc.diffing import heaviest_increasing_subsequence as his
+
+    assert his([], []) == []
+    assert his([0, 1, 2], [1, 1, 1]) == [0, 1, 2]
+    assert his([2, 0, 1], [1, 1, 1]) == [1, 2]  # moved to the top
+    assert his([1, 2, 0], [1, 1, 1]) == [0, 1]  # moved to the bottom
+    assert his([1, 0], [1, 1]) == [1]  # a tie keeps the later one
+    assert his([1, 0], [5, 1]) == [0]  # ...unless it is lighter
+    assert his([3, 1, 2, 0], [1, 1, 1, 1]) == [1, 2]
+    assert his([0, 0, 1], [1, 1, 1]) == [1, 2]  # strictly increasing

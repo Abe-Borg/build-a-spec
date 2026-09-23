@@ -100,6 +100,7 @@ _W_PPR = qn("w:pPr")
 _W_R = qn("w:r")
 _W_RPR = qn("w:rPr")
 _W_T = qn("w:t")
+_W_DEL_TEXT = qn("w:delText")
 _W_TAB = qn("w:tab")
 _W_PTAB = qn("w:ptab")
 _W_BR = qn("w:br")
@@ -454,8 +455,15 @@ def _zero_width_piece(atom: _Atom) -> tuple:
 
 def _pieces(pmap: ParagraphMap, ops: list[SpliceOp]) -> list:
     """The rendered content, in order: ``("run", run_index, node)`` for
-    source content, ``("marker", node)`` for a paragraph-level marker,
+    kept source content, ``("gone", run_index, node)`` for deleted source
+    content, ``("marker", node)`` for a paragraph-level marker, and
     ``("new", text, style_at)`` for inserted text.
+
+    Both renderings read the same pieces: the clean export skips ``gone``
+    (without closing the run it is building — a deleted word between two
+    kept words of one source run leaves them in ONE run), and the redline
+    writes it inside ``w:del``. Keep plus new is therefore the clean export
+    by construction, and keep plus gone is the source paragraph.
 
     Zero-width content (a page or column break, a bookmark, Word's layout
     cache) sits BETWEEN two characters, so where an insertion lands beside
@@ -499,20 +507,19 @@ def _pieces(pmap: ParagraphMap, ops: list[SpliceOp]) -> list:
                     pieces.append(("marker", copy.deepcopy(atom.node)))
                 elif keep or atom.start == op.start:
                     pieces.append(("run", atom.run, copy.deepcopy(atom.node)))
+                else:
+                    pieces.append(("gone", atom.run, copy.deepcopy(atom.node)))
                 cursor += 1
                 continue
             low = atom.start + consumed
             if low >= op.end:
                 break
             high = min(atom.start + len(atom.text), op.end)
-            if keep:
-                if consumed == 0 and high == atom.start + len(atom.text):
-                    node = copy.deepcopy(atom.node)
-                else:
-                    node = _text_node(
-                        atom.text[low - atom.start : high - atom.start]
-                    )
-                pieces.append(("run", atom.run, node))
+            if consumed == 0 and high == atom.start + len(atom.text):
+                node = copy.deepcopy(atom.node)
+            else:
+                node = _text_node(atom.text[low - atom.start : high - atom.start])
+            pieces.append(("run" if keep else "gone", atom.run, node))
             consumed = high - atom.start
             if consumed == len(atom.text):
                 cursor += 1
@@ -542,14 +549,12 @@ def render_clean(pmap: ParagraphMap, ops: list[SpliceOp]):
     open_index = -2
     for piece in _pieces(pmap, ops):
         kind = piece[0]
+        if kind == "gone":
+            continue  # deleted: nothing emitted, and the open run stays open
         if kind == "run":
             _kind, run_index, node = piece
             if open_run is None or open_index != run_index:
-                source_run = pmap.runs[run_index]
-                open_run = copy.deepcopy(source_run)
-                for child in list(open_run):
-                    if child.tag != _W_RPR:
-                        open_run.remove(child)
+                open_run = _empty_copy(pmap.runs[run_index])
                 paragraph.append(open_run)
                 open_index = run_index
             open_run.append(node)
@@ -560,11 +565,90 @@ def render_clean(pmap: ParagraphMap, ops: list[SpliceOp]):
             paragraph.append(piece[1])
             continue
         _kind, text, style_at = piece
-        run = etree.SubElement(paragraph, _W_R)
-        properties = pmap.run_properties_at(style_at)
-        if properties is not None:
-            run.append(copy.deepcopy(properties))
-        append_text(run, text)
+        paragraph.append(_new_run(pmap, text, style_at))
+    return paragraph
+
+
+def _empty_copy(source_run):
+    """``source_run`` with its attributes and ``w:rPr`` and nothing else."""
+    run = copy.deepcopy(source_run)
+    for child in list(run):
+        if child.tag != _W_RPR:
+            run.remove(child)
+    return run
+
+
+def _new_run(pmap: ParagraphMap, text: str, style_at: int):
+    """A run carrying new ``text`` with the formatting Word would give it."""
+    run = etree.Element(_W_R)
+    properties = pmap.run_properties_at(style_at)
+    if properties is not None:
+        run.append(copy.deepcopy(properties))
+    append_text(run, text)
+    return run
+
+
+def _as_deleted_node(node):
+    """A text node of deleted content: ``w:t`` is written ``w:delText``."""
+    if node.tag == _W_T:
+        node.tag = _W_DEL_TEXT
+    return node
+
+
+def render_redline(pmap: ParagraphMap, ops: list[SpliceOp], marks):
+    """The paragraph with the edit script as Word tracked changes.
+
+    The same pieces as :func:`render_clean`: kept content is the original
+    runs (split where the script splits them, ``w:rPr`` copied), deleted
+    content is the original runs inside ``w:del`` (``w:t`` written
+    ``w:delText``), new text is a run inside ``w:ins`` carrying the
+    formatting Word would give it. Markers stay where the clean export puts
+    them, outside any wrapper — never deleted, only positioned. So Accept
+    All is :func:`render_clean` and Reject All is the source paragraph.
+
+    ``marks`` (a :class:`~backend.spec_doc.revision_marks.RevisionMarks`)
+    stamps each wrapper's id, author and date.
+    """
+    paragraph = copy.deepcopy(pmap.element)
+    for child in list(paragraph):
+        if child.tag != _W_PPR:
+            paragraph.remove(child)
+    wrapper = None
+    wrapper_state = ""
+    open_run = None
+    open_key = None
+    for piece in _pieces(pmap, ops):
+        kind = piece[0]
+        if kind == "marker":
+            wrapper = None
+            open_run = None
+            paragraph.append(piece[1])
+            continue
+        state = {"run": "keep", "gone": "del", "new": "ins"}[kind]
+        if state == "keep":
+            if wrapper is not None:
+                wrapper = None
+                open_run = None
+            container = paragraph
+        else:
+            if wrapper is None or wrapper_state != state:
+                wrapper = marks.wrapper("w:del" if state == "del" else "w:ins")
+                paragraph.append(wrapper)
+                wrapper_state = state
+                open_run = None
+            container = wrapper
+        if kind == "new":
+            _kind, text, style_at = piece
+            container.append(_new_run(pmap, text, style_at))
+            open_run = None
+            continue
+        _kind, run_index, node = piece
+        key = (state, run_index)
+        if open_run is None or open_key != key:
+            open_run = _empty_copy(pmap.runs[run_index])
+            container.append(open_run)
+            open_key = key
+        open_run.append(_as_deleted_node(node) if state == "del" else node)
     return paragraph
 
 
@@ -588,6 +672,7 @@ __all__ = [
     "map_paragraph",
     "plan_splice",
     "render_clean",
+    "render_redline",
     "splice_paragraph",
     "word_spans",
 ]

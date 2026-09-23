@@ -384,3 +384,96 @@ def test_a_zero_width_node_inside_a_deleted_word_goes_with_it():
     assert reason == ""
     assert spliced.find(f".//{qn('w:softHyphen')}") is None
     assert _accept_all_paragraph_text(spliced) == "Provide isolators."
+
+
+# ---------------------------------------------------------------------------
+# The redline rendering (Phase 1, D-2): the same pieces, tracked
+# ---------------------------------------------------------------------------
+
+
+def _marks():
+    from backend.spec_doc.revision_marks import RevisionMarks
+
+    return RevisionMarks(author="Build-a-Spec", date="2026-09-22T00:00:00Z", first_id=100)
+
+
+def _in_body(*paragraphs):
+    from copy import deepcopy
+
+    body = etree.Element(qn("w:body"))
+    for paragraph in paragraphs:
+        body.append(deepcopy(paragraph))
+    return body
+
+
+def _rich_paragraph():
+    """Typed letter + tab, a bold phrase, a bookmark over a word, a page
+    break before a word and Word's layout cache — every kind of atom."""
+    paragraph = _paragraph()
+    paragraph.add_run("A.\tSection includes ")
+    paragraph.add_run("vibration isolation").bold = True
+    start = etree.SubElement(paragraph._p, qn("w:bookmarkStart"))
+    start.set(qn("w:id"), "5")
+    start.set(qn("w:name"), "_Ref5")
+    paragraph.add_run(" for mechanical")
+    end = etree.SubElement(paragraph._p, qn("w:bookmarkEnd"))
+    end.set(qn("w:id"), "5")
+    tail = paragraph.add_run(" equipment and ")
+    etree.SubElement(tail._r, qn("w:lastRenderedPageBreak"))
+    paragraph.add_run().add_break(WD_BREAK.PAGE)
+    paragraph.add_run("piping.")
+    return paragraph._p
+
+
+def test_the_redline_accepts_to_the_clean_render_and_rejects_to_the_source():
+    """D-2's promise on one paragraph, over 400 seeded edits: Accept All of
+    the tracked rendering IS the clean export's rendering, and Reject All
+    IS the source paragraph — every run, bookmark and break in place."""
+    from backend.spec_doc.revisions import accept_all, first_difference, reject_all
+    from backend.spec_doc.source_splice import render_clean, render_redline
+
+    source = _rich_paragraph()
+    pmap, reason = map_paragraph(source, expected_text=_accept_all_paragraph_text(source))
+    assert reason == ""
+    words = pmap.text.split()
+    vocabulary = ["seismic", "Provide", "restraints", "B.", "per", "NFPA", "13."]
+    rng = random.Random(20260923)
+    for _ in range(400):
+        edited = list(words)
+        for _ in range(rng.randint(1, 4)):
+            action = rng.choice(["insert", "delete", "replace"])
+            position = rng.randint(0, len(edited))
+            if action == "insert":
+                edited.insert(position, rng.choice(vocabulary))
+            elif edited and position < len(edited):
+                if action == "delete":
+                    del edited[position]
+                else:
+                    edited[position] = rng.choice(vocabulary)
+        ops = plan_splice(pmap.text, " ".join(edited))
+        redline = _in_body(render_redline(pmap, ops, _marks()))
+        clean = _in_body(render_clean(pmap, ops))
+        assert first_difference(accept_all(redline), clean) is None, edited
+        assert first_difference(reject_all(redline), _in_body(source)) is None, edited
+
+
+def test_deleted_words_are_deleted_text_inside_their_own_runs():
+    from backend.spec_doc.source_splice import render_redline
+
+    paragraph = _paragraph()
+    paragraph.add_run("Section includes ")
+    paragraph.add_run("vibration isolation").bold = True
+    pmap, _ = map_paragraph(paragraph._p)
+    redline = render_redline(
+        pmap, plan_splice(pmap.text, "Section includes seismic isolation"), _marks()
+    )
+    (deleted,) = redline.findall(qn("w:del"))
+    (inserted,) = redline.findall(qn("w:ins"))
+    assert [t.text for t in deleted.iter(qn("w:delText"))] == ["vibration"]
+    assert deleted.find(f".//{qn('w:t')}") is None
+    # The replaced word was bold, and the word typed over it takes that.
+    assert inserted.find(f"{qn('w:r')}/{qn('w:rPr')}/{qn('w:b')}") is not None
+    for wrapper in (deleted, inserted):
+        assert wrapper.get(qn("w:author")) == "Build-a-Spec"
+        assert wrapper.get(qn("w:date")) == "2026-09-22T00:00:00Z"
+        assert int(wrapper.get(qn("w:id"))) >= 100

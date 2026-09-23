@@ -189,6 +189,30 @@ def test_every_priced_model_configures_both_cache_write_rates():
         assert rates["cache_write_1h"] == pytest.approx(2.0 * rates["input"]), model
 
 
+# Cache READS are priced per model too, and unlike the write multipliers
+# they are not the same on every row: Anthropic charges a cache hit 0.1x
+# base input on every model PRICING carries except Claude Opus 5.5, whose
+# hits cost 0.05x (Claude Fable 5.1, not priced here, is 0.025x). The map
+# is exhaustive on purpose, so a new row fails below until someone looks
+# its read rate up on the pricing page. Assuming 0.1x is how Opus 5.5
+# shipped at twice its real read price.
+_PUBLISHED_CACHE_READ_MULTIPLIERS = {
+    settings.MODEL_SONNET_5: 0.1,
+    settings.MODEL_OPUS_48: 0.1,
+    settings.MODEL_FABLE_5: 0.1,
+    settings.MODEL_OPUS_5: 0.1,
+    settings.MODEL_OPUS_55: 0.05,
+}
+
+
+def test_every_priced_model_prices_cache_reads_at_its_published_multiplier():
+    assert set(settings.PRICING) == set(_PUBLISHED_CACHE_READ_MULTIPLIERS)
+    for model, rates in settings.PRICING.items():
+        assert rates["cache_read"] == pytest.approx(
+            _PUBLISHED_CACHE_READ_MULTIPLIERS[model] * rates["input"]
+        ), model
+
+
 def test_one_hour_cache_writes_price_at_twice_input_not_the_five_minute_rate():
     # Opus 5 (the Final QC model): $5/M input, so a one-hour write is $10/M.
     # The five-minute rate would say $6.25 — the number this chunk removes.
@@ -653,6 +677,37 @@ def test_final_qc_defaults_to_opus_5_5_priced_and_strict():
     # Opus 5 stays priced and strict: retained reports and overrides use it.
     assert settings.MODEL_OPUS_5 in settings.PRICING
     assert settings.MODEL_OPUS_5 in _STRICT_CAPABLE_MODELS
+
+
+def test_opus_5_5_cache_reads_cost_a_twentieth_of_input(monkeypatch):
+    """Anthropic prices a Claude Opus 5.5 cache hit at 0.05x base input
+    ($0.20/MTok), half the 0.1x the other rows use. The table carried $0.40
+    from v1.20.0 until 2026-09-23: the test above pins input and output, and
+    nothing pinned the read rate. Every Final QC figure the meter and new
+    reports showed over-reported its cache-read line 2x."""
+    rates = settings.PRICING[settings.MODEL_OPUS_55]
+    assert rates["cache_read"] == pytest.approx(0.05 * rates["input"])
+    assert rates["cache_read"] * 1_000_000 == pytest.approx(0.20)
+
+    # The session meter, both Final QC buckets. Pinned: "qc" prices at
+    # settings.QC_MODEL, which an operator may override.
+    monkeypatch.setattr(settings, "QC_MODEL", settings.MODEL_OPUS_55)
+    ledger = UsageLedger()
+    ledger.add("qc", {"cache_read_input_tokens": 1_000_000})
+    ledger.add("qc_batched", {"cache_read_input_tokens": 1_000_000})
+    snap = ledger.snapshot()
+    assert snap["estimated_cost_usd"]["by_category"]["qc"] == 0.2
+    # The batch discount stacks on the read rate: $0.20 x 0.5.
+    assert snap["estimated_cost_usd"]["by_category"]["qc_batched"] == 0.1
+    # What caching saved is measured against the same read price:
+    # 1M x ($4.00 - $0.20) at list, plus the same again at half price.
+    assert snap["cache_saved_usd"] == pytest.approx(3.8 + 1.9)
+
+    # New Final QC reports persist this row as their cost basis, verbatim.
+    basis = usage_pricing_snapshot(settings.MODEL_OPUS_55)
+    assert basis["rates_per_token"]["cache_read"] == pytest.approx(
+        0.20 / 1_000_000
+    )
 
 
 def test_health_names_the_configured_qc_model(monkeypatch):

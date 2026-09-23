@@ -163,6 +163,15 @@ not one, so seats verifying a `code_compliance` finding must be counted
 separately or the cache-read share will read low for a reason that is
 structural rather than a defect.
 
+**Note on exports made by v1.20.0** (added 2026-09-23): Final QC moved to
+Claude Opus 5.5 in v1.20.0, and until 2026-09-23 the app priced Opus 5.5 cache
+reads at $0.40/MTok, twice Anthropic's $0.20. A report stores the rates it was
+priced with in its `cost_basis`, and the profiler prices from that basis. So
+for a report from that window, the profile's cache-read dollars are doubled
+and output's share of estimated cost reads low. Token totals and the
+token-weighted cache-read share, which the decision rule reads, are
+unaffected. Record the app version in the artifact provenance.
+
 ### Step 4 — measure the lint block, then decide
 
 Conditional by design, and the measurement comes first. On the owner's real

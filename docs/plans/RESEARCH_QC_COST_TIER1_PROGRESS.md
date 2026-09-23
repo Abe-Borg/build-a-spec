@@ -14,8 +14,8 @@ and then follows the [Session procedure](#session-procedure) step by step.
 | Chunk | Title | Status | PR | Merge commit | Notes |
 |---|---|---|---|---|---|
 | plan | The plan and this file | **complete** | PR #205 | `3d600d9` | set by its own PR, like every row |
-| 1 | Research cost profiler | **complete** | PR #208 | | M1, the optional baseline, is its first run |
-| 2 | Staggered launch for calls that share a cached prefix | not started | | | |
+| 1 | Research cost profiler | **complete** | PR #208 | `df4d55f` | M1, the optional baseline, is its first run |
+| 2 | Staggered launch for calls that share a cached prefix | **complete** | PR #210 | | ships on (`BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`, 45 s); M2 after merge measures it and gates Chunk 3 |
 | 3 | Warm the batched verifier cache with a streamed lead seat | not started | | | M2 decides build or skip; ships switched off; the default flips on an M3 pass |
 | 4 | Cache `pause_turn` continuations | not started | | | ships switched off; the default flips on an M3 pass |
 | 5 | Resume, don't restart, on a transient failure | not started | | | |

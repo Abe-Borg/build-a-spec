@@ -305,6 +305,19 @@ invisible to CI and expensive to the user.
       verifier seat: each must block `qc_execution_complete`; a failed latest
       attempt must also block `qc_current`; all three report surfaces must
       identify the same run.
+- [ ] **Staggered first stage** (cost Tier 1, Chunk 2). Press Run Final QC:
+      the code-compliance card and one other lens card start at once, and the
+      other three lens cards stay queued for a few seconds until the first
+      one begins answering. The review completes as usual. In the report's
+      per-lens usage, three of the four lenses without web tools show cache
+      reads and no cache write, and
+      `.\.venv\Scripts\python tools\qc_export_cost_profile.py "<the JSON export>"`
+      says 3 read the shared prefix and 1 wrote one. With
+      `$env:BUILD_A_SPEC_QC_WARM_WAIT_SECONDS = "0"` (Command Prompt:
+      `set BUILD_A_SPEC_QC_WARM_WAIT_SECONDS=0`) all five start at once, as
+      before. Press Stop while the three are queued: they are recorded as
+      cancelled, and the activity log shows one "share a cached prefix" line
+      ending `(stopped)`.
 
 ### Redline export (v1.0.0)
 

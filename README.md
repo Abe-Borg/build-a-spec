@@ -981,8 +981,9 @@ real saved files before it is trusted. The plan is
 [`docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md`](docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md);
 where it stands is
 [`docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`](docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md),
-and nowhere else. It is being built one chunk at a time, and nothing a user
-sees has changed yet.
+and nowhere else. It is being built one chunk at a time. So far a user sees
+one change: Final QC's first stage starts a few seconds later (Chunk 2,
+below).
 
 ### Measure what research costs (Chunk 1)
 
@@ -1015,6 +1016,48 @@ later chunks exist to lower, and this is how a before-and-after is measured.
   usage per area per round, not per request, so continuations and retries are
   in the totals but cannot be counted. A research area that failed was still
   billed, and is included.
+
+### Final QC's first stage reuses what it paid for (Chunk 2)
+
+Four of Final QC's five lens reviewers read exactly the same thing: the
+same instructions, the same tools and the same copy of your section, which
+the provider caches after the first one reads it. But a cached copy can only
+be read once the call that stores it has started answering, and the four
+used to start at the same instant, so each one paid to store its own copy.
+Now one of them starts first, and the other three wait for it to begin
+answering and then read its copy. The fifth reviewer, code compliance,
+carries web search and fetch, so its cached copy is its own; it never waits
+(with `BUILD_A_SPEC_QC_MAX_WORKERS` set so low that no worker is free for
+it, it runs after the other four instead of between them, so their shared
+copy is not left to expire while it works).
+The cross-lens grouping step does the same when it has two or more groups
+to check.
+
+- **What changes:** only when each request is sent. The requests themselves
+  are byte for byte what they were, so the reviewers, their instructions,
+  what they find and the report are unchanged, and a Final QC result you
+  already have stays current. The review starts a few seconds later; the
+  three waiting lens cards show as queued until then.
+- **When the wait ends:** as soon as the first reviewer produces its first
+  output, or its first request ends (a rate limit or a dropped connection
+  wrote nothing worth waiting for), or you press Stop (the waiting reviewers
+  are then recorded as cancelled without sending anything), or after
+  `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` (45 s by default). A reviewer that
+  still finds nothing to read simply stores its own copy, as before.
+- **What it saves:** the price of storing a copy, less the price of reading
+  it, three times over: about $0.40–1.20 per Final QC, more for a long
+  section with attached documents. Measured, not modelled: after a Final QC
+  made with this build, `tools\qc_export_cost_profile.py`'s "Phase 1" line
+  on its JSON export should say 3 of the four web-toolless lenses read the
+  shared prefix and 1 wrote one, where it used to say about 0 read and 4
+  wrote.
+- **Switching it off:** `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS=0` sends every
+  call at once again. In PowerShell: `$env:BUILD_A_SPEC_QC_WARM_WAIT_SECONDS = "0"`;
+  in Command Prompt: `set BUILD_A_SPEC_QC_WARM_WAIT_SECONDS=0`.
+- **Where to see it:** each wait writes one line to the activity log
+  (Settings → Developer tools → Activity log tail): how many calls share the
+  copy, whether they were released by the first output (`warm`), the time
+  limit (`timeout`) or a Stop (`stopped`), and how long they waited.
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -2514,6 +2557,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS` | `120` | After a Stop or the wall-clock ceiling, how long the batched phase may keep collecting results the provider has already produced before disclosing the rest as uncollected (floor 1). Those requests are billed whether or not the app reads them, so the window recovers real charges and real verdicts; the cost is that a replacement Final QC run, apply, dismiss and export stay locked while the attempt settles. |
 | `BUILD_A_SPEC_QC_CONSOLIDATION` | `1` | Group near-duplicate lens findings about one defect onto a shared verifier panel. Off reviews every raw candidate separately (the pre-5.2 behaviour, and the fallback every failure path already takes). |
 | `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET` | `25` | Runaway guard on one grouping call's input; a larger bucket falls back to separate panels and records why. |
+| `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` | `45` | Staggered launch: when several Final QC calls read the same cached copy of your section — the four reviewers without web tools, or two or more grouping calls — one is sent first and the rest wait for it to start answering, so they read its cached copy instead of each paying to store their own. This is the longest they wait, in seconds; a wait that runs out, a Stop, or a first call that fails releases them at once. Changes no request, only when it is sent, so a retained Final QC result stays current either way. `0` sends everything at once, as before. Floor 0. |
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE` | `24` | web_search allowance for the code-compliance lens (runaway guard). |
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_LENS` | `8` | web_search allowance for the other lenses + verifiers. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE` | `8` | web_fetch allowance for the code-compliance lens. |

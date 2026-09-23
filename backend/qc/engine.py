@@ -41,6 +41,7 @@ import copy
 import dataclasses
 import hashlib
 import json
+import logging
 import math
 import re
 import threading
@@ -50,6 +51,7 @@ from collections import deque
 from collections.abc import Mapping
 from concurrent.futures import (
     FIRST_COMPLETED,
+    Future,
     ThreadPoolExecutor,
     as_completed,
     wait,
@@ -148,6 +150,11 @@ from .schema import (
 )
 
 EventSink = Callable[[dict], None]
+
+# Diagnostics for the engine's own scheduling decisions (the staggered
+# launch's waits). The app's ``buildaspec.*`` names propagate to the
+# activity-log handler ``diagnostics.init_logging`` attaches to the root.
+_log = logging.getLogger("buildaspec.qc")
 
 
 def _noop_sink(_event: dict) -> None:
@@ -3397,6 +3404,7 @@ def _relay_stream_activity(
     event_fields: dict[str, Any],
     event_sink: EventSink,
     activity_state: dict[str, str],
+    first_output: threading.Event | None = None,
 ) -> None:
     """Drain raw SDK frames and relay observable QC worker activity.
 
@@ -3408,6 +3416,14 @@ def _relay_stream_activity(
     both, and every index is dropped at ``content_block_stop``. A malformed
     individual frame is ignored, while an exception raised by stream
     iteration itself deliberately escapes into the normal retry classifier.
+
+    ``first_output`` is set on the first frame that is not
+    ``message_start``: the first content output, which follows prefill. It
+    is the moment this request's cache entry becomes readable, and what a
+    staggered launch's followers wait for (``_launch_staggered``).
+    ``message_start`` itself does not count — it opens the stream, and the
+    rule the stagger relies on is "the first response begins streaming",
+    read conservatively as the first output after it.
     """
     json_buffers: dict[int, str] = {}
     start_inputs: dict[int, dict[str, Any]] = {}
@@ -3415,6 +3431,8 @@ def _relay_stream_activity(
     for event in stream:
         try:
             event_type = getattr(event, "type", None)
+            if first_output is not None and event_type != "message_start":
+                first_output.set()
             if event_type == "content_block_start":
                 block = getattr(event, "content_block", None)
                 index = getattr(event, "index", 0)
@@ -3551,6 +3569,7 @@ def _run_streaming_call(
     cache_ttl: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
+    first_output: threading.Event | None = None,
 ) -> _CallResult:
     """One QC call: request → pause_turn continuations → parse. Never raises.
 
@@ -3564,182 +3583,205 @@ def _run_streaming_call(
     can only be resumed inside the container it started in. The id is
     attempt-local — a retry starts a fresh conversation and must not inherit
     it — and never enters messages, cacheable content, or ``QCResult``.
+
+    ``first_output`` (a staggered launch's leader only) is set three ways,
+    and it is idempotent, so all three can fire: on the first streamed
+    output (``_relay_stream_activity``); when any request ENDS, raised or
+    not; and on every return path. The second is what keeps a leader that
+    fails fast — a 429 or a 5xx before any output — from holding its
+    followers through the retry backoff: its entry was never written, so
+    waiting on it buys nothing. The third covers a stop before the first
+    request. A follower waiting on this event therefore never waits longer
+    than the leader's own first request takes, whatever it does.
     """
-    # One TTL for every breakpoint in the request. The API requires
-    # longer-lived cache entries to precede shorter-lived ones in prompt
-    # order, and tools render before system, which renders before messages —
-    # so marking these two at the 5-minute default while the user turn asks
-    # for 1h produces a request the provider rejects. Do not "optimise" the
-    # small blocks back down to the default: mixed TTLs here are not a
-    # cheaper cache, they are a 400 on every call in the phase.
-    request_kwargs = _qc_request_kwargs(
-        system_prompt=system_prompt,
-        tools=tools,
-        model=model,
-        max_tokens=max_tokens,
-        effort=effort,
-        cache_ttl=cache_ttl,
-    )
+    try:
+        # One TTL for every breakpoint in the request. The API requires
+        # longer-lived cache entries to precede shorter-lived ones in prompt
+        # order, and tools render before system, which renders before messages —
+        # so marking these two at the 5-minute default while the user turn asks
+        # for 1h produces a request the provider rejects. Do not "optimise" the
+        # small blocks back down to the default: mixed TTLs here are not a
+        # cheaper cache, they are a 400 on every call in the phase.
+        request_kwargs = _qc_request_kwargs(
+            system_prompt=system_prompt,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            effort=effort,
+            cache_ttl=cache_ttl,
+        )
 
-    search_ceiling = max(1, max_searches * 2)
-    policy = DEFAULT_REALTIME_RETRY_POLICY
-    attempts = max(1, policy.max_attempts)
-    billed: list[Any] = []
-    api_request_count = 0
-    activity_state: dict[str, str] = {"kind": ""}
+        search_ceiling = max(1, max_searches * 2)
+        policy = DEFAULT_REALTIME_RETRY_POLICY
+        attempts = max(1, policy.max_attempts)
+        billed: list[Any] = []
+        api_request_count = 0
+        activity_state: dict[str, str] = {"kind": ""}
 
-    for attempt in range(attempts):
-        if should_stop():
-            return _CallResult(
-                None, [], billed, "Cancelled by user.", api_request_count
-            )
-        is_last = attempt == attempts - 1
-        all_responses: list[Any] = []
-        # Reset per ATTEMPT, never per continuation — same rule as the
-        # research fan-out. A retry is a new conversation and must not
-        # inherit the failed attempt's provider container.
-        container_id = ""
-        try:
-            messages: list[dict] = [
-                {
-                    "role": "user",
-                    "content": _qc_user_content(
-                        shared_prefix, request_suffix, cache_ttl
-                    ),
-                }
-            ]
-            completed = False
-            for _ in range(QC_MAX_CONTINUATIONS + 1):
-                if should_stop():
-                    return _CallResult(
-                        None,
-                        all_responses,
-                        [*billed, *all_responses],
-                        "Cancelled by user.",
-                        api_request_count,
-                    )
-                api_request_count += 1
-                # Fresh copy per request. ``request_kwargs`` — and with it
-                # every cache breakpoint above — stays byte-identical for
-                # the whole attempt; the container is a top-level argument
-                # beside it, never inside the system block, the tools, or
-                # ``_qc_user_content``.
-                stream_kwargs = dict(request_kwargs)
-                if container_id:
-                    stream_kwargs["container"] = container_id
-                with client.messages.stream(
-                    messages=messages, **stream_kwargs
-                ) as stream:
-                    _relay_stream_activity(
-                        stream,
-                        event_prefix=event_prefix,
-                        event_fields=event_fields,
-                        event_sink=event_sink,
-                        activity_state=activity_state,
-                    )
-                    response = stream.get_final_message()
-                all_responses.append(response)
-                # Latest nonblank wins: a continuation that omits the field
-                # has not revoked the container.
-                container_id = response_container_id(response) or container_id
-                stop_class = classify_stop_reason(
-                    getattr(response, "stop_reason", None)
+        for attempt in range(attempts):
+            if should_stop():
+                return _CallResult(
+                    None, [], billed, "Cancelled by user.", api_request_count
                 )
-                if stop_class == STOP_CLASS_COMPLETE:
-                    completed = True
-                    break
-                if stop_class == STOP_CLASS_PAUSE:
-                    total_search = sum(
-                        _web_search_count(r) for r in all_responses
-                    )
-                    if total_search > search_ceiling:
+            is_last = attempt == attempts - 1
+            all_responses: list[Any] = []
+            # Reset per ATTEMPT, never per continuation — same rule as the
+            # research fan-out. A retry is a new conversation and must not
+            # inherit the failed attempt's provider container.
+            container_id = ""
+            try:
+                messages: list[dict] = [
+                    {
+                        "role": "user",
+                        "content": _qc_user_content(
+                            shared_prefix, request_suffix, cache_ttl
+                        ),
+                    }
+                ]
+                completed = False
+                for _ in range(QC_MAX_CONTINUATIONS + 1):
+                    if should_stop():
                         return _CallResult(
                             None,
                             all_responses,
                             [*billed, *all_responses],
-                            "QC call exceeded the web_search budget ceiling "
-                            f"({total_search} > {search_ceiling}).",
+                            "Cancelled by user.",
                             api_request_count,
                         )
-                    messages.append(
-                        {"role": "assistant", "content": response.content}
+                    api_request_count += 1
+                    # Fresh copy per request. ``request_kwargs`` — and with it
+                    # every cache breakpoint above — stays byte-identical for
+                    # the whole attempt; the container is a top-level argument
+                    # beside it, never inside the system block, the tools, or
+                    # ``_qc_user_content``.
+                    stream_kwargs = dict(request_kwargs)
+                    if container_id:
+                        stream_kwargs["container"] = container_id
+                    try:
+                        with client.messages.stream(
+                            messages=messages, **stream_kwargs
+                        ) as stream:
+                            _relay_stream_activity(
+                                stream,
+                                event_prefix=event_prefix,
+                                event_fields=event_fields,
+                                event_sink=event_sink,
+                                activity_state=activity_state,
+                                first_output=first_output,
+                            )
+                            response = stream.get_final_message()
+                    finally:
+                        # This request is over, raised or not. Anything a
+                        # follower could read was written by now; anything that
+                        # was not never will be, so there is nothing to wait for.
+                        if first_output is not None:
+                            first_output.set()
+                    all_responses.append(response)
+                    # Latest nonblank wins: a continuation that omits the field
+                    # has not revoked the container.
+                    container_id = response_container_id(response) or container_id
+                    stop_class = classify_stop_reason(
+                        getattr(response, "stop_reason", None)
                     )
-                    messages = sanitize_messages_for_resend(messages)
-                    continue
-                if stop_class == STOP_CLASS_REFUSED:
+                    if stop_class == STOP_CLASS_COMPLETE:
+                        completed = True
+                        break
+                    if stop_class == STOP_CLASS_PAUSE:
+                        total_search = sum(
+                            _web_search_count(r) for r in all_responses
+                        )
+                        if total_search > search_ceiling:
+                            return _CallResult(
+                                None,
+                                all_responses,
+                                [*billed, *all_responses],
+                                "QC call exceeded the web_search budget ceiling "
+                                f"({total_search} > {search_ceiling}).",
+                                api_request_count,
+                            )
+                        messages.append(
+                            {"role": "assistant", "content": response.content}
+                        )
+                        messages = sanitize_messages_for_resend(messages)
+                        continue
+                    if stop_class == STOP_CLASS_REFUSED:
+                        return _CallResult(
+                            None,
+                            all_responses,
+                            [*billed, *all_responses],
+                            _refusal_error(response),
+                            api_request_count,
+                            REFUSAL_KIND,
+                        )
                     return _CallResult(
                         None,
                         all_responses,
                         [*billed, *all_responses],
-                        _refusal_error(response),
+                        "QC response incomplete (stop_reason: "
+                        f"{getattr(response, 'stop_reason', None)}).",
                         api_request_count,
-                        REFUSAL_KIND,
                     )
+                if not completed:
+                    return _CallResult(
+                        None,
+                        all_responses,
+                        [*billed, *all_responses],
+                        "QC call did not complete after maximum continuations.",
+                        api_request_count,
+                    )
+                payload = _parse(all_responses, tool_name, json_tag)
                 return _CallResult(
-                    None,
+                    payload,
                     all_responses,
                     [*billed, *all_responses],
-                    "QC response incomplete (stop_reason: "
-                    f"{getattr(response, 'stop_reason', None)}).",
+                    "" if payload is not None else "QC produced no parseable payload.",
                     api_request_count,
                 )
-            if not completed:
-                return _CallResult(
-                    None,
-                    all_responses,
-                    [*billed, *all_responses],
-                    "QC call did not complete after maximum continuations.",
-                    api_request_count,
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as exc:  # noqa: BLE001 — classified below
+                failure_class = classify_exception(exc)
+                if not is_retryable_failure_class(failure_class) or is_last:
+                    message = (
+                        AUTH_ERROR_MESSAGE
+                        if is_authentication_error(exc)
+                        else f"{type(exc).__name__}: {exc}"
+                    )
+                    return _CallResult(
+                        None,
+                        all_responses,
+                        [*billed, *all_responses],
+                        message,
+                        api_request_count,
+                        failure_class.value,
+                    )
+                billed.extend(all_responses)
+                backoff = compute_backoff_seconds(
+                    policy, attempt=attempt, failure_class=failure_class
                 )
-            payload = _parse(all_responses, tool_name, json_tag)
-            return _CallResult(
-                payload,
-                all_responses,
-                [*billed, *all_responses],
-                "" if payload is not None else "QC produced no parseable payload.",
-                api_request_count,
-            )
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except Exception as exc:  # noqa: BLE001 — classified below
-            failure_class = classify_exception(exc)
-            if not is_retryable_failure_class(failure_class) or is_last:
-                message = (
-                    AUTH_ERROR_MESSAGE
-                    if is_authentication_error(exc)
-                    else f"{type(exc).__name__}: {exc}"
+                event_sink(
+                    {
+                        "type": f"{event_prefix}_retry",
+                        **event_fields,
+                        "attempt": attempt + 1,
+                        "max_attempts": attempts,
+                        "reason": failure_class.value,
+                        "backoff_s": round(backoff, 1),
+                    }
                 )
-                return _CallResult(
-                    None,
-                    all_responses,
-                    [*billed, *all_responses],
-                    message,
-                    api_request_count,
-                    failure_class.value,
-                )
-            billed.extend(all_responses)
-            backoff = compute_backoff_seconds(
-                policy, attempt=attempt, failure_class=failure_class
-            )
-            event_sink(
-                {
-                    "type": f"{event_prefix}_retry",
-                    **event_fields,
-                    "attempt": attempt + 1,
-                    "max_attempts": attempts,
-                    "reason": failure_class.value,
-                    "backoff_s": round(backoff, 1),
-                }
-            )
-            activity_state["kind"] = ""
-            time.sleep(backoff)
-    return _CallResult(
-        None,
-        [],
-        billed,
-        "QC call failed after all attempts.",
-        api_request_count,
-    )
+                activity_state["kind"] = ""
+                time.sleep(backoff)
+        return _CallResult(
+            None,
+            [],
+            billed,
+            "QC call failed after all attempts.",
+            api_request_count,
+        )
+    finally:
+        # Every return path, a stop before the first request included.
+        if first_output is not None:
+            first_output.set()
 
 
 def _web_search_count(response: Any) -> int:
@@ -3946,6 +3988,213 @@ def _source_checks(
 
 
 # ---------------------------------------------------------------------------
+# Staggered launch — calls that share a cached prefix (cost Tier 1, Chunk 2)
+# ---------------------------------------------------------------------------
+#
+# A cache entry becomes readable only once the response that writes it
+# begins streaming. Calls that share a prefix and start together therefore
+# all miss, and all pay to write the same entry. The documented fix, and
+# what this does: send one first, wait for its first streamed output, then
+# send the rest. It changes WHEN a request is sent, never a byte of what is
+# sent, and a follower that still finds nothing readable simply writes, as
+# it would have. Nothing here is a review input, so nothing reaches the
+# input manifest (the plan's F3).
+
+
+@dataclass(frozen=True)
+class _CallPieces:
+    """What one streamed call sends, built once and read twice.
+
+    The staggered launch groups calls by the prefix they share
+    (:func:`_prefix_lineage_key`), and the call itself sends that prefix, so
+    both read these SAME objects. The key therefore cannot drift from the
+    request it names. ``cache_ttl`` rides here for the same reason: it forks
+    a cache, and the call and its key must agree on it.
+    """
+
+    system_prompt: str
+    tools: list[dict]
+    shared_prefix: str
+    request_suffix: str
+    cache_ttl: str = ""
+
+
+def _prefix_lineage_key(
+    *,
+    tools: list[dict],
+    system_prompt: str,
+    shared_prefix: str,
+    model: str,
+    effort: str,
+    cache_ttl: str,
+) -> str:
+    """Name the cache lineage a call writes into, as a SHA-256 hex digest.
+
+    Exactly what precedes the block-0 breakpoint (tools, then system, then
+    the shared prefix — the render order), plus the settings that fork a
+    cache (model, effort, TTL). Two calls share a lineage exactly when their
+    keys match. ``cache_control`` markers are not part of the provider's key
+    and are identical within a TTL anyway, so the tools are hashed as the
+    builders return them.
+
+    Computed from the real builders, never from a list of lens ids: the key
+    decides who waits for whom, so a later change to which lens carries web
+    tools stays correct on its own. A wrong key cannot break a review — it
+    only costs the saving, or makes a follower wait for nothing.
+    """
+    payload = {
+        "cache_ttl": cache_ttl,
+        "effort": effort,
+        "model": model,
+        "shared_prefix": shared_prefix,
+        "system": system_prompt,
+        "tools": tools,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=repr,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _pieces_lineage_key(pieces: _CallPieces, *, model: str, effort: str) -> str:
+    return _prefix_lineage_key(
+        tools=pieces.tools,
+        system_prompt=pieces.system_prompt,
+        shared_prefix=pieces.shared_prefix,
+        model=model,
+        effort=effort,
+        cache_ttl=pieces.cache_ttl,
+    )
+
+
+# How often a follower's wait re-checks a Stop and its deadline. The wait
+# still returns the moment its leader releases it; this only bounds how late
+# a Stop is noticed.
+_WARM_WAIT_SLICE_SECONDS = 1.0
+
+WARM_OUTCOME_WARM = "warm"
+WARM_OUTCOME_TIMEOUT = "timeout"
+WARM_OUTCOME_STOPPED = "stopped"
+
+
+def _launch_staggered(
+    items: list[Any],
+    *,
+    key_of: Callable[[Any], str],
+    submit: Callable[[Any, threading.Event | None], Future],
+    wait_seconds: float,
+    should_stop: Callable[[], bool],
+    label: str,
+    capacity: int,
+) -> dict[Future, Any]:
+    """Submit ``items``, leaders first; return ``{future: item}``.
+
+    ``items`` are grouped by ``key_of``. A lineage of two or more gets a
+    leader — its first item in input order, so the choice is deterministic —
+    submitted with a fresh ``threading.Event`` for ``submit`` to hand to
+    :func:`_run_streaming_call` as ``first_output``. Then every single-call
+    lineage the pool can START at once is submitted (``code_compliance``,
+    whose web tools make it a lineage of its own), then the leaders are
+    waited on, each lineage's followers are submitted the moment its leader
+    releases them, and any single-call lineage left over goes last.
+
+    ``capacity`` is the pool's worker count, and it decides where a
+    single-call lineage goes: a call the pool cannot start at once waits in
+    the pool's FIFO queue, and one waiting ahead of released followers would
+    make them sit out a minutes-long call while their leader's 5-minute
+    entry expires — costing a second write instead of saving the first
+    (Codex, PR #210). So a single-call lineage goes ahead of the wait only
+    while a worker is free for it, and never in the queue ahead of a
+    follower. Leaders go first of all, so a pool of one runs the leader, its
+    followers, then everything else, the way the declared order used to
+    keep them together. The wait runs on the calling thread, never in the
+    pool, so it cannot starve the leader it waits on.
+
+    The wait is bounded (``wait_seconds``) and stop-aware. On a Stop the
+    followers are submitted anyway: each one checks ``should_stop`` before
+    it sends anything and returns cancelled, so the phase's records stay
+    complete and the existing cancellation paths are unchanged. A leader
+    releases on its first output, when a request of its ends, and when its
+    task ends for any reason (a done-callback), so a leader that cannot
+    produce output never holds anyone longer than its own first request.
+
+    ``wait_seconds`` of 0 (or fewer than two items, or no shared lineage)
+    submits everything at once in input order — exactly the pre-stagger
+    behaviour.
+    """
+    futures: dict[Future, Any] = {}
+    groups: dict[str, list[Any]] = {}
+    if wait_seconds > 0 and len(items) > 1:
+        for item in items:
+            groups.setdefault(key_of(item), []).append(item)
+    if not any(len(members) > 1 for members in groups.values()):
+        for item in items:
+            futures[submit(item, None)] = item
+        return futures
+
+    leaders: list[tuple[list[Any], threading.Event]] = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        released = threading.Event()
+        future = submit(members[0], released)
+        futures[future] = members[0]
+        future.add_done_callback(lambda _done, event=released: event.set())
+        leaders.append((members, released))
+    singles = [members[0] for members in groups.values() if len(members) == 1]
+    room = max(0, int(capacity) - len(leaders))
+    for single in singles[:room]:
+        futures[submit(single, None)] = single
+
+    started = time.monotonic()
+    deadline = started + float(wait_seconds)
+    pending = list(leaders)
+
+    def release(entry: tuple[list[Any], threading.Event], outcome: str) -> None:
+        members, _released = entry
+        _log.info(
+            "Final QC %s: %d calls share a cached prefix; the %d waiting "
+            "were released (%s) after %d ms.",
+            label,
+            len(members),
+            len(members) - 1,
+            outcome,
+            max(0, int((time.monotonic() - started) * 1000)),
+        )
+        for follower in members[1:]:
+            futures[submit(follower, None)] = follower
+
+    while pending:
+        for entry in [entry for entry in pending if entry[1].is_set()]:
+            pending.remove(entry)
+            release(entry, WARM_OUTCOME_WARM)
+        if not pending:
+            break
+        remaining = deadline - time.monotonic()
+        if should_stop():
+            outcome = WARM_OUTCOME_STOPPED
+        elif remaining <= 0:
+            outcome = WARM_OUTCOME_TIMEOUT
+        else:
+            pending[0][1].wait(
+                timeout=min(_WARM_WAIT_SLICE_SECONDS, remaining)
+            )
+            continue
+        for entry in pending:
+            release(entry, outcome)
+        pending = []
+    # Whatever the pool could not start at once goes behind the followers.
+    for single in singles[room:]:
+        futures[submit(single, None)] = single
+    return futures
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 — lens fan-out
 # ---------------------------------------------------------------------------
 
@@ -3990,25 +4239,57 @@ class _LensOutcome:
     billed: list[Any] = field(default_factory=list)
 
 
-def _run_lens(
-    client: Any,
-    *,
+def _lens_call_pieces(
     lens: QCLens,
+    *,
     section: SpecSection,
     module: SpecModule,
     profile: RequirementsProfile | None,
     model: str,
-    max_tokens: int,
-    effort: str,
     discipline: str = "",
     source_capability_summary: str = "",
     today: str = "",
     reference_documents: str = "",
     project_facts: str = "",
+) -> _CallPieces:
+    """One lens's request pieces. ``run_final_qc`` keys and sends these."""
+    return _CallPieces(
+        system_prompt=_lens_system_prompt(module),
+        tools=_lens_tools(lens, model),
+        shared_prefix=_lens_shared_prefix(
+            section,
+            module,
+            profile,
+            discipline,
+            source_capability_summary,
+            # Keyword, not positional: this is the last parameter of a
+            # builder under active edit, and a new one inserted ahead of it
+            # would bind silently and wrongly.
+            today=today,
+            reference_documents=reference_documents,
+            project_facts=project_facts,
+        ),
+        request_suffix=_lens_request_suffix(lens),
+    )
+
+
+def _run_lens(
+    client: Any,
+    *,
+    lens: QCLens,
+    pieces: _CallPieces,
+    model: str,
+    max_tokens: int,
+    effort: str,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
+    first_output: threading.Event | None = None,
 ) -> _LensOutcome:
-    """One lens's full lifecycle. Never raises (KeyboardInterrupt aside)."""
+    """One lens's full lifecycle. Never raises (KeyboardInterrupt aside).
+
+    ``pieces`` come from :func:`_lens_call_pieces`, built once by the caller
+    so the staggered launch's lineage key names exactly what this sends.
+    """
     event_sink(
         {
             "type": "lens_started",
@@ -4031,22 +4312,10 @@ def _run_lens(
         )
     result = _run_streaming_call(
         client,
-        system_prompt=_lens_system_prompt(module),
-        shared_prefix=_lens_shared_prefix(
-            section,
-            module,
-            profile,
-            discipline,
-            source_capability_summary,
-            # Keyword, not positional: this is the last parameter of a
-            # builder under active edit, and a new one inserted ahead of it
-            # would bind silently and wrongly.
-            today=today,
-            reference_documents=reference_documents,
-            project_facts=project_facts,
-        ),
-        request_suffix=_lens_request_suffix(lens),
-        tools=_lens_tools(lens, model),
+        system_prompt=pieces.system_prompt,
+        shared_prefix=pieces.shared_prefix,
+        request_suffix=pieces.request_suffix,
+        tools=pieces.tools,
         tool_name=QC_FINDINGS_TOOL_NAME,
         json_tag=_FINDINGS_JSON_TAG,
         model=model,
@@ -4055,8 +4324,10 @@ def _run_lens(
         max_searches=lens.max_searches if lens.web else 0,
         event_prefix="lens",
         event_fields={"lens_id": lens.lens_id},
+        cache_ttl=pieces.cache_ttl,
         event_sink=event_sink,
         should_stop=should_stop,
+        first_output=first_output,
     )
     usage = _sum_billed(result.billed)
     queries, retrieved_sources = _collect_call_activity(result.responses)
@@ -4435,6 +4706,7 @@ def _consolidate_candidates(
     effort: str,
     today: str = "",
     enabled: bool = True,
+    warm_wait_seconds: float = 0,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> tuple[list[_Candidate], QCConsolidation, list[Any]]:
@@ -4443,6 +4715,12 @@ def _consolidate_candidates(
     Returns the candidates phase 2 will verify, the persisted grouping
     record, and the billed responses. Every early return produces a complete
     singleton partition, so the caller needs no failure branch.
+
+    Every grouping call reads the same system prompt, tool and document, so
+    two or more eligible buckets are one cache lineage, and they launch
+    staggered behind the first (``warm_wait_seconds``; 0 = all at once, the
+    default for a direct caller). One eligible bucket is a lineage of one and
+    never waits.
     """
     origins: list[QCCandidateOrigin] = []
     taken_origin_ids: set[str] = set()
@@ -4615,26 +4893,54 @@ def _consolidate_candidates(
         )
 
     results: dict[str, tuple[list[dict[str, Any]] | None, str, _CallResult | None]] = {}
-    with ThreadPoolExecutor(
-        max_workers=min(_qc_max_workers(), len(eligible))
-    ) as pool:
-        futures = {
-            pool.submit(
+    # Built once per bucket and read twice: by the lineage key that decides
+    # who waits, and by the call that sends them.
+    bucket_origins = {
+        bucket.bucket_id: [origins[index] for index in bucket.indexes]
+        for bucket in eligible
+    }
+    bucket_pieces = {
+        bucket.bucket_id: _consolidation_call_pieces(
+            bucket,
+            bucket_origins[bucket.bucket_id],
+            section_render=section_render,
+            module=module,
+            model=model,
+            today=today,
+        )
+        for bucket in eligible
+    }
+    bucket_workers = min(_qc_max_workers(), len(eligible))
+    with ThreadPoolExecutor(max_workers=bucket_workers) as pool:
+
+        def submit_bucket(
+            bucket: _CandidateBucket, first_output: threading.Event | None
+        ) -> Future:
+            return pool.submit(
                 _run_consolidation_call,
                 client,
                 bucket=bucket,
-                origins=[origins[index] for index in bucket.indexes],
-                section_render=section_render,
-                module=module,
+                origins=bucket_origins[bucket.bucket_id],
+                pieces=bucket_pieces[bucket.bucket_id],
                 model=model,
                 max_tokens=max_tokens,
                 effort=effort,
-                today=today,
                 event_sink=event_sink,
                 should_stop=should_stop,
-            ): bucket
-            for bucket in eligible
-        }
+                first_output=first_output,
+            )
+
+        futures = _launch_staggered(
+            eligible,
+            key_of=lambda bucket: _pieces_lineage_key(
+                bucket_pieces[bucket.bucket_id], model=model, effort=effort
+            ),
+            submit=submit_bucket,
+            wait_seconds=warm_wait_seconds,
+            should_stop=should_stop,
+            label="consolidation",
+            capacity=bucket_workers,
+        )
         for future in as_completed(futures):
             bucket = futures[future]
             try:
@@ -4709,27 +5015,44 @@ def _consolidate_candidates(
     )
 
 
+def _consolidation_call_pieces(
+    bucket: _CandidateBucket,
+    origins: list[QCCandidateOrigin],
+    *,
+    section_render: str,
+    module: SpecModule,
+    model: str,
+    today: str = "",
+) -> _CallPieces:
+    """One bucket's grouping-call pieces; the lineage key reads these too."""
+    return _CallPieces(
+        system_prompt=_consolidation_system_prompt(module),
+        tools=[submit_qc_consolidation_tool(model=model)],
+        shared_prefix=_consolidation_shared_prefix(section_render, today),
+        request_suffix=_consolidation_request_suffix(bucket, origins),
+    )
+
+
 def _run_consolidation_call(
     client: Any,
     *,
     bucket: _CandidateBucket,
     origins: list[QCCandidateOrigin],
-    section_render: str,
-    module: SpecModule,
+    pieces: _CallPieces,
     model: str,
     max_tokens: int,
     effort: str,
-    today: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
+    first_output: threading.Event | None = None,
 ) -> tuple[list[dict[str, Any]] | None, str, _CallResult | None]:
     """One bucket's grouping call. ``None`` groups = fall back to singletons."""
     result = _run_streaming_call(
         client,
-        system_prompt=_consolidation_system_prompt(module),
-        shared_prefix=_consolidation_shared_prefix(section_render, today),
-        request_suffix=_consolidation_request_suffix(bucket, origins),
-        tools=[submit_qc_consolidation_tool(model=model)],
+        system_prompt=pieces.system_prompt,
+        shared_prefix=pieces.shared_prefix,
+        request_suffix=pieces.request_suffix,
+        tools=pieces.tools,
         tool_name=QC_CONSOLIDATION_TOOL_NAME,
         json_tag=_CONSOLIDATION_JSON_TAG,
         model=model,
@@ -4738,8 +5061,10 @@ def _run_consolidation_call(
         max_searches=0,
         event_prefix="consolidation",
         event_fields={"bucket_id": bucket.bucket_id},
+        cache_ttl=pieces.cache_ttl,
         event_sink=event_sink,
         should_stop=should_stop,
+        first_output=first_output,
     )
     if result.payload is None:
         return None, result.error or "The grouping call failed.", result
@@ -6333,6 +6658,7 @@ def run_final_qc(
     lens_effort: str = "",
     verifier_effort: str = "",
     batch_verification: bool | None = None,
+    warm_wait_seconds: float | None = None,
     version_index: int,
     started_at: str,
     finished_at: str,
@@ -6376,6 +6702,17 @@ def run_final_qc(
         settings.QC_BATCH_VERIFICATION
         if batch_verification is None
         else bool(batch_verification)
+    )
+    # Pinned once so phase 1 and consolidation stagger alike. Deliberately
+    # NOT in the input manifest: it changes when a request is sent, never
+    # what is sent, so it is not a review input (the cost plan's F3).
+    warm_wait_seconds = max(
+        0.0,
+        float(
+            settings.QC_WARM_WAIT_SECONDS
+            if warm_wait_seconds is None
+            else warm_wait_seconds
+        ),
     )
     # Same discipline, load-bearing for a different reason: this string leads
     # both cached shared prefixes, so re-reading the clock per call would
@@ -6442,32 +6779,58 @@ def run_final_qc(
         }
     )
 
-    # -- Phase 1: lenses (parallel) ----------------------------------------
+    # -- Phase 1: lenses (parallel, staggered by shared prefix) -------------
+    # Each lens's pieces are built ONCE and read twice: by the lineage key
+    # that decides which lenses wait for which, and by the call that sends
+    # them. The four web-toolless lenses share a lineage today, so one leads
+    # and three follow; `code_compliance` carries web tools and never waits.
+    # The key decides that, not a list of lens ids.
+    lens_pieces = {
+        lens.lens_id: _lens_call_pieces(
+            lens,
+            section=section,
+            module=module,
+            profile=profile,
+            model=model,
+            discipline=discipline,
+            source_capability_summary=source_capability_summary,
+            today=today,
+            reference_documents=reference_block,
+            project_facts=facts_block,
+        )
+        for lens in QC_LENSES
+    }
     outcomes: dict[str, _LensOutcome] = {}
-    with ThreadPoolExecutor(
-        max_workers=min(_qc_max_workers(), len(QC_LENSES))
-    ) as pool:
-        futures = {
-            pool.submit(
+    lens_workers = min(_qc_max_workers(), len(QC_LENSES))
+    with ThreadPoolExecutor(max_workers=lens_workers) as pool:
+
+        def submit_lens(
+            lens: QCLens, first_output: threading.Event | None
+        ) -> Future:
+            return pool.submit(
                 _run_lens,
                 client,
                 lens=lens,
-                section=section,
-                module=module,
-                profile=profile,
+                pieces=lens_pieces[lens.lens_id],
                 model=model,
                 max_tokens=max_tokens,
                 effort=lens_effort,
-                discipline=discipline,
-                source_capability_summary=source_capability_summary,
-                today=today,
-                reference_documents=reference_block,
-                project_facts=facts_block,
                 event_sink=event_sink,
                 should_stop=should_stop,
-            ): lens
-            for lens in QC_LENSES
-        }
+                first_output=first_output,
+            )
+
+        futures = _launch_staggered(
+            list(QC_LENSES),
+            key_of=lambda lens: _pieces_lineage_key(
+                lens_pieces[lens.lens_id], model=model, effort=lens_effort
+            ),
+            submit=submit_lens,
+            wait_seconds=warm_wait_seconds,
+            should_stop=should_stop,
+            label="lenses",
+            capacity=lens_workers,
+        )
         for future in as_completed(futures):
             lens = futures[future]
             try:
@@ -6609,6 +6972,7 @@ def run_final_qc(
         effort=lens_effort,
         today=today,
         enabled=consolidation_enabled,
+        warm_wait_seconds=warm_wait_seconds,
         event_sink=event_sink,
         should_stop=should_stop,
     )

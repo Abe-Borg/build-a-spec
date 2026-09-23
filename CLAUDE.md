@@ -136,6 +136,11 @@ backend/
                            gate waived by the owner, not passed; 0 = the
                            Phase 1 rendering byte for byte; read per request
                            by app._render_original_redline);
+                           QC_WARM_WAIT_SECONDS (BUILD_A_SPEC_QC_WARM_WAIT_
+                           SECONDS, default 45, floor 0 — cost Tier 1 Chunk 2's
+                           staggered-launch bound; 0 = every QC call at once;
+                           pinned once per run by run_final_qc, never in the
+                           QC input manifest);
                            REDLINE_COMMENTS (BUILD_A_SPEC_REDLINE_COMMENTS,
                            default ON — redline Phase 3, owner decision 9;
                            0 = the redline without comments byte for byte;
@@ -433,7 +438,10 @@ backend/
                            buckets → one grouping call each → strict partition
                            validation → singletons on ANY failure; QCCandidateOrigin
                            / QCConsolidationGroup / QCConsolidation persisted) →
-                           adversarial verification panel (tie→refuters) → ops
+                           adversarial verification panel (final-qc/4: every
+                           seat upholds → upheld, a refuting majority →
+                           refuted — for critical/high only with a validated
+                           citation — anything else → disputed) → ops
                            dry-run validation → audit-grade QCResult (versioned
                            run/input identity; complete lens, source, verifier-seat,
                            ops/disposition, usage/cost and limitation evidence;
@@ -445,7 +453,26 @@ backend/
                            non-empty); the Review Room batch relays observable
                            activity/search/fetch/retry frames from each open lens
                            and verifier stream, plus explicit verification and
-                           local-validation phase events (never hidden reasoning)
+                           local-validation phase events (never hidden reasoning);
+                           cost Tier 1 Chunk 2: the phase-1 lenses and the
+                           consolidation grouping calls launch STAGGERED by
+                           cache lineage — _CallPieces built once per call
+                           (_lens_call_pieces / _consolidation_call_pieces,
+                           which _run_lens / _run_consolidation_call now take)
+                           and read twice, by _prefix_lineage_key (SHA-256 of
+                           tools + system + shared prefix + model/effort/TTL)
+                           and by the request; _launch_staggered sends each
+                           lineage's leader, then every single-call lineage
+                           the pool can start at once (its `capacity`; the
+                           rest go after the followers, never queued ahead of
+                           them), waits on the calling thread (bounded by
+                           settings.QC_WARM_WAIT_SECONDS, stop-aware) for the
+                           leader's first_output — set by _relay_stream_
+                           activity on the first non-message_start frame, when
+                           any request of _run_streaming_call ends, on its
+                           every return, and by a done-callback — then its
+                           followers; the engine's first logger,
+                           buildaspec.qc, writes one INFO line per wait
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
@@ -2230,6 +2257,19 @@ tests/
                            round, golden pricing against the table and the
                            ledger, no text/names/paths in the report, and
                            the client never loaded (a subprocess)
+  test_qc_warm_launch.py   [Research/QC cost Tier 1, Chunk 2] the staggered
+                           launch, every wait an event or a stepped clock:
+                           followers sent only after the leader's first
+                           output and code_compliance never held, a
+                           fast-failing leader releasing them before its
+                           backoff, a Stop cancelling them unsent, the bound,
+                           zero wait = all at once, a one-worker pool keeping
+                           the lineage together (a single never queued ahead
+                           of the followers), the lineage key, consolidation
+                           buckets staggering (one bucket never waiting), the
+                           same request multiset either way, a retained
+                           result current with the switch in either position,
+                           and the default read from the source
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -15504,6 +15544,153 @@ release note: the tool is not part of the app.
      `tests/test_docs_consistency.py` says four profilers and the canary.
   2. The Layout gains its first `tools/` entry. The other profilers are
      still described only in their implemented-notes sections.
+
+## Final QC's calls that share a cache start staggered — implemented notes (Research/QC cost Tier 1, Chunk 2)
+
+Chunk 2 of `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` (where the
+program stands is `docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`, and only
+there). No route, SSE event, dependency, project-format change, version bump
+or `release_notes.py` entry; one env knob. The plan's Chunk 2 **As built**
+carries the deviations; this section is the why and the traps.
+
+- **Why four lenses paid four times.** A cache entry becomes readable only
+  once the response that writes it begins streaming. The four web-toolless
+  lenses send byte-identical tools, system and block 0, and all started at
+  the same instant, so all four missed and all four paid Opus 5.5's 5-minute
+  write rate for the same prefix. Two or more consolidation buckets did the
+  same with theirs. The documented fix is the one built: send one, wait for
+  its first streamed output, send the rest.
+- **It changes when a request is sent, never what is sent.** Pinned by
+  `test_staggering_changes_no_request_bytes` (the captured multiset, lenses,
+  grouping calls and the verifier batch included, equal with the wait on and
+  off). So nothing reaches the input manifest, and a retained result stays
+  current with the switch in either position (the plan's F3, pinned with the
+  fingerprints compared too).
+- **The lineage is named from the real builders, never from lens ids.**
+  `_prefix_lineage_key` hashes exactly what precedes block 0's breakpoint
+  (tools, then system, then the shared prefix — the render order) plus what
+  forks a cache (model, effort, TTL). `_CallPieces` are built once per call
+  (`_lens_call_pieces` / `_consolidation_call_pieces`) and read twice: by the
+  key, and by the call (`_run_lens` / `_run_consolidation_call` now TAKE
+  them), so the key cannot drift from the request it names. The per-call
+  tail (block 1) is after the breakpoint and does not fork. `code_compliance`
+  carries web tools, so it keys alone and never waits — a property of the
+  key, so a later lens change stays correct on its own. `_qc_request_kwargs`
+  stamps its breakpoint on a COPY of the tools, which is what lets the key
+  read them unstamped (pinned).
+- **`_launch_staggered`: leaders, then the single-call lineages a worker
+  is free for, then the wait, then followers, then any single left over.**
+  Leaders go first so a pool of one never parks a leader behind a
+  minutes-long `code_compliance` while its followers wait on it. And a
+  single-call lineage goes ahead of the wait only while the pool (its
+  `capacity`) can START it at once (caught in review on PR #210, Codex): one
+  that would only queue sits in the pool's FIFO queue AHEAD of the released
+  followers, so a sole worker would run the long web-tooled lens between the
+  leader and its followers, long enough for the leader's 5-minute entry to
+  expire and a follower to pay a second write — more than the pre-stagger
+  declared order, which kept the four together. With the default 8 workers
+  `code_compliance` still starts at once and never waits; with one worker
+  the order is leader, followers, `code_compliance` (both pinned). The wait
+  runs on the CALLING thread,
+  never in the pool, so it cannot starve the leader it waits on. It is
+  bounded by `settings.QC_WARM_WAIT_SECONDS` and stop-aware (it re-checks
+  every `_WARM_WAIT_SLICE_SECONDS`, 1 s, but returns the instant its leader
+  releases). Each lineage is released by its own leader, against one
+  deadline shared by all leaders.
+- **A leader releases four ways, and all four matter.** `first_output`
+  (`threading.Event`, idempotent) is set: by `_relay_stream_activity` on the
+  first frame that is not `message_start` — the first content output, read
+  conservatively as the moment the entry is readable; by a `finally` around
+  every request in `_run_streaming_call`, so a leader that fails fast (a 429
+  or a dropped connection wrote nothing worth waiting for) does not hold its
+  followers through its retry backoff; by a function-level `finally` on
+  every return path; and by a done-callback the launcher puts on the
+  leader's `Future`, because `_run_lens` checks `should_stop` and returns
+  BEFORE it reaches `_run_streaming_call`. A follower therefore never waits
+  longer than its leader's own first request takes.
+- **`_run_streaming_call`'s body now sits inside one `try`/`finally`.** The
+  re-indent is mechanical; read its diff with whitespace ignored. Anything
+  that adds a return path inherits the release.
+- **On a Stop the followers are sent anyway**, and each one checks
+  `should_stop` before it sends anything and returns "Cancelled by user.":
+  the phase's records stay complete and the existing cancellation paths are
+  untouched. `_run_lens` emits `lens_started` first, so the Review Room
+  shows the follower cards queued until then, which is accurate — no new
+  SSE event.
+- **The setting.** `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`, default 45, floor
+  0; `0` sends everything at once, exactly as before. `run_final_qc` takes
+  `warm_wait_seconds` (`None` = the setting), pinned once per run and shared
+  by phase 1 and consolidation. Default on per the plan's F5: the guarantee
+  is documented, and a follower that finds nothing readable writes as it
+  always did.
+- **The engine's first logger.** `logging.getLogger("buildaspec.qc")` writes
+  one INFO line per wait: the lineage size, the outcome (`warm`, `timeout`,
+  `stopped`) and the milliseconds waited. `warm` means the followers were
+  released by their leader, whichever of the four release points fired; the
+  event cannot say which.
+- **Out of scope, deliberately:** the streamed verifier transport
+  (`QC_BATCH_VERIFICATION=0`) still starts its seats together. Phase 2's
+  default is batched, which is Chunk 3's.
+- **Knowing test change.**
+  `test_parallel_lens_activity_interleaves_without_breaking_worker_order`
+  forced a cross-worker order with a rendezvous between `completeness` and
+  `coordination_consistency`. They now share a lineage, and the follower
+  cannot be sent until the leader has emitted, so the rendezvous timed out
+  and the order assertion failed. It now pairs the leader with
+  `code_compliance`, which still starts alongside it; only the lens ids
+  changed. **A test that makes two lenses rendezvous must pick lenses in
+  different lineages.**
+- **Measured, not modelled.** After a Final QC made with this build, the
+  QC profiler's "Phase 1" line should say 3 of the 4 web-toolless lenses
+  read the shared prefix and 1 wrote one (the expected baseline is about 0
+  and 4). That is Abraham's M2 run, and the progress file records it.
+- **Tests: `tests/test_qc_warm_launch.py` (17)** — every wait an event or a
+  stepped clock, never a real sleep: followers sent only after the leader's
+  first output with `code_compliance` never held and `lens_statuses` in
+  declared order; a leader failing before streaming releases them before its
+  backoff; a Stop mid-wait sends no follower request; the bound (a stepped
+  clock that outruns it on the first check); zero wait; the setting reaching
+  the run; a one-worker pool keeping the lineage together; the capacity rule; the relay's `message_start` rule; a call
+  stopped before its first request; the lineage key; consolidation buckets
+  staggering and one bucket never waiting; the request multiset; F3; the
+  default read from the source; and the done-callback.
+
+- **Revert matrix**: each mechanism reverted in place, one at a time,
+  restored from the exact text it read, and `git diff` clean after every row
+  (the warm-launch and live-event suites run each time):
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the relay never sets `first_output` | 3 |
+  | the relay counts `message_start` as output | 1 |
+  | no release when a request ends | 1 |
+  | no release on `_run_streaming_call`'s return paths | 1 |
+  | no done-callback on the leader's future | 1 |
+  | single-call lineages submitted before leaders | 3 |
+  | every single-call lineage ahead of the wait, whatever the pool's capacity (the PR #210 review fix) | 2 |
+  | the wait ignores a Stop | 1 |
+  | the wait has no bound | 1 |
+  | zero wait still waits | 1 |
+  | consolidation not handed the wait | 1 |
+  | `warm_wait_seconds=None` not reading the setting | 1 |
+  | `_run_lens` not forwarding `first_output` | 2 |
+  | `_run_consolidation_call` not forwarding it | 1 |
+  | no INFO line | 5 |
+  | the wait put into the input manifest (the F3 proof) | 1 |
+  | the key ignoring tools | 5 |
+  | the key ignoring system / shared prefix / model / effort / TTL | 1 each (5 rows) |
+
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Final QC cost + speed" (v1.8.0) says "No pre-warm priming
+     (deliberate)": the first `QC_MAX_WORKERS` calls of each phase all miss,
+     and a serial prime would add ~60 s. Phase 1 and consolidation are now
+     primed by staggering. What it costs is the leader's time to its first
+     output — seconds, not a whole call — so the ~60 s objection does not
+     apply to it. Phase 2 is unchanged here.
+  2. The Layout entry for `qc/engine.py` said "adversarial verification
+     panel (tie→refuters)", v3's rule, since Chunk 5.1. The Layout is
+     maintained current, so it now states v4's rule in place.
 
 ## Comments on the changes — implemented notes (redline Phase 3)
 

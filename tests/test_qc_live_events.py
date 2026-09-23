@@ -685,7 +685,14 @@ def test_verifier_retry_then_relays_tool_activity_for_the_same_seat(
 
 
 def test_parallel_lens_activity_interleaves_without_breaking_worker_order() -> None:
-    """Workers may interleave globally, but each worker keeps its subsequence."""
+    """Workers may interleave globally, but each worker keeps its subsequence.
+
+    The pair is ``code_compliance`` and the leader of the web-toolless
+    lineage, because those two start together under the staggered launch
+    (cost Tier 1, Chunk 2): ``code_compliance`` is a lineage of its own and
+    never waits. Two web-toolless lenses cannot rendezvous before either
+    emits any more — the follower is not sent until the leader has.
+    """
     first_seen = threading.Event()
     second_seen = threading.Event()
 
@@ -703,21 +710,21 @@ def test_parallel_lens_activity_interleaves_without_breaking_worker_order() -> N
             second_seen.set()
             yield block_start_event(1, "tool_use", "submit_qc_findings")
 
-    first = qc_findings_response("completeness", findings=[])
+    first = qc_findings_response("code_compliance", findings=[])
     first.events = FirstEvents()
     second = qc_findings_response("coordination_consistency", findings=[])
     second.events = SecondEvents()
     events: list[dict] = []
     _run(
         _scripts(
-            completeness=[first],
+            code_compliance=[first],
             coordination_consistency=[second],
         ),
         events,
     )
 
     first_activity = _events_for(
-        events, type="lens_activity", lens_id="completeness", kind="thinking"
+        events, type="lens_activity", lens_id="code_compliance", kind="thinking"
     )[0]
     second_activity = _events_for(
         events,
@@ -726,7 +733,7 @@ def test_parallel_lens_activity_interleaves_without_breaking_worker_order() -> N
         kind="thinking",
     )[0]
     first_terminal = _events_for(
-        events, type="lens_complete", lens_id="completeness"
+        events, type="lens_complete", lens_id="code_compliance"
     )[0]
     second_terminal = _events_for(
         events, type="lens_complete", lens_id="coordination_consistency"
@@ -734,7 +741,7 @@ def test_parallel_lens_activity_interleaves_without_breaking_worker_order() -> N
     assert events.index(first_activity) < events.index(second_activity)
     assert events.index(second_activity) < events.index(first_terminal)
     assert events.index(second_activity) < events.index(second_terminal)
-    for lens_id in ("completeness", "coordination_consistency"):
+    for lens_id in ("code_compliance", "coordination_consistency"):
         worker = _events_for(events, lens_id=lens_id)
         types = [event["type"] for event in worker]
         assert types[0] == "lens_started"

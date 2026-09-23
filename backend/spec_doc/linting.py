@@ -407,8 +407,49 @@ def _matches_needed(total: int) -> int:
     return need
 
 
+#: Below this code point a character keeps a position mask of its own; every
+#: character at or above it shares one of 256 (see :func:`_mask_symbols`).
+_OWN_MASK_BELOW = "\u0100"
+
+
+def _mask_symbols(text: str) -> str:
+    """``text`` spelled in at most 512 symbols, for the subsequence bound.
+
+    :func:`_position_masks` keeps one mask per distinct character, each as
+    wide as that character's last position, so a text of many distinct
+    characters — a script with a large alphabet, or any run of distinct code
+    points — would hold masks whose total size grows with the SQUARE of its
+    length: one 40,000-character provision of distinct code points held
+    about 108 MB of them, four times what half the length held. Every
+    character at or above U+0100 therefore folds onto one of 256 shared
+    symbols, chosen by the low byte of its code point, so a text has at most
+    512 masks and they stay linear in its length.
+
+    Folding keeps the bound an upper bound: two characters that become one
+    symbol can only lengthen a common subsequence, never shorten one. It
+    loosens the bound only for characters at or above U+0100 — ASCII and
+    Latin-1 text comes back unchanged — and on unrelated paragraphs of a
+    large-alphabet script the folded subsequence still reads about a quarter
+    of their length, far below the bar. Both texts of a pair must be spelled
+    this way, or a character would miss its own mask.
+    """
+    if not text or max(text) < _OWN_MASK_BELOW:
+        return text
+    return text.translate(
+        {
+            ord(char): 0x100 | (ord(char) & 0xFF)
+            for char in set(text)
+            if char >= _OWN_MASK_BELOW
+        }
+    )
+
+
 def _position_masks(text: str) -> dict[str, int]:
-    """Each character of ``text`` mapped to the bit set of its positions."""
+    """Each character of ``text`` mapped to the bit set of its positions.
+
+    Fed :func:`_mask_symbols`, never raw text: the masks' total size is the
+    number of distinct characters times the text's length.
+    """
     masks: dict[str, int] = {}
     for position, char in enumerate(text):
         masks[char] = masks.get(char, 0) | (1 << position)
@@ -426,7 +467,9 @@ def _lcs_upper_bound(
 ) -> int:
     """An upper bound on the longest common subsequence of two texts.
 
-    ``long_masks`` is :func:`_position_masks` of the longer text. Row by row
+    ``long_masks`` is :func:`_position_masks` of the longer text, and
+    ``short`` is spelled in the same symbols (:class:`_RatioBounds` passes
+    both through :func:`_mask_symbols`). Row by row
     over ``short``, this is the bit-parallel LCS recurrence (Allison and
     Dix; Hyyrö): each zero bit of ``vector`` is one more character of the
     common subsequence, so a row costs a few whole-number operations rather
@@ -476,12 +519,16 @@ class _RatioBounds:
     reads 0.9–0.97 for unrelated text. The LCS bound is order-aware and
     reads about 0.45 for the same pairs, which is what keeps number-free
     siblings — a memo imported as one long article — from costing a
-    character-level ``ratio()`` for every pair.
+    character-level ``ratio()`` for every pair. It is computed over the
+    texts spelled in :func:`_mask_symbols`, which keeps its position masks
+    linear in each text's length whatever the alphabet, and can only
+    lengthen the subsequence it measures.
     """
 
     def __init__(self, texts: list[str]) -> None:
         self._texts = texts
         self._counts: dict[int, Counter[str]] = {}
+        self._symbols: dict[int, str] = {}
         self._masks: dict[int, dict[str, int]] = {}
 
     def _count(self, index: int) -> Counter[str]:
@@ -490,10 +537,16 @@ class _RatioBounds:
             counts = self._counts[index] = Counter(self._texts[index])
         return counts
 
+    def _spelled(self, index: int) -> str:
+        symbols = self._symbols.get(index)
+        if symbols is None:
+            symbols = self._symbols[index] = _mask_symbols(self._texts[index])
+        return symbols
+
     def _mask(self, index: int) -> dict[str, int]:
         masks = self._masks.get(index)
         if masks is None:
-            masks = self._masks[index] = _position_masks(self._texts[index])
+            masks = self._masks[index] = _position_masks(self._spelled(index))
         return masks
 
     def may_reach(self, first: int, second: int) -> bool:
@@ -512,8 +565,10 @@ class _RatioBounds:
         )
         if shared < need:
             return False
-        # (3) At most the longest common subsequence.
-        return _lcs_upper_bound(short, self._mask(second), len(long), need) >= need
+        # (3) At most the longest common subsequence — measured over the
+        # mask symbols, whose subsequence is at least as long.
+        symbols = self._spelled(first)
+        return _lcs_upper_bound(symbols, self._mask(second), len(long), need) >= need
 
 
 def _duplicate_siblings(

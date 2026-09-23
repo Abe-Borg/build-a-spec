@@ -885,7 +885,10 @@ backend/
                            bounds (real_quick_ratio / quick_ratio, computed
                            from per-provision profiles) and a bit-parallel
                            character LCS that stops once the rows left cannot
-                           reach _matches_needed — so no finding moves and
+                           reach _matches_needed (spelled in _mask_symbols:
+                           characters at or above U+0100 share 256 masks, so
+                           the masks stay linear in the text's length
+                           whatever its alphabet) — so no finding moves and
                            long number-free siblings stop costing seconds
                            (see "The duplicate lint proves before it compares")
   spec_doc/source_format.py
@@ -1978,9 +1981,10 @@ tests/
                            siblings (counted, never timed), every finding
                            held to the pre-bounds comparison around the bar,
                            each bound against difflib and a plain LCS DP, the
-                           early exit; and one lint pass per committed
-                           version across payload, readiness, turn context
-                           and the lint event
+                           early exit, the masks linear for a large alphabet
+                           and still sound once folded; and one lint pass per
+                           committed version across payload, readiness, turn
+                           context and the lint event
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -14181,6 +14185,34 @@ picks the release).
   0.01 / 0.03 / 0.07 / 0.11 / 0.08 s for the five cases above; a whole
   `lint_document` on the 40-paragraph memo is ~130 ms, all of it the LCS
   bound.
+- **The masks stay linear in the text, whatever its alphabet** (review
+  finding on PR #200, Codex). A position mask is as wide as its
+  character's last position, and there is one per distinct character, so
+  a provision of many distinct characters held masks that grew with the
+  SQUARE of its length — 1.8 MB for 5,000 distinct code points, 27 MB for
+  20,000, 108 MB for 40,000, about 670 MB extrapolated to Codex's 100,000
+  — and `_RatioBounds` keeps them for every sibling. `_mask_symbols` now
+  spells both texts of a pair in at most 512 symbols: a character below
+  U+0100 keeps its own, every other one shares one of 256 by the low byte
+  of its code point, and the same 100,000 characters hold 3.45 MB of
+  masks. Merging characters can only lengthen a common subsequence, so the
+  bound stays an upper bound, provided BOTH texts fold the same way: a
+  character folded in the masks but not in the rows would miss its own
+  mask, and that bound is too LOW, the unsound direction (pinned pair by
+  pair on an alphabet built to collide). ASCII and Latin-1 are spelled as
+  themselves, so English keeps exactly the bound it had and the timings
+  above do not move; typographic quotes and dashes share a mask with the
+  few rare letters that have their low byte. On large-alphabet text
+  difflib's own character-count bound usually settles unrelated pairs
+  first (0.55–0.76 on synthetic CJK-like paragraphs), and the folded LCS
+  reads 0.22–0.25 of their length on the rest. Two costs stay. At 100,000
+  distinct characters a pair still retains 27 MB, most of it the two exact
+  character counts — one entry per distinct character, so linear. And the
+  LCS takes time proportional to the product of the two lengths over the
+  word size, which only pays off where `ratio()` is the slower of the two:
+  on Codex's near-duplicate pair it takes 2.7 s where `ratio()` on
+  all-distinct text takes 0.17 s, while on English near-duplicates of
+  30,000 characters the bounds take 0.13 s and `ratio()` 10.3 s.
 - **Word-level comparison was ruled out, not measured.** A character-level
   0.90 leaves 10% of the characters unmatched, and those can fall one per
   word, so a pair can reach the bar with every word altered: no measure over
@@ -14261,7 +14293,7 @@ picks the release).
   the run's first `=`, further left, so the leftmost match always starts
   there; a randomized sweep of 20,000 forged, broken and doubled markers
   pins the old and shared patterns span for span.
-- **Tests** (`tests/test_lint_cost.py`, 15, plus 2 in
+- **Tests** (`tests/test_lint_cost.py`, 18, plus 2 in
   `tests/test_chat_compaction.py`): forty ~1,150-character number-free
   siblings build no `SequenceMatcher` and call no `ratio()` (counted with a
   stub that never computes, so a regression fails in a second instead of
@@ -14276,7 +14308,11 @@ picks the release).
   undo, and a doc-changing turn's event; provisional trees never kept; a
   version record rewritten in place re-linted; copies on a hit and on a
   miss; per-input reports; a module switch. And the engine's escape reading
-  compaction's very object, plus the span-for-span equivalence.
+  compaction's very object, plus the span-for-span equivalence. After the
+  review: the masks of 5,000 distinct code points (at most 512, none wider
+  than the text); over a colliding alphabet, no pair at or above the bar
+  settled and the folded bound never below the exact LCS; Latin-1 spelled
+  as itself, and every other character folding the same way in every text.
 - **Revert matrix** (each mechanism reverted in place, the exact text
   restored after, `git diff` clean after every row): the bounds not
   consulted → 1 red (the forty-sibling pin); the LCS bound dropped → 1; the
@@ -14289,6 +14325,10 @@ picks the release).
   readiness check, the turn context or the lint event bypassing the memo →
   2, 2, 2, 1; the engine keeping its own pattern → 1; the escape compiling a
   pattern of its own → 1; the shared pattern losing its lookbehind → 1.
+  After the review: the fold removed → 1 (the memory pin); the masks built
+  from raw text → 2; the rows reading raw text → 2 (the colliding-alphabet
+  test among them: that bound is too low); Latin-1 folded too → 2; a fold
+  that differs per text → 3.
 - **Errata** (these notes are append-only, so corrections to earlier
   sections are recorded here):
   1. "What each turn carries is measured (Project workspace Phase 5A)",

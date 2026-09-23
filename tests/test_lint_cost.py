@@ -398,6 +398,100 @@ def test_the_cheap_bounds_run_before_the_expensive_ones(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# The masks stay linear in the text's length, whatever its alphabet
+# ---------------------------------------------------------------------------
+
+# An alphabet built to collide: beside three ASCII characters, six at or
+# above U+0100 that fold onto two mask symbols by their low byte (U+0161,
+# U+0261 and U+4E61 share one; U+0162, U+0262 and U+4E62 the other).
+_COLLIDING = "ab " + "".join(
+    chr(high << 8 | low) for high in (0x01, 0x02, 0x4E) for low in (0x61, 0x62)
+)
+
+
+def test_the_position_masks_stay_linear_in_the_texts_length():
+    """Review finding on PR #200: one mask per distinct character, each as
+    wide as the text, made a provision of distinct code points cost memory
+    that grows with the square of its length — 12.5 million bits of masks
+    for 5,000 characters, and about 108 MB for 40,000. Spelled in the mask
+    symbols it holds at most 512 masks, none wider than the text."""
+    n = 5_000
+    distinct = "".join(chr(0x4E00 + i) for i in range(n))
+    twin = distinct[: n // 2] + "x" + distinct[n // 2 + 1 :]
+    bounds = linting._RatioBounds([distinct, twin])
+    assert bounds.may_reach(0, 1)
+    assert bounds._masks, "the subsequence bound never ran"
+    for masks in bounds._masks.values():
+        assert len(masks) <= 512
+        assert sum(mask.bit_length() for mask in masks.values()) <= 512 * n
+
+
+def test_folding_the_alphabet_never_settles_a_pair_that_reaches_the_bar():
+    """Characters that share a mask symbol can only lengthen a common
+    subsequence. Over the colliding alphabet the folded bound is never below
+    the exact subsequence of the texts as written, and a pair at or above
+    the bar is never settled; the edits are graded so pairs land close to
+    the bar on both sides."""
+    # The premise: nine characters, five mask symbols.
+    assert len(set(linting._mask_symbols(_COLLIDING))) == 5
+    rng = random.Random(13)
+    at_or_above = just_below = 0
+    for trial in range(1_500):
+        base = "".join(rng.choice(_COLLIDING) for _ in range(rng.randint(40, 120)))
+        variant = list(base)
+        for _ in range(rng.randint(0, len(base) // 6)):
+            spot = rng.randrange(len(variant) + 1)
+            action = rng.random()
+            if action < 0.4 and spot < len(variant):
+                variant[spot] = rng.choice(_COLLIDING)
+            elif action < 0.7:
+                variant.insert(spot, rng.choice(_COLLIDING))
+            elif spot < len(variant):
+                del variant[spot]
+        variant = "".join(variant)
+        if not trial % 5:
+            short, long = sorted((base, variant), key=len)
+            folded = linting._lcs_upper_bound(
+                linting._mask_symbols(short),
+                linting._position_masks(linting._mask_symbols(long)),
+                len(long),
+                0,
+            )
+            assert folded >= _lcs(short, long), (short, long)
+        ratio = SequenceMatcher(None, base, variant, autojunk=False).ratio()
+        if ratio >= _BAR:
+            may_reach = linting._RatioBounds([base, variant]).may_reach(0, 1)
+            assert may_reach, (base, variant, ratio)
+            at_or_above += 1
+        elif ratio >= 0.85:
+            just_below += 1
+    assert at_or_above >= 50 and just_below >= 10, (at_or_above, just_below)
+
+
+def test_latin_1_keeps_a_mask_of_its_own_and_the_rest_folds_the_same_everywhere():
+    """ASCII and Latin-1 text is spelled as itself, so the bound on English
+    is exactly what it was. A character at or above U+0100 folds to one
+    symbol below U+0200 — the same one in every text, or a pair's two
+    spellings would disagree and a character would miss its own mask."""
+    latin = (
+        "provide caf\u00e9-grade 90\u00b0 elbows, \u00b15 percent, "
+        "\u00bd turn, na\u00efve reviewers."
+    )
+    assert linting._mask_symbols(latin) == latin
+    mixed = "quoted \u2018aside\u2019 \u2014 \u201cmore\u201d \u0261 \u0161a \u4e2d\u6587"
+    folded = linting._mask_symbols(mixed)
+    assert len(folded) == len(mixed)
+    assert all(
+        (char == original)
+        if original < "\u0100"
+        else ("\u0100" <= char < "\u0200")
+        for char, original in zip(folded, mixed)
+    )
+    assert linting._mask_symbols(folded) == folded
+    assert linting._mask_symbols("\u4e2dz")[0] == linting._mask_symbols("q\u4e2d")[1]
+
+
+# ---------------------------------------------------------------------------
 # One pass per committed version
 # ---------------------------------------------------------------------------
 

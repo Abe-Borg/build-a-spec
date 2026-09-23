@@ -507,7 +507,7 @@ function Dossier() {
             <>
               <b className="text-ink">
                 No model runs that you did not start — with one disclosed
-                follow-up.
+                follow-up, and one more you can switch on.
               </b>{" "}
               No auto-research, no silent re-draft, no automatic fact harvest,
               no scheduled job: every
@@ -519,10 +519,17 @@ function Dossier() {
               summarizes how the findings affect the draft and asks whether to
               proceed — it appears in the transcript like any message, can be
               stopped like any turn, never applies changes by itself, and can
-              be switched off (BUILD_A_SPEC_AUTO_DEBRIEF=0). Beyond that, the
-              only thing the app does on its own is check for a new version at
-              startup, at most once a day; that request goes to GitHub, carries
-              nothing about your project, and can be switched off.
+              be switched off (BUILD_A_SPEC_AUTO_DEBRIEF=0). Condensing a long
+              conversation is model work too, and by default it is part of a
+              turn you started: when a message would not otherwise fit in the
+              model&apos;s context window, the oldest turns are condensed first,
+              inside that turn, and the status line says so. Routine condensing
+              (BUILD_A_SPEC_CHAT_COMPACTION=1, off by default) is the one you
+              can switch on: it writes that summary after a reply instead, while
+              you read it. Beyond that, the only thing the app does on its own
+              is check for a new version at startup, at most once a day; that
+              request goes to GitHub, carries nothing about your project, and
+              can be switched off.
             </>,
             <>
               <b className="text-ink">Every automated judgment is re-derivable.</b>{" "}
@@ -733,8 +740,9 @@ function Dossier() {
             <>
               One streamed request to Anthropic. If the model decides to use a
               tool — edit the document, create a figure, read an attached
-              reference, track or check off something it needs from you, run a
-              web lookup — the app executes that tool locally,
+              reference, track or check off something it needs from you, look
+              up the exact words of a condensed earlier turn, run a web lookup
+              — the app executes that tool locally,
               hands back the result, and the model continues in the same turn.
               Document edits stream into the panel as they are applied, which is
               why you watch the page fill in.
@@ -746,7 +754,9 @@ function Dossier() {
               <b className="text-ink">fixed instruction block</b> built from the
               active discipline module — byte-identical every turn, so it is
               cached and billed at a fraction after the first call; (b) the{" "}
-              <b className="text-ink">conversation so far</b>; and (c) a{" "}
+              <b className="text-ink">conversation so far</b> — or, once a long
+              conversation has been condensed, a summary of its oldest turns
+              followed by the recent turns word for word; and (c) a{" "}
               <b className="text-ink">PROJECT CONTEXT block</b> attached to your
               newest message, containing the current date and time from your own
               computer’s clock, the standards editions in effect, which
@@ -1410,6 +1420,56 @@ function Dossier() {
             </>
           }
         />
+
+        <Runtime
+          n={16}
+          title="A long conversation is condensed"
+          trigger="Nothing extra — keep talking. By default it happens only when a message you send would not otherwise fit in the model's context window; with routine condensing switched on (BUILD_A_SPEC_CHAT_COMPACTION=1), after a reply once the conversation passes about 600,000 tokens."
+          runs={
+            <>
+              One model call that writes a summary of the oldest turns, kept
+              close to your own words: decisions and why, options ruled out and
+              why, exact values, your corrections, where things stand and what
+              was promised next, and decisions the project facts do not record
+              yet. The last three turns stay word for word. From then on every
+              message sends the summary in place of those turns, and a divider
+              in the chat marks where it ends —{" "}
+              <b className="text-ink">View summary</b> shows exactly what the
+              model reads. When the model needs an exact detail from a condensed
+              turn it looks it up in your saved conversation — the lookup runs
+              on your computer, like its document edits, and the words it finds
+              go back to it in the same turn. A summary that is empty, too long,
+              cut off, declined or missing its sections is rejected and nothing
+              changes. If even condensing cannot make a message fit, that one
+              message leaves the oldest turns out, says so, and they can still
+              be looked up.
+            </>
+          }
+          sent={
+            <>
+              The same request a chat turn sends — the fixed instruction block
+              and the conversation — plus one instruction carrying the
+              established project facts and what is waiting on you, so the
+              summary can point at them instead of restating them. It is a fork
+              of the last turn&apos;s request, so it reads the cache that turn
+              wrote instead of paying for the whole conversation again. The
+              document, research, Final QC and facts are never summarized: they
+              arrive fresh with every message.
+            </>
+          }
+          model="Claude Sonnet 5, effort “high” — the chat's own model and settings."
+          bounds={
+            <>
+              One summary at a time, at most 64,000 output tokens; after a
+              failed routine attempt the next waits a turn, then two, four, up
+              to sixteen (a message that would not fit tries again at once).
+              Metered under its own “Conversation condensing” line whatever it
+              produced. Nothing is deleted: the transcript on screen, the saved
+              project and the local trace keep every turn. Never in the guided
+              tour.
+            </>
+          }
+        />
       </Section>
 
       <Section
@@ -1620,9 +1680,10 @@ function Dossier() {
               did not start.</b> You are billed by Anthropic for your own API
               usage, under your own key. The one automatic model turn is the
               completion debrief after a research or Final QC run you launched
-              (an ordinary chat turn, disclosed above, switchable off); beyond
-              it the update check is the app’s only unprompted request, and it
-              costs nothing.
+              (an ordinary chat turn, disclosed above, switchable off); routine
+              conversation condensing, if you switch it on, writes a summary
+              after a reply; beyond those the update check is the app’s only
+              unprompted request, and it costs nothing.
             </>,
             <>
               <b className="text-ink">The fixed instruction block is cached.</b>{" "}
@@ -1777,7 +1838,9 @@ function Dossier() {
               <b className="text-ink">Watch a firewall or proxy log.</b> The only
               routine destination is Anthropic’s API — including the one
               automatic completion-debrief turn after a research or Final QC
-              run you launched. You will also see one
+              run you launched, and, if you switched routine condensing on, a
+              summary request after a long conversation&apos;s reply. You will
+              also see one
               GitHub request at startup — that is the version check described
               above, and it is the only connection the app makes that no
               action of yours set in motion.

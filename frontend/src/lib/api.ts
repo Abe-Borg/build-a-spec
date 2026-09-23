@@ -1,5 +1,8 @@
 import type {
   BriefRefreshResult,
+  CompactionInfo,
+  CompactionStatus,
+  CompactionSummary,
   DiagnosticsActivity,
   DiagnosticsLog,
   DiagnosticsSnapshot,
@@ -1201,6 +1204,35 @@ export async function stopChat(): Promise<void> {
   }
 }
 
+/**
+ * The condensed-conversation summary (compaction plan Phase 3), for the
+ * chat's "View summary". The document payload carries only its sizes and
+ * turn range; the text comes here when the user asks to read it. Throws the
+ * server's own message — including when there is nothing condensed.
+ */
+export async function getCompactionSummary(): Promise<CompactionSummary> {
+  const resp = await fetch("/api/chat/compaction");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `summary failed (${resp.status})`);
+  }
+  return data.compaction as CompactionSummary;
+}
+
+/** Whether a background summary is still on its way, and the record now —
+ *  two small fields, never the summary text. */
+export async function getCompactionStatus(): Promise<CompactionStatus> {
+  const resp = await fetch("/api/chat/compaction/status");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `status failed (${resp.status})`);
+  }
+  return {
+    pending: data.pending === true,
+    compaction: (data.compaction ?? null) as CompactionInfo | null,
+  };
+}
+
 /* --- Research (Phase 4) --- */
 
 /**
@@ -1332,6 +1364,7 @@ export async function deleteReference(
   reference_docs: ReferenceDocMeta[];
   suggested_prompts: string[];
   figures: Figure[];
+  compaction: CompactionInfo | null;
 }> {
   const resp = await fetch(`/api/reference/${encodeURIComponent(rid)}`, {
     method: "DELETE",
@@ -1349,6 +1382,9 @@ export async function deleteReference(
     reference_docs: data.reference_docs,
     suggested_prompts: data.suggested_prompts ?? [],
     figures: data.figures ?? [],
+    // A delete that cut history may have dropped the summary of the turns
+    // it cut — the caller replaces its record with this one.
+    compaction: data.compaction ?? null,
   };
 }
 

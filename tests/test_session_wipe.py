@@ -23,6 +23,7 @@ import json
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
+from backend.llm.compaction import CompactionRecord
 from backend.llm.conversation import SessionState
 from backend.research.engine import RequirementsProfile
 from backend.spec_doc.source_format import (
@@ -73,6 +74,16 @@ _STATE_PROBES = {
     # workspace Phase 5A). A breakdown that outlived its conversation would
     # have Developer tools describe a context the fresh session never sent.
     "last_context_sizes": lambda s: s.last_context_sizes,
+    # The condensed-conversation summary, the call that may still be writing
+    # one, and the size calibration (compaction plan Phase 3). A summary that
+    # outlived its conversation would stand in for turns the fresh session
+    # never had; the runner is compared by what it holds, not by identity.
+    "compaction": lambda s: s.compaction,
+    "compaction_runner": lambda s: (
+        s.compaction_runner.snapshot(),
+        s.compaction_runner.result,
+    ),
+    "tokens_per_char": lambda s: s.tokens_per_char,
     "turn_active": lambda s: s.turn_active,
     "_active_turn_token": lambda s: s._active_turn_token,
     "stop_requested": lambda s: s.stop_requested.is_set(),
@@ -210,6 +221,19 @@ def _dirty(session: SessionState) -> None:
     session.usage.add("interview", {"input_tokens": 100, "output_tokens": 20})
     session.last_context_tokens = 142_000
     session.last_context_sizes = {"research": 38_000, "total": 65_000}
+    session.compaction = CompactionRecord(
+        summary="## Exact details\nThe old project used 42 gpm.",
+        keep_from=0,
+        covers_turns=0,
+        digest="d" * 64,
+        created_at="2026-09-04T00:00:00+00:00",
+        model="claude-sonnet-5",
+        tokens_before=600_000,
+        tokens_after=40_000,
+    )
+    session.compaction_runner.claim(generation=0, trigger="background")
+    session.compaction_runner.settle(None, error="boom", error_kind="refused")
+    session.tokens_per_char = 0.3
     session.turn_active = True
     session._active_turn_token = object()
     session.stop_requested.set()

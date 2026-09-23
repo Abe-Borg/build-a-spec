@@ -128,6 +128,12 @@ def _category_models() -> dict[str, str]:
         # bucket rather than "interview" so the Settings table says what the
         # spend was for; same model, same rates.
         "harvest": settings.INTERVIEW_MODEL,
+        # Condensing a long conversation into a summary (compaction plan
+        # Phase 3). It forks the chat request — same model, so it can read
+        # the chat's cache — and is billed at the interview model's rates.
+        # Its own bucket because it can run without a click, and the
+        # Settings table is where that spend has to be visible.
+        "compaction": settings.INTERVIEW_MODEL,
     }
 
 

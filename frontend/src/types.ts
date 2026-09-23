@@ -27,7 +27,10 @@ export type StatusKind =
   | "drafting"
   | "searching"
   | "fetching"
-  | "drawing";
+  | "drawing"
+  /** A request would not fit the model's context window, so the older
+   *  turns are being condensed before it is sent (compaction Phase 3). */
+  | "condensing";
 
 export interface StreamStatus {
   kind: StatusKind;
@@ -979,6 +982,14 @@ export interface DocPayload {
    *  Phase 4) — the hint the Project facts panel, Next section and the
    *  brief export show. */
   harvest?: HarvestStatus;
+  /** The condensed-conversation record (compaction Phase 3), or null when
+   *  nothing has been condensed. Never carries the summary text itself;
+   *  `getCompactionSummary()` fetches that on demand. */
+  compaction?: CompactionInfo | null;
+  /** A background summary is running, or finished and waiting to be
+   *  adopted — the divider may still move without a turn, so the chat asks
+   *  `getCompactionStatus()` until it settles. */
+  compaction_pending?: boolean;
   lint: LintIssue[];
   standards: StandardInfo[];
   profile_complete: boolean;
@@ -2125,6 +2136,75 @@ export interface TurnUsage {
   web_fetch_requests?: number;
 }
 
+/**
+ * A summary standing in for the oldest turns of the conversation
+ * (compaction plan Phase 3). The transcript on screen and in the saved
+ * project is untouched; this says where the model's view of it was cut, so
+ * the chat can draw a divider there.
+ */
+export interface CompactionInfo {
+  /** Turns 1..covers_turns are condensed into the summary. */
+  covers_turns: number;
+  created_at: string;
+  /** Estimated conversation tokens before and after condensing. */
+  tokens_before: number;
+  tokens_after: number;
+  /** "background" (routine, past the threshold) or "backstop" (a request
+   *  would not have fit the model's context window). */
+  trigger: string;
+  summary_chars: number;
+}
+
+/** `GET /api/chat/compaction`: the record's sizes plus the summary itself,
+ *  fetched only when the user asks to read it. */
+export interface CompactionSummary extends CompactionInfo {
+  summary: string;
+}
+
+/** `GET /api/chat/compaction/status`: whether a background summary is still
+ *  on its way, and the record as it stands. The chat asks this while the
+ *  document payload says one is pending — a summary usually lands after its
+ *  turn's stream has closed, with no stream left to announce it. */
+export interface CompactionStatus {
+  pending: boolean;
+  compaction: CompactionInfo | null;
+}
+
+/** The background summary runner, as `/api/diagnostics` reports it. */
+export interface CompactionRunnerFacts {
+  /** idle | running | ready | failed */
+  status: string;
+  trigger: string;
+  attempts: number;
+  failures: number;
+  error_kind: string;
+  /** After a failure: the conversation's turn count at which the next
+   *  attempt may start (the backoff doubles per failure, capped). 0 when
+   *  nothing failed. */
+  retry_after_turns: number;
+  started_at: string;
+  finished_at: string;
+}
+
+/** Developer tools' view of condensing: never the summary text. */
+export interface CompactionFacts {
+  /** Routine (background) condensing is switched on. The backstop — condense
+   *  before a request that would not fit — runs either way. */
+  enabled: boolean;
+  threshold_tokens: number;
+  keep_turns: number;
+  active: boolean;
+  covers_turns: number;
+  keep_from: number | null;
+  created_at: string;
+  trigger: string;
+  tokens_before: number;
+  tokens_after: number;
+  summary_chars: number;
+  tokens_per_char: number | null;
+  runner: CompactionRunnerFacts | null;
+}
+
 export type StreamEvent =
   | { type: "text_delta"; text: string }
   | { type: "thinking_delta"; text: string }
@@ -2141,6 +2221,7 @@ export type StreamEvent =
   | { type: "followups"; followups: FollowUp[] }
   | { type: "project_facts"; project_facts: ProjectFact[] }
   | { type: "qc_dispositions"; outcomes: Record<string, string> }
+  | { type: "compaction"; compaction: CompactionInfo }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }
   | { type: "doc_snapshot"; doc: SpecDoc }
   | { type: "open_questions"; items: OpenItem[] }
@@ -2364,6 +2445,9 @@ export interface DiagnosticsSnapshot {
     /** What the saved conversation the model re-reads every turn is made
      *  of: sizes by category, never text. Tokens are a len/4 estimate. */
     history_composition?: HistoryComposition;
+    /** The condensed-conversation record and its runner (compaction plan
+     *  Phase 3). Sizes, counts and closed tokens only, never the summary. */
+    compaction?: CompactionFacts;
     unsaved: boolean;
     import_report_present: boolean;
     module_id: string;

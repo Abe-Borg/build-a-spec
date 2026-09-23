@@ -114,19 +114,20 @@ see Phase 5.
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
 | 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`) | commit-time + load-time elision; live canary built but **never run** — the PR merged without it. Ships in 1.21.0 **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`) until the canary passes — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | unblocked (D1 and D3 decided 2026-09-22); ship both halves together |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **in review** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189) | both halves; routine condensing off by default until the recall check, backstop always on — see Phase 3 → As built |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
 A status moves to **complete** only after the PR merges, set by the next
 session that touches this file (the project-workspace convention).
 
-**Where it stands (2026-09-23, recorded at the 1.21.0 closeout).**
-Phases 1 and 2 are on `master`, and both ship in 1.21.0 (the
-project-workspace closeout, `project-workspace/07_RELEASE_CLOSEOUT.md`).
-The owner decided D1–D4 on 2026-09-22 (see the Decisions table). No real
-measurements have been supplied yet, so the numbers under "What actually
-fills the history" are still the synthetic ones.
+**Where it stands (2026-09-23, recorded at the 1.21.0 closeout; the Phase 3
+line updated while PR #189 is in review).** Phases 1 and 2 are on `master`,
+and both ship in 1.21.0 (the project-workspace closeout,
+`project-workspace/07_RELEASE_CLOSEOUT.md`). The owner decided D1–D4 on
+2026-09-22 (see the Decisions table). No real measurements have been
+supplied yet, so the numbers under "What actually fills the history" are
+still the synthetic ones.
 
 - **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, which
   has still not been run. It needs the owner's API key and one paid
@@ -136,19 +137,27 @@ fills the history" are still the synthetic ones.
   both the commit-time and the load-time elision. Turning it on by default
   is a one-line change, plus the Phase 2 release note, once the canary
   reports acceptance (see Phase 2 → Canary result).
-- **Phase 3** is next, and nothing blocks building it: D1 is 600k tokens
-  with the last 3 user turns kept, and D3 is our own summarizer. It ships
-  the condensed conversation and the recall tool together, as its own PR.
-  Turning it on by default still waits on the paid recall check under
-  "Before it is on by default".
-- **D4 is yes.** Phase 3's summary lists decisions missing from the
-  ledgers, and that list becomes a candidate source for the harvest
-  (project-workspace Phase 4, merged in PR #185). The harvest spec records
-  the seam (`project-workspace/04_HARVEST.md`, deviation 23): one more
-  framed, neutralized block in `HarvestInputs`, reaching the harvest sheet
-  through the same checks and commit. It gets wired once Phase 3's summary
-  exists. That deviation was written before D1, D3 and D4 were decided, so
-  it still calls them open.
+- **Phase 3** is built and in review in PR #189. It condenses with our own
+  summarizer at D1 (600k tokens of committed conversation, the last 3 turns
+  kept) and ships `recall_conversation` with it. **Routine condensing is off
+  by default** (`BUILD_A_SPEC_CHAT_COMPACTION`) until the paid recall check
+  under "Before it is on by default"; the backstop, which condenses only
+  when a message would not otherwise fit, runs either way. It is NOT in the
+  1.21.0 release notes — and **v1.21.0 was not yet tagged** when this was
+  written, so the order matters: tag 1.21.0 from the commit before PR #189
+  merges, or fold Phase 3's release-note draft (below) into the 1.21.0
+  entry before tagging. Merging first and tagging after ships the backstop
+  and the recall tool in a build whose notes do not mention them.
+- **D4 is yes, and half of it is in.** Phase 3's summary lists the
+  decisions missing from the ledgers, each tagged with the turn it was
+  settled in, and that list is saved with the summary. Feeding it to the
+  harvest (project-workspace Phase 4, merged in PR #185) is not wired yet —
+  a harvest proposal must cite a source that resolves, and a summary line
+  is not one (see Phase 3 → As built). The harvest spec keeps the seam
+  (`project-workspace/04_HARVEST.md`, deviation 23): one more framed,
+  neutralized block in `HarvestInputs`, reaching the sheet through the same
+  checks and commit. That deviation was written before D1, D3 and D4 were
+  decided, so it still calls them open.
 - **Phase 5** is optional and still waits on a measured before/after on
   real full drafts.
 
@@ -467,6 +476,164 @@ condense at turn K, then ask about a decision, a rejected option and an
 exact value from before K — with and without the summary, and with recall.
 The claude-api skill's `build-eval` guide is the method.
 
+### As built, and the release-note draft
+
+**As built** (differences from the scope above, and why):
+
+- **Sizing is an estimate calibrated by the provider's own count, not
+  `messages.count_tokens`.** The counting endpoint returns
+  `invalid_request_error` for requests carrying server tools — web search
+  and web fetch among them — and every chat request carries both (checked
+  against the token-counting docs on 2026-09-23, which point such requests
+  at the Messages API's `usage` instead). So every size is serialized
+  characters × a tokens-per-character ratio learned per session from the
+  last committed turn's `usage` (clamped between 1/8 and 1/1.5; 1/3.5 until
+  the first measurement, which errs toward condensing early). The ratio is
+  process-local and cleared on reset and load.
+- **Two measures, deliberately different.** Routine condensing compares
+  the committed conversation (the history as later requests send it,
+  without PROJECT CONTEXT, system prompt or tools) against D1, as the
+  decision is worded. The backstop compares the whole first request (system
+  and tools, the view, and the new turn with its PROJECT CONTEXT) against
+  85% of `settings.MODEL_CONTEXT_WINDOW`.
+- **Routine condensing is a knob, off by default**
+  (`BUILD_A_SPEC_CHAT_COMPACTION`, with `_THRESHOLD` and `_KEEP_TURNS` for
+  D1). "Before it is on by default" names the paid recall check as the
+  gate; the knob is how the gate is kept. The backstop is not a knob and
+  runs regardless: without it a conversation past the window fails on
+  every message and the saved project carries that.
+- **Adopted at whichever comes first, checked by content.** A finished
+  background summary is adopted by the worker itself when no turn is
+  streaming, when a turn ends (after `finalize_model_turn`), or at the
+  start of the next turn under `owned_model_turn_guard` — never mid-turn.
+  The check is a digest over the role and text of every condensed message
+  (`CompactionRecord.fits`), not the plan's length check:
+  `delete_reference_if_idle` truncates history without a generation bump,
+  and a history that was truncated and then grew back past its old length
+  would pass a length check while the summary described turns that are
+  gone. The same digest makes a saved record load only while it still
+  describes the file's history. A record is only ever replaced by one
+  covering more turns.
+- **A reference delete drops a record that covers or starts at a removed
+  turn**, and always abandons the runner (a summary still being written
+  read the old history).
+- **Re-compaction** sends the current view (the earlier summary as a
+  preface, plus the kept turns) and tells the model to carry everything
+  the earlier summary records into the new one, which replaces it.
+- **The fork**, as specified: the chat's model, system, tools, thinking and
+  effort; one breakpoint at the previous turn's committed-history boundary
+  (the message before the last typed turn of the view) at
+  `CHAT_CACHE_TTL`; the tail unmarked (`_with_cache_breakpoints(...,
+  mark_tail=False)` — no later request repeats the instruction, so caching
+  it would be pure cost); no `tool_choice`, no container. Its output
+  ceiling is 64k (`CHAT_COMPACTION_MAX_TOKENS`), which is not part of the
+  cached prefix.
+- **The instruction** carries eight required headings: Anthropic's six
+  retention items as seven sections (exact values get their own), plus
+  D4's "Decisions the ledgers are missing", each line tagged with the turn
+  it was settled in (recall's numbering). The facts and waiting-on-you
+  blocks ride in a `<ledgers>` frame, and every frame is made inert inside
+  what it frames. A reply is refused — and still metered — when it is a
+  refusal, calls a tool, stops for any reason but `end_turn`, has no
+  `<summary>`, is empty or over 200k characters, or misses a heading; the
+  error carries a closed code for the trace and Developer tools.
+- **Backoff** after a failed routine attempt: the next may start one
+  committed turn later, then two, four, up to sixteen. The backstop
+  ignores it (a message that would not fit tries at once) and, when a
+  background summary is already running, waits for it for up to 300 s,
+  showing the `condensing` status, before writing one itself.
+- **The last resort covers the no-summary case too.** The plan named
+  dropping the oldest *condensed* turns; as built, when no summary can be
+  made at all, the one request leaves the oldest turns out (fewest first)
+  with a disclosed note, `recall_conversation` can read every turn left
+  out, and nothing about the session changes.
+- **New: a request the provider rejects as too long is retried once.** The
+  estimate can let through a request the provider counts as too long (a
+  conversation of unusually token-dense text). That 400 arrives before any
+  output, so the turn retries once with a pessimistic view (0.5 tokens per
+  character, 70% of the window, at least one more turn left out) instead
+  of failing now and on every later message. `_enter_stream` no longer
+  mistakes that 400 for a rejected thinking-display key: before, it would
+  have switched the thinking summary off for the whole process and resent
+  the same request.
+- **The turn announces its view.** A `compaction` SSE event (sizes and the
+  turn range, never the text) opens every turn whose view carries a
+  summary, so the chat's divider moves the moment one is adopted;
+  `condensing` joins the status vocabulary. `GET /api/chat/compaction`
+  returns the text for **View summary**. The divider's position is derived
+  client-side from `covers_turns`, counting only the messages that reached
+  the saved history (notes and failed turns skipped).
+- **Surfaces**: the "Conversation condensing" usage line (priced on the
+  interview model), the `chat_compaction` trace event, a Developer tools
+  row, a trust-dossier runtime card with "no model runs on its own"
+  re-scoped (the background summary is the one you can switch on), a Help
+  line, and a tour step on the always-present chat pane (appended to the
+  chapter, so no resume index moves and `TOUR_VERSION` stays 8).
+- **Not done here: feeding D4 to the harvest.** The summary's
+  missing-decisions list is written, turn-tagged and saved, but not yet a
+  source for the harvest sheet. Two things need deciding first, and both
+  are the harvest's: a harvest proposal must cite a source that resolves,
+  and a summary line is not one (a summary turn number is the Nth message
+  the user sent, while the harvest's `turn:N` is the Nth assistant reply,
+  and the two can differ when a turn committed no reply text); and the
+  harvest reads the full history, so a summary line would compete with the
+  turn it came from. `04_HARVEST.md` deviation 23 keeps the seam.
+- **Cost at D1, re-estimated** (Sonnet 5 list prices; the "Cost" section
+  above assumed 150k). One routine summary re-reads ~600k tokens from the
+  last turn's cache (~$0.12 at the 0.1× read rate), sends a ~2k-token
+  instruction uncached, and writes a summary plus its thinking (10–35k
+  output tokens, ~$0.10–0.35): roughly $0.25–0.50 each. The next turn
+  writes a fresh cache for the much shorter view once, and every turn
+  after that re-reads tens of thousands of tokens instead of 600k (about
+  $0.10 less per turn), so a summary pays for itself within a handful of
+  turns — the same shape as the 150k figures, scaled up. Estimates, not a
+  measurement: the usage table's "Conversation condensing" line is the
+  real number.
+- **Found in the build**: `conversation._CONTEXT_BOUNDARY_PATTERN` is
+  quadratic on a long run of `=` that never completes a marker (recorded
+  found-not-fixed in project-workspace Phase 5A). This module's copy
+  carries the `(?<!=)` that makes it linear without changing a match,
+  because it frames whole summaries and recalled turns.
+- **Review fixes (PR #189, Codex).** Three findings, all real. Removing a
+  reference now answers the record its truncation left, and the chat
+  applies it, so the divider cannot outlive its summary. A condensed turn
+  longer than one read (60,000 characters) pages: `recall_conversation`
+  takes `offset`, a partly shown turn names the exact call that reads on,
+  pages end on a word, and a search match in a long turn says which offset
+  to read from. And a summary that lands after its turn's stream has
+  closed now reaches the chat: the doc payload says one is pending
+  (running, or finished and not yet adopted), `GET
+  /api/chat/compaction/status` answers `{pending, compaction}`, and the
+  chat asks it while pending and no turn is streaming, applying only a
+  settled answer. Twenty-six more mechanisms were reverted in place; two
+  first stayed green (an offset rule refused by a different rule, and a
+  "pending" that ignored a finished-but-unadopted summary) and got
+  stronger tests.
+- Tests: `tests/test_chat_compaction.py` (44; 35 before the review fixes,
+  first recorded here as 36) and `frontend/tests/compaction.test.ts`
+  (15), plus the wipe-sweep probes and the tool-order pin. Thirty backend
+  mechanisms and six frontend ones were reverted in place; the matrix first found three blind spots (the chat
+  route's scope flag, the too-long retry, and escaping the summary inside
+  its own frame), each fixed by a stronger test before this was recorded.
+  Every mechanism now turns at least one test red.
+
+**Release-note draft** (for whichever release carries this; see "Release
+policy" below):
+
+> **Long conversations keep working.** A very long drafting conversation
+> used to grow until the model could no longer take it in, and from then
+> on every message failed. Now, when a message would not otherwise fit,
+> the oldest turns are condensed into a summary the model reads instead —
+> kept close to your own words: decisions and why, options ruled out,
+> exact values, your corrections, where things stand. The last three
+> turns stay word for word, and the document, research, QC and project
+> facts still arrive fresh with every message. Nothing is deleted: the
+> chat and the saved project keep every turn, a divider marks where the
+> condensed part ends, and **View summary** shows exactly what the model
+> reads. When it needs an exact detail from before the cut, the model
+> looks the turn up in your saved conversation. Condensing is its own line
+> in the usage table.
+
 ## Phase 4 — promote before prune
 
 Handed off. The summary instruction's "decisions the ledgers are missing"
@@ -496,3 +663,7 @@ step 3 names this file so the drafts are collected.
 Phase 2, and its entry uses Phase 1's draft. Phase 2's draft waits: the
 trim ships switched off until its canary passes, and a release note
 describing a change nobody receives would be false.
+
+Phase 3 (PR #189) is not part of 1.21.0's notes; while 1.21.0 is untagged,
+the order of that tag and PR #189's merge decides whether its build
+carries Phase 3 anyway — see "Where it stands".

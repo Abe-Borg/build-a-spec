@@ -24,26 +24,28 @@ section, not here.
 opened 2026-09-22. Keep the chat history the model re-reads every turn
 bounded without losing what only the conversation holds: stop saving data
 stored elsewhere (Phase 1, stale edit outlines — complete, PR #182; Phase 2,
-fetched page text — in review, PR #183, its live canary still to run), then
+fetched page text — merged in PR #183, but its live canary was never run, so
+1.21.0 ships it switched off until the canary passes), then
 condense the conversation rarely between turns with the full transcript kept
 and recallable (Phase 3 — next; decisions D1–D4 made 2026-09-22). The file is the
 plan, the owner decisions (D1–D4) and the implementation record; its
 "promote before prune" phase is handed to the project workspace's harvest.
-Ships with the project workspace's release (same release policy).
+Phases 1–2 ship in the project workspace's release, 1.21.0 (same release
+policy).
 
-**[Deep-dive remediation](deep-dive-remediation/README.md)** — the other live
-program. Six phases, 24 chunks; **Phase 1 is complete** (direct server-tool
-callers; continuation containers in research, QC and chat; server-tool
-pairing plus legacy history repair) and **Phase 2 is nearly done** — 2.2 (QC
-settling semantics, pulled forward), 2.1 (real-shaped server-tool activity
-events) and 2.3 (research follower reconnect) have landed; only 2.4 remains,
-plus Phases 3–6. Its README carries the handoff prompt, the
-frozen decisions, the finding-coverage matrix, the dependency edges and the
-phase gates; start there, not here.
+**[Deep-dive remediation](deep-dive-remediation/README.md)** — **complete**.
+Six phases, 24 chunks (1.1–6.5), all landed: direct server-tool callers,
+continuation containers, server-tool pairing and legacy history repair, live
+stream resilience, named research coverage, per-TTL cache pricing, the v4
+Final QC panel outcomes, consolidation and sign-off consistency, and the
+locking and snapshot rules. The one item still outstanding is the owner-run
+live and manual QA in Chunk 6.5, which spends real money. Its README carries
+the handoff prompt, the frozen decisions, the finding-coverage matrix, the
+dependency edges and the phase gates; start there, not here.
 
 **[Redline on your original](REDLINE_ON_ORIGINAL_2026-09-22.md)**: opened
 2026-09-22; all six decisions ratified the same day. **Phase 0 is built (PR
-#184) and not yet released** — the owner picks its release. Phase 1 is next
+#184) and ships in 1.21.0** (the project-workspace closeout). Phase 1 is next
 and not started; a fresh session starts from the plan's "Phase 0 — as built"
 note. The program adds a tracked-changes copy of the Word file you imported:
 every non-body part stays byte-identical, Reject All gives back the upload,

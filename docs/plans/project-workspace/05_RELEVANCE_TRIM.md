@@ -1,7 +1,8 @@
 # Phase 5 — Later sections stay cheap: measure, then trim by relevance
 
-**Status:** Part A in review (`ddce90c` + `df87c1a`, PR #186); Part B not
-started — waiting on the owner's gate measurement (below). **Depends on:**
+**Status:** Part A complete (`ddce90c` + `df87c1a`, PR #186, merged
+`049f93d`; ships in 1.21.0); Part B not started — waiting on the owner's
+gate measurement (below), and left out of 1.21.0. **Depends on:**
 Part A on nothing; Part B on Part A's measurement crossing the gate below.
 Do not build Part B on a modelled number: the last cost model in this repo
 (PR #166's review) turned out to be an artifact of a dropped term.

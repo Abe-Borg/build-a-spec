@@ -50,9 +50,9 @@ closed without merging is reconciled back to `not started` with a note.
 | 2 | `02_PROJECT_HOME.md` | **complete** | `7cf3893` + `3da1e64` (PR #176, merged `c6b7803`) | project folder + Project panel; desktop shell only, the browser keeps the file relay; 13 as-built deviations in the phase file |
 | 3 | `03_WRITE_BACK_MERGE.md` | **complete** | `4176a56` + `5cd6a8c` (PR #179, merged `5cdc83a`) | the brief is a living file: save-time refresh, Update project brief, export-onto-existing merge, Pull project changes; 21 as-built deviations in the phase file (19 as built + 2 from the Codex review) |
 | 4 | `04_HARVEST.md` | **complete** | `54d2437` + `9b8b40d` (PR #185, merged `a0f66c6`) | the fact harvest: one opt-in paid call, a review sheet, one-batch commit; a fact's source must resolve (the recording tool, the panel, the commit), older ones flagged, never rewritten; a reply source pinned to the reply it cited; 25 as-built deviations in the phase file (23 as built + 2 from the Codex review) |
-| 5 | `05_RELEVANCE_TRIM.md` | **Part A in review**; Part B not started | Part A: `ddce90c` + `df87c1a` (PR #186) | Part A (the measurement): every turn's PROJECT CONTEXT sizes, block by block, on the `prompt_refs` trace event, in `/api/diagnostics` and in Developer tools → Context makeup; 8 as-built deviations in the phase file (7 as built + 1 from the Codex review). **Part B is waiting on Abraham's measurement** (the gate in the phase file: a real 21 30 00 sitting seeded from a researched 21 13 13) — do not build it before that measurement is recorded there |
-| 6 | `06_CLIENT_LIBRARY.md` | not started | | optional (D5); after 3; only when a second project for one client exists |
-| 7 | `07_RELEASE_CLOSEOUT.md` | not started | | **last.** The one release for Phases 2–6; the tag is Abraham's |
+| 5 | `05_RELEVANCE_TRIM.md` | **Part A complete**; Part B not started | Part A: `ddce90c` + `df87c1a` (PR #186, merged `049f93d`) | Part A (the measurement): every turn's PROJECT CONTEXT sizes, block by block, on the `prompt_refs` trace event, in `/api/diagnostics` and in Developer tools → Context makeup; 8 as-built deviations in the phase file (7 as built + 1 from the Codex review). **Part B is waiting on Abraham's measurement** (the gate in the phase file: a real 21 30 00 sitting seeded from a researched 21 13 13) — do not build it before that measurement is recorded there. Left out of the 1.21.0 release (Phase 7) |
+| 6 | `06_CLIENT_LIBRARY.md` | not started | | optional (D5); after 3; only when a second project for one client exists. Left out of the 1.21.0 release (deferred by D5) |
+| 7 | `07_RELEASE_CLOSEOUT.md` | **in review** | PR pending | **last.** The one release for Phases 2–6, cut as **v1.21.0**: Phases 2 (first announced here — it shipped in the 1.20.0 build), 3, 4 and 5A, plus chat-history compaction Phases 1–2 and redline Phase 0. Compaction Phase 2 ships **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`) because its live canary was never run. 5B and 6 are left out. The tag is Abraham's |
 
 ## Release policy
 
@@ -92,6 +92,19 @@ case: the 1.20.0 entry is frozen, and the closeout ships as a new version
 (1.21.0 in `07_RELEASE_CLOSEOUT.md`). Unlike Phase 2, none of Phase 3 is in
 the 1.20.0 build (PR #179 merged after the tag), so the closeout entry
 announces Phase 3's work as new.
+
+**The closeout (2026-09-23, Phase 7).** The one release is **v1.21.0**.
+v1.20.0 is published, so the rendered release page describes 1.21.0 alone.
+It carries Phases 2, 3, 4 and 5A. Phase 2 is announced here for the first
+time, but it shipped in the 1.20.0 build. It also carries the two plans that
+follow this release policy: chat-history compaction Phases 1–2 and redline
+Phase 0. Compaction Phase 2 ships **switched off**. Its live canary was
+never run, and if the provider refuses that history shape, every later
+message in an affected project fails. So the trim stays behind
+`BUILD_A_SPEC_ELIDE_FETCHED_PAGES` until the canary passes (the
+compaction plan's Phase 2 → Canary result). Phase 5 Part B (waiting on the
+measurement) and Phase 6 (deferred by D5) are left out. Either can ship in
+a later release of its own.
 
 ## How to hand this off
 

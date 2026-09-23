@@ -919,7 +919,12 @@ function Dossier() {
               Only the compliance lens gets web access — with a large search
               allowance and an explicit instruction to look the standard up
               rather than recall it, because article numbers are renumbered
-              between editions. Each lens returns findings{" "}
+              between editions. The four without web access read identical
+              instructions and an identical copy of your section, so one of
+              them starts a few seconds first and the other three wait until it
+              begins answering, then read its cached copy instead of each paying
+              to store their own — the requests are unchanged, only when they
+              are sent. Each lens returns findings{" "}
               <em>and a record of the checks it ran</em>, including the ones that
               passed.
               <br />
@@ -978,9 +983,10 @@ function Dossier() {
               with it, and “medium” for the verifier seats, which adjudicate one
               already-stated claim with the same document in front of them.
               This is still the most expensive action in the app. Your document
-              is sent once per stage rather than once per call: the API caches
-              it and every later call in that stage reads the cached copy at a
-              twentieth of the price.
+              is cached by the API, and a call that finds it cached reads it at
+              a twentieth of the price. Calls whose tools differ cannot share a
+              copy, so the compliance lens, and the verifier seats checking its
+              findings, keep one of their own.
             </>
           }
           bounds={

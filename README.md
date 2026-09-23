@@ -749,6 +749,13 @@ given a numbering level of their own — never their text.
   comment or footnote reference, and deleting part of a table of contents or
   a content control. The redline of extracted provisions still works in every
   case.
+- **Custom XML markup never lands inside a tracked change.** Some tools other
+  than Word write it (Word strips it when it saves), and Word will not open a
+  file with it inside a tracked change. The redline marks the words inside
+  the markup instead, the way it marks a link's words. It refuses by name the
+  rare case it cannot handle that way: custom XML inside a content control, a
+  smart tag or a text box. It also checks for that shape itself before
+  handing the file over.
 - **The default changed; the menu does not rely on it.** A bare
   `?redline=master` now returns the redline on your original whenever it is
   available (else the redline of extracted provisions); both existing menu

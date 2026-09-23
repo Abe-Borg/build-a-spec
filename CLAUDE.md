@@ -1119,7 +1119,12 @@ backend/
                            outlines (elide_stale_outlines) and the text of
                            fetched web pages (elide_fetched_page_text: the
                            URL, title, retrieval time and document block
-                           stay; a fetched PDF keeps its own note) out of
+                           stay; the passages a reply quoted fold into the
+                           page's note and its citations into the old text
+                           go — the canary's first run was refused on
+                           those; a trimmed page is recognized by
+                           FETCHED_PAGE_NOTE_PREFIX; a fetched PDF keeps
+                           its own note) out of
                            COMMITTED history — COW, same list object when
                            nothing changed, applied by _committed_messages
                            and by project load (the page-text half only
@@ -1132,6 +1137,22 @@ backend/
                            tools/chat_history_profile.py). Leaf module: the
                            server_tool_pairing precedent (project.py needs
                            it and cannot import the engine)
+  llm/citations.py         repair_document_citations: every chat request
+                           (and the summary call, identically) goes through
+                           it after the resend sanitizer. document_index
+                           counts every document in the request, and the
+                           API checks a citation against the one it lands
+                           on, so a condensed view (its dropped turns take
+                           their pages with them), a reply numbered under
+                           another view, or a saved PDF note breaks it. A
+                           citation that does not fit is re-pointed at the
+                           EARLIER document it fits (span + quoted text,
+                           whitespace-tolerant; the title only where there
+                           is no quote), or dropped with its words kept. Looks only backwards, so it is
+                           prefix-stable (the cached prefix never moves);
+                           same list object when nothing needed repair.
+                           citation_fits is shared with the page trim. Leaf
+                           module, the server_tool_pairing precedent
   llm/compaction.py        [compaction Phase 3] the condensed conversation's
                            leaf half: CompactionRecord (summary, keep_from,
                            covers_turns, a digest over the role + text of
@@ -1788,15 +1809,26 @@ tests/
                            composition partition, diagnostics, the profiler
   test_fetched_page_elision.py
                            [compaction Phase 2] the page mid-turn and the
-                           note after commit (URL, title, citation kept), a
-                           fetched PDF keeping its own note, an older project
-                           trimmed on open, COW/idempotence/scoping, the
-                           composition canary, the profiler
+                           note after commit (URL, title, the quote folded
+                           into the note, the citation gone), a fetched PDF
+                           keeping its own note, an older project trimmed
+                           on open, COW/idempotence/scoping, the composition
+                           canary, the profiler
+  test_citation_repair.py  the premise (a condensed view's citations break
+                           the provider's rule), re-point vs drop, earlier
+                           documents only, prefix stability, an ordinary
+                           request untouched, a PDF note, the trim's quote
+                           folding (dedupe, budget, never growing a page, a
+                           kept document, the page the citation names over
+                           a mirror, the commit's document offset), and end
+                           to end through the chat and the summary call
+                           (byte-identical prefix)
   test_fetch_elision_canary.py
                            [compaction Phase 2] the live canary without a
                            network: nothing sent without --run, the committed
-                           request shape, the unelided-page refusal, pass and
-                           400 reporting
+                           request shape (quote in the note, no citation into
+                           it), the unelided-page and unfolded-citation
+                           refusals, pass and 400 reporting
   test_chat_compaction.py  [compaction Phase 3] turns, the view, the record's
                            digest, the reply checks, the instruction, frame
                            escapes (the summary's own included) in linear
@@ -13034,6 +13066,160 @@ docstrings and one test only: no code, route, dependency or version change.
   deep-dive remediation README's "Use `venv\Scripts\python` from
   PowerShell" is wrong on both counts, the name and the missing `.\`, and
   stays as history. The form that runs is `.\.venv\Scripts\python`.
+
+## Citations must fit the request that carries them — implemented notes
+
+The owner's first live run of the Phase 2 fetch-elision canary
+(2026-09-23) was refused: `messages.1.content.4.citations.0: Start index
+2406 is beyond document length 257`. That answered the one question Phase 2
+could not answer offline: the API does check a saved citation against the
+document it lands on. The same rule exposed a second defect, in Phase 3,
+which merged the same day. This change adds no route, SSE event,
+dependency or env knob, changes no project format, and bumps no version.
+
+- **Why a citation breaks.** A document citation names its document by
+  `document_index`. The citations docs define that as "0-indexed from the
+  list of all document content blocks in the request (spanning across all
+  messages)", and the provider checks each citation against the document
+  it lands on. Three things change a request's documents under a saved
+  citation:
+  - The page-text trim (Phase 2) replaces a page's text with a short note.
+  - A condensed view (Phase 3) leaves its oldest turns out, and the pages
+    those turns fetched go with them. Every later index then lands early:
+    on the wrong page, or past the end of the list.
+  - A fetched PDF becomes a text note at commit (`elide_all_pdf_sources`,
+    since v0.6.0). A `page_location` citation into it then points at a
+    document with no pages.
+  A fourth follows from the second. A reply answered under one view is
+  numbered against that view, so saved history can hold citations numbered
+  against several requests, and nothing records which.
+- **The fix repairs each request, and keeps no state.**
+  `llm/citations.repair_document_citations` runs on every chat request and
+  on the compaction summary call. It runs after `sanitize_messages_for_resend`,
+  which can itself turn an oversized PDF into a note. It needs no record of
+  which request numbered a citation, because a citation carries what it
+  cites: the quoted text at its span, and `document_title`. `citation_fits`
+  checks three things:
+  - that the span is inside the document;
+  - the document's kind: text for character spans, a PDF for page spans,
+    custom content for block spans;
+  - for a character span that quotes, `same_passage`, which decides on its
+    own. Otherwise (a character span without a quote, or a page or block
+    span), the title decides, when both sides carry one.
+  The quote beats the title on purpose: a title written differently on the
+  citation than on the document would otherwise drop valid citations from
+  ordinary requests. Two documents with the same text at the same span are
+  interchangeable anyway.
+  A citation that fits the document it lands on is left exactly as it is.
+  One that does not is re-pointed at the nearest earlier document it does
+  fit, or dropped. A dropped citation's text block keeps its words and
+  loses its `citations` key, which is how the API returns uncited text.
+- **Whitespace is collapsed before matching, because `cited_text` is the
+  span with its surrounding whitespace trimmed.** The citations docs cite
+  characters 0–20 of "The grass is green. The sky is blue." as "The grass
+  is green.", although the span ends on the space. A strict comparison
+  would reject every citation like that and strip citations from ordinary
+  requests. `same_passage` accepts three cases: equality after collapsing
+  whitespace, the span containing the quote, or the quote containing a
+  span at least half its length. This tolerance can only save a valid
+  citation from being dropped, never make an invalid one pass.
+- **Re-pointing looks only at EARLIER documents, and that is what keeps the
+  cache.** A citation is only ever re-pointed at a document that comes
+  before it in the request. That is the only place its document can be.
+  It also makes the repair prefix-stable: repairing a longer request never
+  changes a message that a shorter request repaired. So the chat's cached
+  prefix never moves, and the summary call's copy of the view comes out
+  byte for byte what the last chat request cached (pinned). A request that
+  needs no repair returns the SAME list object, so a conversation that was
+  never condensed or trimmed sends exactly the bytes it did before.
+- **The trim now folds quotes into the note.** `elide_fetched_page_text`
+  removes every citation in the list that points into a page it trims, and
+  writes each passage into that page's note under "Passages the replies
+  quoted from it:".
+  - Passages are deduped and kept in the order they were quoted, up to
+    4,000 characters per page. A disclosed count covers any that do not
+    fit.
+  - The note is always shorter than the page it replaces. A page too short
+    to hold its quote gets the bare note.
+  - A citation that also fits a document the trim keeps is left alone; the
+    request repair re-points it.
+  - The passage goes to the page the citation NAMES, not merely the nearest
+    page it fits (Codex, PR #192). Two pages can hold the same passage
+    under the same title: a page fetched twice, or a mirror. Only the index
+    tells them apart, and it is counted over the request the reply was
+    written in. A committed turn is the tail of that request, so the
+    commit passes `document_offset`: the number of documents the turn's
+    view sent ahead of it. A condensed view is not the whole history, and
+    counting the whole history or nothing both file the quote under the
+    wrong mirror (both revert-proven). An index that lands on no page the
+    citation fits falls back to the nearest page it does fit. Project load
+    passes 0, which is right for citations written against the whole
+    history.
+  - The Phase 2 design expected the reply's citations to carry the quote on
+    later turns. But the API does not bill `cited_text` as input when it is
+    passed back, which suggests it is not re-sent as text. With the page
+    gone, the note is the only place the passage can still be read.
+  - A trimmed page is recognized by `FETCHED_PAGE_NOTE_PREFIX`. A note that
+    carries quotes is longer than a bare note, so "no longer than its
+    replacement" no longer proves a page was already trimmed. Notes written
+    by earlier builds start with the same prefix.
+- **The trim stays OFF.** The canary now sends the new saved shape: the
+  quote in the note, and no citation into it. It also refuses to send the
+  shape its first run was refused on. The owner re-runs it, and only a
+  recorded pass flips the default.
+- **Found, not done.** The PDF elision (ported code) still leaves page
+  citations into its note in saved history. The request repair drops them
+  on the way out, so saved files keep them but no request carries them.
+  Folding a PDF's quotes into its note is left for the next change to that
+  ported module.
+- **Tests.** `tests/test_citation_repair.py` has 21 tests, and
+  `test_fetch_elision_canary.py` gains 1.
+  `test_fetched_page_elision.py` was updated on purpose, because a saved
+  turn no longer keeps the citation. Revert matrix: twenty-two mechanisms
+  were reverted in place, and each turned its own tests red:
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the chat-request repair | 2 |
+  | the summary-call repair | 1 |
+  | re-pointing | 7 |
+  | earlier documents only | 2 |
+  | the whitespace-tolerant match | 1 |
+  | the quoted-text check | 1 |
+  | the title rule where there is no quote | 1 |
+  | a matching quote deciding on its own | 1 |
+  | a page span needing a PDF | 2 |
+  | removing the emptied key | 2 |
+  | the same list when nothing changes | 2 |
+  | the trim's citation removal | 12 |
+  | its quote folding | 10 |
+  | the kept-document rule | 1 |
+  | the prefix recognition | 4 |
+  | the quote budget | 1 |
+  | dedupe | 1 |
+  | the note staying shorter than the page | 1 |
+  | the canary's fold guard | 1 |
+  | the page the citation names over the nearest match | 3 |
+  | the commit counting no documents ahead of the turn | 1 |
+  | the commit counting the whole history's documents | 1 |
+
+  The canary's own repair call turned 0 tests red, as expected. The shape
+  the canary sends needs no repair; the call is there so the canary sends
+  exactly what a chat request would.
+- **Errata** (these notes are append-only, so corrections are recorded
+  here):
+  1. "Fetched page text stays out of saved history (compaction Phase 2)"
+     says the reply's `char_location` citations keep `cited_text`, and that
+     it is undocumented whether the API checks a saved citation against a
+     replaced document. The canary settled it: the API checks, and refuses.
+     The trim no longer keeps those citations.
+  2. "A long conversation is condensed, never deleted (compaction Phase 3)"
+     describes the view as `history[keep_from:]` plus the summary. Until
+     this repair, that view shifted every later `document_index`. Phase 2's
+     own notes had warned that "removing one would re-point every later
+     citation at the wrong page", and Phase 3 missed it.
+  3. Add to the "Strip at commit" list: with the page trim on, the
+     citations into a trimmed page are removed at commit.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

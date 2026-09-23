@@ -124,6 +124,7 @@ from .llm.client import (
     get_client,
     reset_client_cache,
 )
+from .llm.compaction import compaction_payload
 from .llm.conversation import (
     SessionState,
     effective_discipline,
@@ -1659,6 +1660,12 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # Next-section dialog and the Export menu repeat. Never a trigger:
         # nothing reads this to run anything.
         "harvest": harvest_status(session),
+        # The condensed-conversation record (compaction plan Phase 3): how
+        # many turns the summary stands in for, when, and the sizes before
+        # and after — what the chat draws its divider from. Never the
+        # summary text, which can be long; GET /api/chat/compaction returns
+        # it when the user asks to read it.
+        "compaction": compaction_payload(getattr(session, "compaction", None)),
         # Import honesty/recovery metadata. Native .baspec packages carry the
         # source as a separate binary member; legacy JSON remains source-less.
         "import_report": session.import_report,
@@ -4087,7 +4094,13 @@ def create_app(
         def event_stream() -> Iterator[str]:
             try:
                 with sessions.active_write(lease.workspace_id):
-                    for event in stream_user_turn(session, body.message):
+                    # Tutorial workspaces are short and disposable: nothing
+                    # there is ever condensed (compaction plan Phase 3).
+                    for event in stream_user_turn(
+                        session,
+                        body.message,
+                        allow_compaction=lease.scope == "original",
+                    ):
                         if lease.scope == "original":
                             yield _sse(event)
                         else:
@@ -4108,6 +4121,35 @@ def create_app(
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    @app.get("/api/chat/compaction")
+    def chat_compaction() -> JSONResponse:
+        """The condensed-conversation summary, for "View summary" in the chat.
+
+        The document payload carries only the record's sizes and turn range;
+        the text travels here, when the user asks for it. 404 when the
+        conversation has not been condensed.
+        """
+        session = sessions.get_session()
+        with session.session_state_guard():
+            record = session.compaction
+        if record is None:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "This conversation has not been condensed.",
+                },
+                status_code=404,
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "compaction": {
+                    **(compaction_payload(record) or {}),
+                    "summary": record.summary,
+                },
+            }
         )
 
     @app.post("/api/chat/stop")

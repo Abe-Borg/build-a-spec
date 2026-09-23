@@ -130,6 +130,7 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
         "apply_qc_fixes",
         "track_followups",
         "record_project_facts",
+        "recall_conversation",
     ]
     # Both web tools invoke directly. The provider default for the
     # ``_20260209`` versions is a code-execution caller, whose pause_turn

@@ -1,5 +1,6 @@
 import type {
   BriefRefreshResult,
+  CompactionSummary,
   DiagnosticsActivity,
   DiagnosticsLog,
   DiagnosticsSnapshot,
@@ -1189,6 +1190,21 @@ export async function stopChat(): Promise<void> {
     const data = await resp.json().catch(() => ({}));
     throw new Error(data.error ?? `stop failed (${resp.status})`);
   }
+}
+
+/**
+ * The condensed-conversation summary (compaction plan Phase 3), for the
+ * chat's "View summary". The document payload carries only its sizes and
+ * turn range; the text comes here when the user asks to read it. Throws the
+ * server's own message — including when there is nothing condensed.
+ */
+export async function getCompactionSummary(): Promise<CompactionSummary> {
+  const resp = await fetch("/api/chat/compaction");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `summary failed (${resp.status})`);
+  }
+  return data.compaction as CompactionSummary;
 }
 
 /* --- Research (Phase 4) --- */

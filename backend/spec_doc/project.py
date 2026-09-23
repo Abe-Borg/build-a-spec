@@ -254,6 +254,7 @@ def save_project(
     project_facts: dict[str, Any] | None = None,
     project_link: dict[str, Any] | None = None,
     last_harvest_bubble: int = 0,
+    compaction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -322,6 +323,12 @@ def save_project(
     marker = restore_harvest_marker(last_harvest_bubble, history)
     if marker:
         payload["last_harvest_bubble"] = marker
+    # The condensed-conversation summary (compaction plan Phase 3), when the
+    # conversation has one. Optional the same way: a conversation that was
+    # never condensed writes no key, and a reader that does not know the key
+    # simply sends the whole history, which is still all there.
+    if compaction:
+        payload["compaction"] = compaction
     return payload
 
 
@@ -593,6 +600,28 @@ def load_project(data: Any, session) -> None:
 
     session.history.clear()
     session.history.extend(history)
+    # The condensed-conversation summary rides the file too. Lenient like
+    # every optional key, and checked against the history it summarizes:
+    # a record that no longer describes a prefix of this history (or is
+    # malformed, or from a newer build) loads as "not condensed" — the
+    # conversation runs on its full view and condenses again when it needs
+    # to. Any summary the OUTGOING session was still writing settles into
+    # its abandoned runner, and the size calibration measured the outgoing
+    # conversation.
+    if hasattr(session, "compaction"):
+        from ..llm.compaction import CompactionRecord, CompactionRunner
+
+        session.compaction = CompactionRecord.from_dict(
+            data.get("compaction"), history
+        )
+        if data.get("compaction") is not None and session.compaction is None:
+            _log.info(
+                "A loaded project's condensed-conversation summary no longer "
+                "matches its history and was not restored; the conversation "
+                "will be condensed again when it needs to be."
+            )
+        session.compaction_runner = CompactionRunner()
+        session.tokens_per_char = None
     # Assigned unconditionally (load_project never calls reset()): a file
     # without the key starts its harvest window at the first reply.
     if hasattr(session, "last_harvest_bubble"):

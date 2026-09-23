@@ -13,6 +13,7 @@ import {
   getDiagnosticsTraces,
 } from "../lib/api";
 import { contextMakeup } from "../lib/contextSizes";
+import { describeCompaction } from "../lib/compaction";
 import { useDialogFocus } from "../lib/dialogFocus";
 
 interface Props {
@@ -500,6 +501,12 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                   <Row
                     name="History makeup"
                     value={historyMakeup(sess.history_composition)}
+                  />
+                )}
+                {sess.compaction && (
+                  <Row
+                    name="Condensed conversation"
+                    value={describeCompaction(sess.compaction)}
                   />
                 )}
                 <Row

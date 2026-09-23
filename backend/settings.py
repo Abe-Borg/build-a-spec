@@ -611,6 +611,43 @@ CHAT_CACHE_TTL = _cache_ttl_env(
     "BUILD_A_SPEC_CHAT_CACHE_TTL", CHAT_CACHE_TTL_DEFAULT
 )
 
+# --- Chat history compaction (compaction plan Phase 3) -----------------------
+
+# Routine condensing: once the committed conversation passes the threshold,
+# a background call summarizes the older turns and later requests send that
+# summary plus the newest turns instead of the whole transcript (the full
+# transcript is never deleted, and the model can read any condensed turn back
+# with ``recall_conversation``). OFF by default on purpose: the plan gates
+# turning it on for everyone on a paid recall check against real transcripts
+# (docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md, "Before it is on by
+# default"). The backstop below runs either way.
+CHAT_COMPACTION = _bool_env("BUILD_A_SPEC_CHAT_COMPACTION", False)
+
+# Owner decision D1 (2026-09-22): condense at 600k tokens of committed
+# conversation, keeping the last three user turns word for word. "Committed
+# conversation" is the chat history as later requests send it, without the
+# per-turn PROJECT CONTEXT (which condensing cannot shrink). The floors only
+# stop a value that would condense after nearly every turn.
+CHAT_COMPACTION_THRESHOLD = _int_env(
+    "BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD", 600_000, minimum=10_000
+)
+CHAT_COMPACTION_KEEP_TURNS = _int_env(
+    "BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS", 3, minimum=1
+)
+
+# The hard backstop, and deliberately NOT a knob: a request estimated past
+# this fraction of MODEL_CONTEXT_WINDOW condenses before it is sent (and, if
+# that fails, leaves the oldest turns out of that one request with a note
+# pointing at recall_conversation). Past the window every request is a
+# "prompt is too long" 400, which a saved project would carry into every
+# later session, so this runs whether or not routine condensing is on.
+CHAT_CONTEXT_BACKSTOP_FRACTION = 0.85
+
+# Output ceiling for one summary call (thinking included). Not part of the
+# cached prefix, so it can differ from the chat's own ceiling without costing
+# a cache read. A summary is capped far below this; the headroom is thinking.
+CHAT_COMPACTION_MAX_TOKENS = 64_000
+
 # --- Server -----------------------------------------------------------------
 
 HOST = "127.0.0.1"

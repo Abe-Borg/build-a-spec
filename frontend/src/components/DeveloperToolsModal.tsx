@@ -12,6 +12,7 @@ import {
   getDiagnosticsLog,
   getDiagnosticsTraces,
 } from "../lib/api";
+import { contextMakeup } from "../lib/contextSizes";
 import { useDialogFocus } from "../lib/dialogFocus";
 
 interface Props {
@@ -486,6 +487,10 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                 <Row
                   name="Context gauge"
                   value={sess.last_context_tokens === null ? "not measured" : `${sess.last_context_tokens.toLocaleString()} tokens`}
+                />
+                <Row
+                  name="Context makeup"
+                  value={sess.last_context_sizes ? contextMakeup(sess.last_context_sizes) : "not measured"}
                 />
                 {sess.history_composition && sess.history_composition.messages > 0 && (
                   <Row

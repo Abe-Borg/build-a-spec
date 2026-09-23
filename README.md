@@ -384,6 +384,43 @@ every fact carries `unresolved_ref: true` when its source names nothing, a
 fact citing a reply carries `source_digest` (the identity of the reply it was
 recorded against), and a saved section records how far its last harvest read.
 
+### See what each turn carries (Phase 5, part A)
+
+Every message you send re-sends the project's current state to the model —
+the research profile, the project facts, the whole draft, the lint report,
+the Final QC review — as one block that is rebuilt on each turn, so it is paid
+for as a fresh write every time rather than read back from the cache. A later
+section that carries a large research profile from the first one pays for all
+of it on every message. Phase 5 would render that profile with the findings
+most relevant to the current section first, but only if a real session shows
+it is worth building; part A is the measurement that decides.
+
+- **Settings → Developer tools → Session state → Context makeup** shows the
+  last turn's block piece by piece: its total, the research profile's share
+  (and how many findings the profile's cap left out, when it did), then the
+  document, the lint report, the open items, the Final QC review, the project
+  facts, the other sections and the reference-document stubs, largest first,
+  and the small fixed remainder (the date, the standards, the project identity
+  and profile lines). Estimated tokens — the same estimate the History makeup
+  row uses — and sizes only, never text. It sits beside the Context gauge and
+  describes the same turn: a turn whose request never reached the model
+  leaves both where they were, and a new session or an opened project clears
+  both.
+- **Every turn's reading is in the trace too.** Each turn's `prompt_refs`
+  event carries `context_sizes`: Developer tools → Recent activity (filtered
+  to `prompt_refs`) shows the latest turns, and *Open trace viewer* every turn
+  of the sitting, so you can see how the block changed as you worked.
+- Nothing about what the model is sent changes.
+
+`/api/diagnostics`'s session block gains `last_context_sizes` (null until a
+turn commits): `research`, `research_dropped_items` (a count of findings, not
+tokens), `facts`, `sections`, `references`, `document`, `lint`,
+`open_items`, `qc_review`, `other` and `total`; the blocks sum to `total`.
+
+Part B — rendering the research relevance-first — is not built. It waits on
+that measurement, taken on a real second section of a hyperscale project (see
+`docs/plans/project-workspace/05_RELEVANCE_TRIM.md`).
+
 ## Chat history compaction (in progress)
 
 Every chat turn re-sends the whole conversation, and nothing bounded it: a

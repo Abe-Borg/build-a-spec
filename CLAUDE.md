@@ -420,7 +420,10 @@ backend/
                            default on), redaction (credential patterns;
                            token(?!s) so usage counts survive); capture.py =
                            native never-raise hooks incl. app_event/
-                           turn_round/turn_prompts; research_event/qc_event
+                           turn_round/turn_prompts (Project workspace Phase
+                           5A: turn_prompts carries the context block's
+                           per-block context_sizes on prompt_refs — numbers,
+                           at every capture level); research_event/qc_event
                            rename the sink event's "type" key to event_type
                            (it collided with add_event's positional arg — a
                            swallowed TypeError meant NO research/QC progress
@@ -439,7 +442,10 @@ backend/
                            helpers behind /api/diagnostics* (snapshot,
                            tail_log, list_trace_runs, read_recent_trace_
                            events, build_bundle) — key material never enters
-                           any of it (key_status masked + scrub_data)
+                           any of it (key_status masked + scrub_data); the
+                           snapshot's session block carries
+                           last_context_sizes (Project workspace Phase 5A —
+                           per-block sizes, never text)
   app_paths.py             [PORT: Spec Critic src/core/app_paths.py]
   api_key_store.py         [PORT: Spec Critic src/core/api_key_store.py + save_api_key]
                            Batch 2 adds key_status (masked, never leaks) + delete_api_key
@@ -1027,7 +1033,15 @@ backend/
                            turn_digests pin reply sources),
                            assistant_bubble_count made public, and the
                            resolver in the record_project_facts dispatch and
-                           every panel fact helper
+                           every panel fact helper; Project workspace Phase
+                           5A makes _turn_context_text return (text, sizes)
+                           — CONTEXT_SIZE_KEYS, estimated tokens per block
+                           measured from the very parts the text is joined
+                           from, `other` the exact remainder so the blocks
+                           sum to `total` — and adds
+                           SessionState.last_context_sizes (written beside
+                           last_context_tokens under the same condition,
+                           cleared on reset/load, never persisted)
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -1115,6 +1129,14 @@ frontend/src/
                            client-event via keepalive fetch, never api.ts
                            (a reporter must not throw or recurse); per-kind
                            throttle + a 40/session cap
+  lib/contextSizes.ts      [Project workspace Phase 5A] Developer tools'
+                           Context makeup row: contextMakeup (research
+                           always first — the gate reading — with the cap's
+                           trim count; the other blocks largest first,
+                           empty ones left out, the remainder last) over
+                           CONTEXT_BLOCK_LABELS, which is pinned against
+                           conversation.CONTEXT_SIZE_KEYS so a block the
+                           backend adds cannot drop out of the row
   lib/debriefQueue.ts      [v1.11.0] the completion-debrief queue's pure
                            state: remember-on-terminal-frame vs
                            flush-when-allowed, latest-wins per kind, fired-
@@ -1297,7 +1319,10 @@ frontend/src/
                            DeveloperToolsModal (Settings → Developer tools:
                            environment, session state, activity, log tail,
                            trace runs, the bundle; a SIBLING of the settings
-                           backdrop) / FollowUpsPanel (v1.16.0 "Waiting on
+                           backdrop; Session state's Context makeup row —
+                           Project workspace Phase 5A — renders
+                           last_context_sizes through lib/contextSizes.ts)
+                           / FollowUpsPanel (v1.16.0 "Waiting on
                            you") / ProjectFactsPanel (v1.17.0 "Project
                            facts") / ProjectPanel (Project workspace Phase 2
                            "Project" — the folder, the section registry with
@@ -1484,6 +1509,16 @@ tests/
                            refusals, the token surviving a fixable error),
                            the marker (commit-only, persisted, clamped, zero
                            accepts), and QC reading stale after a commit
+  test_context_sizes.py    [Project workspace Phase 5A] what one turn's
+                           PROJECT CONTEXT carries: the blocks partition
+                           the text as sent and sum to the total, each
+                           named block measured from the block it
+                           contributed (renderer equality, then deltas for
+                           the inline three), the research size and the
+                           cap's trim count, the prompt_refs event and the
+                           diagnostics snapshot carrying them (never the
+                           text), the gauge's own condition, and reset/load
+                           clearing the reading
   test_facts_agent_visibility.py
                            [v1.17.0] the reference-visibility mirror: both
                            audiences, block 0 of every dimension rendered
@@ -11743,6 +11778,101 @@ additive `.baspec` key.
   keeping it, a merged edit carrying it, the binding's reply identity, the
   `harvestable` flag) and two frontend ones (the panel rendering on the
   hint, `canHarvest` counting replies).
+
+## What each turn carries is measured — implemented notes (Project workspace Phase 5A)
+
+Part A of `docs/plans/project-workspace/05_RELEVANCE_TRIM.md`. The carried
+research block rides every turn's PROJECT CONTEXT at up to 100k estimated
+tokens, and that block is stripped at commit and rebuilt on the next turn —
+a cache WRITE per message, never a read — so a later section carrying a big
+profile pays for it on every turn. Part B (render the profile
+relevance-first, with a disclosed hold-back and a `read_research_items`
+tool) is built ONLY if a real second-section session shows the research
+block routinely past ~40k estimated tokens on a section that plainly uses a
+fraction of it. The last cost model in this repo was an artifact of a
+dropped term (PR #166's review), so the gate is a measurement, not a model;
+Part A is the instrument. No new route, SSE event, dep, env knob or
+project-format change; no version bump (Phase 7 releases the program).
+
+- **`_turn_context_text` returns `(text, sizes)`** — the spec's wording and
+  the house idiom (`research_context_block` → `(text, dropped)`). A sibling
+  function would have missed the two concurrency tests that monkeypatch
+  `conversation._turn_context_text` BY NAME (their wrappers pass the tuple
+  through unchanged). **The trap in the return-type change**: on a tuple,
+  `"X" not in _turn_context_text(s)` is an element test and passes
+  vacuously, so every direct caller (nine sites in three test modules)
+  unpacks — a future caller must too.
+- **The partition** is `CONTEXT_SIZE_KEYS`: eight named blocks — `research`,
+  `facts`, `sections`, `references`, `document`, `lint`, `open_items`,
+  `qc_review` — each measured from the very string appended to `parts`;
+  `total`, the estimate of the text AS SENT (after the frame and the
+  boundary escape); and `other`, the exact remainder (the date, identity,
+  standards and profile lines, the editing boundary, follow-ups, figure
+  stubs, the status notes and the frame, plus each block's rounding). The
+  blocks sum to `total` by construction, which would make "they sum" a
+  vacuous test on its own — so the tests also hold every named block to the
+  block the sent text contains: renderer equality for the five with a
+  public renderer, and growth-only-where-expected deltas for the three
+  rendered inline (document, lint, open items). A block measured from the
+  wrong string pushes its growth into a neighbour or into `other`, and that
+  fails. `research_dropped_items` is a COUNT — the findings the cap left out
+  of this turn — and is not in the sum. `other` measures ~540 (generic) /
+  ~630 (hyperscale_fire) estimated tokens on an empty session: constant
+  overhead, ~1% of a context whose research is in the tens of thousands.
+- **One estimator**: `history_hygiene.estimated_tokens` (chars // 4) — the
+  one the History makeup row uses, and identical to each cap's private
+  `_estimate_tokens`, so the reading and the caps agree about what "40k"
+  means. Not a tokenizer; labelled an estimate everywhere it is shown.
+- **Measuring changes nothing about the text.** Only the three inline
+  blocks changed shape (each now binds a local before it is appended);
+  verified byte-identical against HEAD's implementation on a rich fixture
+  and an empty session before landing, and every existing context test is
+  untouched.
+- **Where the reading lives: `SessionState.last_context_sizes`**, written in
+  the guarded commit block beside `last_context_tokens` and under the
+  gauge's OWN condition (`last_round_context is not None`). The Context
+  gauge and Context makeup rows therefore always describe one turn, and a
+  turn whose request never reached the model — a stop landing during the
+  first request's build, or a usage-less fake round — cannot replace a real
+  reading. Cleared by `_reset_while_locked` and `load_project` beside the
+  gauge, declared in the wipe sweep, never persisted, and not in
+  `_doc_payload` or `/api/usage`: Developer tools only.
+- **The trace records every turn.** `capture.turn_prompts(context_sizes=)`
+  puts the dict ON the `prompt_refs` event — numbers ride the event at every
+  capture level while the texts stay hash refs — and the event fires at turn
+  start, so the trace holds the reading of a turn the session skips. None of
+  the keys contains "token", so the `token(?!s)` redaction pattern leaves
+  them alone. The trace viewer and Developer tools → Recent activity
+  JSON-render event fields, so neither needed a change.
+- **`/api/diagnostics`**: `session.last_context_sizes`, a dict copy under the
+  guard (the field-read posture) or null.
+- **Frontend**: `lib/contextSizes.ts` (`contextMakeup` over
+  `CONTEXT_BLOCK_LABELS`) renders Session state's **Context makeup** row,
+  beside Context gauge and History makeup. Research always leads — it is
+  the gate reading — with the cap's trim count when there is one ("no
+  research profile" when there is none); the other blocks follow largest
+  first; an empty block is left out; the remainder trails. Extracted from
+  the modal (the spec named only the modal) so it has a unit test;
+  `frontend/tests/contextSizes.test.ts` also pins the label table against
+  `CONTEXT_SIZE_KEYS` by reading conversation.py (the verificationCopy
+  idiom), so a block the backend adds — Part B's, say — fails the suite
+  until it is labelled rather than silently dropping out of the row.
+- **Deliberately not built: Part B.** No focus, no ranking, no hold-back
+  line, no tool; the 100k cap and the lowest-confidence-first trim are
+  untouched. The gate numbers go in the phase file's "Deviations /
+  measurements" either way.
+- **Tests**: `tests/test_context_sizes.py` (9) — it pins the clock, because
+  the date line changes length at midnight ("9 March" → "10 March") and
+  several tests compare sizes across calls — and
+  `frontend/tests/contextSizes.test.ts` (6). Twenty-five mechanisms were
+  reverted in place, each turning its own tests red: every block's
+  measurement (eight), the trim count, the remainder, the total measured
+  before the frame, the hand-off to the trace, the hook's field, the commit
+  write, the write moved outside the gauge's condition, the diagnostics
+  field, the reset clear and the load clear (eighteen backend); research
+  first, the trim count, the no-profile wording, the sort, the empty-block
+  filter, an unlabelled backend block and the modal's use of the helper
+  (seven frontend).
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

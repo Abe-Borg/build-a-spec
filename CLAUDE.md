@@ -14143,14 +14143,20 @@ finding the doc payload always had.
   partly on the chrome tuple. It was open, not merged, when this landed,
   and its notes leave the event's missing chrome alone as a suggested
   follow-up. This is that follow-up. A trial merge of the two branches
-  (`git merge-tree`) shows `app.py` and the turn context merging on their
-  own into `session.document_lint(..., preserved_chrome=
-  session.preserved_chrome())`. Two small conflicts remain, both in
+  (#200 at `f655369`) showed `app.py` and the turn context merging on
+  their own into `session.document_lint(..., preserved_chrome=
+  session.preserved_chrome())`. Two small code conflicts remain, both in
   `conversation.py`. The two new methods sit side by side: keep both. The
   event's call: take `session.document_lint(` and keep this change's
   comment; its `preserved_chrome=session.preserved_chrome()` line carries
-  over by itself. With both merged, the event and the payload behind it
-  pass equal inputs, so the memo lints each committed version once.
+  over by itself. `CLAUDE.md` conflicts too: keep both sections, in merge
+  order. Resolved that way, the trial passed `ruff` and the full backend
+  suite, and a count of lint passes showed the event and the
+  `GET /api/doc` behind it sharing one. With both merged, two sentences in
+  #200's notes stop being true: that the event passes no chrome, and that
+  an imported master with preserved header or footer lines costs two lint
+  passes per version. The event and the payload behind it pass equal
+  inputs, so the memo lints each committed version once.
   `test_the_turn_lint_event_matches_the_payload_behind_it` fails any
   resolution that drops the chrome from the event.
 - **Tests: `tests/test_preserved_chrome_lint.py` (4).**

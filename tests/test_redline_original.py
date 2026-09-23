@@ -28,10 +28,14 @@ import pytest
 from docx import Document
 from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
+from fastapi.testclient import TestClient
 from lxml import etree
 
+from backend import sessions
+from backend.app import create_app
+from backend.spec_doc.docx_export import upload_redline_filename
 from backend.spec_doc.importer import parse_master_docx
-from backend.spec_doc.model import SpecEditError, apply_edits
+from backend.spec_doc.model import SpecEditError, SpecSection, apply_edits
 from backend.spec_doc.revisions import (
     REVISION_TAGS,
     accept_all,
@@ -46,8 +50,10 @@ from backend.spec_doc.source_render import (
 )
 from backend.spec_doc.source_splice import FALLBACK_REASONS
 from tests.test_preserving_export import (
+    HEADER_TEXT,
     _break_master,
     _hold_break,
+    _import,
     _master_bytes,
     _not_used_master,
     _save,
@@ -1485,3 +1491,316 @@ def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path):
             fallbacks.update(stats.get("fallback", {}))
     assert produced
     assert set(fallbacks) <= set(FALLBACK_REASONS)
+
+
+# ---------------------------------------------------------------------------
+# Through the API (D-8, backend half)
+# ---------------------------------------------------------------------------
+
+_FIXED_DATE = "2026-09-22T12:00:00Z"
+
+
+@pytest.fixture
+def client(monkeypatch):
+    """An app whose revision timestamp is pinned, so two exports of one
+    document are byte-comparable."""
+    import backend.app as app_module
+
+    monkeypatch.setattr(app_module, "_revision_timestamp", lambda: _FIXED_DATE)
+    return TestClient(create_app())
+
+
+def _reword_first(client) -> None:
+    doc = client.get("/api/doc").json()["doc"]
+    first = doc["parts"][0]["articles"][0]["paragraphs"][0]["id"]
+    edit = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": first,
+                    "text": "Section includes seismic restraint and isolation.",
+                }
+            ]
+        },
+    )
+    assert edit.status_code == 200, edit.text
+
+
+def _export(client, **params):
+    return client.get("/api/export/docx", params=params)
+
+
+def _filename(response) -> str:
+    disposition = response.headers["content-disposition"]
+    return disposition.split('filename="', 1)[1].split('"', 1)[0]
+
+
+def test_the_route_hands_over_the_redline_on_the_original(client):
+    source = _master_bytes()
+    payload = _import(client, source)
+    assert payload["preserved_redline_available"] is True
+    assert payload["preserved_redline_reason"] is None
+    _reword_first(client)
+
+    response = _export(client, redline="master", mode="preserved")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    # Named after the upload, so replacing the master is a rename (D-6).
+    assert _filename(response) == "office-master - REDLINE.docx"
+    redline = response.content
+
+    # Accept All is the route's own formatted export; Reject All the upload.
+    clean = _export(client, mode="preserved")
+    assert clean.status_code == 200
+    r_body = _body(redline)
+    assert first_difference(accept_all(r_body), _body(clean.content)) is None
+    assert first_difference(reject_all(r_body), _body(source)) is None
+    before, after = _members(source), _members(redline)
+    assert [n for n in before if before[n] != after[n]] == ["word/document.xml"]
+    changes = _revisions(r_body)
+    assert changes
+    assert {c.get(qn("w:author")) for c in changes} == {"Build-a-Spec"}
+    assert {c.get(qn("w:date")) for c in changes} == {_FIXED_DATE}
+    # The firm's header travelled with the file untouched.
+    assert Document(io.BytesIO(redline)).sections[0].header.paragraphs[0].text == (
+        HEADER_TEXT
+    )
+
+
+def test_a_redline_names_its_mode_or_takes_the_default_for_its_kind(client):
+    """``redline=master`` with no mode is the redline on the original when
+    one is available; ``redline=version`` with no mode stays extracted
+    provisions (the preserved redline is master-only in Phase 1)."""
+    _import(client, _master_bytes())
+    _reword_first(client)
+
+    bare = _export(client, redline="master")
+    explicit = _export(client, redline="master", mode="preserved")
+    assert bare.status_code == explicit.status_code == 200
+    assert bare.content == explicit.content
+    assert _filename(bare) == "office-master - REDLINE.docx"
+
+    extracted = _export(client, redline="master", mode="normalized")
+    assert extracted.status_code == 200
+    assert _filename(extracted).startswith("SECTION 23 05 48")
+    # Build-a-Spec's own document: the firm's header does not travel.
+    assert (
+        Document(io.BytesIO(extracted.content)).sections[0].header.paragraphs[0].text
+        != HEADER_TEXT
+    )
+
+    version = _export(client, redline="version", base=0)
+    assert version.status_code == 200
+    assert _filename(version).startswith("SECTION 23 05 48")
+    assert (
+        Document(io.BytesIO(version.content)).sections[0].header.paragraphs[0].text
+        != HEADER_TEXT
+    )
+
+
+def test_a_redline_against_a_version_on_the_original_is_a_400(client):
+    _import(client, _master_bytes())
+    _reword_first(client)
+    response = _export(client, redline="version", base=0, mode="preserved")
+    assert response.status_code == 400
+    assert "imported master only" in response.json()["error"]
+
+
+def test_without_an_imported_master_there_is_nothing_to_compare(client):
+    """A document written from scratch: the redline on the original is not
+    offered, and asking for it is the existing no-master 400."""
+    added = client.post(
+        "/api/doc/edit",
+        json={"ops": [{"action": "add_article", "target_id": "pt1", "text": "SUMMARY"}]},
+    )
+    assert added.status_code == 200
+    payload = client.get("/api/doc").json()
+    assert payload["preserved_redline_available"] is False
+    assert payload["preserved_redline_reason"]["code"] == "no_baseline"
+    response = _export(client, redline="master", mode="preserved")
+    assert response.status_code == 400
+    assert "no imported master" in response.json()["error"]
+
+
+def test_a_project_without_its_format_map_names_what_is_missing(client):
+    """The upload without the map built from it (a project imported before
+    1.14.0): the redline on the original is not offered, an explicit request
+    is refused by name, and the default falls back to extracted provisions."""
+    _import(client, _master_bytes())
+    _reword_first(client)
+    sessions.get_session().source_format_map = None
+
+    payload = client.get("/api/doc").json()
+    assert payload["preserved_redline_available"] is False
+    reason = payload["preserved_redline_reason"]
+    assert reason["code"] == "no_original"
+    assert "importing the file again" in reason["message"]
+
+    refused = _export(client, redline="master", mode="preserved")
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "no_original"
+    assert refused.json()["error"] == reason["message"]
+
+    fallback = _export(client, redline="master")
+    assert fallback.status_code == 200
+    assert _filename(fallback).startswith("SECTION 23 05 48")
+
+
+def _pending_master() -> bytes:
+    from tests.docx_fidelity_helpers import rewrite_zip_members
+
+    source = _master_bytes()
+    document_xml = _member(source, "word/document.xml").decode("utf-8")
+    revised = document_xml.replace(
+        "<w:t>END OF SECTION</w:t>",
+        "<w:t>END OF SECTION</w:t></w:r><w:ins w:id=\"900\" w:author=\"Someone\" "
+        "w:date=\"2026-01-01T00:00:00Z\"><w:r><w:t> (rev)</w:t></w:r></w:ins><w:r>",
+        1,
+    )
+    assert revised != document_xml
+    return rewrite_zip_members(
+        source, replacements={"word/document.xml": revised.encode("utf-8")}
+    )
+
+
+def test_pending_revisions_are_refused_by_the_route_and_named_in_the_payload(client):
+    """D-5, end to end: the payload says why before the click, an explicit
+    request is a 409 naming the fix, and the default falls back to the
+    redline of extracted provisions — which still works."""
+    _import(client, _pending_master())
+    _reword_first(client)
+
+    payload = client.get("/api/doc").json()
+    assert payload["preserved_redline_available"] is False
+    reason = payload["preserved_redline_reason"]
+    assert reason["code"] == "pending_revisions"
+    assert "Accept or reject those changes in Word" in reason["message"]
+    assert "extracted provisions still works" in reason["message"]
+
+    refused = _export(client, redline="master", mode="preserved")
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "pending_revisions"
+    assert refused.json()["error"] == reason["message"]
+
+    fallback = _export(client, redline="master")
+    assert fallback.status_code == 200
+    assert _filename(fallback).startswith("SECTION 23 05 48")
+
+
+def test_track_changes_switched_on_is_offered_through_the_route(client):
+    """``w:trackRevisions`` alone is not a pending change: the package-wide
+    scan reports both, and only the pending half refuses."""
+    from tests.docx_fidelity_helpers import rewrite_zip_members
+
+    source = _master_bytes()
+    settings_xml = _member(source, "word/settings.xml").decode("utf-8")
+    switched = settings_xml.replace("<w:zoom", "<w:trackRevisions/><w:zoom", 1)
+    tracked = rewrite_zip_members(
+        source, replacements={"word/settings.xml": switched.encode("utf-8")}
+    )
+    assert _import(client, tracked)["preserved_redline_available"] is True
+    _reword_first(client)
+    response = _export(client, redline="master", mode="preserved")
+    assert response.status_code == 200
+    assert _member(response.content, "word/settings.xml") == switched.encode("utf-8")
+
+
+def test_a_failed_self_check_is_a_409_naming_the_check(client, monkeypatch):
+    """D-7: a redline that cannot prove its own promise is never handed
+    over. Forced here by making the comparator report a difference."""
+    from backend.spec_doc import revisions
+
+    _import(client, _master_bytes())
+    _reword_first(client)
+    monkeypatch.setattr(
+        revisions,
+        "first_difference",
+        lambda *_a, **_k: revisions.Difference(index=4, left="p", right="p", path="p/r/t"),
+    )
+    response = _export(client, redline="master", mode="preserved")
+    assert response.status_code == 409
+    body = response.json()
+    assert body["code"] == "accept_check_failed"
+    assert "failed its own check" in body["error"]
+    assert "extracted provisions still works" in body["error"]
+
+
+def test_the_payload_and_the_route_answer_from_one_derivation(client, monkeypatch):
+    """The Export menu must never offer a redline the route refuses: both
+    read ``_preserved_redline_availability``."""
+    import backend.app as app_module
+
+    _import(client, _master_bytes())
+    _reword_first(client)
+    monkeypatch.setattr(
+        app_module,
+        "_preserved_redline_availability",
+        lambda _session: (False, "revision_scan_unavailable"),
+    )
+    payload = client.get("/api/doc").json()
+    assert payload["preserved_redline_available"] is False
+    assert payload["preserved_redline_reason"]["code"] == "revision_scan_unavailable"
+    refused = _export(client, redline="master", mode="preserved")
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "revision_scan_unavailable"
+    assert _filename(_export(client, redline="master")).startswith("SECTION 23 05 48")
+
+
+def test_the_revision_scan_runs_once_per_upload(client, monkeypatch):
+    """The payload is built on every edit, undo and poll, and the pending-
+    revisions scan reads every story part of the package — so it is cached
+    per upload, keyed on the upload's content.
+
+    Counted relatively: the session object outlives a test (``reset()`` is
+    in place), so an earlier test that imported this very master may have
+    left its answer cached — a correct hit, since the key is the content."""
+    import backend.app as app_module
+
+    calls = []
+    real = app_module.detect_pending_revisions
+
+    def counting(source):
+        calls.append(len(source))
+        return real(source)
+
+    monkeypatch.setattr(app_module, "detect_pending_revisions", counting)
+    _import(client, _master_bytes())
+    settled = len(calls)
+    assert settled <= 1
+    for _ in range(3):
+        assert client.get("/api/doc").json()["preserved_redline_available"] is True
+    _reword_first(client)
+    assert _export(client, redline="master", mode="preserved").status_code == 200
+    assert len(calls) == settled  # no rescans for the same upload
+
+    # A different upload is a different answer: it is scanned once.
+    assert client.post("/api/session/reset").status_code == 200
+    _import(client, _typed_letter_master())
+    assert len(calls) == settled + 1
+    for _ in range(2):
+        client.get("/api/doc")
+    assert len(calls) == settled + 1
+
+
+def test_the_redline_filename_comes_from_the_upload():
+    section = SpecSection()
+    section.number, section.title = "23 05 48", "VIBRATION CONTROLS"
+    assert upload_redline_filename("office-master.docx", section) == (
+        "office-master - REDLINE.docx"
+    )
+    assert upload_redline_filename("Fire Pump.DOCX", section) == (
+        "Fire Pump - REDLINE.docx"
+    )
+    assert upload_redline_filename('a:b*?"<>|.docx', section) == "ab - REDLINE.docx"
+    assert upload_redline_filename("bad\x0bname.docx", section) == (
+        "badu000Bname - REDLINE.docx"
+    )
+    # Unknown or scrubbed away: the section-derived redline name.
+    for unknown in ("", ".docx", ":*?.docx", None):
+        assert upload_redline_filename(unknown, section) == (
+            "SECTION 23 05 48 - VIBRATION CONTROLS - REDLINE.docx"
+        )

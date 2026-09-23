@@ -1311,6 +1311,108 @@ def test_an_export_records_the_mode_that_ran_and_the_splice_counts(trace_env):
     assert "seismic" not in json.dumps(export)
 
 
+def test_a_redline_on_the_original_records_what_it_tracked(trace_env):
+    """The redline's export event: the mode that ran (``preserved``), the
+    redline asked for, and the counts of what was tracked — never text."""
+    from tests.test_preserving_export import _import, _master_bytes
+
+    client = TestClient(create_app())
+    _import(client, _master_bytes())
+    doc = client.get("/api/doc").json()["doc"]
+    first = doc["parts"][0]["articles"][0]["paragraphs"][0]["id"]
+    edit = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": first,
+                    "text": "Section includes seismic isolation for mechanical equipment.",
+                }
+            ]
+        },
+    )
+    assert edit.status_code == 200
+    response = client.get(
+        "/api/export/docx", params={"redline": "master", "mode": "preserved"}
+    )
+    assert response.status_code == 200
+
+    events = _wait_events(
+        lambda evs: any(
+            e["type"] == "export" and e.get("redline") == "master" for e in evs
+        )
+    )
+    export = next(
+        e for e in events if e["type"] == "export" and e.get("redline") == "master"
+    )
+    assert export["mode"] == "preserved"
+    assert export["ok"] is True
+    assert "refusal" not in export
+    tracked = export["render"]["redline"]
+    assert tracked["spliced"] == 1
+    assert tracked["revisions"] >= 2  # a word out, a word in
+    assert "seismic" not in json.dumps(export)
+
+
+def test_a_refused_redline_records_the_check_and_the_first_mismatch(
+    trace_env, monkeypatch
+):
+    """D-7: "an export diagnostics event records which check failed and the
+    first mismatching element" — positions and element names, never text."""
+    from backend.spec_doc import revisions
+    from tests.test_preserving_export import _import, _master_bytes
+
+    client = TestClient(create_app())
+    _import(client, _master_bytes())
+    doc = client.get("/api/doc").json()["doc"]
+    first = doc["parts"][0]["articles"][0]["paragraphs"][0]["id"]
+    assert (
+        client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {
+                        "action": "replace",
+                        "target_id": first,
+                        "text": "Section includes seismic isolation.",
+                    }
+                ]
+            },
+        ).status_code
+        == 200
+    )
+    monkeypatch.setattr(
+        revisions,
+        "first_difference",
+        lambda *_a, **_k: revisions.Difference(
+            index=4, left="p", right="tbl", path="p/r/t"
+        ),
+    )
+    response = client.get(
+        "/api/export/docx", params={"redline": "master", "mode": "preserved"}
+    )
+    assert response.status_code == 409
+
+    events = _wait_events(
+        lambda evs: any(
+            e["type"] == "export" and e.get("redline") == "master" for e in evs
+        )
+    )
+    export = next(
+        e for e in events if e["type"] == "export" and e.get("redline") == "master"
+    )
+    assert export["ok"] is False
+    assert export["refusal"]["reason"] == "accept_check_failed"
+    assert export["refusal"]["detail"] == {
+        "index": 4,
+        "left": "p",
+        "right": "tbl",
+        "path": "p/r/t",
+    }
+    assert "seismic" not in json.dumps(export)
+
+
 def test_round_end_and_prompt_refs_are_recorded_per_turn(
     monkeypatch, trace_env
 ):

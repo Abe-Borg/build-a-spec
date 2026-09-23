@@ -297,6 +297,25 @@ def redline_filename(section: SpecSection) -> str:
     return name[: -len(".docx")] + " - REDLINE.docx"
 
 
+def upload_redline_filename(upload_name: str, section: SpecSection) -> str:
+    """``<your upload's name> - REDLINE.docx`` — the redline on the original.
+
+    Named after the file the user imported rather than the section, so
+    replacing the master with the reviewed file is a rename, not a hunt.
+    Scrubbed the way :func:`export_filename` scrubs a stem (the name also
+    feeds a native save path), and the section-derived redline name when the
+    upload's name is unknown or scrubs away to nothing.
+    """
+    name = filename_safe_text(upload_name if isinstance(upload_name, str) else "")
+    name = re.sub(r'[\\/:*?"<>|]+', "", name).strip()
+    if name.lower().endswith(".docx"):
+        name = name[: -len(".docx")]
+    name = name.strip(". ")
+    if not name:
+        return redline_filename(section)
+    return f"{name} - REDLINE.docx"
+
+
 # ---------------------------------------------------------------------------
 # Tracked-changes (redline) body — Batch 5
 #

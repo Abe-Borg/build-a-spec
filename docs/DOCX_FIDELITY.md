@@ -376,6 +376,27 @@ Accept All leaves it empty: it shows nothing, exactly as the clean export,
 which does not write it (the self-check's comparison drops an empty
 hyperlink, since Word shows nothing for one).
 
+**Inline custom XML is tracked from inside, never wrapped.** The schema lets
+a `w:ins`/`w:del` hold an inline `w:customXml` element, and Word refuses to
+open such a file: "Word will fail to load a file if ins, del, moveTo, or
+moveFrom contains inline customXml" ([MS-OI29500] §2.1.188(a)). The
+self-check's resolvers read that markup fine, so they cannot catch it. The
+redline therefore treats a custom XML element like a hyperlink. The element
+stays where it is, its `w:customXmlPr` stays first and unmarked, and the runs
+inside it are marked. This applies to deleted, moved and rewritten provisions
+(a paragraph holding custom XML is always rewritten by the fallback), to
+emptied break holders, and to table cells. Resolving those runs away leaves
+the element empty. Word removes custom XML markup when it opens a file (every
+build since January 2010) and keeps its content, so an empty element is not
+there at all. The self-check's comparison drops it, and a deleted paragraph
+left holding only an emptied one is gone on Accept All, even when a table
+follows it. Custom XML inside something the writer wraps whole (an inline
+content control, a smart tag, a run's text box) cannot be moved out of the
+wrapper, so it is refused (`untrackable_markup`). As a last line, the export
+refuses to hand over any file in which a `w:customXml` sits inside a tracked
+change (`word_load_check_failed`). A Word-saved master never holds custom
+XML, because Word strips it on save. Other producers still write it.
+
 **Typed letters are tracked; Word numbering is not.** In a typed-letter master
 a provision relettered by an insert above it carries a tracked letter change
 (`A.` → `B.`), which is the only way Reject All can give the letters back; it
@@ -446,9 +467,10 @@ with the reviewed file is a rename.
 | `simple_field` | A `w:fldSimple` would need tracking (Word cannot track one). |
 | `block_content_control` | A body-level content control would be inserted, deleted or moved. |
 | `field_block` | Part of a table of contents (a field spanning paragraphs) would be deleted or moved. |
-| `pending_revisions_in_body`, `untrackable_markup` | Revision markup, or other markup that cannot be wrapped in a tracked change, met while marking content. |
+| `pending_revisions_in_body`, `untrackable_markup` | Revision markup, or other markup that cannot be wrapped in a tracked change, met while marking content — including inline custom XML inside something wrapped whole (a content control, a smart tag, a run's text box), which cannot be moved out of the wrapper. |
 | `unaccounted_content` | A body element of the upload could not be placed — refused rather than risk losing it. |
 | `accept_check_failed`, `reject_check_failed`, `duplicate_bookmarks`, `package_check_failed` | The self-check. |
+| `word_load_check_failed` | The self-check found a shape Word refuses to open that neither resolution can see: a `w:customXml` inside a `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`. The writer never builds one; this is the file checking that too. |
 
 Every refusal names the redline of extracted provisions as still working
 (`?redline=master&mode=normalized`), except `no_baseline`, which names redline
@@ -490,7 +512,8 @@ every markup shape the writer emits (word-level splices, typed letters, Word
 numbering, whole provisions, articles and tables deleted, moves plain and
 across section breaks and carrying a bookmark, emptied break holders,
 hyperlinks, a field, the fallback, the untrackable last paragraph, a picture,
-a leading page break, front matter), and every corpus master under the corpus
+a leading page break, front matter, inline custom XML deleted, rewritten,
+moved and in a deleted table), and every corpus master under the corpus
 sweep's own scripted edit mixes, exactly as the app does. A hidden Word the
 harness starts and owns (`tools/render_docx_word.py --resolve`) then opens
 each redline read-only, runs Accept All Changes or Reject All Changes, and

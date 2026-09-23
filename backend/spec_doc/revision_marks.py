@@ -20,9 +20,16 @@ What Word is strict about, and this module therefore owns:
   levels, which is only right on the bare paragraphs it builds.
 * **What a wrapper may hold.** ``w:ins``/``w:del`` hold run-level content —
   runs, bookmarks, inline content controls, smart tags, math — but not a
-  hyperlink or a simple field. A hyperlink keeps its element and has its
-  runs wrapped; a simple field cannot be tracked at all and is refused with
-  a named reason (:class:`UntrackableContent`) rather than guessed at.
+  hyperlink, inline custom XML or a simple field. A hyperlink keeps its
+  element and has its runs wrapped, and so does an inline ``w:customXml``
+  (its ``w:customXmlPr`` stays first and unwrapped): the schema allows one
+  inside ``w:ins``/``w:del``, but Word "will fail to load a file if ins,
+  del, moveTo, or moveFrom contains inline customXml" ([MS-OI29500]
+  §2.1.188(a), on ISO/IEC 29500-1 §17.5.1.3), and the self-check's resolver
+  would never notice. Custom XML inside something that IS wrapped whole — a
+  content control, a smart tag, a run's text box — cannot be moved out of
+  the way, so it is refused like a simple field: with a named reason
+  (:class:`UntrackableContent`) rather than guessed at.
 * **Deleted text is ``w:delText``** (``w:delInstrText`` for a field
   instruction) — except inside a text box, which is its own story: deleting
   the run that anchors it deletes the box whole.
@@ -67,6 +74,7 @@ _W_TC = qn("w:tc")
 _W_SDT = qn("w:sdt")
 _W_SDT_CONTENT = qn("w:sdtContent")
 _W_CUSTOM_XML = qn("w:customXml")
+_W_CUSTOM_XML_PR = qn("w:customXmlPr")
 _W_HYPERLINK = qn("w:hyperlink")
 _W_SECTPR = qn("w:sectPr")
 _W_PPR_CHANGE = qn("w:pPrChange")
@@ -82,13 +90,13 @@ _W_AUTHOR = qn("w:author")
 _W_DATE = qn("w:date")
 
 #: Run-level content a ``w:ins``/``w:del`` may hold whole
-#: (``EG_ContentRunContent`` and ``EG_RunLevelElements``).
+#: (``EG_ContentRunContent`` and ``EG_RunLevelElements``) — less inline
+#: ``w:customXml``, which the schema allows and Word refuses to load.
 _WRAPPABLE = frozenset(
     {
         _W_R,
         _W_SDT,
         qn("w:smartTag"),
-        _W_CUSTOM_XML,
         qn("w:dir"),
         qn("w:bdo"),
         _W_BOOKMARK_START,
@@ -103,7 +111,9 @@ _WRAPPABLE = frozenset(
     }
 )
 #: Containers that cannot sit inside a wrapper but whose content can.
-_DESCEND = frozenset({_W_HYPERLINK})
+_DESCEND = frozenset({_W_HYPERLINK, _W_CUSTOM_XML})
+#: A container's own properties: they lead it and are never wrapped.
+_PROPERTIES = frozenset({_W_PPR, _W_CUSTOM_XML_PR})
 
 #: Named reasons a body element cannot be carried as a tracked change.
 UNTRACKABLE_SIMPLE_FIELD = "simple_field"
@@ -370,7 +380,14 @@ def as_deleted(element):
 
 def _check(child) -> None:
     tag = child.tag
-    if tag in _WRAPPABLE or tag in _DESCEND or tag == _W_PPR:
+    if tag in _DESCEND or tag in _PROPERTIES:
+        return
+    if tag in _WRAPPABLE:
+        # Wrapped whole, so custom XML anywhere inside it would sit inside
+        # the wrapper — the one shape Word will not load — and cannot be
+        # moved out of the way.
+        if next(child.iter(_W_CUSTOM_XML), None) is not None:
+            raise UntrackableContent(UNTRACKABLE_MARKUP, "customXml")
         return
     reason = _REASON_BY_TAG.get(tag, UNTRACKABLE_MARKUP)
     raise UntrackableContent(reason, etree.QName(tag).localname)
@@ -382,7 +399,7 @@ def _wrap_content(container, tag: str, marks: RevisionMarks, *, deleted: bool) -
         if not isinstance(child.tag, str):
             group = None  # an XML comment stays where it is
             continue
-        if child.tag == _W_PPR:
+        if child.tag in _PROPERTIES:
             continue
         _check(child)
         if child.tag in _DESCEND:

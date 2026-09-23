@@ -476,7 +476,8 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
     section breaks), emptied section-break holders (and their numbering
     cancel), hyperlinks, a field, the fallback, the untrackable last
     paragraph, a leading page break, front matter, a picture, a bold mark,
-    row properties, and Track Changes already on."""
+    row properties, Track Changes already on, and inline custom XML
+    (deleted, rewritten, moved, in a deleted table)."""
     from tests import test_redline_original as matrix
     from tests.test_import_office_master import _office_master
     from tests.test_preserving_export import (
@@ -833,6 +834,38 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
             "targeted/bookmarked",
             upload(matrix._bookmarked_master),
             (("move-bookmarked", _edit(_move_provision(1, 0))),),
+        ),
+        # Inline custom XML: Word will not load one inside a tracked change
+        # ([MS-OI29500] §2.1.188(a)), so the writer tracks its content from
+        # inside the element. Only Word opening these proves it.
+        JudgeGroup(
+            "targeted/custom-xml",
+            upload(matrix._custom_xml_master),
+            (
+                ("delete-holding-custom-xml", _edit(_delete_provision(0))),
+                (
+                    "rewrite-holding-custom-xml",
+                    _edit(
+                        _replace(
+                            0, "Section includes seismic isolation for mechanical equipment."
+                        )
+                    ),
+                ),
+                (
+                    "delete-table-holding-custom-xml",
+                    _edit(
+                        lambda s: {
+                            "action": "delete",
+                            "target_id": _locked_block("table", article=1)(s).uid,
+                        }
+                    ),
+                ),
+            ),
+        ),
+        JudgeGroup(
+            "targeted/custom-xml-numbered",
+            upload(matrix._custom_xml_master, numbered=True),
+            (("move-holding-custom-xml", _edit(_move_provision(0, 2))),),
         ),
     ]
     return tuple(groups)

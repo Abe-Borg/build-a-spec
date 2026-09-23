@@ -68,7 +68,10 @@ still to run. A follow-up (PR #193) fixed the two losses Phase 1 recorded in
 the formatted export: a provision holding a hyperlink is spliced instead of
 rebuilt from its first run (every fallback in the corpus sweep had been a
 link — none are now), and a new sub-provision in a Word-numbered master takes
-its own numbering level. **Phase 2 lands as two PRs** (a deviation: the plan
+its own numbering level. A second follow-up fixed a redline Word would refuse
+to open: inline custom XML in a changed provision had been wrapped whole in a
+tracked change, and it is now tracked from inside, like a hyperlink, with the
+self-check refusing that shape outright. **Phase 2 lands as two PRs** (a deviation: the plan
 sized it as one). PR A (PR #197) makes real Word the redline's judge — an optional
 Windows suite where a hidden Word accepts and rejects every change and the
 result must match Word's own save of the formatted export or the upload —

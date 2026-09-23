@@ -16,8 +16,9 @@ Accept All (:func:`accept_all`):
   one flagged deleted joins the paragraph to the next one: whatever the
   paragraph still holds moves to the front of the next paragraph (which
   keeps its own properties, as in Word), and a paragraph holding nothing is
-  simply gone. With no next paragraph to join, it stays (Word cannot remove
-  a container's last paragraph mark);
+  simply gone — an emptied inline custom XML element counts as nothing
+  (see the comparison below). With no next paragraph to join, it stays
+  (Word cannot remove a container's last paragraph mark);
 * a row flagged deleted (``w:trPr/w:del``) is removed, one flagged inserted
   loses the flag, and a table left with no rows is removed;
 * every recorded property change (``w:pPrChange``, ``w:rPrChange``, …)
@@ -41,15 +42,22 @@ Word splits text into runs — the one thing it re-does on every save anyway:
 * a bookmark is compared by NAME (ids are file-local), and the caller may
   exclude names — the one documented Reject-All limit: a moved provision's
   bookmarks stay with its new copy;
-* an empty hyperlink is dropped (Word shows nothing for it), and so are
-  FORMATTING-FREE empty paragraphs at the very end of the body: a document's
-  last paragraph mark cannot be tracked, so resolving a deletion or insertion
-  there leaves an empty paragraph behind. Only a formatting-free one is
-  invisible — an empty paragraph still prints its number, breaks the page
-  before it, draws its border, and takes its line height from its mark — so
-  one that sets anything (any paragraph property, any run formatting on its
-  mark, a section break) is a difference like any other. The redline writer
-  makes sure the one it leaves sets nothing
+* an empty hyperlink is dropped (Word shows nothing for it);
+* so is an inline ``w:customXml`` holding nothing but its own
+  ``w:customXmlPr``: Word removes custom XML markup when it opens a file
+  (every build since January 2010) and keeps its content, so an empty one
+  is not there at all. The redline writer wraps a custom XML element's runs
+  rather than the element (Word will not load one inside
+  ``w:ins``/``w:del``), so the resolution that removes those runs leaves
+  exactly this behind;
+* and so are FORMATTING-FREE empty paragraphs at the very end of the body:
+  a document's last paragraph mark cannot be tracked, so resolving a
+  deletion or insertion there leaves an empty paragraph behind. Only a
+  formatting-free one is invisible — an empty paragraph still prints its
+  number, breaks the page before it, draws its border, and takes its line
+  height from its mark — so one that sets anything (any paragraph property,
+  any run formatting on its mark, a section break) is a difference like any
+  other. The redline writer makes sure the one it leaves sets nothing
   (``revision_marks.neutralize_last_paragraph``).
 """
 
@@ -81,6 +89,8 @@ _W_TCPR = qn("w:tcPr")
 _W_NUMPR = qn("w:numPr")
 _W_SECTPR = qn("w:sectPr")
 _W_HYPERLINK = qn("w:hyperlink")
+_W_CUSTOM_XML = qn("w:customXml")
+_W_CUSTOM_XML_PR = qn("w:customXmlPr")
 _W_BOOKMARK_START = qn("w:bookmarkStart")
 _W_BOOKMARK_END = qn("w:bookmarkEnd")
 _W_ID = qn("w:id")
@@ -282,8 +292,24 @@ def _resolve_property_changes(root, *, accept: bool) -> None:
             parent.append(child)
 
 
+def _emptied_custom_xml(element) -> bool:
+    """An inline ``w:customXml`` holding nothing but its properties (or
+    other emptied custom XML). Word removes custom XML markup on load, so
+    this shows nothing and holds nothing."""
+    if element.tag != _W_CUSTOM_XML or (element.text or "").strip():
+        return False
+    return all(
+        not isinstance(child.tag, str)
+        or child.tag == _W_CUSTOM_XML_PR
+        or _emptied_custom_xml(child)
+        for child in element
+    )
+
+
 def _content(paragraph) -> list:
-    return [c for c in paragraph if c.tag != _W_PPR]
+    return [
+        c for c in paragraph if c.tag != _W_PPR and not _emptied_custom_xml(c)
+    ]
 
 
 def _join_to_next(paragraph) -> None:
@@ -440,6 +466,12 @@ class _Canon:
             if not content:
                 return None
         if tag == _W_HYPERLINK and not children:
+            return None
+        if (
+            tag == _W_CUSTOM_XML
+            and not text
+            and all(c[0] == _W_CUSTOM_XML_PR for c in children)
+        ):
             return None
         if tag in _DROP_WHEN_EMPTY and not children and not attributes:
             return None

@@ -280,6 +280,8 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
         "delText",
         "delInstrText",  # a deleted field instruction
         "deleted-drawing",
+        "del@customXml",  # tracked inside inline custom XML, never around it
+        "ins@customXml",
     } <= markup, markup
     assert moved == {"_Ref77"}
 

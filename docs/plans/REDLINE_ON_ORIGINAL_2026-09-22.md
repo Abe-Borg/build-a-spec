@@ -1060,6 +1060,133 @@ above, plus the "Found, not done" lists — this one's and Phase 0's.
 
 **Size:** one medium PR.
 
+#### Phase 2 (PR A) — as built
+
+**The split (deviation 1).** The plan sized Phase 2 as one medium PR. It
+lands as two, on the owner's instruction (2026-09-23): **PR A** makes real
+Word the judge, because the judge proves Phase 1's existing output as well
+as the native moves that follow; **PR B** (native "Moved" marks) starts only
+after PR A merges and the owner has run the judge on Windows. The scope's
+**Settings** bullet is dropped from both: Decisions 4 and 5 were ratified as
+"Track Changes off" and "author Build-a-Spec", so there is nothing to set.
+PR A changes nothing in the app and needs no release note; the Phase 2 draft
+comes with PR B.
+
+**What landed.**
+
+- **A resolve mode for the hidden-Word automation**
+  (`tools/render_docx_word.py --resolve accept|reject|resave`,
+  `resolve_docx(jobs)`). A branch inside the bridge's one owned, hidden,
+  alerts-off, macros-off Word — never a second activation with rules of its
+  own: each job opened read-only and off Recent Files in a window the owned
+  Word holds, Accept All Changes / Reject All Changes / neither, then
+  `SaveAs2` format 16 to a NEW file (also off Recent Files), closed without
+  saving. One job per file, one Word per batch; a file Word cannot open,
+  resolve or save fails only its own job. Each answer carries the changes
+  Word read, their distinct authors (`Revision.Author`, what the Reviewing
+  Pane lists) and the changes left. The Python side trusts nothing the
+  bridge says without a check: every job answered, in order, with its own
+  paths and action; a finished job's file exists and is not empty; counts
+  are integers, never booleans; a failed job carries a reason. It refuses,
+  before Word starts, an output that exists, that two jobs write, or that
+  is an input under Windows' case rules. The render path is unchanged.
+- **Windows PowerShell 5.1, which never runs in CI.** The job file is
+  `{"jobs": [...]}` (5.1's `ConvertFrom-Json` hands a top-level array over
+  as one object); a one-element array serialized as its element and a
+  one-author list as a bare string are both read; the result is read as
+  `utf-8-sig` (5.1 writes a BOM). A test parses both PowerShell scripts with
+  `pwsh` and refuses 7-only syntax (`??`, `?.`, ternaries, `&&`/`||`); CI's
+  Linux runner has `pwsh`.
+- **The judge** (`tests/word_judge.py`, gated suite
+  `tests/test_redline_word_judge.py`, proven without Word by
+  `tests/test_word_judge.py`). Twenty-five targeted groups (42 cases: every
+  markup shape the writer emits, each on the master that makes it) plus
+  every corpus master under the corpus sweep's own edit mixes, rendered with
+  the production author. Word must open every file, read every change as
+  Build-a-Spec's and leave none behind; Accept All must give the formatted
+  export and Reject All the upload, losing only a moved copy's bookmarks.
+- **The comparison is symmetric (deviation 2).** Comparing Word's resolution
+  with the app's own file would need a tolerance for everything a Word save
+  rewrites (formatting spelled its own way, table-look flags, a hyperlink's
+  history flag, …). Instead the same Word re-saves the formatted export and
+  the upload, and each resolution is compared with that. Four tolerances
+  remain, for what a save writes on its own, removed from both sides: rsid
+  attributes, `w:proofErr`, `w:lastRenderedPageBreak` and the `_GoBack`
+  bookmark. The canonical comparison is `revisions.first_difference`; the
+  app's own self-check applies none of the four (pinned).
+- **Only the body is compared (deviation 3):** every other part is the
+  upload's byte for byte by the self-check's package check, and neither
+  resolution changes anything outside the body.
+- **The corpus sweep's edit mixes are shared (deviation 4).**
+  `CORPUS_SWEEP_SEEDS`, `CORPUS_SWEEP_EDITS`, `corpus_sweep_edits` and
+  `STRUCTURAL_REFUSALS` became public names in
+  `tests/test_redline_original.py` (a pure refactor), so the judge replays
+  exactly the redlines that suite proves and agrees with it on which
+  refusals are legitimate. Any other refusal fails the judge.
+- **Word's own tracked moves.** The corpus gains `tracked_move_source` (a
+  placeholder spec with a bookmarked provision, an ordinary ready case), and
+  `generate_word_fixtures.ps1` a `TrackedMove` recipe: Track Changes and
+  Track Moves on, two whole paragraphs cut and pasted (one carrying the
+  bookmark), saved as `microsoft-word-16-tracked-move.docx`. `-Recipes`
+  names which fixtures to produce (every committed one is pinned, so
+  producing one again changes its bytes); `-ScratchRoot` is needed only by
+  LegacyDoc now.
+- **Privacy.** Word records the Office user as each change's author in
+  `word/document.xml`, which `sanitize_external_fixtures.py` never touches.
+  The recipe sets a placeholder identity (`Build-a-Spec Corpus`, initials
+  `BASC`, and "Always use these values regardless of sign in to Office")
+  before opening anything and restores the owner's in a `finally` block;
+  checks before saving that every change is the placeholder's, that both
+  cut-and-pastes were recorded as moves, and that the bookmark survived;
+  then scans every XML part of the saved package (no local identity as a
+  whole word, no user-folder path, every author the placeholder, no
+  signed-in presence in `word/people.xml`) and deletes the file on any
+  finding. The owner's identity is compared and restored, never printed.
+  Separately, `tests/test_docx_corpus.py` now holds every corpus package to
+  a POSITIVE list of placeholder identities wherever a producer records a
+  person (a denylist cannot know every real name), and runs the recipe's own
+  package scan, lifted out of the script by its syntax tree, under `pwsh`.
+- **The fixture's manifest entry waits for the fixture (deviation 5).** An
+  entry naming a missing file would break every corpus test, so
+  `actual_word_16_tracked_move` lands with the fixture and its pinned
+  checksum. Its expectations are pre-validated on a hand-built Word-shaped
+  sample: importable as the Accept-All view, exact-original only
+  (`tracked_changes`), exact no-op kept, and refused by the redline
+  (`pending_revisions`).
+
+**The harness was debugged against itself (deviation 6).** Before any real
+Word ran, a fake Word — the app's own resolver plus a model of a Word save —
+was run through the entire gated suite. It found two bugs, both in the fake
+and both caught by the judge doing its job: a "proofing split" that copied a
+run's tab along with its text, and a `_GoBack` bookmark numbered 0, beside a
+real bookmark 0. Both are fixed, and the no-Word suite now runs every corpus
+mix through the noisy fake too, so a failure on Windows is real Word
+disagreeing, never the harness. The fake also rewrites content the same way
+in every file (a hyperlink history flag, a run language) that no tolerance
+covers, which is what proves the comparison has to be symmetric.
+
+**What stays manual (deviation 7).** The judge checks what Word read and
+saved. It cannot see a repair prompt — alerts are off in an owned Word, so a
+file Word refuses to open fails its job instead, but one it silently repairs
+cannot be told apart — or how the Reviewing Pane draws the changes. Those
+rows stay manual in `docs/RELEASE_WINDOWS.md`; the side-by-side Accept All /
+Reject All row is replaced by the judge.
+
+**What PR B inherits.**
+
+- The judge, and the owner's first Windows results (recorded below when they
+  arrive).
+- Once pushed and pinned, the Word-saved tracked-move sample, and the
+  judge's report on it: whether Word's Accept All and Reject All of its own
+  moves match the app's resolver, and where the moved paragraph's bookmark
+  lands each way — the evidence D-6's moved-bookmark limit and the
+  `moved_annotation` refusal are re-decided from.
+- The questions to settle against ECMA-376 and that sample, citing clauses:
+  `w:moveFrom` run content (`w:t` or `w:delText`); range-marker pairing
+  (`w:name`, ids); how a moved paragraph mark is recorded.
+
+**Owner's Windows results:** pending.
+
 ### Phase 3 — Later, only if wanted
 
 - A redline against any version, on the original.

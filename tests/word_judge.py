@@ -166,7 +166,7 @@ def word_body(payload: bytes):
 def strip_word_save_markup(body):
     """A copy of ``body`` without what a Word save writes on its own (the
     first three :data:`WORD_SAVE_TOLERANCES`; the bookmark is excluded by
-    name in :func:`word_difference`)."""
+    name in :func:`body_difference`)."""
     stripped = copy.deepcopy(body)
     for element in list(stripped.iter(PROOFING_MARK, LAST_RENDERED_PAGE_BREAK)):
         _remove(element)
@@ -189,18 +189,32 @@ def bookmark_names(payload: bytes) -> set[str]:
     }
 
 
+def body_difference(
+    resolved,
+    reference,
+    *,
+    exclude_bookmarks=frozenset(),
+) -> Difference | None:
+    """``None`` when two Word-saved bodies agree up to
+    :data:`WORD_SAVE_TOLERANCES` — all four applied here, to both sides — else
+    where they first disagree. The one comparison every verdict goes
+    through."""
+    return first_difference(
+        strip_word_save_markup(resolved),
+        strip_word_save_markup(reference),
+        exclude_bookmarks=frozenset(exclude_bookmarks) | {GO_BACK_BOOKMARK},
+    )
+
+
 def word_difference(
     resolved: bytes,
     reference: bytes,
     *,
     exclude_bookmarks=frozenset(),
 ) -> Difference | None:
-    """``None`` when two Word-saved files hold the same body up to
-    :data:`WORD_SAVE_TOLERANCES`, else where they first disagree."""
-    return first_difference(
-        _judged(resolved),
-        _judged(reference),
-        exclude_bookmarks=frozenset(exclude_bookmarks) | {GO_BACK_BOOKMARK},
+    """:func:`body_difference` of two Word-saved files."""
+    return body_difference(
+        word_body(resolved), word_body(reference), exclude_bookmarks=exclude_bookmarks
     )
 
 
@@ -1261,6 +1275,7 @@ __all__ = [
     "JudgeReport",
     "RefusedCase",
     "bookmark_names",
+    "body_difference",
     "bookmark_places",
     "build_judge_cases",
     "describe_difference",

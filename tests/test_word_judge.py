@@ -39,12 +39,10 @@ def _paragraph(*runs: str, attrs: str = "") -> str:
     return f"<w:p{attrs}>{''.join(runs)}</w:p>"
 
 
-def _difference(left, right, **kwargs):
-    return first_difference(
-        judge.strip_word_save_markup(left),
-        judge.strip_word_save_markup(right),
-        exclude_bookmarks=frozenset(kwargs.get("exclude", ())) | {judge.GO_BACK_BOOKMARK},
-    )
+def _difference(left, right):
+    """The judge's own comparison — never a copy of it, so each tolerance
+    test proves the verdicts the judge actually reaches."""
+    return judge.body_difference(left, right)
 
 
 # ---------------------------------------------------------------------------

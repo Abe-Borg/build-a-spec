@@ -17,10 +17,12 @@ fires, and recall answers from the full record.
 """
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -861,9 +863,31 @@ def test_a_declined_summary_leaves_the_conversation_whole(monkeypatch):
     assert session.compaction_runner.snapshot()["error_kind"] == "refused"
 
 
-def test_routine_condensing_is_off_by_default(monkeypatch):
+def test_routine_condensing_ships_switched_on():
+    """The owner turned routine condensing on by default on 2026-09-23
+    (decision D5 in the compaction plan), without the paid recall check the
+    plan had named as its gate. Read from the source, not the loaded value,
+    so a developer's own environment cannot make this pass or fail."""
+    source = Path(settings.__file__).read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "CHAT_COMPACTION"
+            for target in node.targets
+        ):
+            call = node.value
+            assert isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_bool_env"
+            name, default = (arg.value for arg in call.args)
+            assert name == "BUILD_A_SPEC_CHAT_COMPACTION"
+            assert default is True, "routine condensing defaults on (owner decision D5)"
+            return
+    raise AssertionError("settings.CHAT_COMPACTION is gone")
+
+
+def test_with_routine_condensing_off_no_summary_is_written(monkeypatch):
+    """Switched off, a conversation past the threshold is left alone: no
+    background summary, no billed call. Only the backstop remains."""
+    monkeypatch.setattr(settings, "CHAT_COMPACTION", False)
     monkeypatch.setattr(settings, "CHAT_COMPACTION_THRESHOLD", 1_000)
-    assert settings.CHAT_COMPACTION is False
     fake = FakeClient(_chat_turns(4))
     _patch_client(monkeypatch, fake)
     client = _client()
@@ -963,6 +987,7 @@ def test_a_stale_ready_summary_is_never_adopted():
 
 def test_the_backstop_condenses_before_a_request_that_would_not_fit(monkeypatch):
     # Routine condensing OFF: this is the backstop alone.
+    monkeypatch.setattr(settings, "CHAT_COMPACTION", False)
     monkeypatch.setattr(conversation, "_system_tools_chars", lambda module: 0)
     fake = _Routed(_chat_turns(3) + [text_turn(["Fits now."])], [_summary_turn()])
     _patch_client(monkeypatch, fake)

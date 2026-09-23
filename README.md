@@ -442,9 +442,9 @@ first stop saving data that is already stored elsewhere, then condense the
 conversation rarely between turns, with the original transcript always
 kept and recallable. Phases 1 and 2 ship in v1.21.0. Phase 2's trim is on
 by default since its live check passed on 2026-09-23 (below). Condensing the
-conversation (Phase 3) is on `master` too, with routine condensing off until
-its own paid check. An optional trim within a single turn (Phase 5) is still
-to come, so the program is still in progress.
+conversation (Phase 3) is on `master` too, and routine condensing is on by
+default since 2026-09-23 (below). An optional trim within a single turn
+(Phase 5) is still to come, so the program is still in progress.
 
 ### Stale outlines stay out of the conversation (Phase 1)
 
@@ -548,25 +548,31 @@ is sent, each citation is checked against the pages that message actually
 carries: one that no longer fits is pointed back at its page, or removed if
 its page was condensed away. The reply's words stay either way.
 
-**When it happens.** By default only when a message would not otherwise fit:
-past about 85% of the model's context window, the app condenses before
-sending (the status line says *Condensing earlier conversation…*). If a
-summary cannot be made, that one message leaves the oldest turns out, says
-so to the model, and they can still be looked up — a conversation never
-turns into one that fails on every message. **Routine condensing**
-(`BUILD_A_SPEC_CHAT_COMPACTION=1`) instead writes the summary in the
-background after a reply once the conversation passes 600,000 tokens
-(`BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD`), keeping the last three turns
-(`BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS`). It is off until a paid recall
-check on real transcripts confirms nothing important is lost; that check is
-described in the plan. Nothing is ever condensed in the guided tour.
+**When it happens.** **Routine condensing**, on by default, writes the
+summary in the background after a reply once the conversation passes 600,000
+tokens (`BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD`), keeping the last three
+turns (`BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS`). It is a billed model call
+with no click behind it, and `BUILD_A_SPEC_CHAT_COMPACTION=0` switches it
+off. It became the default on 2026-09-23 by the owner's decision, without
+the paid recall check on real transcripts that the plan had named as the
+gate. With the trims above, a conversation grows slowly: the one real project
+measured would reach 600,000 tokens around turn 130. Whether routine
+condensing is on or off, a message that would not otherwise fit (past about
+85% of the model's context window) is condensed before it is sent, and the
+status line says *Condensing earlier conversation…*. If a summary cannot be
+made, that one message leaves the oldest turns out, says so to the model,
+and they can still be looked up — a conversation never turns into one that
+fails on every message. Nothing is ever condensed in the guided tour.
 
 **What it costs.** One summary call on the chat's own model, metered as its
 own **Conversation condensing** line in Settings. It is a fork of the last
 turn's request, so it reads that turn's cache instead of paying for the
 whole conversation again, and every later message re-reads a far shorter
-conversation. **Settings → Developer tools → Session state → Condensed
-conversation** shows the record's sizes (never its text).
+conversation. At 600,000 tokens a summary costs roughly $0.25–0.50 (an
+estimate at Sonnet 5 list prices; the usage line is the real number), and
+it pays for itself within a handful of later messages. **Settings →
+Developer tools → Session state → Condensed conversation** shows the
+record's sizes (never its text).
 
 ## Redline on your original (in progress)
 
@@ -2212,7 +2218,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
 | `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the system block and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
-| `BUILD_A_SPEC_CHAT_COMPACTION` | off | Routine conversation condensing: once the committed conversation passes the threshold below, a summary of its oldest turns is written **in the background after a reply** — a real, **billed** model call with no click behind it — and every later message sends the summary instead of those turns. Off until the paid recall check the compaction plan calls for; the backstop (condense before a message that would not fit in ~85% of the context window) runs either way and is not configurable. |
+| `BUILD_A_SPEC_CHAT_COMPACTION` | `1` | Routine conversation condensing: once the committed conversation passes the threshold below, a summary of its oldest turns is written **in the background after a reply** — a real, **billed** model call with no click behind it — and every later message sends the summary instead of those turns. **On by default** since the owner decided it on 2026-09-23 (without the paid recall check the compaction plan had named as the gate); `0` switches it off. The backstop (condense before a message that would not fit in ~85% of the context window) runs either way and is not configurable. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD` | `600000` | Estimated tokens of committed conversation — the history as later requests send it, not the per-turn PROJECT CONTEXT, which condensing cannot shrink — at which routine condensing starts (owner decision D1). Floor 10,000. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS` | `3` | How many of the most recent turns stay word for word when the conversation is condensed (D1). Floor 1. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |

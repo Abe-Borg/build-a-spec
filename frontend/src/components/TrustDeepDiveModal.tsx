@@ -506,8 +506,8 @@ function Dossier() {
             </>,
             <>
               <b className="text-ink">
-                No model runs that you did not start — with one disclosed
-                follow-up, and one more you can switch on.
+                No model runs that you did not start — with two disclosed
+                exceptions, both of which you can switch off.
               </b>{" "}
               No auto-research, no silent re-draft, no automatic fact harvest,
               no scheduled job: every
@@ -520,13 +520,14 @@ function Dossier() {
               proceed — it appears in the transcript like any message, can be
               stopped like any turn, never applies changes by itself, and can
               be switched off (BUILD_A_SPEC_AUTO_DEBRIEF=0). Condensing a long
-              conversation is model work too, and by default it is part of a
-              turn you started: when a message would not otherwise fit in the
-              model&apos;s context window, the oldest turns are condensed first,
-              inside that turn, and the status line says so. Routine condensing
-              (BUILD_A_SPEC_CHAT_COMPACTION=1, off by default) is the one you
-              can switch on: it writes that summary after a reply instead, while
-              you read it. Beyond that, the only thing the app does on its own
+              conversation is model work too. When a message would not otherwise
+              fit in the model&apos;s context window, the oldest turns are
+              condensed first, inside that turn, and the status line says so.
+              The second exception is routine condensing, on by default: once a
+              conversation passes about 600,000 tokens, it writes that summary
+              in the background after a reply, while you read it, and it can be
+              switched off (BUILD_A_SPEC_CHAT_COMPACTION=0). Beyond that, the
+              only thing the app does on its own
               is check for a new version at startup, at most once a day; that
               request goes to GitHub, carries nothing about your project, and
               can be switched off.
@@ -1453,7 +1454,7 @@ function Dossier() {
         <Runtime
           n={16}
           title="A long conversation is condensed"
-          trigger="Nothing extra — keep talking. By default it happens only when a message you send would not otherwise fit in the model's context window; with routine condensing switched on (BUILD_A_SPEC_CHAT_COMPACTION=1), after a reply once the conversation passes about 600,000 tokens."
+          trigger="Nothing extra — keep talking. By default it happens in the background after a reply once the conversation passes about 600,000 tokens (routine condensing; BUILD_A_SPEC_CHAT_COMPACTION=0 switches it off), and inside a turn whenever a message you send would not otherwise fit in the model's context window."
           runs={
             <>
               One model call that writes a summary of the oldest turns, kept
@@ -1705,14 +1706,16 @@ function Dossier() {
         <Bullets
           items={[
             <>
-              <b className="text-ink">There is no subscription and no spend you
-              did not start.</b> You are billed by Anthropic for your own API
-              usage, under your own key. The one automatic model turn is the
-              completion debrief after a research or Final QC run you launched
-              (an ordinary chat turn, disclosed above, switchable off); routine
-              conversation condensing, if you switch it on, writes a summary
-              after a reply; beyond those the update check is the app’s only
-              unprompted request, and it costs nothing.
+              <b className="text-ink">There is no subscription, and no spend
+              you did not start beyond two disclosed exceptions.</b> You are
+              billed by Anthropic for your own API usage, under your own key.
+              The exceptions are the completion debrief after a research or
+              Final QC run you launched (an ordinary chat turn, disclosed
+              above, switchable off) and routine conversation condensing,
+              which writes a summary after a reply once a conversation passes
+              about 600,000 tokens (on by default, switchable off with
+              BUILD_A_SPEC_CHAT_COMPACTION=0). Beyond those, the update check
+              is the app’s only unprompted request, and it costs nothing.
             </>,
             <>
               <b className="text-ink">The fixed instruction block is cached.</b>{" "}
@@ -1875,8 +1878,8 @@ function Dossier() {
               <b className="text-ink">Watch a firewall or proxy log.</b> The only
               routine destination is Anthropic’s API — including the one
               automatic completion-debrief turn after a research or Final QC
-              run you launched, and, if you switched routine condensing on, a
-              summary request after a long conversation&apos;s reply. You will
+              run you launched, and, unless you switched routine condensing off,
+              a summary request after a long conversation&apos;s reply. You will
               also see one
               GitHub request at startup — that is the version check described
               above, and it is the only connection the app makes that no

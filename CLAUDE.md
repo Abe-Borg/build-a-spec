@@ -123,9 +123,12 @@ backend/
                            closeout had set it off; commit and project load
                            read it at call time); CHAT_COMPACTION (+ _THRESHOLD D1 600k /
                            _KEEP_TURNS 3; compaction Phase 3 — routine
-                           condensing, OFF until the paid recall check) and
-                           the NON-knob CHAT_CONTEXT_BACKSTOP_FRACTION (0.85,
-                           runs either way) + CHAT_COMPACTION_MAX_TOKENS
+                           condensing, default ON since owner decision D5 on
+                           2026-09-23, without the paid recall check; each
+                           summary is a billed background call, 0 switches
+                           it off) and the NON-knob
+                           CHAT_CONTEXT_BACKSTOP_FRACTION (0.85, runs either
+                           way) + CHAT_COMPACTION_MAX_TOKENS
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive, gated on the
                            draft prerequisites via _draft_prerequisites —
@@ -13573,6 +13576,88 @@ bumps no version.
   3. "Citations must fit the request that carries them" says "The trim
      stays OFF" and that "only a recorded pass flips the default". The pass
      is now recorded, and this change flips the default.
+
+## Routine condensing is on by default — implemented notes
+
+Owner decision D5 (Abraham, 2026-09-23): "let's flip automatic condensing
+on by default." Compaction Phase 3 shipped routine condensing switched off,
+with a paid recall check on real transcripts named as the gate ("Before it
+is on by default" in `docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`).
+The plan's reading of the owner's real measurement, the same day, had
+recommended keeping it off, since a project like the one measured reaches
+the 600k trigger around turn 130. The owner decided to turn it on without
+the check. That is the owner's call to make, and the plan records it as D5,
+with the gate marked waived, not passed. This change adds no route, SSE event, dependency or project format,
+and bumps no version; one knob's default moves.
+
+- **What changed.** `settings.CHAT_COMPACTION`
+  (`BUILD_A_SPEC_CHAT_COMPACTION`) now defaults to `True`. Once the
+  committed conversation passes `CHAT_COMPACTION_THRESHOLD` (600k estimated
+  tokens, D1), a summary of its oldest turns is written in the background
+  after a reply. That is a billed model call with no click behind it,
+  roughly $0.25–0.50 each at D1 (the plan's "Cost at D1, re-estimated"),
+  metered under the usage table's "Conversation condensing" line. `0` (or
+  `false`, `no`, `off`) switches it off. The backstop runs either way, as
+  before.
+- **What did not change.** The threshold and the three kept turns (D1), the
+  one-summary-at-a-time runner and its backoff, adoption between turns
+  only, and the tutorial exclusion (`allow_compaction = lease.scope ==
+  "original"`). A conversation under 600k never pays for a summary.
+- **The pin flipped with the default.**
+  `test_routine_condensing_is_off_by_default` asserted the loaded value, so
+  a developer's own environment could make it pass or fail. It is now
+  `test_routine_condensing_ships_switched_on`, which reads the default from
+  the source with `ast` (the page-trim pin's idiom). The rest of the old
+  test, a threshold-lowered conversation that writes no summary, became
+  `test_with_routine_condensing_off_no_summary_is_written`. It switches the
+  setting off itself and now covers the opt-out. The backstop test also
+  switches routine condensing off itself, so its comment ("this is the
+  backstop alone") stays true under the new default. It passed without
+  that line (its routine threshold stays at 600k), so the line is a guard,
+  not a fix.
+- **Checked before any test changed.** The original compaction module, run
+  against the new default, failed only the old pin (43 passed). The whole
+  suite then ran with the new default and the edited compaction tests:
+  2,420 passed, 9 skipped. No other test file changed, so for every other
+  module that run was also a check before any test changed. The compaction,
+  diagnostics and session-wipe modules also pass with
+  `BUILD_A_SPEC_CHAT_COMPACTION=0` set (94 passed), so no test leans on
+  the default.
+- **Reverted in place**: the default back to `False` → the pin red (1); the
+  commit-time trigger ignoring the setting (`if allow_compaction:`) → the
+  opt-out test red (1).
+- **The copy is a contract, and the new default falsified it in several
+  places.** The trust dossier: its heading now reads "No model runs that you
+  did not start — with two disclosed exceptions, both of which you can
+  switch off", and the paragraph under it names routine condensing as the
+  second. The Money bullet names both exceptions (it had said routine
+  condensing runs "if you switch it on"). Card 16's trigger now leads with
+  the background summary. The firewall bullet now says "unless you switched
+  routine condensing off". Help: the "no model runs on its own" answer and
+  the tour-section footer. README: the compaction intro, "When it happens",
+  "What it costs" (which now gives a per-summary estimate) and the
+  configuration row, which now shows `1`. The release checklist's
+  Phase 3 rows no longer set the switch, and there is a new "Switching it
+  off" row. The backstop row now also switches routine condensing off, so
+  it still tests the backstop alone.
+- **The release note is owed, not written.** The plan's Phase 3
+  release-note draft now describes routine condensing as on by default and
+  names the off switch; the auto-debrief note is the precedent for naming
+  one. Its release policy says a release cut from a commit that has Phase 3
+  but not this change would ship condensing off, and would need the earlier
+  wording. No release is planned (owner, 2026-09-23).
+- **Errata.** These notes are append-only, so corrections to earlier
+  sections are recorded here:
+  1. "A long conversation is condensed, never deleted (compaction Phase 3)"
+     says "Routine condensing is a knob, off by default" and names the paid
+     recall check as its gate. Since this change it defaults on, and the
+     gate was waived by the owner (D5), not passed.
+  2. That section's erratum 5 says v1.11.0's "no model runs on its own" has
+     "a second, opt-in exception: routine condensing". It is now opt-out: on
+     by default, and `BUILD_A_SPEC_CHAT_COMPACTION=0` switches it off.
+  3. The Layout entry for `settings.py` said routine condensing was "OFF
+     until the paid recall check". It is maintained current, so it was
+     corrected in place.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

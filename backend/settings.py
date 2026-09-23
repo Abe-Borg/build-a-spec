@@ -635,11 +635,12 @@ CHAT_CACHE_TTL = _cache_ttl_env(
 # a background call summarizes the older turns and later requests send that
 # summary plus the newest turns instead of the whole transcript (the full
 # transcript is never deleted, and the model can read any condensed turn back
-# with ``recall_conversation``). OFF by default on purpose: the plan gates
-# turning it on for everyone on a paid recall check against real transcripts
-# (docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md, "Before it is on by
-# default"). The backstop below runs either way.
-CHAT_COMPACTION = _bool_env("BUILD_A_SPEC_CHAT_COMPACTION", False)
+# with ``recall_conversation``). ON by default since the owner decided it on
+# 2026-09-23 (decision D5 in docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md),
+# without the paid recall check that plan had named as the gate. Each summary
+# is a billed background call with no click behind it, so ``0`` switches it
+# off. The backstop below runs either way.
+CHAT_COMPACTION = _bool_env("BUILD_A_SPEC_CHAT_COMPACTION", True)
 
 # Owner decision D1 (2026-09-22): condense at 600k tokens of committed
 # conversation, keeping the last three user turns word for word. "Committed

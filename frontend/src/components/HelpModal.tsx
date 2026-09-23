@@ -305,8 +305,9 @@ function HowToUse({
         automatic model turn is the debrief the chat sends itself when a
         research or Final QC run you started finishes — visible, stoppable,
         and switchable off. A very long conversation is condensed into a
-        summary before a message that would not otherwise fit; routine
-        condensing after a reply is off unless you switch it on.
+        summary before a message that would not otherwise fit, and, once it
+        passes about 600,000 tokens, in the background after a reply; that
+        routine condensing is on by default and switchable off.
       </p>
     </div>
   );
@@ -528,7 +529,7 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
           },
           {
             t: "No model runs you did not set in motion",
-            d: "Research, Final QC, drafting, and export all start with a click of yours. The one automatic follow-up is the completion debrief: when a run you started finishes, the chat sends itself a single visible turn that summarizes the findings and asks whether to proceed — it never applies changes by itself and can be switched off. Condensing a very long conversation into a summary happens inside a turn you started, when your message would not otherwise fit; routine condensing after a reply is off unless you switch it on. Beyond that, the app's only unprompted request is the daily version check to GitHub, which carries nothing about your project and can also be switched off.",
+            d: "Research, Final QC, drafting, and export all start with a click of yours. The one automatic follow-up is the completion debrief: when a run you started finishes, the chat sends itself a single visible turn that summarizes the findings and asks whether to proceed — it never applies changes by itself and can be switched off. Condensing a very long conversation into a summary happens inside a turn you started when your message would not otherwise fit, and, once a conversation passes about 600,000 tokens, in the background after a reply; that routine condensing is on by default and can be switched off. Beyond that, the app's only unprompted request is the daily version check to GitHub, which carries nothing about your project and can also be switched off.",
           },
           {
             t: "Your key and spend stay in view",

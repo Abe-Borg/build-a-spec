@@ -464,7 +464,7 @@ To measure saved projects offline — sizes and counts only, files named by a
 hash:
 
 ```
-.venv\Scripts\python tools\chat_history_profile.py "C:\specs\*.baspec" --out history-measurement.md
+.\.venv\Scripts\python tools\chat_history_profile.py "C:\specs\*.baspec" --out history-measurement.md
 ```
 
 ### Fetched web pages stay out of the conversation (Phase 2 — ships switched off)
@@ -491,7 +491,7 @@ yet. It costs about two cents at most, and without `--run` it sends
 nothing:
 
 ```
-.venv\Scripts\python tools\fetch_elision_canary.py --run
+.\.venv\Scripts\python tools\fetch_elision_canary.py --run
 ```
 
 The check turns the trim on for its own request, whatever the switch says.
@@ -2052,37 +2052,70 @@ are cut (a tag push builds and publishes the installer via GitHub Actions).
 
 ## Install & Run (from source, Windows)
 
-```bat
-:: 1. Python environment
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+The commands in this section run as written in PowerShell (the Windows
+default terminal) and in Command Prompt; the one step that differs
+between the two is shown for each. Run them from the repo root.
 
-:: 2. Build the UI once
-cd frontend
-npm install
-npm run build
-cd ..
+1. Create the Python environment and install the dependencies:
 
-:: 3. Launch
-python main.py
-```
+   ```
+   python -m venv .venv
+   .\.venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+   Keep the leading `.\` on every command that runs something from
+   `.venv`: without it, PowerShell reads `.venv` as the name of a
+   PowerShell module and stops with "The module '.venv' could not be
+   loaded". Command Prompt accepts either form. In Command Prompt the
+   activation line runs `activate.bat`; in PowerShell it runs
+   `Activate.ps1`. If PowerShell refuses to run it because running
+   scripts is disabled on this system, allow local scripts for your
+   account once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`,
+   then activate again.
+
+2. Build the UI once:
+
+   ```
+   cd frontend
+   npm install
+   npm run build
+   cd ..
+   ```
+
+3. Launch:
+
+   ```
+   python main.py
+   ```
 
 A native window opens. If no API key is configured, enter one in the banner — it lands in Windows Credential Manager when `keyring` is installed, otherwise in a key file under your user config folder (`%APPDATA%\BuildASpec`). `ANTHROPIC_API_KEY` in the environment always wins and is never persisted.
 
 ### Development mode (hot reload)
 
-Terminal 1:
+Terminal 1, in PowerShell:
+
+```powershell
+.\.venv\Scripts\activate
+$env:BUILD_A_SPEC_DEV = "1"
+python main.py
+```
+
+or in Command Prompt:
 
 ```bat
-.venv\Scripts\activate
+.\.venv\Scripts\activate
 set BUILD_A_SPEC_DEV=1
 python main.py
 ```
 
-Terminal 2:
+Only the middle line differs. In PowerShell, `set BUILD_A_SPEC_DEV=1`
+creates a PowerShell variable, not an environment variable, so the app
+never sees it and starts without dev mode.
 
-```bat
+Terminal 2 (either shell):
+
+```
 cd frontend
 npm run dev
 ```
@@ -2158,8 +2191,8 @@ Every integer knob in `backend/settings.py` is clamped to a floor — `1` unless
 Hermetic by default — no API key, no network. `tests/conftest.py` injects a placeholder key; API-touching tests monkeypatch a fake streaming client (the same convention as Spec Critic's suite).
 
 ```
-.venv\Scripts\python -m pytest -q
-.venv\Scripts\python -m ruff check .
+.\.venv\Scripts\python -m pytest -q
+.\.venv\Scripts\python -m ruff check .
 ```
 
 The second line is the lint gate (`ruff.toml`: pyflakes, flake8-bugbear and
@@ -2181,7 +2214,7 @@ The paid provider-schema smoke test is separate and explicitly opt-in; it
 sends one low-token QC verifier request and never runs a full Final QC:
 
 ```
-.venv\Scripts\python tools\qc_verifier_canary.py --run
+.\.venv\Scripts\python tools\qc_verifier_canary.py --run
 ```
 
 Without `--run`, the command only reports whether a key is configured.
@@ -2194,7 +2227,7 @@ refusal needs diagnosing). Until it passes, that trim ships switched off
 (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
 
 ```
-.venv\Scripts\python tools\fetch_elision_canary.py --run
+.\.venv\Scripts\python tools\fetch_elision_canary.py --run
 ```
 
 The DOCX fidelity contract, fixture layers, frontend checks, and release

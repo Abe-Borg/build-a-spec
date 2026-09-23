@@ -8380,7 +8380,7 @@ project-format bump (two additive `.baspec` keys).
 ## Commands
 
 ```
-.venv/bin/python -m pytest -q          # backend suite (Windows: .venv\Scripts\python)
+.venv/bin/python -m pytest -q          # backend suite (Windows: .\.venv\Scripts\python)
 .venv/bin/python -m ruff check .       # lint gate: pyflakes + bugbear + syntax (ruff.toml); CI runs it before pytest
 cd frontend && npm test                # node --test: the capability/tour contract + units
 cd frontend && npm run dev             # UI hot reload (with BUILD_A_SPEC_DEV=1 backend)
@@ -8396,6 +8396,14 @@ Frontend build job, before the build), so a gap fails the PR rather than
 shipping — but find out locally, not from a red check. The workflow pins
 **Node 22**: `npm test` runs `node --test` directly over the `.ts` test files
 and depends on type stripping, which Node 20 cannot do.
+
+A Windows command written into the docs has to run as written in
+PowerShell, the owner's terminal, and in Command Prompt. Put `.\` in front
+of any relative program path (`.\.venv\Scripts\python`), write one command
+per line with no `^` continuation and no `&&`, and show
+`$env:NAME = "value"` beside `set NAME=value`.
+`tests/test_docs_consistency.py::test_the_docs_windows_commands_run_in_powershell`
+pins the `.\` and `^` rules.
 
 ## Runtime date awareness — implemented notes (the app knows what day it is)
 
@@ -12928,6 +12936,104 @@ deviations; this section is the why and the traps.
   `master`. The plan's status line and the plans index: combined. The
   second (compaction Phase 3, PR #189) conflicted only in CLAUDE.md, where
   its section now sits ahead of this one.
+
+## Windows commands run as written in PowerShell — implemented notes
+
+Reported (Abraham, 2026-09-23): the canary command the README gives,
+`.venv\Scripts\python tools\fetch_elision_canary.py --run`, fails in
+PowerShell, the default Windows terminal and the one he uses, with "The
+module '.venv' could not be loaded" (`CouldNotAutoLoadModule`). Docs,
+docstrings and one test only: no code, route, dependency or version change.
+
+- **PowerShell does not run a program from a relative path without a
+  leading `.\`.** Windows PowerShell reads `.venv\Scripts\python` as a
+  module-qualified command name (`Module\Command`), tries to import a
+  module called `.venv`, and fails. `.\.venv\Scripts\...` runs in PowerShell
+  and in Command Prompt, so every documented Windows venv command now
+  carries it: README (8), the release runbook (2), the compaction plan's
+  canary line, the project-workspace plan's verification hint, the
+  execution record's two measurement commands (steps 2 and 4 are still to
+  be run, so its commands are meant to be run), the Commands section of
+  this file, the four profilers' usage docstrings and the PyInstaller
+  spec's build steps. `.\.venv\Scripts\activate` runs `activate.bat` in
+  Command Prompt and `Activate.ps1` in PowerShell. PowerShell's execution
+  policy can still block `Activate.ps1`; the README and the runbook's
+  one-time setup give Microsoft's documented fix,
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, and nothing else.
+- **The error's format names the floor.** `X : The module ...` with
+  `FullyQualifiedErrorId : CouldNotAutoLoadModule` is how Windows
+  PowerShell 5.1 prints an error, so the docs are written for 5.1, not
+  PowerShell 7. 5.1 has no `&&`, and it aliases `curl` to
+  `Invoke-WebRequest`.
+- **Four more cmd-only habits sat in the same blocks, each replaced with a
+  form that works in both shells.** `::` comment lines: PowerShell reports
+  "The term '::' is not recognized", so the README setup became numbered
+  steps. `set NAME=value`: in PowerShell `set` is the alias of
+  `Set-Variable`, so it creates a PowerShell variable literally named
+  `NAME=value` and leaves the environment alone. Following the README's
+  dev-mode steps in PowerShell therefore started the app without dev mode.
+  Those steps now show `$env:BUILD_A_SPEC_DEV = "1"` beside the Command
+  Prompt form, and the runbook's smoke-test prose gives both forms too.
+  `^` continuations (the profilers' docstrings, the runbook's manifest
+  step): PowerShell passes the caret on as an argument and runs the next
+  line as a command of its own, so each command is now one line. `&&` (the
+  spec's build steps, two runbook lines) is split into one command per
+  line, and the runbook's WebView2 download calls `curl.exe`.
+- **The frozen-app smoke test had the same bug.** Its commands started
+  with `dist\BuildASpec\BuildASpec.exe`, a bare relative path, so they are
+  now `.\dist\...`. While rewriting those lines, the manifest and tag steps
+  took `X.Y.Z` placeholders in place of `0.9.0` (Batch 8 had already done
+  this for the ISCC line). The spec's build steps now match the runbook's
+  Build section (`pip install pythonnet pyinstaller`, `npm ci`).
+- **How it was checked without Windows.** The session installed
+  PowerShell 7.4 for Linux in its scratchpad. It reproduced the
+  module-autoload failure for `venv\Scripts\python` and
+  `dist\App\app`, and `.\` fixed both. It could not reproduce the dotted
+  case: pwsh on Linux resolves `.venv\...` through its "starts with a dot"
+  relative lookup and finds an extensionless file, which Windows does not
+  have. The owner's Windows report is the evidence for that case. Every
+  rewritten command was also run through pwsh against a fake `python`
+  that echoes its arguments: the quoted globs and the filename with spaces
+  each arrived as one argument (the profilers glob for themselves), and
+  `$env:` reached the child process.
+- **The pin.** `tests/test_docs_consistency.py::
+  test_the_docs_windows_commands_run_in_powershell`, a sibling of the
+  venv-name test, reads the five docs that test reads, the two live
+  plans, the execution record, the four profilers, the spec and this
+  file's Commands section. It checks three rules. (1) No `.venv\Scripts`
+  path, plain or Python-escaped (`[\\/]+`), starts a token; after a
+  separator it is part of a longer path, which runs. (2) No line ends in
+  ` ^`. (3) In a command fence (unlabelled, `bat`, `cmd`, `powershell`,
+  `pwsh`, `ps1`), no line starts with a relative path lacking `.\` or
+  `..\`. Only the Commands section of this file is read, because the
+  implemented notes are append-only and must be able to quote the broken
+  form they record, as this one does. The deep-dive remediation plans are
+  finished and keep their commands as written (the Batch 8 decision), and
+  a `bash` fence is not read: the runbook's `--since` render example is
+  labelled bash and keeps its `\` continuation. Reverted in place against
+  the committed fix, the whole fix goes red, and so does each of the 11
+  files reverted alone, each named by its own label (which proves every
+  scanned file is read, the escaped form and the Commands extraction
+  included). So do a frozen-app line without `.\` (the relative-command
+  rule), a `^` continuation with no venv path in the runbook and in a
+  docstring (the caret rule), and a bare venv path in an indented list
+  block and in inline prose code.
+- **Left alone, on purpose.** The CI and release workflows have no bare
+  relative path (they run the frozen app through `Start-Process -FilePath
+  $exe`). The `bash` and Linux blocks keep their `&&`, which bash runs:
+  this file's Commands section and the project-workspace plan's
+  verification block. `main.py`'s "frontend/dist not found" hint still
+  says `cd frontend && npm install && npm run build`. That is code rather
+  than a doc, and it fails only in Windows PowerShell 5.1.
+- **Errata** (append-only, so recorded here): Batch 8's rename to `.venv`
+  fixed the venv's name everywhere, which was only half of the problem.
+  The three DOCX docs and the runbook's DOCX gate already called the venv
+  the way PowerShell needs (`& '.\.venv\Scripts\python.exe'`) and needed
+  only the rename. The bare `.venv\Scripts\...` commands in the README and
+  the rest of the runbook did not run in PowerShell until this change. The
+  deep-dive remediation README's "Use `venv\Scripts\python` from
+  PowerShell" is wrong on both counts, the name and the missing `.\`, and
+  stays as history. The form that runs is `.\.venv\Scripts\python`.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

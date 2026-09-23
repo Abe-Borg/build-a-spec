@@ -211,7 +211,7 @@ last and depends on every phase the owner wants in the release.
 ## Standard verification commands
 
 ```
-.venv/bin/python -m ruff check .                    # Windows: .venv\Scripts\python
+.venv/bin/python -m ruff check .                    # Windows: .\.venv\Scripts\python
 .venv/bin/python -m pytest -q
 cd frontend && npm test && npm run build && cd ..
 ```

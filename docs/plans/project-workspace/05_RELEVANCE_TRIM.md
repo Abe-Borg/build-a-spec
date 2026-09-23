@@ -1,9 +1,10 @@
 # Phase 5 — Later sections stay cheap: measure, then trim by relevance
 
-**Status:** not started. **Depends on:** Part A on nothing; Part B on Part
-A's measurement crossing the gate below. Do not build Part B on a modelled
-number: the last cost model in this repo (PR #166's review) turned out to
-be an artifact of a dropped term.
+**Status:** Part A in review (`ddce90c`, PR #186); Part B not started —
+waiting on the owner's gate measurement (below). **Depends on:** Part A on
+nothing; Part B on Part A's measurement crossing the gate below. Do not
+build Part B on a modelled number: the last cost model in this repo (PR
+#166's review) turned out to be an artifact of a dropped term.
 
 ## Goal
 

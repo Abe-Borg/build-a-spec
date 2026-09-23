@@ -210,10 +210,11 @@ def _is_unstructured(project: dict[str, Any]) -> bool:
 
 
 def _preserved_chrome(project: dict[str, Any], has_source: bool) -> tuple[str, ...]:
-    """The header/footer and front-matter lines the stale-identifier lint reads.
+    """Mirror ``SessionState.preserved_chrome``.
 
-    Gated on retained source bytes exactly as the turn-context builder
-    gates it, so the measurement sees the same rule set a real turn does.
+    The header/footer and front-matter lines the stale-identifier lint
+    reads, gated on retained source bytes exactly as the session gates
+    them, so the measurement sees the same rule set a real turn does.
     """
     if not has_source:
         return ()

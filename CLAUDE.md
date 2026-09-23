@@ -1226,7 +1226,11 @@ backend/
                            _STANDARDS_POLICY/_PROVENANCE/FULL_DRAFT_DIRECTIVE
                            to stay true for pinless modules
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
-                           lint event + standards_payload; PROJECT CONTEXT begins
+                           lint event + standards_payload (the event lints
+                           exactly as the doc payload does:
+                           SessionState.preserved_chrome() is the one
+                           header/footer/cover-page derivation every lint
+                           surface reads); PROJECT CONTEXT begins
                            with versioned discipline/project type identity, using
                            legacy session discipline only when identity is absent;
                            Batch 7 adds
@@ -1617,6 +1621,11 @@ tests/
   test_standards.py        pins, overrides, rendering helpers
   test_spec_modules.py     registry-validation failure modes
   test_linting.py          every lint rule + suppression + override interplay
+  test_preserved_chrome_lint.py
+                           every lint surface (doc payload, readiness, the
+                           turn's PROJECT CONTEXT, the post-commit `lint`
+                           SSE event) reads SessionState.preserved_chrome();
+                           the event matches the payload behind it
   test_qc.py               [Batch 4] lens fan-out, adversarial verification (tie
                            kills, median severity), ops validation, apply (one undo
                            step + stale skip), dismiss memory, runner lifecycle,
@@ -13922,6 +13931,86 @@ waived.
   3. "Stale outlines stay out of saved history (compaction Phase 1)" lists
      trimming outlines within a turn as Phase 5, as if still to come. It
      was dropped (D6).
+
+## Every lint surface reads the same preserved chrome — implemented notes
+
+The `lint` SSE event that a doc-changing chat turn emits after it commits
+linted the document without the preserved header, footer and cover-page
+lines. The other three places that lint the live document passed them. So
+on an imported master whose preserved header or footer still names another
+section number, the `stale_document_identifier` finding was missing from
+the event. This change adds no route, SSE event type, dependency or env
+knob, changes no project format, and bumps no version. **It does change the
+`lint` event's findings**: the event now carries the stale-identifier
+finding the doc payload always had.
+
+- **What the user saw.** `App.tsx` handles the event with
+  `setLintIssues(evt.items)`, so the finding vanished from the Issues drawer
+  after every doc-changing turn. The `refreshDoc()` that follows
+  `turn_complete` put it back, so it flickered, and the stream disagreed
+  with the payload right behind it. When the turn itself renumbered the
+  section, the finding did not appear until that refetch.
+- **Why it happened.** The rule arrived with the formatting-preserving
+  import (v1.14.0, PR #141), and v1.15.0 added cover-page lines to what it
+  reads. Three of the four lint callers passed those lines, each deriving
+  them itself: `app._doc_payload` and `app._readiness_payload` through
+  `app._preserved_chrome`, and `conversation._turn_context_text` through an
+  inline copy of the same gate. The post-commit event was a fourth call
+  site, and it was missed.
+- **One derivation now.** `SessionState.preserved_chrome()` sits beside
+  `import_is_unstructured()`. It returns the format map's
+  `preserved_chrome()` (header and footer lines, then front matter) when
+  the session holds both the map and the retained upload, and `()`
+  otherwise, exactly the gate both copies applied. All four callers read
+  it. `app._preserved_chrome` is gone, along with its fallback for a format
+  map without the method: every assignment of `source_format_map` is a real
+  `SourceFormatMap` (the import, project load, the tutorial's staged
+  import) or None, so the fallback could never run. The event is now built
+  with exactly the arguments `_doc_payload` passes, under the commit's own
+  guard, so it equals the payload that follows it item for item (pinned).
+- **The offline profiler keeps its mirror.** `tools/lint_block_profile.py`
+  reads a saved project file, not a live session, so it still derives the
+  lines itself, like its `import_is_unstructured` mirror. Its docstring
+  now names `SessionState.preserved_chrome` as the rule it mirrors, instead
+  of the turn-context builder's inline copy, which no longer exists.
+- **How this meets a per-version lint memo.** A separate change was
+  expected to add `SessionState.document_lint`, a lint memo per committed
+  version, keyed partly on the chrome tuple. It had not merged, and no PR
+  was open, when this landed. Whichever of the two merges second should
+  have the event pass `session.preserved_chrome()` to the memo (or have the
+  memo call it itself). The event and the payload behind it then share one
+  lint pass.
+- **Tests: `tests/test_preserved_chrome_lint.py` (4).**
+  - The method's gate: a fresh session, a map without the retained bytes,
+    and both.
+  - The event matching the next `GET /api/doc` lint item for item, on a
+    master whose footer reads 23 05 48, in two cases: the chat turn
+    renumbers the section itself, or the section was renumbered from the
+    panel and the turn changes something else.
+  - Readiness and the model's PROJECT CONTEXT reading the same chrome.
+    Nothing pinned those two before, and both moved onto the new method.
+
+  Revert matrix, each mechanism reverted in place and restored from the
+  exact text read:
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the event's chrome (the fix itself) | 2 |
+  | the method ignoring the retained-bytes gate | 1 |
+  | the method returning nothing | 6 |
+  | the turn context without chrome | 1 |
+  | readiness without chrome | 1 |
+  | the doc payload without chrome | 5 |
+
+  "The method returning nothing" also turns red the two stale-identifier
+  tests that already existed, in `test_preserving_export.py` and
+  `test_import_office_master.py`.
+- **Release note: owed, not written.** v1.21.0 is untagged, and whether it
+  is tagged at the closeout commit (`a273ab7`) or at a later `master` is
+  undecided, so its entry is left alone (the page-trim change's posture).
+  Draft line for whichever release next ships from `master`: "A section
+  number left behind in a preserved header, footer or cover page no longer
+  drops out of the issues list each time the assistant edits the document."
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

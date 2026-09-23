@@ -1665,22 +1665,6 @@ def _revision_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _preserved_chrome(session) -> tuple[str, ...]:
-    """Header/footer lines retained from an imported package.
-
-    Empty for a from-scratch document, and empty once the retained bytes are
-    gone — the lines describe a specific upload, and reporting them beside a
-    document that no longer carries it would be a warning about nothing.
-    """
-    format_map = getattr(session, "source_format_map", None)
-    if format_map is None or session.source_docx_bytes is None:
-        return ()
-    preserved = getattr(format_map, "preserved_chrome", None)
-    if callable(preserved):
-        return tuple(preserved())
-    return tuple(getattr(format_map, "header_footer_text", ()) or ())
-
-
 def _compaction_pending(session: Any) -> bool:
     """Whether a background summary is running, or finished and waiting to
     be adopted — i.e. the chat's divider may still move without a turn."""
@@ -1723,7 +1707,7 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
             session.doc.doc,
             session.module,
             unstructured_import=session.import_is_unstructured(),
-            preserved_chrome=_preserved_chrome(session),
+            preserved_chrome=session.preserved_chrome(),
         ),
         "standards": standards_payload(session),
         "profile_complete": bool(profile and profile.is_complete()),
@@ -2081,7 +2065,7 @@ def _readiness_payload(
         doc,
         session.module,
         unstructured_import=session.import_is_unstructured(),
-        preserved_chrome=_preserved_chrome(session),
+        preserved_chrome=session.preserved_chrome(),
     )
     profile = ProjectProfile.from_dict(doc.project_profile)
     profile_ok = bool(profile and profile.is_complete())

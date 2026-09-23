@@ -50,9 +50,9 @@ outgoing request against what the request really holds.
 Fetched PDFs are not touched here; ``research.resend_sanitizer.
 elide_all_pdf_sources`` already turns each one into a short note at commit.
 The callers apply the page trim only while ``settings.ELIDE_FETCHED_PAGE_
-TEXT`` is on, which it is not by default until the live canary
-(``tools/fetch_elision_canary.py``) passes on this shape; this module stays
-a leaf and reads no settings itself.
+TEXT`` is on, which it is by default since the live canary
+(``tools/fetch_elision_canary.py``) passed on this shape on 2026-09-23; this
+module stays a leaf and reads no settings itself.
 
 :func:`history_composition` says what a history is made of, by category,
 in sizes only — never text — for Developer tools, the support bundle and
@@ -501,9 +501,9 @@ def history_composition(messages: list[Any]) -> dict[str, Any]:
     what makes it a useful canary; ``tools/chat_history_profile.py`` uses it
     to show what the elision removes from files saved by earlier ones.
     ``fetched_page_texts`` counts fetched web pages that still carry their
-    text: the same canary while the page-text trim is switched on, and
-    simply the number of pages the history keeps while it is off (the
-    default until its live canary passes).
+    text: the same canary while the page-text trim is switched on (the
+    default since its live canary passed), and simply the number of pages
+    the history keeps while it is off.
     """
     tool_names: dict[str, str] = {}
     for message in messages:

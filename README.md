@@ -440,9 +440,11 @@ after which every message fails and the saved project keeps the problem.
 The plan is [`docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`](docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md):
 first stop saving data that is already stored elsewhere, then condense the
 conversation rarely between turns, with the original transcript always
-kept and recallable. Phases 1 and 2 ship in v1.21.0, with Phase 2
-switched off until its live check passes (below). Condensing the
-conversation (Phase 3) is next, so the program is still in progress.
+kept and recallable. Phases 1 and 2 ship in v1.21.0. Phase 2's trim is on
+by default since its live check passed on 2026-09-23 (below). Condensing the
+conversation (Phase 3) is on `master` too, with routine condensing off until
+its own paid check. An optional trim within a single turn (Phase 5) is still
+to come, so the program is still in progress.
 
 ### Stale outlines stay out of the conversation (Phase 1)
 
@@ -467,14 +469,14 @@ hash:
 .\.venv\Scripts\python tools\chat_history_profile.py "C:\specs\*.baspec" --out history-measurement.md
 ```
 
-### Fetched web pages stay out of the conversation (Phase 2 — ships switched off)
+### Fetched web pages stay out of the conversation (Phase 2)
 
 When the assistant reads a web page during a chat, the page's text (up to
-about 50,000 tokens a page) is saved into the conversation, so every later
-message re-sends every page the session has ever read. With this phase
-switched on, a saved turn keeps the page's address, its title and when it
-was read, plus the passages the reply quoted (written into a short note
-where the page text was), and drops the rest of the text. The reply's
+about 50,000 tokens a page) used to be saved into the conversation, so every
+later message re-sent every page the session had ever read. Now a saved
+turn keeps the page's address, its title and when it was read, plus the
+passages the reply quoted (written into a short note where the page text
+was), and drops the rest of the text. The reply's
 citations into the dropped text go too: the API checks every citation
 against the text it points into. The assistant can open the page
 again whenever it needs the exact wording, and during the turn nothing
@@ -483,34 +485,35 @@ trimmed this way and keep their own note. A project saved by an earlier
 version is trimmed the same way when it is opened (the file itself changes
 at the next save). Nothing you see in the chat changes.
 
-**v1.21.0 ships it switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`,
-default `0`), so saved conversations keep fetched page text exactly as they
-did before. A one-request live check decides whether it can be on by
-default, because a history the API refused would make every later message
-in the project fail. Its first run (2026-09-23) was refused: the earlier
+**It is on by default since its live check passed on 2026-09-23.** The
+1.21.0 closeout had set it off (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`), because
+a history the API refused would make every later message in the project
+fail, and nothing had yet shown that the API accepts a trimmed page. A
+one-request live check decides that. Its first run was refused: the earlier
 version of the trim kept the reply's citations pointing into the page, and
 the API checks a citation against the text it points into ("Start index
 2406 is beyond document length 257"). The trim was reworked to move the
-quoted passages into the note and remove those citations, and the check now
-has to pass on that shape. It costs about two cents at most, and without
-`--run` it sends nothing:
+quoted passages into the note and remove those citations, and the second
+run, on that shape, passed. The check costs about two cents at most, and
+without `--run` it sends nothing:
 
 ```
 .\.venv\Scripts\python tools\fetch_elision_canary.py --run
 ```
 
 The check turns the trim on for its own request, whatever the switch says.
-If it reports that the provider accepted the conversation, the default can
-be switched on. If it reports a refusal, run it once more with `--control`.
-That sends the same conversation with the page text kept, which tells a
-refused trim apart from a refused test conversation. To use the trim before
-then, set the variable to `1`. Either way, **History makeup** and the
-offline profiler count the fetched pages that still carry their text.
+If it ever reports a refusal, set the variable to `0` and run the check once
+more with `--control`. That sends the same conversation with the page text
+kept, which tells a refused trim apart from a refused test conversation.
+`0` keeps fetched page text in saved conversations exactly as earlier
+versions did. Either way, **History makeup** and the offline profiler count
+the fetched pages that still carry their text, which is none while the trim
+is on.
 
 ### A long conversation is condensed, never deleted (Phase 3)
 
-With the stale outlines gone (and fetched page text too, once its switch is
-on — see above), what is left is mostly conversation — and a long enough one
+With the stale outlines and the text of fetched pages gone (see above),
+what is left is mostly conversation — and a long enough one
 still grows past what the model can take in at once. Now its
 oldest turns can be **condensed**: the model writes a summary of them, kept
 close to your own words (decisions and why, options ruled out and why, exact
@@ -2160,7 +2163,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_SDK_MAX_RETRIES` | `2` | The Anthropic SDK's own request retries (429 / 5xx / connection errors, honoring `retry-after`) — the SDK's default, made explicit. Research and Final QC add their own 3-attempt policy on top, so one fan-out call is bounded by 3 × (1 + this) requests; the SDK's share is the one that behaves under rate limiting, so leave it unless real run telemetry says otherwise. Floor 0. |
 | `BUILD_A_SPEC_API_TIMEOUT_SECONDS` | `600` | Per-request read/write timeout for every model call (a streaming reply counts between chunks). The connect timeout stays the SDK's 5 s regardless. Floor 30. |
 | `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |
-| `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `0` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn then keeps each page's address and title, with the passages the reply quoted written into a note where the text was, and an older project is trimmed the same way when opened. **Off by default** until its live check (`tools\fetch_elision_canary.py --run`) passes. The check's first run was refused on an earlier version of the trim that kept citations into the dropped text; the trim now removes those citations, and a refused history would fail every later message in the affected project. `1` turns it on. |
+| `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `1` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn keeps each page's address and title, with the passages the reply quoted written into a note where the text was, and an older project is trimmed the same way when opened. **On by default** since its live check (`tools\fetch_elision_canary.py --run`) passed on 2026-09-23. The check's first run was refused on an earlier version of the trim that kept citations into the dropped text; the trim now removes those citations. `0` keeps page text in saved history, as earlier versions did. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
@@ -2238,10 +2241,10 @@ Without `--run`, the command only reports whether a key is configured.
 
 The second paid check, also opt-in and also a single low-token request,
 confirms the provider accepts a saved chat history whose fetched page text
-was trimmed while a reply still cites it (see "Fetched web pages stay out of
-the conversation" above; `--control` sends the untrimmed conversation when a
-refusal needs diagnosing). Until it passes, that trim ships switched off
-(`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
+was trimmed to a note carrying the passage a reply quoted (see "Fetched web
+pages stay out of the conversation" above; `--control` sends the untrimmed
+conversation when a refusal needs diagnosing). It passed on 2026-09-23, so
+that trim is on by default (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
 
 ```
 .\.venv\Scripts\python tools\fetch_elision_canary.py --run

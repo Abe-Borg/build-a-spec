@@ -113,8 +113,8 @@ see Phase 5.
 |---|---|---|---|---|
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
-| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, in review) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. Stays **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`) until the canary passes on the new shape — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, in review) | both halves; routine condensing off by default until the recall check, backstop always on. A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
+| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, merged `7e32d14`); default on (PR #194, in review) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. The second run (2026-09-23) **passed** on that shape, so the trim is **on by default** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0` turns it off) — see Phase 2 → Canary result |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, merged `7e32d14`) | both halves; routine condensing off by default until the recall check, backstop always on. A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
@@ -122,24 +122,27 @@ A status moves to **complete** only after the PR merges, set by the next
 session that touches this file (the project-workspace convention).
 
 **Where it stands (2026-09-23; recorded at the 1.21.0 closeout, updated
-when PR #189 merged and the Phase 2 canary's first run came back
-refused).** Phases 1–3 are on `master`. 1.21.0 was prepared to carry
+when PR #189 merged, when the Phase 2 canary's first run came back
+refused, and when its second run passed).** Phases 1–3 are on `master`. 1.21.0 was prepared to carry
 Phases 1 and 2 (the project-workspace closeout,
 `project-workspace/07_RELEASE_CLOSEOUT.md`), but it is not tagged. The owner decided D1–D4 on
 2026-09-22 (see the Decisions table). No real measurements have been
 supplied yet, so the numbers under "What actually fills the history" are
 still the synthetic ones.
 
-- **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, and
-  ships **switched off**: `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` (default `0`)
+- **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, so
+  the 1.21.0 closeout switched it off: `BUILD_A_SPEC_ELIDE_FETCHED_PAGES`
   gates both the commit-time and the load-time elision. The owner ran the
   canary on 2026-09-23 and it was **refused**: the API checks a saved
   citation against the document it lands on, and the trim had left the
   reply's citation pointing past the end of its note (see Phase 2 → Canary
-  result). The rework (PR #192) folds each quoted passage into the page's
-  note and removes the citations into the trimmed text. The trim stays off
-  until the canary passes on that shape; then turning it on is a one-line
-  change plus the Phase 2 release note.
+  result). The rework (PR #192, merged `7e32d14`) folds each quoted passage
+  into the page's note and removes the citations into the trimmed text.
+  The owner's second run, the same day, **passed** on that shape, so the
+  trim is **on by default** on `master` (PR #194); `=0` turns it off.
+  1.21.0's release notes were written while it was off, so the next release
+  cut from `master` owes Phase 2's release-note draft (below), beside
+  Phase 3's.
 - **Phase 3** merged in PR #189 (`971683f`) — before v1.21.0 was tagged, so
   `master` carries it although 1.21.0's release notes do not mention it. No
   release is planned for now (owner, 2026-09-23); whichever release next
@@ -261,7 +264,8 @@ for PDFs and no failure has been reported, but whether the API validates a
 historical citation against its (now replaced) document is not documented.
 One opt-in request settles it: a history holding an elided fetched page
 plus a citation into it, sent once. **Settled 2026-09-23: the API checks,
-and refused it** (see Canary result). Follow the `tools/qc_verifier_canary.py`
+and refused it; the reworked shape, with no citation into the trimmed text,
+passed the same day** (see Canary result). Follow the `tools/qc_verifier_canary.py`
 pattern (no request without `--run`) and record the result here; CLAUDE.md
 names that canary as the sole paid exception, so adding a second one means
 updating that ground rule in the same change.
@@ -338,30 +342,42 @@ updating that ground rule in the same change.
   trimmed text; the canary sends that shape, and refuses to send the old
   one. Every chat request also goes through the citation repair (Phase 3 →
   As built), which drops a citation that no longer fits its document on the
-  way out. **Run 2 is owed**, with the same command:
-  `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one request,
-  about two cents at most). It forces the trim on for its own request
-  whatever the switch below says, so it tests the shape the switch would
-  turn on.
-- **What that decided:** 1.21.0 ships the trim **switched off**
-  (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`), so no saved history
-  takes the unverified shape. With the switch off, commit and project load
-  keep fetched page text exactly as they did before this phase. Phase 1's
-  outline trim is unaffected, and Developer tools and the offline profiler
-  still count the fetched pages that keep their text.
-- **When it passes:** paste its output here. Then flip the default in
-  `backend/settings.py` (`test_the_page_text_trim_ships_switched_off`
-  pins it and will need its expectation changed with it), add the
-  Release-note draft below to the next release, and update README.md's
-  Configuration row and "Fetched web pages" subsection.
-- **If run 2 is refused:** run it again with `--control`, record both
-  outputs here, and rework the elision again before the default changes.
-  (Run 1's refusal took the option this bullet used to name: drop the
-  citations that point into a trimmed page, keeping their quoted passages
-  in the note.)
+  way out. The canary forces the trim on for its own request whatever the
+  switch says, so it tests the shape the switch turns on.
+- **What run 1 decided:** the trim stayed **switched off**
+  (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`, as the 1.21.0 closeout
+  had set it) until a run passed on the new shape, so no saved history took
+  an unverified shape. With the switch off, commit and project load keep
+  fetched page text exactly as they did before this phase.
+- **Run 2 — passed** (the owner's run, 2026-09-23, on the shape PR #192
+  ships: the quoted passage in the page's note, and no citation into the
+  trimmed text). Output, verbatim:
 
-**Release-note draft** (NOT in 1.21.0, which ships the trim switched
-off; it goes into the release that turns the trim on by default):
+  ```
+  Configured API key: yes (source: keyring).
+  Sending one request to claude-sonnet-5: elided page; the saved page is 292 of 2,489 characters, and the reply's citation into characters 2406-2455 of the original was replaced by that passage, kept in the page's note.
+  Fetch elision canary passed: the provider accepted a saved conversation whose fetched page text was replaced by a note carrying the passage its reply quoted (stop_reason=end_turn). Record this in the plan's Phase 2 section; the page-text trim's default can then be switched on.
+  ```
+
+  The 292 characters are the 201-character note plus the passage the reply
+  quoted, which is what the same request rebuilt offline produces.
+- **What run 2 decided: the trim is on by default** (PR #194).
+  `settings.ELIDE_FETCHED_PAGE_TEXT` defaults to `True`;
+  `BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0` keeps page text, exactly as before
+  this phase. `test_the_page_text_trim_ships_switched_on` pins the default,
+  README's Configuration row and "Fetched web pages" subsection say so, and
+  the Release-note draft below is owed to the next release cut from
+  `master`.
+- **If a later run is ever refused:** set
+  `BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0`, run it again with `--control`,
+  record both outputs here, and rework the elision before the default goes
+  back on. (Run 1's refusal took the option this bullet used to name: drop
+  the citations that point into a trimmed page, keeping their quoted
+  passages in the note.)
+
+**Release-note draft** (not in 1.21.0's release notes, which were written
+while the trim was off. It is owed to the next release cut from `master`,
+where the trim is on by default since run 2 passed):
 
 > **Web pages the assistant reads stop riding along.** When the assistant
 > read a web page during a chat, the page's full text was saved into the
@@ -720,8 +736,8 @@ closeout writes the real entry from the drafts. v1.20.0 was published
 step 3 names this file so the drafts are collected.
 
 **1.21.0 (2026-09-23)** is that release. It carries Phase 1 and
-Phase 2, and its entry uses Phase 1's draft. Phase 2's draft waits: the
-trim ships switched off until its canary passes, and a release note
+Phase 2, and its entry uses Phase 1's draft. Phase 2's draft waited: the
+trim shipped switched off until its canary passed, and a release note
 describing a change nobody receives would be false.
 
 Phase 3 (PR #189) is not part of 1.21.0's notes, and it merged on
@@ -730,3 +746,8 @@ planned for now (owner, 2026-09-23). Whichever release next ships from
 `master` — 1.21.0 tagged at a later commit, or a later version — must carry
 Phase 3's release-note draft. The citation repair (PR #192) is part of
 Phase 3's behaviour before any release, so it needs no note of its own.
+
+The canary passed on its second run the same day, and PR #194 turned the
+trim on by default on `master`. So that same release must carry Phase 2's
+draft too. A 1.21.0 tagged at the closeout commit (`a273ab7`) still ships
+the trim off, and its notes stay as they are.

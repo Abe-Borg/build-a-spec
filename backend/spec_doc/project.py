@@ -590,8 +590,8 @@ def load_project(data: Any, session) -> None:
     # page it ever fetched and re-sends all of them on every turn. The URL,
     # title and retrieval time stay, so the model can fetch a page again.
     # Same copy-on-write posture, same channel. The switch
-    # (settings.ELIDE_FETCHED_PAGE_TEXT) is off by default until the trim's
-    # live canary passes; with it off, a loaded history keeps its pages,
+    # (settings.ELIDE_FETCHED_PAGE_TEXT) is on by default since the trim's
+    # live canary passed; with it off, a loaded history keeps its pages,
     # exactly as commit does.
     if settings.ELIDE_FETCHED_PAGE_TEXT:
         without_pages = elide_fetched_page_text(history)

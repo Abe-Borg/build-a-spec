@@ -25,8 +25,8 @@ opened 2026-09-22. Keep the chat history the model re-reads every turn
 bounded without losing what only the conversation holds: stop saving data
 stored elsewhere (Phase 1, stale edit outlines — complete, PR #182; Phase 2,
 fetched page text — merged in PR #183 and switched off; its live canary's
-first run on 2026-09-23 was refused, and the trim was reworked in PR
-#192, so it stays off until the canary passes on the new shape), then
+first run on 2026-09-23 was refused, the trim was reworked in PR #192, and
+the second run passed the same day, so PR #194 turns it on by default), then
 condense the conversation rarely between turns with the full transcript kept
 and recallable (Phase 3 — complete, PR #189; decisions D1–D4 made
 2026-09-22; routine condensing stays off by default until a paid recall

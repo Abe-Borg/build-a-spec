@@ -95,6 +95,11 @@ As built, 2026-09-23 (v1.21.0):
    forces the trim on for its own request. The code, tests and canary all
    stay on `master`. The compaction plan's Phase 2 → Canary result says
    what turns it on. Its release-note draft is withheld from this entry.
+   Later the same day the canary passed on its second run, on the shape
+   PR #192 reworked it to, and PR #194 turned the trim on by default on
+   `master`. A 1.21.0 tagged at this closeout's commit still ships it off;
+   one cut from `master` carries it on and owes Phase 2's release-note
+   draft.
 2. **Phase 5 Part B and Phase 6 are left out** (step 1). Part B waits on
    the owner's gate measurement (a real 21 30 00 sitting seeded from a
    researched 21 13 13), and Phase 6 is deferred by D5. Neither was

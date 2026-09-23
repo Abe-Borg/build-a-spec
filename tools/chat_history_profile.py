@@ -8,7 +8,7 @@ For each project file it reports the saved conversation by category —
 the history every chat turn re-sends — and how much of it this build's
 saved-history trims remove: stale document outlines (Phase 1) and, while
 ``BUILD_A_SPEC_ELIDE_FETCHED_PAGES`` is on, the text of fetched web pages
-(Phase 2 — off by default until its live canary passes). Each runs at
+(Phase 2 — on by default since its live canary passed). Each runs at
 commit and again when an older file is opened. It also shows how much web
 research the history still keeps once they have run.
 

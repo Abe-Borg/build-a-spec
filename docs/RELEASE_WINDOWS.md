@@ -603,7 +603,7 @@ section →) is under v1.20.0 above.
       `docs/plans/project-workspace/05_RELEVANCE_TRIM.md` (the gate), not
       here — it is not a release check.
 
-### Chat history compaction (v1.21.0; Phases 1–2, Phase 2 switched off)
+### Chat history compaction (Phases 1–2; the page-text trim on by default)
 
 - [ ] **Stale outlines leave the saved conversation** (Phase 1). In a
       section of a few articles, press *Draft full section*, then send one
@@ -611,30 +611,33 @@ section →) is under v1.20.0 above.
       makeup** mentions no stale outlines. Save, copy the `.baspec` to a
       `.zip` and open its `project.json`: each edit result says its outline
       was omitted instead of repeating the document.
-- [ ] **With the default, a fetched page stays in the saved conversation.**
-      1.21.0 ships the page-text trim switched off. Ask the assistant to read
-      a public web page and quote something from it. After the reply,
-      **History makeup** reports the page ("1 fetched pages carrying their
-      text"), and the saved `project.json` still holds the page's text.
-- [ ] **The fetch elision canary passes** before any release that switches
-      the page-text trim on by default (not a 1.21.0 check):
+- [ ] **The fetch elision canary passes**:
       `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
       request, about two cents at most). It sends a saved conversation whose
       fetched page text was trimmed to a note that carries the passage the
       reply quoted, with the reply's citation into the old text removed,
       and must report that the provider accepted it. Its first run
       (2026-09-23) was refused on the older shape, which kept that
-      citation. If it reports a refusal, keep the default off; run it
-      again with `--control` and record both outputs in the compaction
+      citation; its second run, the same day, passed on this one, and the
+      page-text trim has been on by default since. If it reports a refusal,
+      switch the trim off (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0`), run it
+      again with `--control`, and record both outputs in the compaction
       plan's Phase 2 section.
-- [ ] **With the trim switched on, a fetched page leaves the saved
-      conversation.** Launch with `BUILD_A_SPEC_ELIDE_FETCHED_PAGES=1` and
-      repeat the web-page check. **History makeup** no longer mentions
+- [ ] **With the default, a fetched page leaves the saved conversation.**
+      Ask the assistant to read a public web page and quote something from
+      it, then send one more message. **History makeup** does not mention
       fetched pages carrying their text, and the next message still gets an
-      answer (the assistant may read the page again). In `project.json` the
-      page's address and title are there and its body text is not. The
-      quoted passage is still there, inside the page's note, and the reply
-      no longer carries a citation into the removed text.
+      answer (the assistant may read the page again). Save, copy the
+      `.baspec` to a `.zip` and open its `project.json`: the page's address
+      and title are there and its body text is not. The quoted passage is
+      still there, inside the page's note, and the reply no longer carries
+      a citation into the removed text.
+- [ ] **With the trim switched off, a fetched page stays in the saved
+      conversation.** Launch with `BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0`
+      (PowerShell: `$env:BUILD_A_SPEC_ELIDE_FETCHED_PAGES = "0"`) and repeat
+      the web-page check. After the reply, **History makeup** reports the
+      page ("1 fetched pages carrying their text"), and the saved
+      `project.json` still holds the page's text.
 
 ### Chat history compaction (Phase 3)
 
@@ -667,12 +670,16 @@ the shell you launch the app from, and clear them when done.
       from the panel: the divider goes with it at once (**View summary** is
       gone rather than failing).
 - [ ] **Condensing after web lookups.** With the same three knobs set,
-      ask the assistant to read a public web page and quote it; in a later
-      turn, ask it to read a second page and quote that. Keep chatting
-      until the divider moves past the first page's turn. The next message
-      still gets an answer. Before the citation repair, a condensed
-      conversation whose early turns read pages could be refused from
-      then on, because its later citations pointed at the wrong page.
+      and the page-text trim switched off
+      (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0`, so the saved replies keep
+      their citations into the pages), ask the assistant to read a public
+      web page and quote it; in a later turn, ask it to read a second page
+      and quote that. Keep chatting until the divider moves past the first
+      page's turn. The next message still gets an answer. Before the
+      citation repair, a condensed conversation whose early turns read
+      pages could be refused from then on, because its later citations
+      pointed at the wrong page. With the trim on (the default), the saved
+      replies carry no citations into the pages, so this row needs it off.
 - [ ] **The backstop.** Clear the three knobs and launch with
       `BUILD_A_SPEC_CONTEXT_WINDOW=60000`. Keep chatting: once a message
       would not fit, the status line reads *Condensing earlier

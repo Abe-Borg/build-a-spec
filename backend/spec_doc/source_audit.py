@@ -9,6 +9,7 @@ members are never materialized in memory.
 from __future__ import annotations
 
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from io import BytesIO
 from typing import BinaryIO
@@ -117,6 +118,20 @@ def _document_entry(
     return matches[0]
 
 
+def _expect_part(
+    output: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    payload: bytes,
+    chunk_size: int,
+) -> None:
+    with output.open(info, "r") as member:
+        if not streams_equal(BytesIO(payload), member, chunk_size=chunk_size):
+            raise SourceAuditError(
+                "unexpected_part",
+                f"part {info.filename!r} does not hold its approved content",
+            )
+
+
 def audit_package_preservation_streaming(
     source_bytes: bytes,
     output_bytes: bytes,
@@ -124,6 +139,7 @@ def audit_package_preservation_streaming(
     expected_document_xml: bytes,
     document_part: str = DEFAULT_DOCUMENT_PART,
     chunk_size: int = DEFAULT_AUDIT_CHUNK_BYTES,
+    expected_parts: Mapping[str, bytes] | None = None,
 ) -> None:
     """Audit decompressed package preservation without materializing members.
 
@@ -132,6 +148,13 @@ def audit_package_preservation_streaming(
     :func:`streams_equal`.  The output document part is compared directly to
     the approved XML bytes.  Callers remain responsible for validating the
     source package and for the separate raw-record fidelity audit.
+
+    ``expected_parts`` (Redline on your original, Phase 3) names the other
+    members the caller rewrote or added, each with its approved bytes: one
+    the source holds must hold exactly those bytes instead, and one it does
+    not is expected after every source member, in the mapping's order. It is
+    the ONLY way a member other than ``document_part`` may differ, so the
+    default (none) is the historical contract exactly.
     """
     if not isinstance(source_bytes, bytes):
         raise TypeError("source_bytes must be bytes")
@@ -142,6 +165,12 @@ def audit_package_preservation_streaming(
     if not isinstance(document_part, str) or not document_part:
         raise ValueError("document_part must be a non-empty string")
     chunk_size = _validated_chunk_size(chunk_size)
+    expected_parts = dict(expected_parts or {})
+    for name, payload in expected_parts.items():
+        if not isinstance(name, str) or not name or name == document_part:
+            raise ValueError("expected_parts names other package members")
+        if not isinstance(payload, bytes):
+            raise TypeError("expected part payloads must be bytes")
 
     try:
         with zipfile.ZipFile(BytesIO(source_bytes), "r") as source, zipfile.ZipFile(
@@ -151,7 +180,8 @@ def audit_package_preservation_streaming(
             output_inventory = _ordered_inventory(output)
             source_names = tuple(info.filename for info in source_inventory)
             output_names = tuple(info.filename for info in output_inventory)
-            if source_names != output_names:
+            added = tuple(name for name in expected_parts if name not in source_names)
+            if source_names + added != output_names:
                 raise SourceAuditError(
                     "part_inventory_changed",
                     "the patched package member inventory changed",
@@ -168,6 +198,14 @@ def audit_package_preservation_streaming(
             ):
                 if source_info.filename == document_part:
                     continue
+                if source_info.filename in expected_parts:
+                    _expect_part(
+                        output,
+                        output_info,
+                        expected_parts[source_info.filename],
+                        chunk_size,
+                    )
+                    continue
                 with source.open(source_info, "r") as source_member, output.open(
                     output_info, "r"
                 ) as output_member:
@@ -180,6 +218,14 @@ def audit_package_preservation_streaming(
                             "out_of_scope_part_changed",
                             f"out-of-scope part {source_info.filename!r} changed",
                         )
+
+            for output_info in output_inventory[len(source_inventory) :]:
+                _expect_part(
+                    output,
+                    output_info,
+                    expected_parts[output_info.filename],
+                    chunk_size,
+                )
 
             with output.open(output_document, "r") as output_member:
                 if not streams_equal(

@@ -2,10 +2,17 @@
 
 The ordinary :mod:`zipfile` writer recompresses every member and rebuilds the
 whole archive.  This module instead indexes the immutable source bytes,
-copies every unchanged local record verbatim, and rebuilds only one supported
-member plus central-directory offsets.  Ambiguous or advanced ZIP layouts are
-runtime mutation blockers; callers must still retain and return the exact
-original bytes for no-op export.
+copies every unchanged local record verbatim, and rebuilds only the members a
+caller names plus central-directory offsets.  Ambiguous or advanced ZIP
+layouts are runtime mutation blockers; callers must still retain and return
+the exact original bytes for no-op export.
+
+:func:`rewrite_raw_zip_members` is the general form: it replaces any number
+of supported members and APPENDS new ones (Redline on your original, Phase 3
+— the comments part and its relationships). Every unchanged local record is
+still copied verbatim and every rebuilt archive is re-parsed and audited
+against its source before it is returned. :func:`replace_raw_zip_member` is
+its one-member special case, byte for byte what it always produced.
 """
 from __future__ import annotations
 
@@ -15,6 +22,7 @@ import struct
 import unicodedata
 import zipfile
 import zlib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
 
@@ -673,9 +681,13 @@ def _cross_check_zipfile(
 def parse_raw_zip_archive(
     data: bytes,
     *,
-    mutable_member: str = _DOCUMENT_PART,
+    mutable_member: str | None = _DOCUMENT_PART,
 ) -> RawZipArchive:
-    """Return a strict immutable index for a raw-preserving mutation."""
+    """Return a strict immutable index for a raw-preserving mutation.
+
+    ``mutable_member`` is validated as mutable (supported compression and
+    flags); ``None`` skips that check, for callers that validate several
+    members themselves."""
     if not isinstance(data, bytes):
         raise TypeError("data must be bytes")
     try:
@@ -769,7 +781,8 @@ def parse_raw_zip_archive(
         archive_comment=comment,
         trailing_bytes=trailing,
     )
-    _validate_mutable_member(result, mutable_member)
+    if mutable_member is not None:
+        _validate_mutable_member(result, mutable_member)
     return result
 
 
@@ -798,7 +811,7 @@ def _validate_mutable_member(
 def _source_archive_for_mutation(
     source_bytes: bytes,
     *,
-    mutable_member: str,
+    mutable_members: tuple[str, ...],
     source_archive: RawZipArchive | None,
 ) -> RawZipArchive:
     """Resolve and bind an optional immutable source index without reparsing.
@@ -806,15 +819,19 @@ def _source_archive_for_mutation(
     ``RawZipArchive`` instances retain the exact bytes from which every span
     was derived.  Exact byte equality therefore prevents a stale index from
     being paired with a different package, while the member-specific check
-    below preserves the same narrow compression/flag policy as a fresh parse.
+    below preserves the same narrow compression/flag policy as a fresh parse
+    — for every member the caller means to replace.
     """
     if not isinstance(source_bytes, bytes):
         raise TypeError("source_bytes must be bytes")
     if source_archive is None:
-        return parse_raw_zip_archive(
+        archive = parse_raw_zip_archive(
             source_bytes,
-            mutable_member=mutable_member,
+            mutable_member=mutable_members[0] if mutable_members else None,
         )
+        for member in mutable_members[1:]:
+            _validate_mutable_member(archive, member)
+        return archive
     if not isinstance(source_archive, RawZipArchive):
         raise TypeError("source_archive must be a RawZipArchive or None")
     if (
@@ -824,7 +841,8 @@ def _source_archive_for_mutation(
         raise _unsupported(
             "the cached raw ZIP archive does not match the source bytes"
         )
-    _validate_mutable_member(source_archive, mutable_member)
+    for member in mutable_members:
+        _validate_mutable_member(source_archive, member)
     return source_archive
 
 
@@ -934,20 +952,39 @@ def _audit_raw_rebuild(
     source: RawZipArchive,
     output_bytes: bytes,
     *,
-    mutable_member: str,
-    expected_payload: bytes,
+    replacements: Mapping[str, bytes],
+    additions: Sequence[tuple[str, bytes]] = (),
 ) -> None:
-    output = parse_raw_zip_archive(output_bytes, mutable_member=mutable_member)
+    """Prove ``output_bytes`` is ``source`` with exactly ``replacements``
+    rebuilt and ``additions`` appended — nothing else moved.
+
+    Every unchanged local record, every inter-member gap, the preamble, the
+    archive comment and the trailing bytes must be byte-identical; a
+    replaced member keeps its header shape and every central-directory field
+    but its sizes, CRC and offset; an appended member is a plain deflated
+    record placed after every source record, listed last in the central
+    directory; and each rebuilt or appended member must decompress to
+    exactly its expected payload.
+    """
+    replaced = tuple(replacements)
+    added_names = tuple(name for name, _payload in additions)
+    output = parse_raw_zip_archive(
+        output_bytes, mutable_member=replaced[0] if replaced else None
+    )
+    source_count = len(source.entries)
+    eocd_mask = ((8, 12), (12, 20)) if additions else ((12, 20),)
     if (
         [entry.filename for entry in output.entries]
-        != [entry.filename for entry in source.entries]
-        or output.local_order != source.local_order
+        != [entry.filename for entry in source.entries] + list(added_names)
+        or output.local_order
+        != source.local_order
+        + tuple(range(source_count, source_count + len(added_names)))
         or output.preamble != source.preamble
         or output.archive_comment != source.archive_comment
         or output.trailing_bytes != source.trailing_bytes
         or output.offset_base != source.offset_base
-        or _masked_record(output.eocd, ((12, 20),))
-        != _masked_record(source.eocd, ((12, 20),))
+        or _masked_record(output.eocd, eocd_mask)
+        != _masked_record(source.eocd, eocd_mask)
     ):
         raise _unsupported("the rebuilt ZIP archive layout changed unexpectedly")
 
@@ -961,7 +998,7 @@ def _audit_raw_rebuild(
             after.gap_after_span,
         ):
             raise _unsupported("an inter-member ZIP gap changed")
-        if before.filename != mutable_member:
+        if before.filename not in replacements:
             if not _byte_spans_equal(
                 source.source_bytes,
                 before.local_record_span,
@@ -991,15 +1028,225 @@ def _audit_raw_rebuild(
             after.central_record, central_mask
         ):
             raise _unsupported("ZIP central-directory metadata changed unexpectedly")
+    for name in added_names:
+        after = output_by_name[name]
+        if (
+            after.compression_method != zipfile.ZIP_DEFLATED
+            or after.flags != 0
+            or after.descriptor_span is not None
+            or after.gap_after_span.start != after.gap_after_span.end
+            or after.version_needed != 20
+        ):
+            raise _unsupported("an appended ZIP member has an unexpected shape")
+    expected = dict(replacements)
+    expected.update(additions)
     try:
         with zipfile.ZipFile(BytesIO(output_bytes), "r") as archive:
-            with archive.open(mutable_member, "r") as member:
-                if not _stream_matches_bytes(member, expected_payload):
-                    raise _unsupported(
-                        "the rebuilt ZIP member payload is incorrect"
-                    )
+            for name, payload in expected.items():
+                with archive.open(name, "r") as member:
+                    if not _stream_matches_bytes(member, payload):
+                        raise _unsupported(
+                            "the rebuilt ZIP member payload is incorrect"
+                        )
     except (KeyError, RuntimeError, zipfile.BadZipFile, NotImplementedError) as exc:
         raise _unsupported("the rebuilt ZIP archive failed validation") from exc
+
+
+def _validate_additions(
+    source: RawZipArchive,
+    replacements: Mapping[str, bytes],
+    additions: Sequence[tuple[str, bytes]],
+) -> None:
+    """New member names must be plain, safe, and collide with nothing."""
+    taken = {_safe_member_key(entry.filename) for entry in source.entries}
+    for name in replacements:
+        if not isinstance(name, str):
+            raise TypeError("member names must be strings")
+    for name, payload in additions:
+        if not isinstance(name, str) or not isinstance(payload, bytes):
+            raise TypeError("an appended member is a (name, bytes) pair")
+        if not name.isascii() or not name.isprintable() or name.endswith("/"):
+            # ASCII only: an appended record carries no UTF-8 name flag, so
+            # its name must read the same as cp437 and as UTF-8.
+            raise _unsupported("an appended ZIP member has an unsupported name")
+        key = _safe_member_key(name)
+        if key in taken:
+            raise _unsupported(
+                f"an appended ZIP member {name!r} collides with an existing one"
+            )
+        taken.add(key)
+
+
+def _appended_template(source: RawZipArchive) -> tuple[int, int, int, int, int]:
+    """``(version_made, time, date, internal_attr, external_attr)`` for an
+    appended record, borrowed from the package's own document part (else its
+    first member) so the new member reads as written with the rest."""
+    template = next(
+        (entry for entry in source.entries if entry.filename == _DOCUMENT_PART),
+        source.entries[0] if source.entries else None,
+    )
+    if template is None:
+        return 20, 0, (1 << 5) | 1, 0, 0
+    fields = _CENTRAL_HEADER.unpack_from(template.central_record)
+    version_made = fields[1]
+    made = (version_made & 0xFF00) | max(version_made & 0xFF, 20)
+    return made, fields[5], fields[6], fields[14], fields[15]
+
+
+def rewrite_raw_zip_members(
+    source_bytes: bytes,
+    *,
+    replacements: Mapping[str, bytes],
+    additions: Sequence[tuple[str, bytes]] = (),
+    source_archive: RawZipArchive | None = None,
+) -> bytes:
+    """Replace supported members and append new ones, preserving every other
+    raw record.
+
+    ``replacements`` maps an existing member's name to its new payload; each
+    must pass the same compression/flag policy a single replacement always
+    has. ``additions`` are ``(name, payload)`` pairs, appended in order after
+    every source record — plain deflated records, ASCII names, colliding with
+    nothing already in the package. The rebuilt archive is audited against
+    its source before it is returned (:func:`audit_raw_zip_rewrite`).
+    """
+    if not isinstance(replacements, Mapping):
+        raise TypeError("replacements must be a mapping of name to bytes")
+    for payload in replacements.values():
+        if not isinstance(payload, bytes):
+            raise TypeError("payload must be bytes")
+    additions = tuple(additions)
+    if not replacements and not additions:
+        raise ValueError("nothing to rewrite")
+    source = _source_archive_for_mutation(
+        source_bytes,
+        mutable_members=tuple(replacements),
+        source_archive=source_archive,
+    )
+    _validate_additions(source, replacements, additions)
+    rebuilt: dict[str, tuple[bytes, int, int]] = {}
+    for name, payload in replacements.items():
+        rebuilt[name] = _rebuilt_local_record(
+            source_bytes, source.entry(name), payload
+        )
+
+    output = bytearray(source.preamble)
+    new_offsets: dict[int, int] = {}
+    for central_index in source.local_order:
+        entry = source.entries[central_index]
+        new_offsets[central_index] = len(output)
+        if entry.filename in rebuilt:
+            output.extend(rebuilt[entry.filename][0])
+        else:
+            output.extend(
+                source_bytes[entry.local_record_span.start : entry.local_record_span.end]
+            )
+        output.extend(
+            source_bytes[entry.gap_after_span.start : entry.gap_after_span.end]
+        )
+
+    version_made, mod_time, mod_date, internal_attr, external_attr = (
+        _appended_template(source)
+    )
+    appended_central: list[bytes] = []
+    for name, payload in additions:
+        raw_name = name.encode("ascii")
+        compressor = zlib.compressobj(
+            zlib.Z_DEFAULT_COMPRESSION, zlib.DEFLATED, -15
+        )
+        compressed = compressor.compress(payload) + compressor.flush()
+        crc32 = binascii.crc32(payload) & 0xFFFFFFFF
+        if len(payload) >= _ZIP64_U32 or len(compressed) >= _ZIP64_U32:
+            raise _unsupported("an appended member would require ZIP64 sizes")
+        relative_offset = len(output) - source.offset_base
+        if not 0 <= relative_offset <= _ZIP64_U32 - 1:
+            raise _unsupported("the rebuilt ZIP offsets would require ZIP64")
+        output.extend(
+            _LOCAL_HEADER.pack(
+                _LOCAL_SIGNATURE,
+                20,
+                0,
+                zipfile.ZIP_DEFLATED,
+                mod_time,
+                mod_date,
+                crc32,
+                len(compressed),
+                len(payload),
+                len(raw_name),
+                0,
+            )
+        )
+        output.extend(raw_name)
+        output.extend(compressed)
+        appended_central.append(
+            _CENTRAL_HEADER.pack(
+                _CENTRAL_SIGNATURE,
+                version_made,
+                20,
+                0,
+                zipfile.ZIP_DEFLATED,
+                mod_time,
+                mod_date,
+                crc32,
+                len(compressed),
+                len(payload),
+                len(raw_name),
+                0,
+                0,
+                0,
+                internal_attr,
+                external_attr,
+                relative_offset,
+            )
+            + raw_name
+        )
+
+    central_start = len(output)
+    for entry in source.entries:
+        record = bytearray(entry.central_record)
+        relative_offset = new_offsets[entry.central_index] - source.offset_base
+        if not 0 <= relative_offset <= _ZIP64_U32 - 1:
+            raise _unsupported("the rebuilt ZIP offsets would require ZIP64")
+        struct.pack_into("<I", record, 42, relative_offset)
+        if entry.filename in rebuilt:
+            _record, crc32, compressed_size = rebuilt[entry.filename]
+            struct.pack_into(
+                "<3I",
+                record,
+                16,
+                crc32,
+                compressed_size,
+                len(replacements[entry.filename]),
+            )
+        output.extend(record)
+    for record in appended_central:
+        output.extend(record)
+    central_size = len(output) - central_start
+    stored_central_offset = central_start - source.offset_base
+    if (
+        central_size > _ZIP64_U32 - 1
+        or not 0 <= stored_central_offset <= _ZIP64_U32 - 1
+    ):
+        raise _unsupported("the rebuilt central directory would require ZIP64")
+
+    eocd = bytearray(source.eocd)
+    if additions:
+        total = len(source.entries) + len(additions)
+        if total >= _ZIP64_U16:
+            raise _unsupported("the rebuilt archive would require ZIP64 counts")
+        struct.pack_into("<HH", eocd, 8, total, total)
+    struct.pack_into("<II", eocd, 12, central_size, stored_central_offset)
+    output.extend(eocd)
+    output.extend(source.archive_comment)
+    output.extend(source.trailing_bytes)
+    result = bytes(output)
+    _audit_raw_rebuild(
+        source,
+        result,
+        replacements=replacements,
+        additions=additions,
+    )
+    return result
 
 
 def replace_raw_zip_member(
@@ -1012,69 +1259,33 @@ def replace_raw_zip_member(
     """Replace one supported member while preserving every other raw record."""
     if not isinstance(payload, bytes):
         raise TypeError("payload must be bytes")
-    source = _source_archive_for_mutation(
+    return rewrite_raw_zip_members(
         source_bytes,
-        mutable_member=filename,
+        replacements={filename: payload},
         source_archive=source_archive,
     )
-    target = source.entry(filename)
-    rebuilt_target, target_crc, target_compressed_size = _rebuilt_local_record(
-        source_bytes, target, payload
+
+
+def audit_raw_zip_rewrite(
+    source_bytes: bytes,
+    output_bytes: bytes,
+    *,
+    replacements: Mapping[str, bytes],
+    additions: Sequence[tuple[str, bytes]] = (),
+    source_archive: RawZipArchive | None = None,
+) -> None:
+    """Independently prove the named members are the only raw ZIP change."""
+    source = _source_archive_for_mutation(
+        source_bytes,
+        mutable_members=tuple(replacements),
+        source_archive=source_archive,
     )
-
-    output = bytearray(source.preamble)
-    new_offsets: dict[int, int] = {}
-    for central_index in source.local_order:
-        entry = source.entries[central_index]
-        new_offsets[central_index] = len(output)
-        if entry.filename == filename:
-            output.extend(rebuilt_target)
-        else:
-            output.extend(
-                source_bytes[entry.local_record_span.start : entry.local_record_span.end]
-            )
-        output.extend(
-            source_bytes[entry.gap_after_span.start : entry.gap_after_span.end]
-        )
-
-    central_start = len(output)
-    for entry in source.entries:
-        record = bytearray(entry.central_record)
-        relative_offset = new_offsets[entry.central_index] - source.offset_base
-        if not 0 <= relative_offset <= _ZIP64_U32 - 1:
-            raise _unsupported("the rebuilt ZIP offsets would require ZIP64")
-        struct.pack_into("<I", record, 42, relative_offset)
-        if entry.filename == filename:
-            struct.pack_into(
-                "<3I",
-                record,
-                16,
-                target_crc,
-                target_compressed_size,
-                len(payload),
-            )
-        output.extend(record)
-    central_size = len(output) - central_start
-    stored_central_offset = central_start - source.offset_base
-    if (
-        central_size > _ZIP64_U32 - 1
-        or not 0 <= stored_central_offset <= _ZIP64_U32 - 1
-    ):
-        raise _unsupported("the rebuilt central directory would require ZIP64")
-
-    eocd = bytearray(source.eocd)
-    struct.pack_into("<II", eocd, 12, central_size, stored_central_offset)
-    output.extend(eocd)
-    output.extend(source.archive_comment)
-    output.extend(source.trailing_bytes)
-    result = bytes(output)
     _audit_raw_rebuild(
         source,
-        result,
-        mutable_member=filename,
-        expected_payload=payload,
+        output_bytes,
+        replacements=replacements,
+        additions=tuple(additions),
     )
-    return result
 
 
 def audit_raw_zip_replacement(
@@ -1086,16 +1297,11 @@ def audit_raw_zip_replacement(
     source_archive: RawZipArchive | None = None,
 ) -> None:
     """Independently prove one rebuilt member is the only raw ZIP change."""
-    source = _source_archive_for_mutation(
+    audit_raw_zip_rewrite(
         source_bytes,
-        mutable_member=filename,
-        source_archive=source_archive,
-    )
-    _audit_raw_rebuild(
-        source,
         output_bytes,
-        mutable_member=filename,
-        expected_payload=expected_payload,
+        replacements={filename: expected_payload},
+        source_archive=source_archive,
     )
 
 
@@ -1115,6 +1321,7 @@ def replace_document_xml_raw(
 
 __all__ = [
     "audit_raw_zip_replacement",
+    "audit_raw_zip_rewrite",
     "ByteSpan",
     "RawZipArchive",
     "RawZipEntry",
@@ -1122,4 +1329,5 @@ __all__ = [
     "parse_raw_zip_archive",
     "replace_document_xml_raw",
     "replace_raw_zip_member",
+    "rewrite_raw_zip_members",
 ]

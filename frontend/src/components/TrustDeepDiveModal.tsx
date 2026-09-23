@@ -1269,8 +1269,9 @@ function Dossier() {
                 <b className="text-ink">Redline on your original</b> is a copy
                 of the Word file you imported in which every change since the
                 import is a native Word tracked change by Build-a-Spec, dated
-                at export; every part of the file outside the document body is
-                your upload’s, byte for byte. Before the file is handed over,
+                at export; apart from Build-a-Spec’s comments (below), every
+                part of the file outside the document body is your upload’s,
+                byte for byte. Before the file is handed over,
                 the app{" "}
                 <b className="text-ink">resolves it both ways itself</b> —
                 Accept All and Reject All, in code that shares nothing with the
@@ -1295,6 +1296,26 @@ function Dossier() {
                 not yet checked the Moved marks themselves (the owner chose to
                 ship them first); setting{" "}
                 <code>BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0</code> turns them off.
+              </p>
+              <p className="mt-2">
+                <b className="text-ink">It carries Build-a-Spec’s comments.</b>{" "}
+                A change with a recorded basis gets a Word comment, authored
+                “Build-a-Spec”, saying what it rests on: the research finding
+                (its requirement, authority, code reference and the sources
+                grounding accepted — or, for a lead nobody verified, what it
+                cited, labelled not verified), the attached document by name,
+                or the Final QC fix (its title, severity, lens, issue and
+                sources). Web sources are clickable links. That text and those
+                links travel in the file, which may go to a client. A change
+                with no recorded basis — a hand edit, a relettering — gets no
+                comment, and a fix is only credited while the provision still
+                reads as the fix left it. The comments are added after both
+                checks pass and are proved separately: removing them gives back
+                exactly the checked file, every other part stays your
+                upload’s, and your own comments are kept. If that proof ever
+                fails, the file is delivered without comments rather than
+                refused. Setting <code>BUILD_A_SPEC_REDLINE_COMMENTS=0</code>{" "}
+                turns them off.
               </p>
               <p className="mt-2">
                 Two exceptions, both disclosed. A provision you moved keeps its

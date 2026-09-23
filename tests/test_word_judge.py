@@ -216,6 +216,7 @@ def targeted(tmp_path_factory):
     workspace = tmp_path_factory.mktemp("judge-targeted")
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(settings, "REDLINE_NATIVE_MOVES", True)
+        patch.setattr(settings, "REDLINE_COMMENTS", True)
         return [
             judge.build_judge_cases(group, workspace / group.slug)
             for group in judge.judge_groups()
@@ -305,6 +306,9 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
         "moveToRangeStart@p",
         "moveFromRangeEnd@body",  # ...and closes between paragraphs
         "moveToRangeEnd@body",
+        # Build-a-Spec's comments (Phase 3): a range inside the paragraphs.
+        "commentRangeStart@p",
+        "commentRangeEnd@p",
     } <= markup, markup
     assert moved == {"_Ref77", "_Ref44"}
 
@@ -451,16 +455,22 @@ def _group(group_id: str) -> judge.JudgeGroup:
 
 @pytest.fixture(scope="module")
 def batches(tmp_path_factory):
+    from backend import settings
+
     workspace = tmp_path_factory.mktemp("judge-batches")
-    return {
-        group_id: judge.build_judge_cases(_group(group_id), workspace / group_id.replace("/", "-"))
-        for group_id in (
-            "targeted/nested",
-            "targeted/bookmarked",
-            "targeted/last-numbered",
-            "targeted/break-holder",
-        )
-    }
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(settings, "REDLINE_COMMENTS", True)
+        return {
+            group_id: judge.build_judge_cases(
+                _group(group_id), workspace / group_id.replace("/", "-")
+            )
+            for group_id in (
+                "targeted/nested",
+                "targeted/bookmarked",
+                "targeted/last-numbered",
+                "targeted/break-holder",
+            )
+        }
 
 
 @pytest.mark.parametrize("noise", [False, True], ids=["plain", "with-word-save-noise"])
@@ -664,7 +674,9 @@ def test_a_bookmark_lost_by_no_move_is_a_failure(batches, tmp_path):
         batch.group,
         batch.upload,
         tuple(
-            judge.JudgeCase(c.name, c.redline, c.clean, frozenset(), c.stats)
+            judge.JudgeCase(
+                c.name, c.redline, c.clean, frozenset(), c.stats, comments=c.comments
+            )
             for c in batch.rendered
         ),
     )
@@ -684,6 +696,188 @@ def test_a_file_word_cannot_open_is_an_error_not_a_pass(batches, tmp_path):
     assert by_case["reorder-article"]["status"] == "error"
     assert any("Word could not accept" in f for f in verdict.failures)
     assert by_case["delete-article"]["status"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Build-a-Spec's comments on the changes (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def _shift_comment_ids(payload: bytes, offset: int) -> bytes:
+    """``payload`` with every comment renumbered by ``offset`` — in the
+    comments part and in the body — the way a Word save may renumber."""
+    import io
+    import zipfile
+
+    from tests.docx_fidelity_helpers import rewrite_zip_members
+
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    replacements = {}
+    for name, tags in (
+        ("word/comments.xml", ("comment",)),
+        ("word/document.xml", ("commentRangeStart", "commentRangeEnd", "commentReference")),
+    ):
+        if name not in members:
+            continue
+        root = etree.fromstring(members[name])
+        for element in root.iter(*(qn(f"w:{tag}") for tag in tags)):
+            element.set(qn("w:id"), str(int(element.get(qn("w:id"))) + offset))
+        replacements[name] = etree.tostring(
+            root, xml_declaration=True, encoding="UTF-8", standalone=True
+        )
+    return rewrite_zip_members(payload, replacements=replacements)
+
+
+def _renumbering(resolve, offset: int = 1000):
+    """A Word that also renumbers every comment when it saves."""
+
+    def wrapped(jobs, **kwargs):
+        resolution = resolve(jobs, **kwargs)
+        for document in resolution.documents:
+            path = document.job.output_path
+            if document.ok and path.exists():
+                path.write_bytes(_shift_comment_ids(path.read_bytes(), offset))
+        return resolution
+
+    return wrapped
+
+
+def _dropping_a_comment(resolve_body):
+    """A resolution that also loses the first of Build-a-Spec's comments."""
+
+    def resolved(body):
+        out = resolve_body(body)
+        references = list(out.iter(qn("w:commentReference")))
+        if references:
+            lost = references[-1].get(qn("w:id"))
+            for element in list(
+                out.iter(
+                    qn("w:commentRangeStart"),
+                    qn("w:commentRangeEnd"),
+                    qn("w:commentReference"),
+                )
+            ):
+                if element.get(qn("w:id")) == lost:
+                    element.getparent().remove(element)
+        return out
+
+    return resolved
+
+
+def test_the_targeted_cases_carry_build_a_specs_comments(targeted):
+    """With comments on, the redlines Word judges carry Build-a-Spec's
+    comments — on inserted, edited, deleted and moved content alike, and
+    beside a reviewer's own comment."""
+    commented = {
+        (batch.group.group_id, case.name): case.comments
+        for batch in targeted
+        for case in batch.rendered
+        if case.comments
+    }
+    assert len(commented) >= 20, commented
+    reviewer = next(b for b in targeted if b.group.group_id == "targeted/commented-master")
+    for case in reviewer.rendered:
+        assert case.comments >= 1
+        authors = {
+            c.get(qn("w:author"))
+            for c in etree.fromstring(
+                _member(case.redline, "word/comments.xml")
+            ).iter(qn("w:comment"))
+        }
+        assert authors == {"Reviewer", judge.JUDGE_AUTHOR}
+
+
+def _member(payload: bytes, name: str) -> bytes:
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        return archive.read(name)
+
+
+def test_build_a_specs_comments_are_left_out_by_the_ids_word_saved_them_under(
+    batches, tmp_path
+):
+    """Word may renumber comments on save: the judge reads the ids from the
+    file Word saved, so a renumbering Word still passes — and without the
+    exclusion, the comparison would read the comments as a difference."""
+    batch = batches["targeted/nested"]
+    verdict = judge.judge_batch(
+        batch, tmp_path / "renumbered", resolve=_renumbering(_fake_word(noise=True))
+    )
+    assert verdict.failures == [], verdict.failures
+    checked = 0
+    for case in batch.rendered:
+        if not case.comments:
+            continue
+        for action, reference in (("accepted", "formatted"), ("rejected", None)):
+            saved = (tmp_path / "renumbered" / f"{case.name}.{action}.word.docx").read_bytes()
+            other = (
+                (tmp_path / "renumbered" / f"{case.name}.{reference}.word.docx").read_bytes()
+                if reference
+                else (tmp_path / "renumbered" / "upload.word.docx").read_bytes()
+            )
+            ids = judge.our_comment_ids(saved)
+            assert len(ids) == case.comments
+            assert ids.isdisjoint(judge.our_comment_ids(case.redline))  # renumbered
+            assert ids <= judge.anchored_comment_ids(saved)
+            assert judge.word_difference(saved, other) is not None
+            assert judge.word_difference(saved, other, exclude_comments=ids) is None
+            checked += 1
+    assert checked
+
+
+@pytest.mark.parametrize("action", ["accept", "reject"])
+def test_a_word_that_loses_a_comment_fails(batches, tmp_path, action):
+    fake = (
+        _fake_word(accept=_dropping_a_comment(accept_all))
+        if action == "accept"
+        else _fake_word(reject=_dropping_a_comment(reject_all))
+    )
+    verdict = judge.judge_batch(batches["targeted/nested"], tmp_path / action, resolve=fake)
+    assert any(
+        f"after Word's '{action}'," in failure and "comment(s) were still there" in failure
+        for failure in verdict.failures
+    ), verdict.failures
+
+
+def test_only_the_named_comments_are_left_out():
+    """The judge's own strip removes the named comments' anchors — and a run
+    left with nothing but its properties — and nothing else: another
+    author's comment, and a run holding text, stay and are compared."""
+    body = _body(
+        '<w:p><w:commentRangeStart w:id="5"/><w:commentRangeStart w:id="1"/>'
+        "<w:r><w:t>words</w:t></w:r>"
+        '<w:commentRangeEnd w:id="1"/><w:commentRangeEnd w:id="5"/>'
+        '<w:r><w:rPr><w:sz w:val="16"/></w:rPr><w:commentReference w:id="5"/></w:r>'
+        '<w:r><w:t>kept</w:t><w:commentReference w:id="1"/></w:r></w:p>'
+    )
+    stripped = judge.strip_comment_anchors(body, {"5"})
+    ids = [e.get(qn("w:id")) for e in stripped.iter() if e.get(qn("w:id"))]
+    assert ids == ["1", "1", "1"]
+    assert len(list(stripped.iter(qn("w:r")))) == 2
+    assert judge.strip_comment_anchors(body, set()) is not body
+    assert len(list(body.iter(qn("w:commentReference")))) == 2  # never in place
+
+
+def test_the_judge_renders_with_the_comments_switch_the_route_passes(tmp_path, monkeypatch):
+    """``build_judge_cases`` reads ``settings.REDLINE_COMMENTS`` per call,
+    as the export route does: on, the changes carry Build-a-Spec's comments;
+    off, the redline carries none."""
+    from backend import settings
+
+    group = _group("targeted/nested")
+    for switch in (True, False):
+        monkeypatch.setattr(settings, "REDLINE_COMMENTS", switch)
+        batch = judge.build_judge_cases(group, tmp_path / str(switch))
+        commented = [case for case in batch.rendered if case.comments]
+        if switch:
+            assert commented
+        else:
+            assert commented == []
+            for case in batch.rendered:
+                assert "comments" not in case.stats.get("redline", {})
 
 
 def test_refused_mixes_are_recorded_not_sent_to_word(tmp_path):

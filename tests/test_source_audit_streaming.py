@@ -317,3 +317,83 @@ def test_integrated_source_export_audit_never_uses_unbounded_member_reads(
     assert output != source
     assert requests
     assert all(0 < size <= 1024 * 1024 for _, size in requests)
+
+
+# ---------------------------------------------------------------------------
+# Redline on your original, Phase 3: the comment parts, and nothing else
+# ---------------------------------------------------------------------------
+
+
+def _commented_package(*, types: bytes = b"types+comments", comments=b"<c/>"):
+    source = _package_entries(document_xml=b"<document/>")
+    output = tuple(
+        (name, types if name == "[Content_Types].xml" else payload)
+        for name, payload in source
+    ) + (("word/comments.xml", comments),)
+    return _write_zip(source), _write_zip(output)
+
+
+def test_package_audit_allows_exactly_the_named_rewritten_and_added_parts():
+    source, output = _commented_package()
+    audit_package_preservation_streaming(
+        source,
+        output,
+        expected_document_xml=b"<document/>",
+        expected_parts={
+            "[Content_Types].xml": b"types+comments",
+            "word/comments.xml": b"<c/>",
+        },
+    )
+
+
+def test_package_audit_still_refuses_what_the_caller_did_not_name():
+    source, output = _commented_package()
+    # The added part unnamed: the inventory changed.
+    with pytest.raises(SourceAuditError) as exc_info:
+        audit_package_preservation_streaming(
+            source,
+            output,
+            expected_document_xml=b"<document/>",
+            expected_parts={"[Content_Types].xml": b"types+comments"},
+        )
+    assert exc_info.value.blocker == "part_inventory_changed"
+    # The rewritten part unnamed: an out-of-scope part changed.
+    with pytest.raises(SourceAuditError) as exc_info:
+        audit_package_preservation_streaming(
+            source,
+            output,
+            expected_document_xml=b"<document/>",
+            expected_parts={"word/comments.xml": b"<c/>"},
+        )
+    assert exc_info.value.blocker == "out_of_scope_part_changed"
+    # A named part that does not hold what was approved.
+    with pytest.raises(SourceAuditError) as exc_info:
+        audit_package_preservation_streaming(
+            source,
+            output,
+            expected_document_xml=b"<document/>",
+            expected_parts={
+                "[Content_Types].xml": b"types+comments",
+                "word/comments.xml": b"<other/>",
+            },
+        )
+    assert exc_info.value.blocker == "unexpected_part"
+    # A rewritten part that does not hold what was approved.
+    with pytest.raises(SourceAuditError) as exc_info:
+        audit_package_preservation_streaming(
+            source,
+            output,
+            expected_document_xml=b"<document/>",
+            expected_parts={
+                "[Content_Types].xml": b"types+something-else",
+                "word/comments.xml": b"<c/>",
+            },
+        )
+    assert exc_info.value.blocker == "unexpected_part"
+    with pytest.raises(ValueError, match="other package members"):
+        audit_package_preservation_streaming(
+            source,
+            output,
+            expected_document_xml=b"<document/>",
+            expected_parts={_DOCUMENT_PART: b"<document/>"},
+        )

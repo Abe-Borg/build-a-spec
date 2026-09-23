@@ -60,6 +60,7 @@ from __future__ import annotations
 import copy
 import re
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from io import BytesIO
 
@@ -85,7 +86,19 @@ from .model import (
     _paragraph_label,
     labelled_paragraphs,
 )
-from .raw_zip import replace_document_xml_raw
+from .raw_zip import replace_document_xml_raw, rewrite_raw_zip_members
+from .redline_comments import (
+    CHANGE_DELETED,
+    CHANGE_EDITED,
+    CHANGE_INSERTED,
+    CHANGE_MOVED,
+    FALLBACK_ERROR,
+    FALLBACK_PACKAGE_CHECK,
+    CommentBasis,
+    CommentPassError,
+    CommentSite,
+    add_comments,
+)
 from .source_format import (
     HEADER_SOURCE_CHROME,
     HEADER_SOURCE_FRONT_MATTER,
@@ -1837,6 +1850,9 @@ class _RedlineBuilder:
         self.moved_uids = moved_uids
         self.marks = marks
         self.native_moves = native_moves
+        #: Aligned with the body :meth:`render` returns: ``(change, uid)``
+        #: for an element the redline marks as changed, else None.
+        self.changes: list[tuple[str, str] | None] = []
         self.stats: dict = {
             "kept": 0,
             "spliced": 0,
@@ -2174,28 +2190,56 @@ class _RedlineBuilder:
         """The redline's body elements, and the bookmark names that moved
         with a new copy (the one documented Reject-All limit)."""
         rendered: list[tuple] = []
+        # What each rendered element shows, for the comments pass (Phase 3):
+        # ``(change, uid)`` for an element the redline marks as changed, or
+        # None. A moved element's comment site is its NEW copy; its old copy
+        # (moved away) is none.
+        changes: list[tuple[str, str] | None] = []
         moved_names: set[str] = set()
         sides, groups = (
             self._native_moves(ordered) if self.native_moves else ({}, [])
         )
         for index, record in enumerate(ordered):
             side = sides.get(index)
+            uid = record.item.uid if record.item is not None else ""
             if side == "from":
                 rendered.append(self._render_move_source(record))
+                changes.append(None)
             elif side == "to":
                 element, flag = self._render_move_destination(record)
                 moved_names |= _bookmark_names([element])
                 rendered.append((element, flag))
+                changes.append((CHANGE_MOVED, uid))
             elif record.kind in _REMOVED_KINDS:
                 rendered.append(self._render_deleted(record))
+                changes.append(
+                    None
+                    if record.moved
+                    else (CHANGE_DELETED, self._uid_at(record.source))
+                )
             elif record.moved:
                 element, flag = self._render_inserted(record)
                 moved_names |= _bookmark_names([element])
                 rendered.append((element, flag))
+                changes.append((CHANGE_MOVED, uid))
             elif record.kind == RECORD_INSERTED:
                 rendered.append(self._render_inserted(record))
+                changes.append((CHANGE_INSERTED, uid))
             else:
                 rendered.append(self._render_shared(record))
+                if record.kind == RECORD_SPLICED:
+                    changes.append((CHANGE_EDITED, uid))
+                elif record.kind == RECORD_LEFTOVER:
+                    # The emptied holder of a displaced section break: the
+                    # provision's words deleted — a deletion, unless the
+                    # provision itself lives on elsewhere (a move).
+                    holder_uid = self._uid_at(record.source)
+                    moved = holder_uid in self.moved_uids or any(
+                        item.origin == record.source for item in self.assembler.items
+                    )
+                    changes.append(None if moved else (CHANGE_DELETED, holder_uid))
+                else:
+                    changes.append(None)
         last = len(rendered) - 1
         for index, (element, flag) in enumerate(rendered):
             if flag is None:
@@ -2228,9 +2272,13 @@ class _RedlineBuilder:
                 )
                 closing.setdefault(indexes[-1], []).append(end)
         body: list = []
+        self.changes = []
         for index, (element, _flag) in enumerate(rendered):
             body.append(element)
-            body.extend(closing.get(index, ()))
+            self.changes.append(changes[index])
+            for end in closing.get(index, ()):
+                body.append(end)
+                self.changes.append(None)
         return body, moved_names
 
 
@@ -2322,6 +2370,26 @@ def _check_move_ranges(redline: list, loaded: _LoadedBody) -> None:
         raise SourceRedlineError(REDLINE_PACKAGE_CHECK, detail={"move_check": problem})
 
 
+def _element_texts(section: SpecSection) -> dict[str, str]:
+    """What each element says, whitespace-folded, by uid — the section
+    header (both of its lines), PART and article titles, provision text — so
+    the comments pass can tell a reworded element from a relettered one."""
+    header = _normalized(f"{section.number} {section.title}")
+    texts = {"sec": header, SECTION_TITLE_UID: header}
+
+    def paragraphs(nodes) -> None:
+        for node in nodes:
+            texts[node.uid] = _normalized(node.text)
+            paragraphs(node.children)
+
+    for part in section.parts:
+        texts[part.uid] = _normalized(part.title)
+        for article in part.articles:
+            texts[article.uid] = _normalized(article.title)
+            paragraphs(article.paragraphs)
+    return texts
+
+
 def render_preserving_redline(
     *,
     source_bytes: bytes,
@@ -2333,6 +2401,7 @@ def render_preserving_redline(
     stats: dict | None = None,
     native_moves: bool = False,
     unstructured_import: bool = False,
+    comments: Mapping[str, CommentBasis] | None = None,
 ) -> bytes:
     """The upload with every change since ``baseline`` as a Word tracked
     change: Accept All gives :func:`render_preserving_docx`'s output and
@@ -2355,8 +2424,20 @@ def render_preserving_redline(
     export this redline's Accept All must equal is planned by the same
     ``_plan_for``, so a non-spec import's placeholder headings are left out
     of both, and are never shown as insertions.
+
+    ``comments`` (Phase 3) maps an element uid to what its change rests on
+    (:class:`~backend.spec_doc.redline_comments.CommentBasis`): every change
+    that has one carries a Word comment from ``author`` saying so. ``None``
+    — the default — is the redline without comments, byte for byte. The
+    comments are added by a pass that runs AFTER the self-check, only adds,
+    and proves itself (``redline_comments.add_comments``); the package is
+    then audited with exactly the comment parts allowed to differ. Any
+    failure hands the redline over WITHOUT comments
+    (``redline.comments.fallback`` names the check) — comments never turn an
+    export that works into a refusal.
     """
     from .diffing import diff_sections
+    from .raw_zip import RawZipError
     from .revision_marks import RevisionMarks, highest_annotation_id
     from .source_audit import SourceAuditError, audit_package_preservation_streaming
     from .source_mapping import (
@@ -2388,6 +2469,9 @@ def render_preserving_redline(
     diff = diff_sections(baseline, current, detect_moves=True)
     moved_uids = _subtree_uids(current, diff.moved or [])
     first_id = highest_annotation_id(source_bytes) + 1
+    if comments is not None:
+        baseline_texts = _element_texts(baseline)
+        current_texts = _element_texts(current)
 
     def builder_for(native: bool) -> _RedlineBuilder:
         marks = RevisionMarks(author=author, date=date, first_id=first_id)
@@ -2414,6 +2498,10 @@ def render_preserving_redline(
         _self_check(loaded, redline, clean, moved_names)
         if builder.native_moves:
             _check_move_ranges(redline, loaded)
+        if comments is not None:
+            commented = _commented_redline(builder, redline)
+            if commented is not None:
+                return commented
         rebuilt = _serialize(loaded, redline)
         payload = replace_document_xml_raw(source_bytes, rebuilt)
         try:
@@ -2425,6 +2513,71 @@ def render_preserving_redline(
                 REDLINE_PACKAGE_CHECK, detail={"blocker": exc.blocker}
             ) from exc
         return payload
+
+    def comment_sites(builder: _RedlineBuilder) -> list[CommentSite | None]:
+        sites: list[CommentSite | None] = []
+        for change in builder.changes:
+            if change is None or not change[1]:
+                sites.append(None)
+                continue
+            kind, uid = change
+            anchor = format_map.anchor(uid)
+            sites.append(
+                CommentSite(
+                    uid=uid,
+                    change=kind,
+                    text_changed=(
+                        kind == CHANGE_INSERTED
+                        or baseline_texts.get(uid) != current_texts.get(uid)
+                    ),
+                    locked=bool(anchor is not None and anchor.locked),
+                )
+            )
+        return sites
+
+    def _commented_redline(builder: _RedlineBuilder, redline: list) -> bytes | None:
+        """The proved redline with its comments, or None — no change has a
+        basis, or the pass could not prove its output (counted in
+        ``redline.comments.fallback``); either way the caller writes the
+        redline exactly as without the pass."""
+        comment_stats: dict = {"added": 0, "elements": 0, "skipped": {}, "fallback": ""}
+        if stats is not None:
+            stats.setdefault("redline", {})["comments"] = comment_stats
+        try:
+            package = add_comments(
+                redline,
+                comment_sites(builder),
+                comments,
+                source_bytes=source_bytes,
+                next_id=builder.marks.take_id,
+                author=author,
+                date=date,
+                stats=comment_stats,
+            )
+            if package is None:
+                return None
+            rebuilt = _serialize(loaded, package.body)
+            replacements = {_DOCUMENT_PART: rebuilt, **package.replacements}
+            payload = rewrite_raw_zip_members(
+                source_bytes,
+                replacements=replacements,
+                additions=package.additions,
+            )
+            audit_package_preservation_streaming(
+                source_bytes,
+                payload,
+                expected_document_xml=rebuilt,
+                expected_parts={**package.replacements, **dict(package.additions)},
+            )
+            return payload
+        except CommentPassError as exc:
+            reason = exc.reason
+        except (RawZipError, SourceAuditError):
+            reason = FALLBACK_PACKAGE_CHECK
+        except Exception:  # noqa: BLE001 - never a refusal: no comments instead
+            reason = FALLBACK_ERROR
+        comment_stats.update(added=0, elements=0, fallback=reason)
+        return None
 
     if not native_moves:
         return render(builder_for(False))

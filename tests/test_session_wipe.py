@@ -71,6 +71,10 @@ _STATE_PROBES = {
     # Phase 4). A marker that outlived its conversation would hide the new
     # session's first replies from its first harvest as "already read".
     "last_harvest_bubble": lambda s: s.last_harvest_bubble,
+    # The durable record of applied Final QC fixes (Redline on your
+    # original, Phase 3). A record that outlived its document would put QC
+    # comments on a fresh session's redline for fixes it never received.
+    "qc_fix_log": lambda s: list(s.qc_fix_log),
     "project_link": lambda s: s.project_link,
     "usage": lambda s: s.usage.snapshot(),
     "last_context_tokens": lambda s: s.last_context_tokens,
@@ -187,6 +191,13 @@ def _dirty(session: SessionState) -> None:
         recorded_at="2026-09-04",
     )
     session.last_harvest_bubble = 3
+    session.qc_fix_log = [
+        {
+            "finding_id": "qc-from-the-old-project",
+            "title": "An old fix",
+            "evidence": [{"key": ["field", "pt1.a1.p1"], "value": None}],
+        }
+    ]
     session.project_link = {
         "project_id": "a" * 32,
         "name": "The previous project",

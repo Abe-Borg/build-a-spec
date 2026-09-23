@@ -113,8 +113,8 @@ see Phase 5.
 |---|---|---|---|---|
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
-| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #PENDING, in review) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. Stays **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`) until the canary passes on the new shape — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #PENDING, in review) | both halves; routine condensing off by default until the recall check, backstop always on. A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
+| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, in review) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. Stays **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`) until the canary passes on the new shape — see Phase 2 → Canary result |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, in review) | both halves; routine condensing off by default until the recall check, backstop always on. A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
@@ -136,7 +136,7 @@ still the synthetic ones.
   canary on 2026-09-23 and it was **refused**: the API checks a saved
   citation against the document it lands on, and the trim had left the
   reply's citation pointing past the end of its note (see Phase 2 → Canary
-  result). The rework (PR #PENDING) folds each quoted passage into the page's
+  result). The rework (PR #192) folds each quoted passage into the page's
   note and removes the citations into the trimmed text. The trim stays off
   until the canary passes on that shape; then turning it on is a one-line
   change plus the Phase 2 release note.
@@ -152,7 +152,7 @@ still the synthetic ones.
   message would not otherwise fit, runs either way. The canary's refusal
   exposed a defect in it: a condensed view drops the pages its oldest turns
   fetched, which shifted every later citation's `document_index`. The
-  citation repair (PR #PENDING) fixes every outgoing request (see Phase 3 →
+  citation repair (PR #192) fixes every outgoing request (see Phase 3 →
   As built).
 - **D4 is yes, and half of it is in.** Phase 3's summary lists the
   decisions missing from the ledgers, each tagged with the turn it was
@@ -296,7 +296,7 @@ updating that ground rule in the same change.
   replace the page. `--control` sends the same conversation with the page
   text kept, as one more request, only when a refusal needs diagnosing.
   Unlike the QC canary it has hermetic tests.
-- **Reworked after the canary's first run (PR #PENDING).** The run was
+- **Reworked after the canary's first run (PR #192).** The run was
   refused because the reply's citation still pointed into the trimmed
   text. The trim now removes the citations into a page it trims and writes
   each quoted passage into the page's note, deduped, in quoting order,
@@ -329,7 +329,7 @@ updating that ground rule in the same change.
   `--control` run was not made: the error names the cause exactly (the
   citation's span lies past the end of the note), which settles the
   question `--control` exists to answer.
-- **What run 1 changed** (PR #PENDING): the trim now writes each passage a
+- **What run 1 changed** (PR #192): the trim now writes each passage a
   reply quoted into the page's note and removes the citations into the
   trimmed text; the canary sends that shape, and refuses to send the old
   one. Every chat request also goes through the citation repair (Phase 3 →
@@ -653,7 +653,7 @@ The claude-api skill's `build-eval` guide is the method.
   its own frame), each fixed by a stronger test before this was recorded.
   Every mechanism now turns at least one test red.
 - **Citations in a condensed view (found 2026-09-23, after merge; fixed in
-  PR #PENDING).** A citation names its document by `document_index`, which
+  PR #192).** A citation names its document by `document_index`, which
   counts every document in the request, and the Phase 2 canary's refusal
   showed the provider checks it against the document it lands on. The
   view leaves the oldest turns out — and the pages they fetched with them —
@@ -723,5 +723,5 @@ Phase 3 (PR #189) is not part of 1.21.0's notes, and it merged on
 2026-09-23 before 1.21.0 was tagged, so `master` carries it. No release is
 planned for now (owner, 2026-09-23). Whichever release next ships from
 `master` — 1.21.0 tagged at a later commit, or a later version — must carry
-Phase 3's release-note draft. The citation repair (PR #PENDING) is part of
+Phase 3's release-note draft. The citation repair (PR #192) is part of
 Phase 3's behaviour before any release, so it needs no note of its own.

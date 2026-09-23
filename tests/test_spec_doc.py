@@ -71,6 +71,11 @@ def test_paragraph_nesting_labels_and_depth_limit():
                 "target_id": "pt3.a1.p1.p1.p1",
                 "text": "Level 1)",
             },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt3.a1.p1.p1.p1.p1",
+                "text": "Level a)",
+            },
         ]
     )
     with pytest.raises(SpecEditError, match="depth"):
@@ -78,7 +83,7 @@ def test_paragraph_nesting_labels_and_depth_limit():
             [
                 {
                     "action": "add_paragraph",
-                    "target_id": "pt3.a1.p1.p1.p1.p1",
+                    "target_id": "pt3.a1.p1.p1.p1.p1.p1",
                     "text": "too deep",
                 }
             ]
@@ -90,7 +95,9 @@ def test_paragraph_nesting_labels_and_depth_limit():
     assert top["label"] == "A."
     assert top["children"][0]["label"] == "1."
     assert top["children"][0]["children"][0]["label"] == "a."
-    assert top["children"][0]["children"][0]["children"][0]["label"] == "1)"
+    fourth = top["children"][0]["children"][0]["children"][0]
+    assert fourth["label"] == "1)"
+    assert fourth["children"][0]["label"] == "a)"
 
 
 def test_replace_section_header_and_paragraph_status():
@@ -670,9 +677,9 @@ def test_load_rejects_integrity_violations():
     def foreign_parent(snap):  # id not derived from its parent
         snap["parts"][0]["articles"][0]["id"] = "pt2.a1"
 
-    def too_deep(snap):  # nesting beyond A./1./a./1)
+    def too_deep(snap):  # nesting beyond A./1./a./1)/a)
         p = snap["parts"][0]["articles"][0]["paragraphs"][0]
-        for _ in range(4):
+        for _ in range(5):
             child = {
                 "id": f"{p['id']}.p1",
                 "label": "1.",

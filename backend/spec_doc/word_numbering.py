@@ -16,11 +16,15 @@ from docx.text.paragraph import Paragraph as DocxParagraph
 
 
 _LEVELS = (
-    # numFmt, lvlText
+    # numFmt, lvlText — one per model depth (model.MAX_PARAGRAPH_DEPTH):
+    # A. / 1. / a. / 1) / a). Every lvlText is a single token, which is what
+    # keeps the importer's PART and article numbering grammars from ever
+    # matching the app's own output.
     ("upperLetter", "%1."),
     ("decimal", "%2."),
     ("lowerLetter", "%3."),
     ("decimal", "%4)"),
+    ("lowerLetter", "%5)"),
 )
 _INDENT_DXA = 648  # 0.45 inch, matching the established clean-export layout.
 _ABSTRACT_NAME = "Build-a-Spec SectionFormat Provisions"

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -70,12 +71,28 @@ test("arrow fallbacks choose the nearest exact authorized destination", () => {
   assert.equal(hasAlternatePosition(2, positions), true);
 });
 
-test("subparagraph creation stops at four levels", () => {
-  assert.equal(MAX_PARAGRAPH_LEVELS, 4);
+test("subparagraph creation stops at five levels", () => {
+  assert.equal(MAX_PARAGRAPH_LEVELS, 5);
   assert.equal(canAddChildParagraph(0), true);
   assert.equal(canAddChildParagraph(2), true);
-  assert.equal(canAddChildParagraph(3), false);
+  // A 1) provision takes a) children: SectionFormat's fifth level.
+  assert.equal(canAddChildParagraph(3), true);
   assert.equal(canAddChildParagraph(4), false);
+  assert.equal(canAddChildParagraph(5), false);
+});
+
+test("the editor's level limit is the document model's", () => {
+  // The model enforces the limit (backend/spec_doc/model.py); the editor only
+  // hides the add control past it. Both said four until an imported master's
+  // PR5 content needed a fifth, and a limit raised on one side alone would
+  // either offer an add the server refuses or hide one it allows.
+  const model = readFileSync(
+    new URL("../../backend/spec_doc/model.py", import.meta.url),
+    "utf8",
+  );
+  const match = model.match(/^MAX_PARAGRAPH_DEPTH = (\d+)$/m);
+  assert.ok(match, "MAX_PARAGRAPH_DEPTH not found in backend/spec_doc/model.py");
+  assert.equal(MAX_PARAGRAPH_LEVELS, Number(match[1]));
 });
 
 test("article delete warnings count the complete provision subtree", () => {

@@ -176,6 +176,7 @@ from .spec_doc.docx_export import (
     build_qc_memo,
     export_filename,
     redline_filename,
+    upload_redline_filename,
 )
 from .project_brief import (
     PROJECT_BRIEF_MEDIA_TYPE,
@@ -237,11 +238,23 @@ from .spec_doc.project_package import (
     parse_project_file,
     read_project_upload_bounded,
 )
-from .spec_doc.source_mapping import SourceBodyMap, source_blocker_message
+from .spec_doc.source_mapping import (
+    PENDING_REVISIONS,
+    SourceBodyMap,
+    detect_pending_revisions,
+    source_blocker_message,
+)
 from .spec_doc import source_patch as source_patch_module
 from .spec_doc.source_render import (
+    REDLINE_NO_BASELINE,
+    REDLINE_NO_ORIGINAL,
+    REDLINE_PENDING_REVISIONS,
+    REDLINE_REVISION_SCAN,
+    SourceRedlineError,
     SourceRenderError,
+    redline_refusal_message,
     render_preserving_docx,
+    render_preserving_redline,
 )
 from .spec_doc.source_patch import (
     CAPABILITY_STATUS_PENDING,
@@ -1004,6 +1017,13 @@ class _ExportInputs:
     format_map: Any | None = None
     audit_result: Any | None = None
     qc_result: dict[str, Any] | None = None
+    #: Which redline was asked for ("" | "master" | "version"). With
+    #: ``selected_mode == "preserved"`` it is the redline on the original,
+    #: ``redline_base`` holding the imported master it is measured from.
+    redline: str = ""
+    #: The upload's own name, captured with its bytes: the redline on the
+    #: original is named after it, so replacing the master is a rename.
+    source_filename: str = ""
 
 
 # The QC apply machinery moved to ``backend/qc/apply.py`` so the
@@ -1555,6 +1575,93 @@ def _preserved_export_available(session) -> bool:
     return answer
 
 
+def _pending_revisions(session) -> str:
+    """``detect_pending_revisions`` over the retained upload, cached per upload.
+
+    Only asked once :func:`_preserved_export_available` has matched the
+    bytes to their format map, so the map's SHA-256 IS the bytes' identity
+    and the answer is a pure function of it — the cache is keyed on content,
+    not on the bytes object, so reusing an entry for the same file (a New
+    session and the same master imported again) is a correct answer rather
+    than a coincidence of ``id()``. The scan reads every story part of a
+    multi-megabyte package, and ``_doc_payload`` runs on every edit, undo
+    and poll — it must not rescan each time (the hash's own cache, above,
+    exists for the same reason).
+    """
+    source = session.source_docx_bytes
+    key = session.source_format_map.document_sha256
+    cached = getattr(session, "_pending_revisions_cache", None)
+    if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == key:
+        return str(cached[1])
+    answer = detect_pending_revisions(source)
+    try:
+        session._pending_revisions_cache = (key, answer)
+    except Exception:  # noqa: BLE001 - a read-only session object still answers
+        pass
+    return answer
+
+
+def _preserved_redline_availability(session) -> tuple[bool, str]:
+    """Can this session export a redline on its original — and if not, why?
+
+    ONE derivation for the export route (``redline=master``'s default mode,
+    and the 409 an explicit ``mode=preserved`` earns) and the payload the
+    Export menu reads, the :func:`_preserved_export_available` pattern: a
+    second derivation would be free to offer a redline the route is about to
+    refuse. Returns ``(True, "")`` or ``(False, reason)``, the reason one of
+    ``source_render``'s ``REDLINE_*`` codes (``redline_refusal_message``
+    gives its sentence):
+
+    * ``no_baseline`` — no imported master in the document's history
+      (from scratch, or an edit after undoing past the import replaced it);
+    * ``no_original`` — the upload and the format map built from it are not
+      both kept, or no longer describe each other;
+    * ``pending_revisions`` / ``revision_scan_unavailable`` — the package
+      carries another author's tracked changes (or could not be scanned for
+      them), so Reject All could not give the original back (D-5). Track
+      Changes merely switched ON in the file is not pending and is not
+      refused: nothing is there for Reject All to reject.
+
+    Everything a render can still refuse on (a section break a move would
+    need to cross, the self-check) is the route's to report — it needs the
+    render.
+    """
+    if session.doc.baseline_index is None:
+        return False, REDLINE_NO_BASELINE
+    if not _preserved_export_available(session):
+        return False, REDLINE_NO_ORIGINAL
+    pending = _pending_revisions(session)
+    if pending:
+        return False, (
+            REDLINE_PENDING_REVISIONS
+            if pending == PENDING_REVISIONS
+            else REDLINE_REVISION_SCAN
+        )
+    return True, ""
+
+
+def _preserved_redline_payload(session) -> dict[str, Any]:
+    """The doc payload's two keys for the redline on the original."""
+    available, reason = _preserved_redline_availability(session)
+    return {
+        "preserved_redline_available": available,
+        "preserved_redline_reason": (
+            None
+            if available
+            else {"code": reason, "message": redline_refusal_message(reason)}
+        ),
+    }
+
+
+def _revision_timestamp() -> str:
+    """The export time every tracked change in a redline carries (``w:date``).
+
+    UTC, second resolution, the ``…Z`` form Word writes — and the one seam
+    a test pins to make two exports of one document byte-comparable.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _preserved_chrome(session) -> tuple[str, ...]:
     """Header/footer lines retained from an imported package.
 
@@ -1687,6 +1794,10 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # import) and the normalized re-render, and a user who imported a
         # master to keep its formatting got the app's fonts back instead.
         "preserved_export_available": _preserved_export_available(session),
+        # The redline on the original: the same one derivation the export
+        # route's default and refusal read, so the menu can say why before
+        # the click instead of after a 409.
+        **_preserved_redline_payload(session),
         "preservation_ready": bool(preservation and preservation.ready),
         "source_preservation": _source_preservation_payload(
             session, preservation
@@ -4742,6 +4853,8 @@ def create_app(
         redline: str | None = None,
         base: int | None = None,
         mode: str | None = None,
+        *,
+        refusal: dict | None = None,
     ) -> _ExportInputs | JSONResponse:
         """Validate the request and snapshot everything the render needs.
 
@@ -4749,7 +4862,9 @@ def create_app(
         document. Returns the detached inputs, or the error response the
         request earns — every existing status code and message is preserved,
         including the fail-closed 409 when source-preserving export is asked
-        for without a validated source package.
+        for without a validated source package. ``refusal`` collects the
+        named reason a redline on the original was refused for, for the
+        ``export`` event.
         """
         store = session.doc
         if mode not in (None, "source", "normalized", "preserved"):
@@ -4767,6 +4882,18 @@ def create_app(
                     "ok": False,
                     "error": "Source-preserving export and semantic redline "
                     "export are separate modes.",
+                },
+                status_code=400,
+            )
+        if redline == "version" and mode == "preserved":
+            # Phase 1 redlines the original against the imported master only.
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A redline on your original compares against "
+                    "the imported master only. To compare against a version, "
+                    "export a redline of extracted provisions "
+                    "(mode=normalized).",
                 },
                 status_code=400,
             )
@@ -4795,8 +4922,25 @@ def create_app(
         # ``normalized`` is always available explicitly.
         format_map = getattr(session, "source_format_map", None)
         preserving_available = _preserved_export_available(session)
+        # Asked only when it could matter: the revision scan behind it reads
+        # the whole package the first time (then it is cached per upload).
+        redline_available, redline_reason = (
+            _preserved_redline_availability(session)
+            if redline == "master" and mode in (None, "preserved")
+            else (False, "")
+        )
         if redline_base is not None:
-            selected_mode = "normalized"
+            # ``redline=master`` defaults to the redline on the original when
+            # it is available — the way the clean export defaults to
+            # ``preserved`` — and to the extracted-provisions redline when
+            # not. ``redline=version`` stays extracted provisions (Phase 1;
+            # ``preserved`` with it is the 400 above). The frontend names the
+            # mode on every redline URL, so these defaults serve callers that
+            # name none.
+            if mode is None:
+                selected_mode = "preserved" if redline_available else "normalized"
+            else:
+                selected_mode = mode
         elif mode:
             selected_mode = mode
         elif imported_scope:
@@ -4814,6 +4958,28 @@ def create_app(
         # Detach the current tree: the render walks it long after the guard
         # is gone, and a committing turn replaces ``store.doc`` outright.
         current = SpecSection.from_dict(store.doc.to_dict())
+        if selected_mode == "preserved" and redline_base is not None:
+            if not redline_available:
+                if refusal is not None:
+                    refusal["reason"] = redline_reason
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": redline_refusal_message(redline_reason),
+                        "code": redline_reason,
+                    },
+                    status_code=409,
+                )
+            return _ExportInputs(
+                selected_mode="preserved",
+                current=current,
+                redline="master",
+                redline_base=redline_base,
+                # Immutable by contract, like the byte-exact mode's inputs.
+                source_bytes=session.source_docx_bytes,
+                format_map=format_map,
+                source_filename=session.source_docx_filename or "",
+            )
         if selected_mode == "preserved":
             if not preserving_available:
                 return JSONResponse(
@@ -4899,18 +5065,69 @@ def create_app(
             redline_base=redline_base,
             audit_result=session.audit.result,
             qc_result=qc_result,
+            redline=redline or "",
+        )
+
+    def _render_original_redline(
+        inputs: _ExportInputs, stats: dict | None, refusal: dict | None
+    ) -> Response:
+        """The upload with every change since the import tracked (D-1–D-7).
+
+        ``render_preserving_redline`` checks its own promise before it
+        returns bytes — Accept All is the formatted export, Reject All the
+        upload — so a refusal here is a named reason, never a wrong file.
+        ``refusal`` records which check failed and where (positions and
+        element names only, never document text).
+        """
+        try:
+            payload = render_preserving_redline(
+                source_bytes=inputs.source_bytes,
+                format_map=inputs.format_map,
+                baseline=inputs.redline_base,
+                current=inputs.current,
+                author=settings.APP_NAME,
+                date=_revision_timestamp(),
+                stats=stats,
+            )
+        except SourceRedlineError as exc:
+            if refusal is not None:
+                refusal["reason"] = exc.reason
+                if exc.detail:
+                    refusal["detail"] = dict(exc.detail)
+            return JSONResponse(
+                {"ok": False, "error": str(exc), "code": exc.reason},
+                status_code=409,
+            )
+        except SourceRenderError as exc:
+            if refusal is not None:
+                refusal["reason"] = "render_error"
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        return Response(
+            content=payload,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            headers=_attachment_headers(
+                upload_redline_filename(inputs.source_filename, inputs.current)
+            ),
         )
 
     def _render_export(
-        inputs: _ExportInputs, stats: dict | None = None
+        inputs: _ExportInputs,
+        stats: dict | None = None,
+        refusal: dict | None = None,
     ) -> Response:
         """Render a captured snapshot. Runs WITHOUT the session guard.
 
         ``stats`` collects the appearance-preserving render's counts
         (cloned / spliced / fallback by reason / inserted ...) for the
         export's trace event — the fallback rate the splice's eligibility
-        is widened from. Counts only, never provision text.
+        is widened from. Counts only, never provision text. ``refusal``
+        names why a redline on the original was not produced.
         """
+        if inputs.selected_mode == "preserved" and inputs.redline_base is not None:
+            return _render_original_redline(inputs, stats, refusal)
         redline_diff = (
             diff_sections(inputs.redline_base, inputs.current)
             if inputs.redline_base is not None
@@ -4991,13 +5208,16 @@ def create_app(
         # the lock: the ZIP/XML/python-docx work is seconds on a real
         # section, and the turn-state lock is what a chat turn must claim —
         # so holding it across the render blocked the turn, and the stop.
+        refusal: dict = {}
         with session.session_state_guard():
-            captured = _capture_export_inputs(session, redline, base, mode)
+            captured = _capture_export_inputs(
+                session, redline, base, mode, refusal=refusal
+            )
         render_stats: dict = {}
         response = (
             captured
             if isinstance(captured, JSONResponse)
-            else _render_export(captured, render_stats)
+            else _render_export(captured, render_stats, refusal)
         )
         _trace_capture.app_event(
             "export",
@@ -5013,6 +5233,10 @@ def create_app(
             redline=redline or "",
             ok=response.status_code == 200,
             **({"render": render_stats} if render_stats else {}),
+            # Why a redline on the original was refused: the named reason,
+            # and for a failed self-check the first mismatching element
+            # (positions and element names only).
+            **({"refusal": refusal} if refusal else {}),
         )
         return response
 

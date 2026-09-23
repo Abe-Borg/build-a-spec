@@ -98,11 +98,44 @@ test("the export URL builder covers every shape the menu offers", () => {
     exportDocxUrl({ mode: "normalized" }),
     "/api/export/docx?mode=normalized",
   );
-  assert.equal(exportDocxUrl({ redline: "master" }), "/api/export/docx?redline=master");
+  // Every redline names its mode: the server's default for a bare
+  // `redline=master` became the redline on the original, and a menu item
+  // relying on a default would silently change which file it downloads.
   assert.equal(
-    exportDocxUrl({ redline: "version", base: 3 }),
-    "/api/export/docx?redline=version&base=3",
+    exportDocxUrl({ redline: "master", mode: "normalized" }),
+    "/api/export/docx?redline=master&mode=normalized",
   );
+  assert.equal(
+    exportDocxUrl({ redline: "master", mode: "preserved" }),
+    "/api/export/docx?redline=master&mode=preserved",
+  );
+  assert.equal(
+    exportDocxUrl({ redline: "version", base: 3, mode: "normalized" }),
+    "/api/export/docx?redline=version&base=3&mode=normalized",
+  );
+});
+
+test("the two existing redline actions keep asking for extracted provisions", () => {
+  // Pinned by the runExport key each action already has, so a redline on
+  // the original added beside them does not disturb this — and a regression
+  // that drops the mode (falling back to the server's new default) fails.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const panel = readFileSync(
+    join(here, "..", "src", "components", "ArtifactPanel.tsx"),
+    "utf8",
+  );
+  const master = panel.match(
+    /runExport\(\s*"redline-master",\s*exportDocxUrl\(\{([^}]*)\}\)/,
+  );
+  assert.ok(master, "the redline-master action builds its URL through exportDocxUrl");
+  assert.match(master[1], /redline:\s*"master"/);
+  assert.match(master[1], /mode:\s*"normalized"/);
+  const version = panel.match(
+    /runExport\(\s*"redline-version",\s*exportDocxUrl\(\{([^}]*)\}\)/,
+  );
+  assert.ok(version, "the redline-version action builds its URL through exportDocxUrl");
+  assert.match(version[1], /redline:\s*"version"/);
+  assert.match(version[1], /mode:\s*"normalized"/);
 });
 
 test("the project file download surfaces a refusal's message and scopes the tutorial", async (t) => {

@@ -345,6 +345,26 @@ invisible to CI and expensive to the user.
       and is editable the moment it lands — nothing runs after the import
       any more, so nothing can be waited on.
 
+### Export Word (keeps your formatting) keeps more of it (redline program, Phase 0)
+
+On a **real office master**, export with *Export Word (keeps your
+formatting)* and open the file in **real Word** after each edit below — the
+fixtures in the suite are python-docx- and LibreOffice-built, and only Word
+proves Word's layout:
+
+- [ ] **Add a provision near the top of an article** in a master with typed
+      letters ("A.⇥…"): every provision below it is relettered and keeps the
+      **tab** after its letter and any **bold** or italic phrase; the new
+      provision has the master's tab after its letter, not a space.
+- [ ] **Delete the provision just above a landscape schedule page**: the page
+      stays **landscape** (the section break stays with the content above
+      it), and the document has as many sections as before.
+- [ ] **Add an article in a Word-numbered master** (the article headings'
+      visible text is only the title): the new heading looks like the other
+      headings, and carries Word's number only — no typed number beside it.
+- [ ] **An export with no edits** keeps the master's article numbers as
+      written — `1.01 SUMMARY` stays `1.01`, not `1.1`.
+
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 
 - [ ] Attach one of each reference type — `.docx`, `.pdf`, `.txt`, `.xml`,

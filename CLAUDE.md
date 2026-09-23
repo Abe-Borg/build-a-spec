@@ -14630,7 +14630,7 @@ picks the release).
 
 ## Custom XML is tracked from inside, never wrapped — implemented notes
 
-Found while building redline Phase 2 PR B (native "Moved" marks). PR B's
+PR #206. Found while building redline Phase 2 PR B (native "Moved" marks). PR B's
 "Found, not done" lists it, and its native-move path already keeps any
 paragraph holding custom XML on the Phase 1 rendering (its `markup`
 fallback), so only the Phase 1 `w:ins`/`w:del` path was affected. That path

@@ -22,7 +22,7 @@ other instead of being rebuilt from its first run, and a new sub-provision
 in a Word-numbered master takes its own numbering level — see "Phase 1
 follow-up (links and the nesting level) — as built". No release entry
 either; its draft is under "Release-note drafts".
-**A redline that Word would refuse to open is fixed** (2026-09-23): inline
+**A redline that Word would refuse to open is fixed** (PR #206, 2026-09-23): inline
 custom XML in a deleted, moved or rewritten provision was wrapped whole in a
 tracked change, which Word will not load ([MS-OI29500] §2.1.188(a)). It is
 now tracked from inside, like a hyperlink, and the self-check refuses the
@@ -1049,7 +1049,8 @@ above, plus the "Found, not done" lists — this one's and Phase 0's.
 
 #### Phase 1 follow-up (custom XML inside a tracked change) — as built
 
-Found while building Phase 2 PR B (native "Moved" marks). It is listed in
+PR #206 (2026-09-23). Found while building Phase 2 PR B (native "Moved"
+marks). It is listed in
 PR B's own "Found, not done", which this follow-up closes. PR B's native-move
 path already sends any paragraph that holds custom XML down the Phase 1 path
 (its `markup` fallback). That path is the one fixed here, so no PR B code

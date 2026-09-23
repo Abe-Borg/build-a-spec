@@ -52,7 +52,8 @@ Two more growth sources, both kept forever today:
 - **Fetched web pages.** Each chat `web_fetch` can leave up to
   `WEB_FETCH_MAX_CONTENT_TOKENS` (50k) tokens of page text in history, four
   fetches per round (`CHAT_MAX_FETCHES`). Only fetched PDFs are elided at
-  commit (`elide_all_pdf_sources`).
+  commit (`elide_all_pdf_sources`). (Phase 2 drops the page text too; see
+  its section.)
 - **Web search results** (encrypted content the API needs intact — they
   can only leave with a whole summarized span, never be edited).
 
@@ -110,24 +111,50 @@ see Phase 5.
 
 | Phase | What | Status | Commit/PR | Notes |
 |---|---|---|---|---|
-| plan | this file | **in review** | `72a3b2f` (PR #182) | |
-| 1 | Stale outlines out of saved history + history composition | **in review** | `43a8ad8` (PR #182) | commit-time + load-time elision; Developer tools row; offline profiler |
-| 2 | Fetched web-page text out of saved history | not started | | gated: owner decision D2 + one live canary request |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | gated: D1, D3; ship both halves together |
+| plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
+| 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
+| 2 | Fetched web-page text out of saved history | **in review** | `a6e5fea` (PR #183) | commit-time + load-time elision; live canary built, its one request (the owner's run) gates the merge — see Phase 2 → Canary result |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | unblocked (D1 and D3 decided 2026-09-22); ship both halves together |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
 A status moves to **complete** only after the PR merges, set by the next
 session that touches this file (the project-workspace convention).
 
+**Where it stands (2026-09-22, recorded while Phase 2 is in review).**
+Phase 1 is on `master`. The owner decided D1–D4 on 2026-09-22 (see the
+Decisions table). No real measurements have been supplied yet, so the
+numbers under "What actually fills the history" are still the synthetic
+ones.
+
+- **Phase 2** is built and in review in PR #183. Its live canary has not
+  been run yet: that takes the owner's API key and one paid request, and
+  the PR should not merge until the canary reports acceptance (see Phase 2
+  → Canary result).
+- **Phase 3** is next, and nothing blocks building it: D1 is 600k tokens
+  with the last 3 user turns kept, and D3 is our own summarizer. It ships
+  the condensed conversation and the recall tool together, as its own PR.
+  Turning it on by default still waits on the paid recall check under
+  "Before it is on by default".
+- **D4 is yes.** Phase 3's summary lists decisions missing from the
+  ledgers, and that list becomes a candidate source for the harvest
+  (project-workspace Phase 4, merged in PR #185). The harvest spec records
+  the seam (`project-workspace/04_HARVEST.md`, deviation 23): one more
+  framed, neutralized block in `HarvestInputs`, reaching the harvest sheet
+  through the same checks and commit. It gets wired once Phase 3's summary
+  exists. That deviation was written before D1, D3 and D4 were decided, so
+  it still calls them open.
+- **Phase 5** is optional and still waits on a measured before/after on
+  real full drafts.
+
 ## Decisions (owner)
 
 | # | Question | Recommendation | Status |
 |---|---|---|---|
-| D1 | Trigger size for condensing, and how many turns to keep word for word | 150k tokens of committed conversation (the API's own default threshold); keep the last 3 user turns | open — needed before Phase 3 |
-| D2 | Drop fetched web-page text when a turn is saved, like PDFs? | Yes: the reply keeps its cited passages; the model can re-fetch | open — needed before Phase 2 |
-| D3 | Our own summarizer, or Anthropic's on-demand compaction beta? | Our own (reasons under Phase 3) | open — needed before Phase 3 |
-| D4 | Should flagged decisions become Project-facts suggestions? | Yes, via the harvest (Phase 4 hand-off) | open |
+| D1 | Trigger size for condensing, and how many turns to keep word for word | 150k tokens of committed conversation (the API's own default threshold); keep the last 3 user turns | **decided 2026-09-22: condense at 600k tokens of committed conversation; keep the last 3 user turns word for word.** Differs from the recommendation, so the figures under Phase 3's "Cost" (which assume 150k) scale up for the Phase 3 build |
+| D2 | Drop fetched web-page text when a turn is saved, like PDFs? | Yes: the reply keeps its cited passages; the model can re-fetch | **decided 2026-09-22: yes** |
+| D3 | Our own summarizer, or Anthropic's on-demand compaction beta? | Our own (reasons under Phase 3) | **decided 2026-09-22: our own summarizer**, not the on-demand compaction beta |
+| D4 | Should flagged decisions become Project-facts suggestions? | Yes, via the harvest (Phase 4 hand-off) | **decided 2026-09-22: yes**, through the harvest (the Phase 4 hand-off) |
 
 Phase 1 needs none of these: it removes only data that is stale by
 construction and duplicated in full by every turn's PROJECT CONTEXT.
@@ -217,6 +244,63 @@ plus a citation into it, sent once. Follow the `tools/qc_verifier_canary.py`
 pattern (no request without `--run`) and record the result here; CLAUDE.md
 names that canary as the sole paid exception, so adding a second one means
 updating that ground rule in the same change.
+
+**As built** (differences from the scope above, and why):
+
+- It also runs when an older project is opened, not only at commit (the
+  scope names commit). Otherwise a file saved before this phase re-sends
+  every page it ever fetched, on every turn. Phase 1 set the same posture:
+  copy-on-write, an INFO log, and the file changes at the next save.
+- `elide_fetched_page_text` lives in `backend/llm/history_hygiene.py` beside
+  Phase 1's elision, not inside `resend_sanitizer.elide_all_pdf_sources`.
+  The sanitizer is a near-verbatim Spec Critic port shared with the research
+  and QC continuations, which must keep page text mid-run.
+- Only the text source's `data` changes. The document block stays, because a
+  citation's `document_index` counts every document block across all
+  messages, so dropping one would point later citations at the wrong page.
+  `url`, `retrieved_at`, `title` and the citation setting stay too.
+- A fetched PDF keeps the note the PDF elision already wrote (matched by
+  `PDF_ELISION_NOTE_PREFIX`). A page no longer than its note stays as it is,
+  and that rule is also what makes the elision idempotent.
+- `history_composition` gains a `fetched_page_texts` count and a "page text
+  in fetched web pages" category. Developer tools' History makeup row shows
+  the count when it is nonzero, and the profiler's "Now" applies both trims
+  and counts fetched pages per file. The composition counts assistant
+  messages only, matching the elision; a test caught a first draft that
+  counted a fetch-shaped block in a user message.
+- The canary is `tools/fetch_elision_canary.py`. It uses the production
+  commit transform, chat tools and resend sanitizer, with a one-line system
+  prompt, adaptive thinking at `low` effort and a 1,024-token ceiling (about
+  two cents at most). It refuses to send if the commit transform did not
+  replace the page. `--control` sends the same conversation with the page
+  text kept, as one more request, only when a refusal needs diagnosing.
+  Unlike the QC canary it has hermetic tests.
+- Tests: `tests/test_fetched_page_elision.py` (6) and
+  `tests/test_fetch_elision_canary.py` (6). Each mechanism was reverted in
+  place to prove it load-bearing: the commit wiring → 4 red, the load wiring
+  → 1, the PDF-note check → 3, the shrink rule → 4, the composition split
+  → 2, its assistant-only scope → 1, the profiler's second trim → 1, the
+  canary's guard → 1.
+
+**Canary result** (the owner's run; paste its output here):
+
+- **Pending**: not yet run. The command is
+  `.venv\Scripts\python tools\fetch_elision_canary.py --run`. Phase 2 should
+  merge only after the canary reports that the provider accepted the
+  conversation.
+
+**Release-note draft** (for whichever release carries this; see "Release
+policy" below):
+
+> **Web pages the assistant reads stop riding along.** When the assistant
+> read a web page during a chat, the page's full text was saved into the
+> conversation and re-sent with every later message, up to about 50,000
+> tokens a page. Now a saved turn keeps the page's address, its title and
+> the passages the reply quoted, and drops the rest; the assistant reads the
+> page again whenever it needs the exact wording. Research-heavy sessions
+> cost less per message, stay further from the model's context limit, and
+> save smaller project files. Projects saved by earlier versions are trimmed
+> the same way when you open them.
 
 ## Phase 3 — condensed conversation + recall
 

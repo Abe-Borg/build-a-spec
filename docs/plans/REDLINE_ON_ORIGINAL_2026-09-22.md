@@ -1,13 +1,23 @@
 # Redline on your original — tracked changes in the Word file you imported
 
-**Status:** Phase 0 built 2026-09-22 in PR #184 — ships in 1.21.0 (the
-project-workspace closeout; its note is under "Release-note drafts"). All seven
-decisions ratified 2026-09-22 (see "Decisions"). **Phase 1's backend PR is
-merged** (PR #187, merged `0aa2e98`: the export, the self-check, the refusals,
-the route and the payload flag — see "Phase 1 (backend PR) — as built"). The
-1.21.0 build carries it, reachable only through the API and unannounced until
-the UI ships. **Its UI PR is next and not started**: the menu item, *Open
-redline in Word*, the capability and the copy. Start from that as-built note.
+**Status:** Phase 0 built 2026-09-22 in PR #184 — announced in 1.21.0's
+release entry (the project-workspace closeout; its draft is under
+"Release-note drafts"). All seven decisions ratified 2026-09-22 (see
+"Decisions"). **Phase 1 is built, in two PRs:** the backend (PR #187,
+merged `0aa2e98`: the export, the self-check, the refusals, the route and
+the payload flag — see "Phase 1 (backend PR) — as built") and the UI
+(PR #190: the menu item, *Open redline in Word*, the capability, the copy
+and the QA rows — see "Phase 1 (UI PR) — as built"). Neither has a release
+entry. 1.21.0's, written while only the backend had merged, leaves the
+redline out, since on its own the export is reachable only through the API.
+Which release announces it, with the Phase 1 draft under "Release-note
+drafts", is the owner's pick — and v1.21.0 was not yet tagged when PR #190
+was written, so a v1.21.0 tag cut from `master` after PR #190 merges ships
+the menu item too, and that entry (not frozen until tagged) would need the
+draft. The new export's real-Word QA rows in `docs/RELEASE_WINDOWS.md` are
+still to run.
+**Phase 2 is next and not started**; start from the two Phase 1 as-built
+notes.
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
 the Batch 5 diff engine and redline writer (`diffing.py`, `docx_export.py`),
 and the retained upload + formatting map every import already keeps.
@@ -773,6 +783,108 @@ Found, not done (outside this PR):
 - **Hyperlinks send edited provisions to the fallback** (44% of the corpus
   sweep's edited provisions). The splice's eligibility widens from here.
 - Phase 0's "Found, not done" list stands unchanged.
+
+#### Phase 1 (UI PR) — as built
+
+**Built 2026-09-23 in PR #190.** It bumped no VERSION, added no
+`release_notes.py` entry and changed no backend route or payload — the UI
+reads what the backend PR already serves. The why and the traps are in
+`CLAUDE.md` → "Redline on your original — implemented notes (Phase 1, UI
+PR)"; the contract gained an "In the app" paragraph in
+`docs/DOCX_FIDELITY.md`.
+
+**Which release carries it depends on when v1.21.0 is tagged — the owner's
+call.** 1.21.0's entry was written by the project-workspace closeout
+(PR #188) while only the backend had merged, and it leaves the redline out;
+v1.21.0 was still untagged when this PR was written. Tagged before this PR
+merges, 1.21.0 ships none of this UI, and the Phase 1 draft under
+"Release-note drafts" waits for the next release; nothing else changes.
+Tagged from `master` after it merges, 1.21.0 ships the menu item, so before
+that tag the 1.21.0 entry (not frozen until tagged) takes the Phase 1 draft,
+and the statements that the 1.21.0 build reaches the redline only through
+the API are corrected in the same change:
+`project-workspace/07_RELEASE_CLOSEOUT.md` deviation 8, the
+project-workspace README's phase-7 row and release-policy paragraph, the
+backend as-built note above, and the closeout's `CLAUDE.md` section (by
+erratum — it is append-only). The tag need not be `master`'s head: PR #189
+(compaction Phase 3) merged first and raises the same question for its own
+work, and tagging the closeout merge, `a273ab7`, keeps both out of 1.21.0.
+
+Code: `frontend/src/types.ts` (`preserved_redline_available`,
+`preserved_redline_reason` and `PreservedRedlineReason` on the payload; the
+bridge's `open_in_word(mode, redline?)`), `App.tsx` (both fields read on
+both payload paths, forwarded by the session-bundle mapping, cleared with a
+new session; `onOpenInWord(mode, redline)`), `ArtifactPanel.tsx` (the item,
+its opener, a busy state keyed by target, the extracted-provisions tooltip),
+`main.py` (`open_in_word(mode, redline="")`), `lib/capabilities.ts` +
+`lib/tour.ts` (`export.redline-original` on the existing `export` step, whose
+body was resynced), and the copy: `lib/sourceOutputGuidance.ts`,
+`HelpModal.tsx`, `TrustDeepDiveModal.tsx`. Tests: three new pins in
+`frontend/tests/downloads.test.ts`, one in `sourceCapabilities.test.ts` (and
+its id list), and the four `open_in_word` tests in `tests/test_close_prompt.py`
+extended (the first parametrized over both variants). QA rows:
+`docs/RELEASE_WINDOWS.md` → "Redline on your original (redline program,
+Phase 1)".
+
+Deviations from the text above:
+
+1. **"Right under *Export Word (keeps your formatting)*" means right under
+   its pair.** In the desktop app the formatted export's own *Open in Word*
+   stays directly beneath it, and the redline follows with *Open redline in
+   Word* directly beneath the redline, so each opener sits beside the export
+   it opens. In a browser there are no openers, and the redline is directly
+   under the formatted export. The order is pinned (formatted → original →
+   extracted), not the adjacency.
+2. **The unavailable item is disabled, not hidden, and its opener is hidden,
+   not disabled.** The item stays in the menu with the server's reason on
+   hover (a `Tip`, because a disabled button never shows a native title);
+   one greyed row saying why is enough, so *Open redline in Word* is offered
+   only while the redline is available. The formatted export's opener
+   differs deliberately: it falls back to the styled export, and there is no
+   redline to fall back to.
+3. **The shell pairs the redline with `preserved` only.**
+   `open_in_word("normalized", "master")` is refused rather than opening the
+   extracted-provisions redline in Word — nothing in the menu asks for that,
+   and quietly opening a different file than the one asked for is the thing
+   the house rules forbid. `redline` is a closed vocabulary (`""`,
+   `"master"`) checked before a URL is built.
+4. **`SOURCE_OUTPUT_GUIDANCE` gained a sixth concept** rather than a
+   rewritten fifth: *Redline on your original* sits beside *Normalized
+   redline*, which now points at it. Three surfaces render the list (Help,
+   the tour's export step, the dossier's export card), and two places
+   counted it ("five") — both now say six. The guidance test's id list was
+   updated knowingly.
+5. **The copy the feature made false was fixed beyond the three named
+   surfaces**, because each was a contract a reader could now catch out:
+   Help's trust point "The redline scope is explicit" (it described one
+   redline whose Reject All cannot recreate the master), the dossier's
+   card 10 (Compare shares code with "the redline export" — now true only of
+   the extracted-provisions one), the dossier's "What this does not do"
+   bullet, the extracted-provisions menu tooltip, Help's Export step and its
+   office-master recipe. Help gained a *Redline on your original* recipe for
+   the replace-your-master workflow. Pre-existing staleness the feature did
+   not touch (the office-master recipe's pre-1.14.0 permission steps) was
+   left alone.
+6. **A new session also clears the formatted export's flag.**
+   `clearSessionState` never reset `preservedExportAvailable` — invisible,
+   since the Export menu needs content, but it was the one payload flag left
+   for the refetch; it now clears with the two new ones, and all three are
+   pinned.
+7. **The tutorial-scope refusal of `open_in_word` was never pinned.** The
+   fourth test now pins it for both variants, along with the closed
+   vocabulary and the pairing rule.
+
+Checked (recorded, not committed): a headless Chromium run against the real
+backend and the production build — the item enabled and downloading
+`<upload name> - REDLINE.docx` on an ordinary master; disabled, with hover
+text byte-identical to the payload's reason, on a master carrying a pending
+`w:ins`; the stubbed desktop bridge called with `("preserved", "master")` by
+*Open redline in Word* and `("preserved", "")` by *Open in Word*. None of it
+stands in for the real-Word QA rows, which are still to run.
+
+What Phase 2 starts from: unchanged by this PR — the native-moves rendering
+and the real-Word judge above, plus the Phase 1 and Phase 0 "Found, not
+done" lists, none of which this PR touched.
 
 ### Phase 2 — Native moves and real-Word proof
 

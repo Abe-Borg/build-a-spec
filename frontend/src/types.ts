@@ -964,6 +964,22 @@ export interface SaveOutcome {
   error: string;
 }
 
+/**
+ * Why the redline on your original cannot be exported, before anyone clicks
+ * (DocPayload.preserved_redline_reason). `code` is the server's closed
+ * availability vocabulary; `message` is its own sentence, rendered verbatim —
+ * never restated in client prose (the sourceCapabilities.ts rule). A refusal
+ * only a render can reach arrives later, as the export's 409.
+ */
+export interface PreservedRedlineReason {
+  code:
+    | "no_baseline"
+    | "no_original"
+    | "pending_revisions"
+    | "revision_scan_unavailable";
+  message: string;
+}
+
 export interface DocPayload {
   /** Authoritative active-workspace lease after this snapshot/mutation. */
   workspace_id: number;
@@ -1042,6 +1058,16 @@ export interface DocPayload {
    * and the same derivation the export route selects its mode by.
    */
   preserved_export_available: boolean;
+  /**
+   * True when the redline on your original can be exported: a copy of the
+   * Word file you imported with every change since the import as a native
+   * Word tracked change. Server-derived — the same derivation the export
+   * route's default and its refusal read, so the menu never offers a redline
+   * the route is about to refuse.
+   */
+  preserved_redline_available: boolean;
+  /** Why it cannot, when it cannot; null when it can. */
+  preserved_redline_reason: PreservedRedlineReason | null;
   /** True when edits can be exported by cloning and narrowly patching the source. */
   preservation_ready: boolean;
   /** Detailed imported-source capability state; null for from-scratch documents. */
@@ -2641,12 +2667,16 @@ declare global {
         /** Export the section to a fresh temporary .docx and open it with
          *  the system's default Word application, so the real layout can be
          *  seen. "preserved" rebuilds the imported original with the current
-         *  content; "normalized" is the Build-a-Spec styled file. Goes
-         *  through the same export route as the menu, so its refusals
-         *  (a detached legacy project, a tutorial copy) come back as the
+         *  content; "normalized" is the Build-a-Spec styled file. `redline`
+         *  "master" (with "preserved" only) opens the redline on your
+         *  original instead, so its tracked changes can be reviewed in Word
+         *  straight away. Goes through the same export route as the menu, so
+         *  its refusals (a detached legacy project, a master that already
+         *  carries tracked changes, a tutorial copy) come back as the
          *  server's own message. */
         open_in_word?: (
           mode: "preserved" | "normalized",
+          redline?: "" | "master",
         ) => Promise<OpenInWordResult>;
       };
     };

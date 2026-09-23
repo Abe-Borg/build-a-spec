@@ -13639,11 +13639,36 @@ and the traps.
   under it, just never ignored). A run never reuses a folder
   (`run-<stamp>[-n]`), and `report.json` is rewritten after every group, both
   at the root and in the run folder.
-- **Tests.** `tests/test_word_judge.py` (33), `tests/test_redline_word_judge.py`
-  (43, skipped unless asked), 5 new in `tests/test_docx_corpus.py`, the
-  resolve tests in `tests/test_render_docx_word.py`, and the parse test over
-  both PowerShell scripts. Revert matrix, each mechanism reverted in place
-  and restored from its exact text: <<MATRIX>>
+- **Tests.** `tests/test_word_judge.py` (32),
+  `tests/test_redline_word_judge.py` (43, skipped unless asked), 5 new in
+  `tests/test_docx_corpus.py`, and 14 new in
+  `tests/test_render_docx_word.py` (the resolve mode, its CLI, and the parse
+  test over both PowerShell scripts, which runs wherever `pwsh` is on `PATH`
+  and skips cleanly where it is not). Revert matrix, each mechanism reverted
+  in place and restored from its exact text: 44 mechanisms, 44 red. The
+  bridge's Python side, each → 1: refusing an existing output, an output
+  that two jobs write, an output that is an input under Windows' case rules,
+  an answer for a job it was not given, 5.1's one-element array, 5.1's BOM,
+  a finished job whose file is missing, a count that is a bool, a failed job
+  with no reason, a render inheriting a resolve request, the per-document
+  timeout, `--resolve` without `--output`. The bridge's PowerShell pins,
+  each → 1: the read-only open, the owned-window check, format 16. The
+  judge: each of rsids / `w:proofErr` / `w:lastRenderedPageBreak` → 4;
+  `_GoBack` → 2 on the first run — only the faithful-Word tests caught it,
+  because the tolerance unit tests went through a COPY of the comparison.
+  They now call `body_difference`, the one comparison every verdict goes
+  through, and the row re-ran at 4. Symmetry (comparing with the app's files
+  as written) → 2; the author check, changes left, markup left, a bookmark
+  lost by no move, the lost bookmark excluded from Reject All's comparison,
+  a non-structural refusal, Word's per-file error, file names not paths, the
+  sweep's seeds, the sample's author and leftovers, the gated suite's skip →
+  1 each; which bookmarks a moved copy carries → 2. The corpus source's
+  bookmark, the recipe's needles, the placeholder set before opening, the
+  owner's identity restored in the `finally`, authors checked before saving,
+  the identity never printed, each package-scan rule (whole-word identity,
+  user-folder path, every author, presence) and the 5.1 parse → 1 each. The
+  matrix script restores each file from the exact text it read and checks
+  `git diff` is clean after every row.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

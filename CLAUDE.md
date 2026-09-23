@@ -14138,13 +14138,21 @@ finding the doc payload always had.
   lines itself, like its `import_is_unstructured` mirror. Its docstring
   now names `SessionState.preserved_chrome` as the rule it mirrors, instead
   of the turn-context builder's inline copy, which no longer exists.
-- **How this meets a per-version lint memo.** A separate change was
-  expected to add `SessionState.document_lint`, a lint memo per committed
-  version, keyed partly on the chrome tuple. It had not merged, and no PR
-  was open, when this landed. Whichever of the two merges second should
-  have the event pass `session.preserved_chrome()` to the memo (or have the
-  memo call it itself). The event and the payload behind it then share one
-  lint pass.
+- **How this meets the per-version lint memo (PR #200).** PR #200 adds
+  `SessionState.document_lint`, a lint memo per committed version keyed
+  partly on the chrome tuple. It was open, not merged, when this landed,
+  and its notes leave the event's missing chrome alone as a suggested
+  follow-up. This is that follow-up. A trial merge of the two branches
+  (`git merge-tree`) shows `app.py` and the turn context merging on their
+  own into `session.document_lint(..., preserved_chrome=
+  session.preserved_chrome())`. Two small conflicts remain, both in
+  `conversation.py`. The two new methods sit side by side: keep both. The
+  event's call: take `session.document_lint(` and keep this change's
+  comment; its `preserved_chrome=session.preserved_chrome()` line carries
+  over by itself. With both merged, the event and the payload behind it
+  pass equal inputs, so the memo lints each committed version once.
+  `test_the_turn_lint_event_matches_the_payload_behind_it` fails any
+  resolution that drops the chrome from the event.
 - **Tests: `tests/test_preserved_chrome_lint.py` (4).**
   - The method's gate: a fresh session, a map without the retained bytes,
     and both.

@@ -95,9 +95,10 @@ def test_the_docs_use_the_venv_name_the_setup_creates() -> None:
 
 
 # Every place that tells someone to run a command on Windows: the five docs
-# the venv-name test reads, the two live plans and the execution record
-# whose commands are still to be run, the four profilers' usage docstrings
-# and the PyInstaller spec's build steps. The deep-dive remediation plans are
+# the venv-name test reads, the live plans (the compaction plan, the
+# project workspace, and the research/QC cost program's plan and progress
+# file) and the execution record whose commands are still to be run, the
+# four profilers' usage docstrings and the PyInstaller spec's build steps. The deep-dive remediation plans are
 # finished and keep their commands as written (the Batch 8 decision), and
 # CLAUDE.md is append-only history: only its Commands section is read, so a
 # note can still quote the broken form it records.
@@ -108,6 +109,8 @@ _WINDOWS_COMMAND_DOCS = (
     "docs/DOCX_FIDELITY_CORPUS.md",
     "docs/DOCX_RENDERER_WINDOWS.md",
     "docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md",
+    "docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md",
+    "docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md",
     "docs/plans/project-workspace/README.md",
     "docs/review-results/2026-09-09/EXECUTION_RECORD.md",
     "tools/chat_history_profile.py",

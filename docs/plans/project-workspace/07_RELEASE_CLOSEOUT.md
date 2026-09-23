@@ -1,6 +1,6 @@
 # Phase 7 — Release closeout: the one release for Phases 2–6
 
-**Status:** in review (PR pending) — cut as **v1.21.0**. **Depends on:**
+**Status:** in review (`c526a38`–`7143b48`, PR #188) — cut as **v1.21.0**. **Depends on:**
 every phase Abraham wants in the release, merged (Phases 2, 3, 4 and 5A at
 minimum; 5B and 6 only if built). This is the LAST phase, and the only one
 that touches a version number.

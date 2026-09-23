@@ -1539,6 +1539,7 @@ REDLINE_ACCEPT_CHECK = "accept_check_failed"
 REDLINE_REJECT_CHECK = "reject_check_failed"
 REDLINE_BOOKMARK_CHECK = "duplicate_bookmarks"
 REDLINE_PACKAGE_CHECK = "package_check_failed"
+REDLINE_WORD_LOAD_CHECK = "word_load_check_failed"
 
 _REDLINE_UNAVAILABLE = (
     "The redline of extracted provisions still works."
@@ -1602,6 +1603,11 @@ _REDLINE_MESSAGES = {
         "shown as a tracked change. " + _REDLINE_UNAVAILABLE
     ),
 }
+_REDLINE_MESSAGES[REDLINE_WORD_LOAD_CHECK] = (
+    "The redline failed its own check (word load check failed): it would "
+    "have put Word markup inside a tracked change that Word refuses to "
+    "open, so it was not handed over. " + _REDLINE_UNAVAILABLE
+)
 _SELF_CHECK_MESSAGE = (
     "The redline failed its own check ({check}): it could not prove that "
     "Accept All gives the formatted export and Reject All gives your "
@@ -1632,6 +1638,12 @@ def redline_refusal_message(reason: str) -> str:
 
 _W_TBL = qn("w:tbl")
 _W_SDT = qn("w:sdt")
+_W_CUSTOM_XML = qn("w:customXml")
+#: The revision wrappers that hold content (a paragraph-mark or row flag of
+#: the same name is empty, so it is never anyone's ancestor).
+_TRACKED_WRAPPERS = frozenset(
+    qn(f"w:{name}") for name in ("ins", "del", "moveFrom", "moveTo")
+)
 _W_FLD_CHAR = qn("w:fldChar")
 _W_FLD_CHAR_TYPE = qn("w:fldCharType")
 _W_BOOKMARK_START = qn("w:bookmarkStart")
@@ -2265,6 +2277,20 @@ def _self_check(loaded: _LoadedBody, redline: list, clean: list, moved_names) ->
     )
 
     redline_body = _body_of(loaded, redline)
+    # Word will not load a tracked change holding inline custom XML
+    # ([MS-OI29500] §2.1.188(a)), and neither resolution below can see that:
+    # both resolve the markup fine. The writer never builds one
+    # (revision_marks descends into custom XML); this is the file checking
+    # that promise too.
+    wrapped = sum(
+        1
+        for element in redline_body.iter(_W_CUSTOM_XML)
+        if any(a.tag in _TRACKED_WRAPPERS for a in element.iterancestors())
+    )
+    if wrapped:
+        raise SourceRedlineError(
+            REDLINE_WORD_LOAD_CHECK, detail={"tag": "customXml", "count": wrapped}
+        )
     upload_body = _body_of(loaded, [copy.deepcopy(c) for c in loaded.content])
     accepted = first_difference(accept_all(redline_body), _body_of(loaded, clean))
     if accepted is not None:

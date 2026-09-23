@@ -22,7 +22,13 @@ other instead of being rebuilt from its first run, and a new sub-provision
 in a Word-numbered master takes its own numbering level — see "Phase 1
 follow-up (links and the nesting level) — as built". No release entry
 either; its draft is under "Release-note drafts".
-**The four things Phase 0 left behind are fixed too** (2026-09-23): refs
+**A redline that Word would refuse to open is fixed** (PR #206, 2026-09-23): inline
+custom XML in a deleted, moved or rewritten provision was wrapped whole in a
+tracked change, which Word will not load ([MS-OI29500] §2.1.188(a)). It is
+now tracked from inside, like a hyperlink, and the self-check refuses the
+shape outright. See "Phase 1 follow-up (custom XML inside a tracked change)
+— as built". No release entry; its draft is under "Release-note drafts".
+**The four things Phase 0 left behind are fixed too** (PR #207, 2026-09-23): refs
 that counted preserved blocks, the styled export numbering one, a non-spec
 import's placeholder headings in the formatted export and the redline, and
 a template clone's pending revisions — see "Phase 0 follow-up — as built".
@@ -1141,6 +1147,135 @@ Found, not done (outside this PR):
 What Phase 2 starts from: the native-moves rendering and the real-Word judge
 above, plus the "Found, not done" lists — this one's and Phase 0's.
 
+#### Phase 1 follow-up (custom XML inside a tracked change) — as built
+
+PR #206 (2026-09-23). Found while building Phase 2 PR B (native "Moved"
+marks, PR #204, merged while this was in review). It is listed in PR B's own
+"Found, not done", which this follow-up closes. PR B's native-move path
+already sends any paragraph that holds custom XML down the Phase 1 path (its
+`markup` fallback). That path is the one fixed here. PR B's `move_content`
+wraps through the same `_wrap_content`, so it would descend into custom XML
+too if a native move ever carried one, and the new guard below covers
+`w:moveFrom`/`w:moveTo` as well.
+
+**The defect.** `revision_marks._WRAPPABLE` listed `w:customXml`, so
+`_wrap_content` wrapped an inline custom XML element whole in a `w:ins` or
+`w:del` whenever a deleted, moved or rewritten provision held one. It did the
+same for an emptied section-break holder and for a paragraph in a deleted
+table's cell. The schema allows that. Word does not: "Word will fail to load
+a file if ins, del, moveTo, or moveFrom contains inline customXml"
+([MS-OI29500], revision 2025-02-18, §2.1.188(a), the note on ISO/IEC 29500-1
+§17.5.1.3). The self-check could not see it, because its pure-lxml
+resolvers resolve that markup fine. Rendered with the pre-fix writer, Accept
+All matched the formatted export and Reject All matched the upload, and the
+file Word would refuse to open was handed over. The word-level splice
+(`source_splice.render_redline`) was never affected. `map_paragraph` refuses
+a paragraph holding custom XML (`other_markup`), at the paragraph's own level
+and inside a hyperlink, so such a paragraph always takes the fallback, which
+marks it through `revision_marks`. That is now pinned.
+
+**Decision: descend, as for a hyperlink (option (a)).** The alternative was
+to refuse any change that touches custom XML by name. That would have ruled
+out a redline for every such master, and descending was the smaller change
+once the oracle was checked on hand-built XML.
+
+- *The writer.* `w:customXml` moved from `_WRAPPABLE` to `_DESCEND`. Its
+  `w:customXmlPr` is skipped like a paragraph's `w:pPr`: it stays first and
+  unmarked. Its content is wrapped where it sits, nested custom XML and
+  hyperlinks included.
+- *The residue that cannot descend is refused.* Custom XML inside something
+  the writer wraps whole cannot be moved out of the wrapper. That means an
+  inline content control, a smart tag, `w:dir`/`w:bdo`, math, or a run's text
+  box (any descendant, since a text box is a story of its own). This is
+  refused with the existing `untrackable_markup` reason, a structural
+  refusal whose sentence already fits ("markup around a change that cannot
+  be shown as a tracked change"), with `detail.tag = "customXml"`. No new
+  vocabulary was needed.
+- *The oracle, one tolerance.* Resolving the runs inside a custom XML
+  element away leaves the element empty. Word removes custom XML markup when
+  it opens a file, in every build since January 2010, and keeps the content,
+  so an empty element is not there at all. The comparison therefore drops an
+  inline `w:customXml` holding nothing but its `w:customXmlPr`, beside the
+  empty-hyperlink rule. `_join_to_next` counts an emptied one (nested ones
+  included) as no content, so a deleted paragraph left holding only an
+  emptied element is gone on Accept All. That includes the case where a
+  table follows it, which the join cannot join. Only an EMPTY element is
+  tolerated: one around content is still compared, so a lost or moved custom
+  XML boundary is still a difference.
+- *Defence in depth.* `_self_check` now refuses any redline body in which a
+  `w:customXml` has a `w:ins`, `w:del`, `w:moveFrom` or `w:moveTo` ancestor,
+  with the new code `word_load_check_failed` and a server-authored sentence.
+  It is not in `STRUCTURAL_REFUSALS`: it firing means the writer broke its
+  promise. It covers PR B's `w:moveFrom`/`w:moveTo` too.
+
+**Tests.**
+
+- `tests/test_revisions.py` (+5): deletion and insertion inside custom XML,
+  a deleted paragraph left with only emptied (nested) custom XML, the same
+  before a table, and "only an empty one is not content".
+- `tests/test_redline_original.py`: the invariant matrix gains five rows
+  (deleted, rewritten, moved in a Word-numbered master, a deleted table's
+  cell, an emptied break holder), each run twice: with the Phase 1
+  rendering and with native moves on (the app's default), where the moved
+  row falls back with `moves_fallback == {"markup": 1}`. Each keeps the
+  whole promise through `_verify`, and each asserts that no `w:customXml`
+  has a wrapper ancestor,
+  that a wrapper sits INSIDE the element, and that `w:customXmlPr` stays
+  first. `_verify` itself now asserts the wrapper-ancestor rule on every row
+  and sweep, and `_assert_schema_order` asserts the `w:customXmlPr` order.
+  There are also the named refusals (content control, smart tag), the
+  writer's own guards (descending, and refusing inside a content control, a
+  smart tag and a text box), and the self-check guard with the pre-fix
+  writer reinstated.
+- `tests/test_source_splice.py` (+1): the splice never maps custom XML.
+- `tests/word_judge.py`: two targeted groups (`targeted/custom-xml` and
+  `targeted/custom-xml-numbered`), and the coverage test requires
+  `del@customXml` and `ins@customXml`.
+
+**The rows needed a third provision and a Word-numbered master to move.** In
+a typed-letter article every move reletters. The splice cannot map the
+custom XML paragraph, so the moved copy is rewritten by the fallback and
+carries no custom XML. That meant `w:ins` inside the element needed a
+Word-numbered master, whose moved copy is cloned verbatim. With only two
+siblings, the diff keeps the custom XML provision in place and reports its
+sibling moved (the tie goes to the later position), so A moves below two
+siblings.
+
+**Measured, not asserted.** Rendered with the pre-fix writer and the new
+guard off, the deleted row passes both resolutions and holds one wrapped
+`w:customXml`. That is the defect exactly as the old self-check saw it:
+invisible. No corpus master holds inline custom XML, since Word strips it on
+save. The new rows are its only coverage, and the owner's Windows judge run
+is the first time real Word opens these files.
+
+**Revert matrix:** see the `CLAUDE.md` section.
+
+Found, not done (outside this change):
+
+- **The importer does not read text inside inline custom XML** (nor inside
+  an inline content control): `_collect_accept_all_text` mirrors python-docx
+  `CT_P.text`, which reads only direct runs and hyperlinks. So the tree, the
+  panel and the model's context never hold those words ("Section includes
+  for mechanical equipment." for "Section includes <custom XML>vibration
+  isolation</custom XML> for mechanical equipment."). A table cell's is lost
+  the same way. The formatted export then **silently drops them**
+  whenever the provision is rewritten by the fallback, which is every edit
+  and every relettering. Adding one provision above it is enough: the export
+  writes "B. Section includes for mechanical equipment.", with the words and
+  the tab gone. The redline shows that as a tracked deletion. Untouched
+  provisions are cloned verbatim and lose nothing.
+- **A deleted provision that is ONLY a hyperlink, directly before a table,
+  is refused** by the self-check (`accept_check_failed`). Accept All leaves
+  the emptied link, the join has no paragraph to hand it to, and the
+  paragraph stays. The custom XML version of that shape is handled above,
+  because Word's behaviour (strip on load) is documented. Whether Word keeps
+  or drops a paragraph holding only an emptied hyperlink is not documented.
+  The real-Word judge can answer it once the app renders the case. The
+  refusal fails closed and loses nothing.
+- Custom XML inside a content control, a smart tag or a text box of a
+  changed provision stays a refusal. Descending into those containers too
+  would widen the writer for a shape no corpus master has.
+
 ### Phase 2 — Native moves and real-Word proof
 
 **Scope:**
@@ -1499,7 +1634,8 @@ back the Phase 1 rendering with no other change.
   wraps one (`markup`), but Phase 1's `w:ins`/`w:del` writer lists
   `w:customXml` as wrappable, so a deleted, inserted or edited provision
   holding inline custom XML would produce such a file — and the self-check
-  cannot see it. Suggested as its own task.
+  cannot see it. Suggested as its own task. **Closed by PR #206**: see
+  "Phase 1 follow-up (custom XML inside a tracked change) — as built".
 - Recent Word writes an optional `w16du:dateUtc` on revision wrappers
   (ignorable); not written.
 - Phase 1's and the follow-up's "Found, not done" lists stand unchanged.
@@ -1657,3 +1793,10 @@ against the recommendation, and says so.
   In a master whose provisions Word numbers, a new sub-provision (the first
   '1.' under an 'A.') now prints at its own level instead of one level up,
   whenever your master's numbering defines that level."
+- **Phase 1 follow-up (custom XML inside a tracked change):** "A redline on
+  your original of a master that carries inline custom XML markup now opens
+  in Word. Build-a-Spec used to put that markup inside its tracked changes,
+  which Word refuses to open. It now marks the words inside it instead, and
+  refuses, with a reason, the rare case it cannot mark that way. (Word
+  itself removes this markup when it saves, so it only turns up in masters
+  written by other tools.)"

@@ -113,6 +113,66 @@ def test_a_deletion_inside_a_hyperlink_resolves_where_it_sits():
     assert "".join(t.text for t in rejected.iter(f"{{{W}}}t")) == "linkafter"
 
 
+#: An inline custom XML element's own properties, which lead it and are
+#: never wrapped.
+_CUSTOM_XML_PR = (
+    "<w:customXmlPr><w:attr w:name='kind' w:val='equipment'/></w:customXmlPr>"
+)
+
+
+def _custom_xml(inner: str) -> str:
+    return (
+        f"<w:customXml w:uri='urn:example:spec' w:element='term'>"
+        f"{_CUSTOM_XML_PR}{inner}</w:customXml>"
+    )
+
+
+def test_a_deletion_inside_custom_xml_resolves_where_it_sits():
+    """Word will not load a file whose ``w:ins``/``w:del`` holds inline
+    custom XML ([MS-OI29500] §2.1.188(a)), so the redline marks the runs
+    inside it, the way it marks a hyperlink's. Accept All leaves the element
+    empty — Word removes custom XML markup on load, so that is nothing — and
+    Reject All gives the element back whole, properties and all."""
+    body = _body(
+        "<w:p><w:r><w:t xml:space='preserve'>Provide </w:t></w:r>"
+        + _custom_xml(
+            f"<w:del {_rev(1)}><w:r><w:delText xml:space='preserve'>spring "
+            "</w:delText></w:r></w:del>"
+        )
+        + "<w:r><w:t>isolators.</w:t></w:r></w:p>"
+    )
+    accepted = accept_all(body)
+    assert _texts(accepted) == ["Provide isolators."]
+    assert _equal(
+        accepted,
+        _body("<w:p><w:r><w:t xml:space='preserve'>Provide isolators.</w:t></w:r></w:p>"),
+    )
+    rejected = reject_all(body)
+    assert _texts(rejected) == ["Provide spring isolators."]
+    assert _equal(
+        rejected,
+        _body(
+            "<w:p><w:r><w:t xml:space='preserve'>Provide </w:t></w:r>"
+            + _custom_xml("<w:r><w:t xml:space='preserve'>spring </w:t></w:r>")
+            + "<w:r><w:t>isolators.</w:t></w:r></w:p>"
+        ),
+    )
+    assert not has_revisions(accepted) and not has_revisions(rejected)
+
+
+def test_an_insertion_inside_custom_xml_resolves_where_it_sits():
+    """The mirror image: a moved copy's custom XML keeps its element outside
+    the ``w:ins``; Reject All leaves it empty, which is nothing."""
+    body = _body(
+        "<w:p>"
+        + _custom_xml(f"<w:ins {_rev(1)}><w:r><w:t>spring</w:t></w:r></w:ins>")
+        + "</w:p>"
+    )
+    accepted = accept_all(body)
+    assert _equal(accepted, _body("<w:p>" + _custom_xml("<w:r><w:t>spring</w:t></w:r>") + "</w:p>"))
+    assert _equal(reject_all(body), _body("<w:p/>"))
+
+
 def test_a_text_box_inside_a_deleted_run_keeps_its_own_text_nodes():
     """A text box is its own story: deleting the run that anchors it does
     not mark the box's text, so Reject All must not touch it either."""
@@ -388,6 +448,32 @@ def test_consecutive_deleted_paragraphs_all_go():
     assert _texts(reject_all(body)) == ["1", "2", "3", "Survivor."]
 
 
+def test_a_deleted_paragraph_left_with_only_emptied_custom_xml_joins_nothing():
+    """Accept All of a deleted provision that held custom XML: the element
+    is left empty, and an emptied custom XML element is no content — so the
+    paragraph is gone, as it is in Word (which removed the markup on load),
+    rather than handing an empty element to the next paragraph. Nested
+    emptied elements are nothing too."""
+    deleted = (
+        f"<w:p><w:pPr><w:rPr><w:del {_rev(1)}/></w:rPr></w:pPr>"
+        f"<w:del {_rev(2)}><w:r><w:delText xml:space='preserve'>Provide </w:delText>"
+        "</w:r></w:del>"
+        + _custom_xml(
+            _custom_xml(
+                f"<w:del {_rev(3)}><w:r><w:delText>spring</w:delText></w:r></w:del>"
+            )
+        )
+        + "</w:p>"
+    )
+    body = _body(deleted + "<w:p><w:r><w:t>Survivor.</w:t></w:r></w:p>")
+    accepted = accept_all(body)
+    assert _texts(accepted) == ["Survivor."]
+    assert accepted.find(f".//{{{W}}}customXml") is None
+    rejected = reject_all(body)
+    assert _texts(rejected) == ["Provide spring", "Survivor."]
+    assert len(rejected.findall(f".//{{{W}}}customXml")) == 2
+
+
 # ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
@@ -411,6 +497,25 @@ def test_deleted_rows_go_on_accept_and_an_emptied_table_goes_with_them():
     rejected = reject_all(body)
     assert _texts(rejected) == ["Before.", "tbl", "After."]
     assert not has_revisions(rejected)
+
+
+def test_a_deleted_paragraph_left_with_emptied_custom_xml_goes_even_before_a_table():
+    """With nothing but a table after it there is no paragraph to join, and a
+    paragraph still holding content stays. An emptied custom XML element is
+    not content, so this one goes — the only answer that matches Word."""
+    body = _body(
+        f"<w:p><w:pPr><w:rPr><w:del {_rev(1)}/></w:rPr></w:pPr>"
+        + _custom_xml(
+            f"<w:del {_rev(2)}><w:r><w:delText>Provide isolators.</w:delText></w:r>"
+            "</w:del>"
+        )
+        + "</w:p>"
+        + _table(["AHU-1"])
+        + "<w:p><w:r><w:t>After.</w:t></w:r></w:p>"
+    )
+    accepted = accept_all(body)
+    assert _texts(accepted) == ["tbl", "After."]
+    assert _equal(accepted, _body(_table(["AHU-1"]) + "<w:p><w:r><w:t>After.</w:t></w:r></w:p>"))
 
 
 def test_inserted_rows_go_on_reject():
@@ -557,6 +662,27 @@ def test_identity_comments_and_empty_containers_are_not_content():
     )
     right = _body("<w:p><w:r><w:t>x</w:t></w:r></w:p>")
     assert _equal(left, right)
+
+
+def test_an_emptied_custom_xml_element_is_not_content_but_a_full_one_is():
+    """Only an EMPTY custom XML element is dropped from the comparison:
+    one around content is compared like any other container, so a lost or
+    moved custom XML boundary is still a difference."""
+    bare = _body("<w:p><w:r><w:t>x</w:t></w:r></w:p>")
+    emptied = _body(
+        "<w:p>" + _custom_xml("") + "<w:r><w:t>x</w:t></w:r>"
+        + _custom_xml(_custom_xml("")) + "</w:p>"
+    )
+    assert _equal(emptied, bare)
+    wrapped = _body("<w:p>" + _custom_xml("<w:r><w:t>x</w:t></w:r>") + "</w:p>")
+    assert not _equal(wrapped, bare)
+    assert not _equal(
+        wrapped,
+        _body(
+            "<w:p><w:customXml w:uri='urn:example:spec' w:element='other'>"
+            f"{_CUSTOM_XML_PR}<w:r><w:t>x</w:t></w:r></w:customXml></w:p>"
+        ),
+    )
 
 
 def test_bookmarks_compare_by_name_and_can_be_excluded():

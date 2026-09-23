@@ -453,7 +453,9 @@ map element ids between edits within a turn. That outline used to be saved
 into the conversation permanently, and it was most of what a long session
 re-sent: on a ~300-paragraph section, one **Draft full section** turn saved
 about 260k tokens, 85% of them these outlines, and every later one-sentence
-edit about 17k more. Now a saved turn keeps what each edit did and drops the
+edit about 17k more. On a real 23-turn project measured on 2026-09-23, the
+outlines were three quarters of the saved conversation: about 325,000 of
+431,000 estimated tokens. Now a saved turn keeps what each edit did and drops the
 outline; the model still sees it during the turn, and every turn already
 carries the full, current document with every element id. The same trim
 applies to a project saved by an earlier version as soon as it is opened

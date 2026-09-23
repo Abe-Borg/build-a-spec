@@ -44,8 +44,64 @@ tokens of text — edited one article batch per call, as
 Estimates: synthetic paragraph text, ~3.5 characters per token (Sonnet 5's
 tokenizer runs above the app's usual len/4). The mechanism is exact; the
 totals scale with document size and edit cadence. Phase 1's
-`tools/chat_history_profile.py` measures real `.baspec` files — run it on a
-few of yours to replace these numbers with real ones.
+`tools/chat_history_profile.py` measures real `.baspec` files. The owner ran
+it on one real project on 2026-09-23 (below); this table stays because it
+shows the mechanism.
+
+### Measured on a real project (2026-09-23)
+
+The owner's run of `tools/chat_history_profile.py` on one saved project
+(identified only by its hash, `74da7e1a3def`): 23 typed turns, 184
+messages. The token figures are the profiler's len/4 estimates, which
+overstate encrypted payloads such as web search results.
+
+| | ~tokens | Share |
+|---|---:|---:|
+| As saved: what an older build re-sent with every message | ~431,166 | |
+| Stale outlines (30 of them), which Phase 1 removes | ~325,431 | 75.5% of as saved |
+| Fetched page text, which Phase 2 removes | 0 | the project read one page, already small |
+| Now: what this build sends once the file is opened | ~105,735 | |
+| of which web search results (6 blocks, kept) | ~52,912 | 50% of now |
+
+What it shows:
+
+- **The synthetic finding holds.** Stale outlines were three quarters of
+  what this project re-sent, at about 10.8k tokens per outline. Phase 1
+  alone cuts the re-sent history to a quarter.
+- **Growth per turn fell from about 18.7k tokens to about 4.6k.** At the
+  old rate, the history alone would have reached the backstop's 85% of the
+  1M window around turn 45. At the new rate, D1's 600k trigger is about
+  130 turns in.
+- **Money (Sonnet 5 list prices, rough).** Each message now re-reads about
+  $0.02 of history instead of about $0.09 (cache reads at $0.20/M).
+  Rebuilding a lapsed 1-hour cache costs about $0.42 instead of about
+  $1.72 ($4.00/M).
+- **The harvest already reads all of this conversation.** Its transcript
+  cap (`HARVEST_MAX_TRANSCRIPT_CHARS`) is 400,000 characters, and this
+  project's typed text is about 75,000.
+- **Web search results are half of what is left**, and only condensing can
+  remove them: the API needs their encrypted content intact.
+- This is one project; the figures scale with document size and with how
+  often the model edits.
+
+**What it implies for the open items** (recommendations; the owner
+decides):
+
+- **Routine condensing:** a project like this one would reach the trigger
+  around turn 130, more than 100 turns past where this one stands. The paid
+  recall check that gates the default (Phase 3 → Before it is on by
+  default) buys little for now. Keep it off; the backstop covers the
+  ceiling.
+- **D4's harvest wiring:** a summary exists only once a chat is condensed,
+  and the harvest already reads this whole conversation. The wiring would
+  matter only in chats far longer than this one.
+- **Phase 5** is the one open item with a measurable payoff. A full draft
+  of about 25 article-by-article edit calls writes each ~10.8k-token
+  outline once and re-reads it on every later call. That is about $0.68
+  written (25 × 10.8k at $2.50/M) plus about $0.65 read (300 × 10.8k at
+  $0.20/M), roughly $1.30 per full draft of a section this size. Returning
+  only the edited article's outline would remove most of it. It still needs
+  the paid before/after its section names.
 
 Two more growth sources, both kept forever today:
 
@@ -113,7 +169,7 @@ see Phase 5.
 |---|---|---|---|---|
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
-| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, merged `7e32d14`); default on (PR #194, in review) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. The second run (2026-09-23) **passed** on that shape, so the trim is **on by default** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0` turns it off) — see Phase 2 → Canary result |
+| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, merged `7e32d14`); default on (PR #194, merged `7634c8d`) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. The second run (2026-09-23) **passed** on that shape, so the trim is **on by default** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0` turns it off) — see Phase 2 → Canary result |
 | 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, merged `7e32d14`) | both halves; routine condensing off by default until the recall check, backstop always on. A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
@@ -123,12 +179,15 @@ session that touches this file (the project-workspace convention).
 
 **Where it stands (2026-09-23; recorded at the 1.21.0 closeout, updated
 when PR #189 merged, when the Phase 2 canary's first run came back
-refused, and when its second run passed).** Phases 1–3 are on `master`. 1.21.0 was prepared to carry
+refused, when its second run passed, and when the owner supplied a real
+measurement).** Phases 1–3 are on `master`. 1.21.0 was prepared to carry
 Phases 1 and 2 (the project-workspace closeout,
 `project-workspace/07_RELEASE_CLOSEOUT.md`), but it is not tagged. The owner decided D1–D4 on
-2026-09-22 (see the Decisions table). No real measurements have been
-supplied yet, so the numbers under "What actually fills the history" are
-still the synthetic ones.
+2026-09-22 (see the Decisions table). The owner supplied one real
+measurement on 2026-09-23 ("Measured on a real project", under "What
+actually fills the history"). It says what is left is optional, and it
+recommends keeping routine condensing off and D4's harvest wiring unbuilt
+for now.
 
 - **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, so
   the 1.21.0 closeout switched it off: `BUILD_A_SPEC_ELIDE_FETCHED_PAGES`
@@ -168,7 +227,8 @@ still the synthetic ones.
   checks and commit. That deviation was written before D1, D3 and D4 were
   decided, so it still calls them open.
 - **Phase 5** is optional and still waits on a measured before/after on
-  real full drafts.
+  real full drafts. The real measurement puts its payoff at roughly $1.30
+  per full draft of a section that size.
 
 ## Decisions (owner)
 

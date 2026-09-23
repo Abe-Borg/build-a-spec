@@ -2,7 +2,7 @@
 
 Office-style SectionFormat layout: centered section header, PART headings,
 ``1.1  TITLE`` articles, hanging-indent paragraph levels (A. / 1. / a. /
-1)) backed by genuine Word multilevel numbering in clean exports, END OF
+1) / a)) backed by genuine Word multilevel numbering in clean exports, END OF
 SECTION — followed on a new page by the **assumptions
 schedule**: every ``assumed`` block listed with its numbering so a senior
 reviewer can audit each model default in one pass, plus the open-item

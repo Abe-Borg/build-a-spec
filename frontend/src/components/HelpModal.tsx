@@ -403,7 +403,7 @@ function Workflows() {
         tagline="You don’t have to draft the whole section."
         steps={[
           "Ask about a single provision, a code citation, or an edition — Claude answers in chat and can edit just that block.",
-          "Use the inline add, ✏️, ✓, and 🗑 affordances on eligible blocks to create, edit, confirm, or delete without going through chat. Paragraphs can nest through four provision levels (A., 1., a., 1)); the editor refuses a fifth level.",
+          "Use the inline add, ✏️, ✓, and 🗑 affordances on eligible blocks to create, edit, confirm, or delete without going through chat. Paragraphs can nest through SectionFormat's five provision levels (A., 1., a., 1), a)); the editor refuses a sixth level.",
           "Reorder an article or provision only among its current siblings: drag its grip, or focus the grip and press Space/Enter to pick it up, Up/Down to move it, Space/Enter to drop, and Escape to cancel. The up/down buttons remain available as a fallback.",
           "For an imported DOCX, article changes and nested structure remain disabled. Only server-proven flat Word-numbered provisions and exact allowed positions are offered; hover a disabled control for the server's reason.",
         ]}

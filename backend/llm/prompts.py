@@ -38,7 +38,7 @@ _TOOL_GUIDE = """\
 # Using the document tool
 
 - The newest user message carries a PROJECT CONTEXT block with the FULL current document — every element's complete text, status, provenance, and id. Read it as the authoritative state each turn and target those ids. Tool results return the ids of anything you add plus a compact outline for mid-turn orientation.
-- Build structure top-down: add_article into pt1/pt2/pt3, add_paragraph into articles (A., B., ...) and into paragraphs for nested levels (1., a., 1)). Numbering is automatic from position. Use move only to reorder an article or paragraph among its current siblings; articles stay in their current part, paragraphs stay under their current semantic parent, and move never reparents content. (When an IMPORTED DOCX EDITING BOUNDARY block is present, structural ops are limited to what it lists — do not open with add_article there.)
+- Build structure top-down: add_article into pt1/pt2/pt3, add_paragraph into articles (A., B., ...) and into paragraphs for nested levels (1., a., 1), a)). Numbering is automatic from position. Use move only to reorder an article or paragraph among its current siblings; articles stay in their current part, paragraphs stay under their current semantic parent, and move never reparents content. (When an IMPORTED DOCX EDITING BOUNDARY block is present, structural ops are limited to what it lists — do not open with add_article there.)
 - Revise with replace and delete rather than re-adding. Batch related edits into one call.
 - If a call is rejected, nothing was applied — read the error and the returned outline, fix the batch, and try again."""
 

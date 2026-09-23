@@ -21,13 +21,14 @@ came from and HOW its label was expressed. :mod:`backend.spec_doc.source_render`
 reads that back at export time.
 
 Label kinds are the one genuinely non-obvious recording. The importer strips
-a literal ``A.`` / ``1.`` / ``a.`` / ``1)`` label off a manually labelled
-provision (``importer._LEVEL_RES``), because Build-a-Spec numbers positionally
-so an inserted provision renumbers its siblings for free. An auto-numbered
-master carries no such text at all — the label lives in ``w:numPr`` and Word
-renders it. Those two cases need opposite treatment on the way out, and the
-literal itself never needs storing: ``model._paragraph_label`` regenerates
-exactly the four forms the importer recognizes.
+a literal ``A.`` / ``1.`` / ``a.`` / ``1)`` / ``a)`` label off a manually
+labelled provision (``importer._LEVEL_RES``), because Build-a-Spec numbers
+positionally so an inserted provision renumbers its siblings for free. An
+auto-numbered master carries no such text at all — the label lives in
+``w:numPr`` and Word renders it. Those two cases need opposite treatment on
+the way out, and the literal itself never needs storing:
+``model._paragraph_label`` regenerates exactly the five forms the importer
+recognizes.
 """
 
 from __future__ import annotations

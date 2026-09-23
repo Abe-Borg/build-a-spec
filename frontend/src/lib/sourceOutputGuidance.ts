@@ -8,6 +8,7 @@ export type SourceOutputGuidanceId =
   | "exact-original"
   | "source-preserving"
   | "normalized"
+  | "redline-original"
   | "normalized-redline"
   | "pass-through-only";
 
@@ -37,10 +38,16 @@ export const SOURCE_OUTPUT_GUIDANCE: readonly SourceOutputGuidance[] = [
       "A newly generated DOCX built from Build-a-Spec's semantic content. It is an explicit alternative and does not promise to preserve the uploaded package's formatting, layout, headers, footers, or other OOXML details.",
   },
   {
+    id: "redline-original",
+    label: "Redline on your original",
+    description:
+      "A copy of the Word file you imported with every change since the import shown as a Word tracked change by Build-a-Spec; every part of the file outside the document body is your upload's, byte for byte. In Word, Accept All gives exactly what Export Word (keeps your formatting) produces and Reject All gives your original back. The app checks both before it hands the file over, and refuses with the reason rather than deliver one that fails. One limit: a provision you moved keeps its bookmarks at its new position, so Reject All does not restore them where it was. A master that already carries tracked changes is refused, with the fix named: accept or reject them in Word, save, and import the file again.",
+  },
+  {
     id: "normalized-redline",
     label: "Normalized redline",
     description:
-      "Tracked changes between normalized extracted provisions or saved versions. It is not a redline of the uploaded Word package, and Reject All does not recreate the original upload.",
+      "Tracked changes between normalized extracted provisions or saved versions, in Build-a-Spec's own styles. It is not a redline of the uploaded Word package, and Reject All does not recreate the original upload; the redline on your original is the one that does both. This one keeps working when that one cannot.",
   },
   {
     id: "pass-through-only",

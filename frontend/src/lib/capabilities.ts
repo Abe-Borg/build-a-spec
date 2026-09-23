@@ -68,6 +68,7 @@ export const END_USER_CAPABILITIES = [
   "readiness.checklist",
   "export.clean",
   "export.redline-source",
+  "export.redline-original",
   "export.open-in-word",
   "project.save-open",
   "project.brief-export",

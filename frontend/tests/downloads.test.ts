@@ -138,6 +138,107 @@ test("the two existing redline actions keep asking for extracted provisions", ()
   assert.match(version[1], /mode:\s*"normalized"/);
 });
 
+// --- Redline on your original (Phase 1 UI) ----------------------------------
+// Text-level pins, the sessionBundle.test.ts idiom: the panel has no DOM
+// harness, and each of these is a wire that fails silently when cut — the
+// item downloading the other redline, a disabled item with no reason, a
+// Word opener asking the server for its bare-redline default.
+
+const sources = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+const readSource = (...parts: string[]) => readFileSync(join(sources, ...parts), "utf8");
+
+test("the redline on your original asks for it by name, under its own key", () => {
+  const panel = readSource("components", "ArtifactPanel.tsx");
+  const original = panel.match(
+    /runExport\(\s*"redline-original",\s*exportDocxUrl\(\{([^}]*)\}\)/,
+  );
+  assert.ok(original, "the redline-original action builds its URL through exportDocxUrl");
+  // Named, never defaulted: a bare `redline=master` is the server's to decide.
+  assert.match(original[1], /redline:\s*"master"/);
+  assert.match(original[1], /mode:\s*"preserved"/);
+  assert.equal(
+    exportDocxUrl({ redline: "master", mode: "preserved" }),
+    "/api/export/docx?redline=master&mode=preserved",
+  );
+  // It sits with the formatted export it resolves to, above the redline of
+  // extracted provisions it is the alternative to.
+  // (Positions of the runExport CALLS — the key names also appear in the
+  // ExportKey union at the top of the file.)
+  const formatted = panel.search(/runExport\(\s*"preserved",/);
+  const redline = panel.search(/runExport\(\s*"redline-original",/);
+  const extracted = panel.search(/runExport\(\s*"redline-master",/);
+  assert.ok(formatted >= 0 && extracted >= 0, "both neighbours are in the menu");
+  assert.ok(formatted < redline && redline < extracted, "formatted → original → extracted");
+  // And the extracted-provisions item now points at it instead of implying
+  // no redline of your Word file exists.
+  const extractedTitle = /"redline-master",[\s\S]{0,400}?title="([^"]*)"/.exec(panel)?.[1];
+  assert.ok(extractedTitle);
+  assert.match(extractedTitle, /not a redline of your Word file — Redline on your original, above, is/);
+});
+
+test("the redline on your original reads the payload flag and shows the server's own reason", () => {
+  const panel = readSource("components", "ArtifactPanel.tsx");
+  const item = /<Tip\s+tip=\{\s*preservedRedlineAvailable[\s\S]*?<\/Tip>/.exec(panel)?.[0];
+  assert.ok(item, "the item is wrapped in a Tip keyed on the payload flag");
+  // Unavailable: the server's sentence, verbatim. The fallback for a payload
+  // that gave none is a named constant, never a client-written reason.
+  assert.match(item, /preservedRedlineReason\?\.message \?\?\s*REDLINE_REASON_MISSING/);
+  assert.match(panel, /const REDLINE_REASON_MISSING =\s*\n\s*"[^"]*not available[^"]*";/);
+  // Disabled off the flag — visible, never hidden — and inert to the pointer
+  // so the hover reaches the Tip's title: a disabled button never shows a
+  // native title of its own, which is why the button carries none.
+  assert.match(item, /disabled=\{!preservedRedlineAvailable \|\| exportsBusy\}/);
+  assert.match(item, /disabled:pointer-events-none/);
+  assert.doesNotMatch(item, /\btitle=/);
+  assert.match(item, /data-capability="export\.redline-original"/);
+  assert.match(item, /Redline on your original \(tracked changes\)/);
+
+  // App reads both fields off EVERY payload path (the refresh and the one
+  // apply), passes them down, and a new session drops them at once.
+  const app = readSource("App.tsx");
+  const flagReads = app.match(
+    /setPreservedRedlineAvailable\(\s*payload\.preserved_redline_available \?\? false,?\s*\)/g,
+  );
+  const reasonReads = app.match(
+    /setPreservedRedlineReason\(payload\.preserved_redline_reason \?\? null\)/g,
+  );
+  assert.equal(flagReads?.length, 2, "refreshDoc and applyDocPayload both read the flag");
+  assert.equal(reasonReads?.length, 2, "refreshDoc and applyDocPayload both read the reason");
+  assert.match(app, /preservedRedlineAvailable=\{preservedRedlineAvailable\}/);
+  assert.match(app, /preservedRedlineReason=\{preservedRedlineReason\}/);
+  const clear = /const clearSessionState = \(\) => \{[\s\S]*?\n {2}\};/.exec(app)?.[0];
+  assert.ok(clear, "clearSessionState exists");
+  assert.match(clear, /setPreservedRedlineAvailable\(false\)/);
+  assert.match(clear, /setPreservedRedlineReason\(null\)/);
+  // …and its sibling, the formatted export's flag, which used to be the one
+  // payload flag left for the refetch to overwrite.
+  assert.match(clear, /setPreservedExportAvailable\(false\)/);
+});
+
+test("Open redline in Word asks the shell for the redline on your original, desktop only", () => {
+  const panel = readSource("components", "ArtifactPanel.tsx");
+  // Rendered only when the native bridge exists, and only when the redline
+  // can run at all — the disabled item above already says why it cannot.
+  const opener = /\{hasNativeBridge && onOpenInWord && preservedRedlineAvailable && \(([\s\S]*?)\n\s*\)\}/.exec(
+    panel,
+  )?.[1];
+  assert.ok(opener, "the redline opener is gated on the bridge and the payload flag");
+  assert.match(opener, /runOpenInWord\("redline"\)/);
+  assert.match(opener, /data-capability="export\.redline-original"/);
+  assert.match(opener, /openInWordBusy === "redline"\s*\?\s*"Opening redline in Word…"/);
+  // The runner names both halves, like every redline URL the menu builds.
+  assert.match(
+    panel,
+    /target === "redline"\s*\?\s*await onOpenInWord\("preserved", "master"\)/,
+  );
+  // The busy state is the TARGET in flight: the other opener keeps its label.
+  assert.match(panel, /openInWordBusy === "export"\s*\?\s*"Opening in Word…"/);
+  // App hands the redline through to the bridge untouched.
+  const app = readSource("App.tsx");
+  assert.match(app, /redline: "" \| "master" = ""/);
+  assert.match(app, /api\.open_in_word\(mode, redline\)/);
+});
+
 test("the project file download surfaces a refusal's message and scopes the tutorial", async (t) => {
   // The knowing behavior change of folding downloadProjectFile into the
   // shared helper: a refused save used to be a bare `save failed (N)`.

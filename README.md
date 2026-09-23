@@ -31,7 +31,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
-| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over (in progress — see "Redline on your original" below). |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. Export → *Redline on your original (tracked changes)* (no release entry announces it yet — see "Redline on your original" below). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -548,13 +548,15 @@ conversation** shows the record's sizes (never its text).
 ## Redline on your original (in progress)
 
 The redline-on-your-original program
-(`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`) will export a copy of the
-Word file you imported with every change Build-a-Spec made shown as Word
-tracked changes — Accept All gives the updated section, Reject All gives your
+(`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`) exports a copy of the Word
+file you imported with every change Build-a-Spec made shown as Word tracked
+changes — Accept All gives the updated section, Reject All gives your
 original back. Its first phase fixes the export that redline has to agree
-with, and it ships in v1.21.0. So does the redline's backend (Phase 1,
-below), but only through the API: the Export-menu item and *Open redline in
-Word* arrive with Phase 1's UI change, so the program is still in progress.
+with, and it ships in v1.21.0. The redline itself (Phase 1, below) is
+built too: its backend is in v1.21.0, and its Export-menu item and *Open
+redline in Word* are on `master`, with no release entry yet — which release
+announces the redline is the owner's pick. Word's own "Moved" marks come
+next, so the program is still in progress.
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)
 
@@ -606,12 +608,25 @@ Developer tools) records the mode that ran and counts what the export did —
 provisions cloned, spliced, rebuilt by reason, added, preserved — never their
 text.
 
-### The redline itself (Phase 1 — backend on `master`, menu item next)
+### The redline itself (Phase 1)
 
-The export exists and is reachable through the API; its Export-menu item,
-*Open redline in Word* and the copy that explains it arrive with the next
-(UI) change.
-
+- **In the Export menu.** For an imported master, **Redline on your original
+  (tracked changes)** sits right under *Export Word (keeps your formatting)*
+  and its *Open in Word*. In the desktop app, **Open redline in Word** beside
+  it writes the redline to a temporary file and opens it in Word, the way
+  *Open in Word* does for the formatted export. When the redline cannot run
+  — a master that already carries tracked changes, a project imported before
+  1.14.0, no imported master in the document's history — the item stays in
+  the menu, greyed out, and hovering it shows the server's own reason and
+  what to do; *Open redline in Word* is not offered then. A refusal only the
+  export itself can find (a change Word cannot show as a tracked change, or
+  its own check failing) arrives in the export error strip, in the server's
+  words. *Redline of extracted provisions* stays below it, for the cases it
+  cannot handle and for comparing against a version.
+- **The intended workflow:** export it, review the changes in Word, accept
+  or reject them, save, and replace your master with the saved file. Help's
+  *Workflows* has the recipe; the Help export guide, the tour's export step
+  and the trust dossier's export card state the same promise and its limits.
 - **`GET /api/export/docx?redline=master&mode=preserved`** returns
   `<your upload's name> - REDLINE.docx`: your file, with every change since
   the import as a Word tracked change by "Build-a-Spec", dated at export.
@@ -650,7 +665,13 @@ The export exists and is reachable through the API; its Export-menu item,
   original compares against the imported master only.
 - **The payload says so before the click:** `preserved_redline_available`,
   and `preserved_redline_reason` (`{code, message}`) when it is not — the
-  same derivation the route's default and refusal read.
+  same derivation the route's default and refusal read. The menu item is
+  drawn off it and shows the message verbatim.
+- **The desktop bridge:** `js_api.open_in_word(mode, redline)` takes
+  `redline="master"` (with `mode="preserved"` only — any other pairing is
+  refused) and fetches `?redline=master&mode=preserved` from this launch's own
+  server, with the same fresh temporary file, tutorial refusal and
+  server-worded errors as *Open in Word*.
 
 ## Shipped in v1.20.0 (Next section in one click)
 

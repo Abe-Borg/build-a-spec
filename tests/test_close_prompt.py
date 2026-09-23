@@ -773,7 +773,23 @@ def _fake_backend():
     return types.SimpleNamespace(host="127.0.0.1", port=1, api_token="token")
 
 
-def test_open_in_word_exports_through_the_local_route_and_launches(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("args", "route", "served_name"),
+    [
+        (("preserved",), "/api/export/docx?mode=preserved", "Section 21 05 00 - COMMON WORK.docx"),
+        # Open redline in Word (Redline on your original, Phase 1 UI): the
+        # same route with the redline named, and its mode named too — the
+        # redline on your original, never the server's bare-redline default.
+        (
+            ("preserved", "master"),
+            "/api/export/docx?redline=master&mode=preserved",
+            "21 05 00 Office Master - REDLINE.docx",
+        ),
+    ],
+)
+def test_open_in_word_exports_through_the_local_route_and_launches(
+    monkeypatch, tmp_path, args, route, served_name
+):
     """The bridge fetches the export with the shell's own token, writes a
     fresh temp file, and hands it to the system's default .docx app."""
     fetched: list[str] = []
@@ -782,23 +798,25 @@ def test_open_in_word_exports_through_the_local_route_and_launches(monkeypatch, 
     def fake_fetch(backend, path):
         assert backend.api_token == "token"
         fetched.append(path)
-        return b"PK\x03\x04docx", "Section 21 05 00 - COMMON WORK.docx"
+        return b"PK\x03\x04docx", served_name
 
     monkeypatch.setattr(main, "_fetch_backend_bytes", fake_fetch)
     monkeypatch.setattr(main, "_launch_file", lambda p: launched.append(str(p)))
     monkeypatch.setattr(main.tempfile, "gettempdir", lambda: str(tmp_path))
 
     controller = main._CloseController(None, backend=_fake_backend())
-    result = controller.open_in_word("preserved")
+    result = controller.open_in_word(*args)
 
     assert result["ok"] is True, result
-    assert fetched == ["/api/export/docx?mode=preserved"]
+    assert fetched == [route]
     assert launched == [result["path"]]
     written = tmp_path / "BuildASpec"
     files = list(written.glob("*.docx"))
     assert len(files) == 1
     assert files[0].read_bytes() == b"PK\x03\x04docx"
-    assert files[0].name.startswith("Section 21 05 00 - COMMON WORK ")
+    # The served name survives as the prefix, so Word's title bar reads like
+    # the file — "<your upload's name> - REDLINE" for the redline.
+    assert files[0].name.startswith(served_name[: -len(".docx")] + " ")
     assert result["name"] == files[0].name
 
 
@@ -829,6 +847,20 @@ def test_open_in_word_never_reuses_a_file_word_may_hold_open(monkeypatch, tmp_pa
     assert first["name"].startswith("Section 21 05 00 ")
     assert first["name"].endswith(".docx")
 
+    # The redline gets the same guarantee: reviewing it twice (Word still
+    # holding the first) is two files, never one overwritten behind a window.
+    redline_name = "Section 21 05 00 - REDLINE.docx"
+    monkeypatch.setattr(main, "_fetch_backend_bytes", lambda b, p: (b"redline one", redline_name))
+    third = controller.open_in_word("preserved", "master")
+    monkeypatch.setattr(main, "_fetch_backend_bytes", lambda b, p: (b"redline two", redline_name))
+    fourth = controller.open_in_word("preserved", "master")
+
+    assert third["ok"] and fourth["ok"], (third, fourth)
+    assert len({first["path"], second["path"], third["path"], fourth["path"]}) == 4
+    assert open(third["path"], "rb").read() == b"redline one"
+    assert open(fourth["path"], "rb").read() == b"redline two"
+    assert third["name"].startswith("Section 21 05 00 - REDLINE ")
+
 
 def test_open_in_word_reports_the_servers_own_refusal(monkeypatch, tmp_path):
     def failing_fetch(backend, path):
@@ -846,14 +878,65 @@ def test_open_in_word_reports_the_servers_own_refusal(monkeypatch, tmp_path):
         (tmp_path / "BuildASpec").glob("*.docx")
     )
 
+    # The redline's refusal reaches the user verbatim too — a master that
+    # already carries tracked changes names its fix in the server's words,
+    # and nothing is written or launched.
+    from backend.spec_doc.source_render import (
+        REDLINE_PENDING_REVISIONS,
+        redline_refusal_message,
+    )
 
-def test_open_in_word_refuses_unknown_modes_and_a_browser_session():
+    sentence = redline_refusal_message(REDLINE_PENDING_REVISIONS)
+    asked: list[str] = []
+
+    def refused_redline(backend, path):
+        asked.append(path)
+        raise RuntimeError(sentence)
+
+    monkeypatch.setattr(main, "_fetch_backend_bytes", refused_redline)
+    result = controller.open_in_word("preserved", "master")
+    assert result["ok"] is False
+    assert result["error"] == sentence
+    assert asked == ["/api/export/docx?redline=master&mode=preserved"]
+    assert not (tmp_path / "BuildASpec").exists() or not list(
+        (tmp_path / "BuildASpec").glob("*.docx")
+    )
+
+
+def test_open_in_word_refuses_unknown_modes_and_a_browser_session(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "_fetch_backend_bytes",
+        lambda b, p, **kw: (_ for _ in ()).throw(AssertionError(f"must not fetch {p}")),
+    )
     controller = main._CloseController(None, backend=_fake_backend())
     assert controller.open_in_word("evil")["ok"] is False
+    # The redline variant is a closed vocabulary too: the only redline is
+    # the one on your original, and only with its own mode. Anything else is
+    # refused before a URL is built, rather than opening a different file.
+    assert controller.open_in_word("preserved", "evil")["ok"] is False
+    assert controller.open_in_word("preserved", "version")["ok"] is False
+    for mode in ("normalized", "source"):
+        refused = controller.open_in_word(mode, "master")
+        assert refused["ok"] is False
+        assert "redline on your original" in refused["error"]
     no_backend = main._CloseController(None)
     result = no_backend.open_in_word("preserved")
     assert result["ok"] is False
     assert "desktop app" in result["error"]
+    result = no_backend.open_in_word("preserved", "master")
+    assert result["ok"] is False
+    assert "desktop app" in result["error"]
+
+    # A tutorial copy is not the user's document: neither variant opens it.
+    sessions.workspace_manager().begin_tutorial(request_id="open-in-word-in-a-tour")
+    try:
+        for args in (("preserved",), ("preserved", "master")):
+            refused = controller.open_in_word(*args)
+            assert refused["ok"] is False
+            assert "Return to your project" in refused["error"]
+    finally:
+        sessions.reset_session()
 
 
 def test_filename_from_disposition_prefers_the_encoded_form():

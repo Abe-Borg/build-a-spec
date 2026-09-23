@@ -365,6 +365,38 @@ proves Word's layout:
 - [ ] **An export with no edits** keeps the master's article numbers as
       written — `1.01 SUMMARY` stays `1.01`, not `1.1`.
 
+### Redline on your original (redline program, Phase 1)
+
+On a **real office master**, in **real Word**, from the **packaged** app. The
+suite proves Accept All and Reject All with its own XML resolver on every
+export; only Word proves Word agrees.
+
+- [ ] Import the master and make a mix of edits: reword a provision, add one
+      near the top of an article, delete one, move one. Export →
+      **Redline on your original (tracked changes)**. The file is named
+      `<your upload's name> - REDLINE.docx`, opens with **no repair prompt**,
+      and the Reviewing Pane lists the changes with **Build-a-Spec** as the
+      author. In a master with typed letters, the provisions below the added
+      one show their letter change (`A.` → `B.`) with the tab after it kept.
+- [ ] **Accept All** (Review → Accept → Accept All Changes) looks like
+      *Export Word (keeps your formatting)* of the same document, side by
+      side. **Reject All** (on a fresh copy of the file) looks like *Download
+      exact original DOCX*: same text, fonts, numbering, headers, footers and
+      page setup.
+- [ ] **Replace your master with it, end to end.** In Word, accept or reject
+      every change, save, and close. Import the saved file into a New session:
+      it imports with no tracked-changes warning and reads the way you left
+      it in Word. That file is now the master.
+- [ ] **Open redline in Word** (in the Export menu, desktop app only) opens
+      the same redline from a temporary folder straight into Word. With Word
+      still holding it open, click it again: a second copy opens, no error.
+- [ ] **A master that already carries tracked changes** (saved in Word with
+      changes neither accepted nor rejected): after import, *Redline on your
+      original* is greyed out, and hovering it shows the server's reason with
+      the fix (accept or reject them in Word, save, import again). *Open
+      redline in Word* is not offered, and *Redline of extracted provisions*
+      still downloads.
+
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 
 - [ ] Attach one of each reference type — `.docx`, `.pdf`, `.txt`, `.xml`,

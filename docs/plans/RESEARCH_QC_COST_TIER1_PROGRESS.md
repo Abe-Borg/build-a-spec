@@ -16,7 +16,7 @@ and then follows the [Session procedure](#session-procedure) step by step.
 | plan | The plan and this file | **complete** | PR #205 | | set by its own PR, like every row |
 | 1 | Research cost profiler | not started | | | |
 | 2 | Staggered launch for calls that share a cached prefix | not started | | | |
-| 3 | Warm the batched verifier cache with a streamed lead seat | not started | | | gated on M2 |
+| 3 | Warm the batched verifier cache with a streamed lead seat | not started | | | M2 decides build or skip; ships switched off; the default flips on an M3 pass |
 | 4 | Cache `pause_turn` continuations | not started | | | ships switched off; the default flips on an M3 pass |
 | 5 | Resume, don't restart, on a transient failure | not started | | | |
 | 6 | Closeout | not started | | | |
@@ -90,8 +90,9 @@ none
 3. **Pick the chunk.** Build the first row whose status is "not started"
    and whose dependencies (the plan's §5) are complete or skipped.
    - If the chunk has a gate, apply it before writing any code, and
-     record the decision in [Owner decisions](#owner-decisions). Chunk 3
-     is decided by M2. Chunk 4's default flip is decided by M3.
+     record the decision in [Owner decisions](#owner-decisions). M2
+     decides whether Chunk 3 is built. M3 decides whether Chunk 3's and
+     Chunk 4's defaults flip on.
    - If a gate skips the chunk, mark it "skipped (measured)" with the
      numbers, and go on to the next chunk in the same session.
 
@@ -188,9 +189,9 @@ Two exceptions:
 |---|---|---|
 | the plan | nothing | — |
 | Chunk 1 | **M1**: run the research profiler on one to three researched projects, and paste its output into the next prompt. Optional, but Chunk 4's trial is judged against it. | free |
-| Chunk 2 | **M2**: run the QC profiler on your newest Final QC JSON export, and paste its output. Chunk 3's gate needs it: without it, Chunk 3 ships switched off. | free |
-| Chunk 3 | nothing new. If the chunk shipped switched on, M4 confirms it later. | — |
-| Chunk 4 | **M3**: from a source checkout, run one Research round and one Final QC with the new switches on. Paste both profilers' output, plus the error text of anything that failed. Chunk 4's default flips only on a pass. | only the runs themselves |
+| Chunk 2 | **M2**: run the QC profiler on your newest Final QC JSON export, and paste its output. Chunk 3's gate reads it to decide whether to build Chunk 3, and how big a batch must be before a lead pays. Without it, Chunk 3 uses a conservative fallback. It ships switched off either way. | free |
+| Chunk 3 | nothing new. M3, after Chunk 4, tests it: Chunk 3 ships switched off. | — |
+| Chunk 4 | **M3**: from a source checkout, run one Research round and one Final QC with the new switches on. Paste both profilers' output, plus the error text of anything that failed. Chunks 3 and 4 each flip their default only on a pass of their own test. | only the runs themselves |
 | Chunk 5 | M3, if it has not been done yet. | as above |
 | Chunk 6 | nothing. The program is complete. | — |
 

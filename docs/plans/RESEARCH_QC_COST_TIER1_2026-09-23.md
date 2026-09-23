@@ -260,13 +260,14 @@ read the reasoning.
 |---|---|---|---|---|---|
 | 1 | Research cost profiler | measurement | — | none (a developer tool) | makes Chunks 4 and 5 measurable |
 | 2 | Staggered launch for calls sharing a cached prefix | QC phase 1 and consolidation reuse one cache write | 1 (order only) | `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` (45) | ~$0.40–1.20 per Final QC |
-| 3 | Streamed lead seat warms the batch | QC phase 2 reuses one cache write per lineage | 2 | `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` (see its gate) | gated on M2; up to ~$2 per Final QC when the batch reuses little |
+| 3 | Streamed lead seat warms the batch | QC phase 2 reuses one cache write per lineage | 2 | `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` (**off** until M3 passes) | built or skipped on M2; up to ~$2 per Final QC when the batch reuses little |
 | 4 | Cache `pause_turn` continuations | continuations read the previous request's cache | 1 | `BUILD_A_SPEC_CONTINUATION_CACHE` (**off** until M3 passes) | research ~$1–2.50 per round; QC less |
 | 5 | Resume, don't restart, on a transient failure | stop re-paying finished continuations | 4 | none | situational; removes worst-case double bills |
 | 6 | Closeout | measurements, docs, release notes | 1–5 | — | — |
 
-Chunk 3 may be skipped by its gate. Chunk 4's flip to on happens in a
-later session, once M3 passes (Chunk 4, "Flip").
+Chunk 3 may be skipped by its gate. Chunks 3 and 4 both ship switched
+off. Each flips on in a later session, once M3 passes that chunk's own
+test (their "Flip" sections).
 
 ---
 
@@ -431,6 +432,13 @@ to phase 1's web-toolless lenses and to the consolidation grouping calls.
    lenses, and the consolidation equivalents. **Do not hard-code "the
    four web-toolless lenses"**: the key decides, so a later lens change
    stays correct.
+   - Build each call's pieces once, and hand the same objects to the key
+     and to the call. For example, a small helper that returns a lens's
+     system prompt, tools and shared prefix, and that `_run_lens` also
+     uses. Then the key cannot drift from the request it names.
+   - A wrong key cannot break a review: it only costs the saving, or makes
+     a follower wait for nothing. Still pin it (the lineage-key test
+     below).
 3. **One launcher helper**, for example `_launch_staggered(pool, calls, *,
    key_of, submit, wait_seconds, should_stop) -> dict[Future, item]`:
    - Group the calls by key.
@@ -449,8 +457,9 @@ to phase 1's web-toolless lenses and to the consolidation grouping calls.
      `_run_lens` / `_run_streaming_call` sees `should_stop()` first and
      returns cancelled without sending a request. The phase's records
      stay complete, and the existing cancellation paths stay unchanged.
-4. **Phase 1.** In `run_final_qc`, replace the dict-comprehension submit
-   with the helper. `as_completed` collection is unchanged, and the pool
+4. **Phase 1.** `_run_lens` gains `first_output` and forwards it to
+   `_run_streaming_call`. In `run_final_qc`, replace the dict-comprehension
+   submit with the helper. `as_completed` collection is unchanged, and the pool
    size stays `min(_qc_max_workers(), len(QC_LENSES))`. Confirm that
    `lens_statuses` still come out in `QC_LENSES` order, and pin it.
 5. **Consolidation.** Run the same helper over `eligible` in
@@ -524,34 +533,57 @@ is about 0 read and 4 wrote.
 
 ### Chunk 3 — Warm the batched verifier cache with a streamed lead seat
 
-**Gate.** Decide this before writing code, and record the decision in the
-progress file. Use **M2** (§8): the QC profiler on a real batched Final QC
-export.
+**Gate.** Two decisions, taken at two different times. Record both in
+the progress file.
 
-- **Skip** when every lineage that has batched seats shows a token-weighted
-  read share of **85% or more**. That is the profiler's "Phase 2 batched
-  `web-tooled` / `no-web` seats: … token-weighted read share X%" line. The
-  provider already reuses the cache there, and a lead would only add cost.
-  Mark the chunk `skipped (measured)` with the numbers, and continue with
-  Chunk 4 in the same session.
-- **Build, default on** when the recorded share is below 85%.
-- **Build, default off** when M2 was not provided. The build is then
-  unmeasured, so it does not go on (F5). The post-merge message asks for
-  M3, which covers it.
+1. **Build or skip: M2, before any code.** M2 (§8) is the QC profiler run
+   on a real batched Final QC export. For each phase-2 lineage in it, take
+   that bucket's row in the profiler's table (`seat:batched:web-tooled`,
+   `seat:batched:no-web`) and work out three numbers:
+   - p = (Cache read + 1h write) / Records: the shared prefix, in tokens
+     per seat;
+   - h = Cache read / (Cache read + 1h write): the share of that prefix
+     the batch already reads today;
+   - o = Output / Records: output tokens per seat.
+
+   Do **not** use the profiler's printed "Read share" column. Its
+   denominator includes each seat's uncached input, so it is not the
+   share of the prefix read. For `web-tooled` seats, continuations re-read
+   the prefix, so p is an upper bound and h reads high. That makes the rule
+   conservative for that lineage, which is the right direction.
+
+   §10.3 turns (h, p, o) into `n_min`: the smallest lineage, in seats, for
+   which a lead saves more than it costs. No single read-share cut-off
+   works, because the break-even rises with the lineage's size (§10.3).
+   - **Skip** when every measured lineage's `n_min` is larger than that
+     lineage's Records in M2, so no real run would have gained. Mark the
+     chunk `skipped (measured)` with the numbers, and continue with
+     Chunk 4 in the same session.
+   - **Build** otherwise. Each lineage type's minimum is its own `n_min`,
+     never below 8 (design point 1).
+   - **No M2:** build, with both minimums at the fallback of 20. At that
+     size a lead still pays while the batch reads up to 88% of the prefix
+     today (§10.3, at p = 40k and o = 5k).
+2. **Default: M3, after the build.** The chunk always ships **switched
+   off**. A lead saves money only if the batch requests that follow it can
+   read the cache entry it streamed. Nothing documents that sharing between
+   the two transports (§10.3), and M2 cannot show it, because no lead ran.
+   The default flips on in a later session, and only on an M3 pass (see
+   **Flip**, below).
 
 The break-even arithmetic is §10.3.
 
-**Goal.** When a phase-2 batch would carry at least `_WARM_LEAD_MIN_SEATS`
-seats of one cache lineage, stream one of them first at list price. Submit
-the rest only after its first output, so they read the 1-hour entry it
-wrote instead of each writing their own.
+**Goal.** When a phase-2 batch would carry at least its lineage type's
+minimum number of seats (see the gate) of one cache lineage, stream one of
+them first at list price. Submit the rest only after its first output, so
+they read the 1-hour entry it wrote instead of each writing their own.
 
 **Depends on:** Chunk 2, for `first_output`, `_prefix_lineage_key` and the
 bounded wait.
 
 **Switch.** `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` → `settings.QC_BATCH_WARM_LEAD`,
-a boolean whose default follows the gate. It is also inert when
-`QC_WARM_WAIT_SECONDS` is 0.
+a boolean, **default off in this chunk** (the gate's second decision). It
+is also inert when `QC_WARM_WAIT_SECONDS` is 0.
 
 **Why a real seat, and not a `max_tokens: 0` pre-warm.** A pre-warm is
 billed but is not a seat. It would need a new record type in `QCResult`
@@ -565,10 +597,15 @@ since v1.12.0. What the lead costs is its batch discount.
 1. **Pick the leads.** `_run_batch_calls(..., warm_leads: bool = False)`.
    When true:
    - Group `specs` by `_prefix_lineage_key(...)`.
-   - For each lineage with at least `_WARM_LEAD_MIN_SEATS` seats (a
-     module constant, **8**; §10.3 gives the reason), the lead is its
-     first key in `specs` order, which is submission order and therefore
-     deterministic.
+   - A lineage's type is `web-tooled` when its seats carry the web tools
+     (the `lens.web` branch of `_verifier_tools`), and `no-web` otherwise.
+   - A lineage gets a lead when it has at least its type's minimum seats:
+     `_WARM_LEAD_MIN_SEATS_WEB` or `_WARM_LEAD_MIN_SEATS_NO_WEB`. Both are
+     module constants that the gate sets from M2 (20 each without M2),
+     never below 8. Below 8, one list-price seat is a large share of the
+     phase, and a misestimate of p or o outweighs the saving.
+   - The lead is the lineage's first key in `specs` order. That is
+     submission order, and therefore deterministic.
 2. **Stream the leads.** Run each lead on a small `ThreadPoolExecutor`,
    at most one worker per lineage, calling `_run_streaming_call` with:
    - the lead's `_CallSpec` fields;
@@ -598,6 +635,26 @@ since v1.12.0. What the lead costs is its batch discount.
      requests, and the SDK timeout within one. That is the guarantee the
      streaming transport already gives in its settling state. Say so in
      the docstring.
+
+   **Traps in the round loop.** The loop was written for a phase in which
+   every unsettled seat is in the batch. A streaming lead is unsettled but
+   is not a batched seat, and five places would treat it as one:
+   - The submission list comes from `unsettled()`. Exclude streaming
+     leads. When every unsettled seat is a lead, stop submitting and join
+     the leads: never call `batches.create` with an empty list.
+   - `_consume_batch_results(..., submitted=...)` and the `unread` list
+     must be built from the keys actually submitted. Otherwise a lead reads
+     as a missing result row, and is settled as failed with an uncollected
+     request.
+   - `settle_all(...)` on a stop, a refused submission or the wall-clock
+     ceiling must skip a lead. So must the tail's "did not settle within
+     the round ceiling" loop. A lead's record is the `_CallResult` its own
+     `_run_streaming_call` returns, and settling it anywhere else would
+     overwrite a real, billed record.
+   - The refused-submission retry path (`restart_attempt()` today, and
+     Chunk 5's resume later) applies to batched seats only.
+   - The top-of-loop stop and deadline checks settle `pending`. `pending`
+     must exclude leads there too, and the leads are then joined.
 7. **Price the lead at list.** `_BatchPhaseOutcome` gains
    `streamed_keys: frozenset[str]`. The batch branch in `run_final_qc`
    stops hard-coding `cost_multiplier=settings.BATCH_COST_MULTIPLIER`, and
@@ -653,17 +710,53 @@ precedent in CLAUDE.md's "Final QC phase 2 is batched").
 - `test_the_switch_off_is_todays_batch_exactly`: request bytes and counts.
 - `test_a_retained_result_stays_current_across_the_switch` (F3).
 - `test_the_methodology_sentence_is_the_same_in_both_projections`.
-- Frontend, `frontend/tests/qcLive.test.ts`: a batch-transport run where
-  one seat streams `verifier_activity` frames folds them into that seat's
-  panel, and the batch line counts it settled once its `verifier_complete`
-  lands.
+- `test_the_lineage_minimums_are_never_below_eight`.
+- `test_warm_lead_ships_switched_off`: reads the default from the source
+  with `ast`, as Chunk 4's pin does. The flip replaces it (**Flip**,
+  below).
+- Frontend, `frontend/tests/qcLive.test.ts`: a batch-transport run in
+  which one seat streams `verifier_activity` and `verifier_search` frames
+  folds them into that seat's panel. The batch line still renders the
+  phase-level `settled` its `verification_batch` frames report. On the batch
+  transport, every seat's `verifier_complete`, the lead's included, arrives
+  only after the phase returns.
 
-**Measurement.** On a Final QC made with the switch on, the QC profiler
+**Measurement: M3.** On a Final QC made with the switch on, the QC profiler
 should show:
-- nearly every batched seat reading a cached prefix;
-- a `list-price` seat line with one seat per warmed lineage.
+- a `seat:list-price:<lineage>` row, with one record per warmed lineage;
+- that lineage's `seat:batched:<lineage>` row reading nearly its whole
+  prefix: Cache read / (Cache read + 1h write) close to 1.
 
-This is part of M3 when the chunk ships default off, and M4 otherwise.
+M3 needs a run in which at least one lineage reaches its minimum. If the
+profiler shows no `seat:list-price` row, no lead ran, and M3 says nothing
+about this chunk. Record that, and ask for another run.
+
+**Flip.** The first later session that finds a recorded M3 pass for this
+chunk makes the flip its own commit:
+- set the default to True;
+- replace `test_warm_lead_ships_switched_off` with
+  `test_warm_lead_ships_switched_on`;
+- update the README row and text, and the release-note draft.
+
+**M3 decides the flip.** The test is the arithmetic of §10.3, applied to
+the run that happened.
+- **Pass:** a lead ran, no seat failed with an `invalid_request` error,
+  and in every lineage that had a lead:
+  (n − 1) × b × (h₁ − h₀) × (w − r) × p > (1 − b) × C + b × h₀ × (w − r) × p.
+  - n counts the batched Records plus the lead. p and h₁ come from the
+    lineage's `seat:batched:<lineage>` row, worked out as in the gate.
+  - C is the Cost on the lead's `seat:list-price:<lineage>` row. The right
+    side is what the lead actually cost beyond a batched seat at the
+    baseline: its continuations and searches included. For a lead with no
+    continuations it equals §10.3's extra cost.
+  - Take h₀ from M2's row for the same lineage type, or 0.88 if M2 was
+    never recorded.
+  - In words: the batch read enough more of the prefix than it did before
+    to pay for the list-price seat. If the two transports share the entry,
+    h₁ should be close to 1.
+- **Fail:** the switch stays off. Record the numbers. Chunk 6 records the
+  flip as owed or abandoned. The most likely cause is that a streamed
+  request's cache entry is not readable by the batch.
 
 **Docs.**
 - README: the Configuration row and a subsection.
@@ -750,6 +843,14 @@ a boolean, **default off in this chunk**.
    the way around that, which the NOTE did not consider. Rewrite it, and
    add a CLAUDE.md erratum for the "Final QC cost + speed" bullet "No
    messages-tail breakpoint (deliberate)".
+   - Two more comments call one TTL per request absolute. They are
+     `_cache_control`'s docstring ("EVERY breakpoint in a single request
+     must be built from the same `cache_ttl`"), and the comment that opens
+     `_run_streaming_call` ("One TTL for every breakpoint in the
+     request"). Make both say every *explicit* marker. Name the
+     continuation tail as the one shorter-lived breakpoint the ordering
+     rule allows. The rule they defend is unchanged: longer-lived entries
+     come first.
 8. **SDK floor.** Confirm the oldest `anthropic` release `requirements.txt`
    allows accepts top-level `cache_control` on `messages.stream`. If it
    does not, raise the floor to the first release that does, and say so
@@ -823,16 +924,20 @@ attempt, so the new path can cost at most one extra attempt, in the rare
 case where a conversation keeps failing.
 
 **The rule: resume first, restart last.**
-- **Resume** on a retryable failure when the current conversation has at
-  least one completed response and this is not the final attempt. Keep
-  `messages`, `all_responses`, `container_id` and the continuation count,
-  and re-send the request that failed.
+- **Resume** on a retryable failure when both hold:
+  - the current conversation has at least one completed response;
+  - the retry about to run is not the final attempt.
+
+  Keep `messages`, `all_responses`, `container_id` and the continuation
+  count, and re-send the request that failed. With `max_attempts` = 3, the
+  first retry can resume, and the second (the final attempt) always
+  restarts.
 - **Restart** otherwise — no progress yet, or the final attempt — exactly
   as today: `billed.extend(all_responses)`, fresh messages, container
   cleared.
-- Backoff, attempt counting and the `{prefix}_retry` events are unchanged.
-  The events gain a `mode: "resume" | "restart"` field. Check that no
-  exact-dict test pins them, and update one knowingly if it does.
+- Backoff and attempt counting are unchanged. The `{prefix}_retry` events
+  gain a `mode: "resume" | "restart"` field. Three tests pin those events
+  as exact dicts; they are listed below.
 
 **Where.**
 1. **Research `_run_dimension`.** Hoist `messages`, `all_responses`,
@@ -869,15 +974,26 @@ docstrings that say "Reset per ATTEMPT" in both engines and in
   (research) and `test_qc_pause_continuation_echoes_the_container_and_a_retry_drops_it`
   (QC): the first retry now resumes and keeps the container; the final
   attempt's restart drops it. Rename both to say so.
-- `test_a_retryable_seat_failure_restarts_on_a_fresh_conversation`
-  (batch): the seat now resumes. Add the restart-on-the-last-attempt case.
+- Three tests assert a retry event as an exact dict:
+  `test_retry_emits_dimension_retry_event` (`dimension_retry`),
+  `test_malformed_frames_are_ignored_and_stream_failure_retries`
+  (`lens_retry`) and
+  `test_verifier_retry_then_relays_tool_activity_for_the_same_seat`
+  (`verifier_retry`). Each fails before any response, so each still
+  restarts. Each gains `"mode": "restart"`, and nothing else changes.
 - Keep green, unchanged:
-  `test_retryable_failure_retries_then_succeeds`,
-  `test_retry_emits_dimension_retry_event`,
-  `test_retry_success_counts_billed_usage_from_abandoned_attempt`,
-  `test_the_failed_round_bill_counts_a_retried_attempt_exactly_once`,
-  `test_malformed_frames_are_ignored_and_stream_failure_retries` and
-  `test_verifier_retry_then_relays_tool_activity_for_the_same_seat`.
+  - `test_a_retryable_seat_failure_restarts_on_a_fresh_conversation`
+    (batch). Its seat fails on its first request, before any response, so
+    the rule still restarts it. It now pins that case. The resume case is
+    the new `test_a_retryable_item_error_resumes_the_seat`.
+  - `test_retryable_failure_retries_then_succeeds`, which also fails
+    before any response.
+  - `test_retry_success_counts_billed_usage_from_abandoned_attempt` and
+    `test_the_failed_round_bill_counts_a_retried_attempt_exactly_once`.
+    Both fail after a billed pause, so both now resume rather than
+    restart. Their totals (300) are the same either way, which is the
+    billing invariant working. Their docstrings' "abandoned" wording
+    becomes loose; leave the assertions alone.
 
 **New tests** (research and QC unless marked):
 - `test_a_failure_after_continuations_resumes_the_same_conversation`: the
@@ -892,8 +1008,9 @@ docstrings that say "Reset per ATTEMPT" in both engines and in
 - Batch: `test_a_refused_submission_resubmits_the_same_messages` and
   `test_a_retryable_item_error_resumes_the_seat`.
 
-**Also in this session.** If M3 is recorded as a pass, flip Chunk 4's
-default, as its own commit.
+**Also in this session.** If M3 is recorded, apply each chunk's flip
+rule. Chunk 3's and Chunk 4's defaults flip only on their own passes,
+each as its own commit.
 
 **Docs.**
 - README: a subsection.
@@ -917,13 +1034,15 @@ default, as its own commit.
 
 1. **Reconcile and backfill.** Fill in every merge commit in the progress
    table.
-2. **Flip, if owed.** If an M3 pass is recorded and Chunk 4's default is
-   still off, flip it (Chunk 4, "Flip"). If M3 was never run, leave the
-   default off, and record "Chunk 4 shipped off; flip owed after M3" in
-   `docs/plans/README.md`, the compaction plan's precedent.
-3. **Revisit Chunk 3.** If it was built default off, apply the same rule
-   against M3. If M4 shows its lead did not raise batched reads, turn its
-   default off and say why.
+2. **Flip, if owed.** Chunks 3 and 4 each have their own M3 test (their
+   "Flip" sections). For each chunk whose M3 pass is recorded and whose
+   default is still off, flip it, each as its own commit. If M3 was never
+   run, or its result for a chunk is missing or inconclusive, leave that
+   default off. Then record, for example, "Chunk 4 shipped off; flip owed
+   after M3" in `docs/plans/README.md` (the compaction plan's precedent).
+3. **Revisit Chunk 3 against M4.** If its default is on and M4 no longer
+   passes its M3 test (Chunk 3, "Flip"), turn the default off and say
+   why.
 4. **Record the after-numbers.** Put Abraham's M4 outputs in the progress
    file.
 5. **Consolidate §7** into one "Release-note draft (Tier 1)" block that a
@@ -1009,13 +1128,16 @@ than one round if you have them.
 ```
 
 Use the newest Final QC JSON export you have (Final QC → Download JSON),
-made with batch verification at its default. The lines Chunk 3 reads are
-"Phase 2 batched … seats: … token-weighted read share". This also closes
+made with batch verification at its default. Chunk 3's gate reads the
+per-bucket table's `seat:batched:web-tooled` and `seat:batched:no-web`
+rows: Records, 1h write, Cache read and Output (Chunk 3, "Gate"). It does
+not use the printed "Read share" column. This also closes
 step 2 of `docs/review-results/2026-09-09/EXECUTION_RECORD.md`; record it
 there as well.
 
-**M3 — trial with the new switches on.** After Chunk 4 merges; after
-Chunk 3 too, if it shipped off. This uses real runs you would make anyway,
+**M3 — trial with the new switches on.** After Chunk 4 merges. Chunk 3,
+if it was built, merged before it and ships switched off too, so this trial
+tests both. This uses real runs you would make anyway,
 and costs nothing beyond them. From a source checkout of `master`, with the
 frontend built as README's "Install & Run (from source, Windows)" section
 describes:
@@ -1033,6 +1155,11 @@ $env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "1"
 2. Save the project, and export the Final QC JSON.
 3. Run both profilers on the results (M1's and M2's commands).
 4. Note any dimension, lens or seat that failed, with its error text.
+
+Chunk 3's half needs a Final QC that produces enough findings for at least
+one lineage to reach its minimum. The QC profiler's `seat:list-price` row
+shows whether a lead ran. If there is no such row, say so; that half of the
+trial then waits for a larger run.
 
 **M4 — after.** After the program's switches are on in normal use, run M1's
 and M2's commands again on new runs. Chunk 6 records the result.
@@ -1102,33 +1229,68 @@ dimensions that is roughly $1–2.50. M3 tells which case holds.
 
 ### 10.3 Chunk 3: the break-even
 
-For one lineage of N seats in a batch, with a fraction h of seats already
-reading the prefix today, on Claude Opus 5.5 with a 1-hour TTL at the
-batch rate:
+One lineage of n seats in a batch shares a prefix of p tokens, and each
+seat writes o output tokens. Today a share h of that prefix is read rather
+than written (the gate says how to measure h, p and o from M2). The rates
+are the QC model's list rates in `settings.PRICING`: w for a 1-hour write,
+r for a read, u for output. b is `settings.BATCH_COST_MULTIPLIER`. On
+Claude Opus 5.5, w = $8.00, r = $0.20 and u = $20.00 per million, and
+b = 0.5.
 
-- A seat that writes the prefix pays $4.00 per million (the $8.00 write,
-  halved).
-- A seat that reads it pays $0.10 per million (the $0.20 read, halved).
+- **Saving.** A lead turns each other seat's expected write into a read:
+  (n − 1) × b × (1 − h) × (w − r) × p, when every other seat then reads.
+- **Extra cost.** The lead gives up its batch discount:
+  [w − b × (h r + (1 − h) w)] × p + (1 − b) × u × o.
+  (Its uncached suffix loses the discount too; that term is negligible.)
+- **`n_min`** is the smallest integer n for which the saving exceeds the
+  extra cost: the smallest integer above
+  1 + extra ÷ [b × (1 − h) × (w − r) × p].
 
-The saving is (N − 1)(1 − h) × $3.90/M × P, when every non-lead seat reads
-after the warm-up. The lead's extra cost is roughly P × ($8 − its batched
-expectation) + O × $10/M.
+On Claude Opus 5.5, with p = 40k and o = 4k:
 
-| N | P | O | Break-even h |
+| h (read today) | 0 | 0.5 | 0.7 | 0.8 | 0.85 | 0.9 | 0.95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `n_min` | 3 | 5 | 8 | 12 | 16 | 23 | 46 |
+
+The same arithmetic, turned around: the break-even h for a lineage of n
+seats.
+
+| n | p | o | Break-even h |
 |---:|---:|---:|---:|
-| 20 | 40k | 5k | ≈ 0.88 |
 | 8 | 40k | 3k | ≈ 0.72 |
-| 4 | 40k | 3k | ≈ 0.45 |
+| 20 | 40k | 5k | ≈ 0.88 |
+| 40 | 40k | 4k | ≈ 0.94 |
+| 80 | 40k | 4k | ≈ 0.97 |
 
-Hence two rules. A lead is used only on a lineage of at least 8 seats
-(`_WARM_LEAD_MIN_SEATS`). The chunk is skipped when M2 shows h ≥ 0.85.
-On a lineage of 20 seats, a lead at h = 0.3 saves about $1.80.
+So no single read-share cut-off is right for every lineage. With p = 40k
+and o = 3k, an 8-seat lineage at h = 0.8 loses about $0.10 on a lead: it
+saves $0.22 and costs $0.31. An 80-seat lineage at h = 0.9 (o = 4k) gains
+about $0.89. Hence the gate's per-lineage minimum, and its floor of 8. On a
+20-seat lineage at h = 0.3 (o = 5k), a lead saves about $1.80.
 
-**One assumption M3/M4 must confirm:** a streamed request's cache entry is
+**The M3 test.** A run with a lead measures h₁, the batched seats' read
+share with the lead in place, against the baseline h₀ from M2. The saving
+is (n − 1) × b × (h₁ − h₀) × (w − r) × p; the formula above is the case
+h₁ = 1. For the extra cost, the trial uses the lead's actual list-price
+cost C, from its own row in the profiler: (1 − b) × C + b × h₀ × (w − r) ×
+p. That counts everything the lead did, continuations and searches
+included. For a single-request lead, it equals the extra-cost formula
+above.
+
+Two estimates in the gate lean the safe way for `web-tooled` seats, whose
+continuations re-read the prefix. With P the true prefix, h the true read
+share and k continuations per seat, the gate measures p = P × (1 + k) and
+a read share of (h + k) / (1 + k). Their product p × (1 − measured share)
+is still P × (1 − h), so the saving is exact. The extra cost comes out
+higher by k × P × (w − r). That is far more than the re-sent turn content
+the formula leaves out, so in any realistic run `n_min` comes out higher,
+never lower.
+
+**The assumption only M3 can confirm:** a streamed request's cache entry is
 readable by the batch requests that follow it. Caches are per workspace
 and are not documented as separate for the two paths. But nothing states
-the sharing outright either, which is why the chunk's default follows the
-measurement.
+the sharing outright either. That is why the chunk ships switched off, and
+its default flips only on an M3 pass.
 
 ### 10.4 Chunk 5: resumes
 

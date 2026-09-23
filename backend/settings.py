@@ -479,8 +479,9 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 
 # --- Pricing (WI4 cost meter) -----------------------------------------------
 
-# USD per token unless noted. VERIFIED 2026-08-25 against
-# platform.claude.com/docs/en/about-claude/pricing. Sonnet 5 launched with
+# USD per token unless noted. VERIFIED 2026-09-23 against
+# platform.claude.com/docs/en/about-claude/pricing, every row and rate
+# below. Sonnet 5 launched with
 # $2/$10 per MTok as introductory pricing through 2026-08-31, with a
 # scheduled increase to $3/$15 the next day — this table used to price at
 # the post-increase rate defensively, so the meter would never under-report
@@ -488,15 +489,24 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 # happen: $2/$10 is now the permanent standard rate. Pricing here follows
 # suit — the defensive $3/$15 would now OVER-report every dollar figure the
 # app shows for Sonnet 5 usage instead of protecting against under-reporting.
-# Cache read is 0.1× input. Cache WRITE is per-TTL and this table carries
-# both rates: ``cache_write`` is the 5-minute ephemeral entry at 1.25× input,
-# ``cache_write_1h`` the one-hour entry at 2.0× input (VERIFIED 2026-07 —
-# the 1h entry lives longer, so it costs more to create). The provider
-# reports the one-hour subtotal INSIDE the cache-creation total, so the two
-# rates apply to disjoint slices (``usage_ledger.estimate_usage_cost``);
-# charging the subtotal at both rates would double-bill it. Final QC's
-# verifier requests are the app's only one-hour writes today (v1.8.0), and
-# Chunk 4.2 puts the interview on them too.
+#
+# Cache READ is per model, not one multiple for every row: Anthropic prices
+# a cache hit at 0.1× input on every model here EXCEPT Opus 5.5, whose hits
+# cost 0.05× input ($0.20/MTok — footnote 2 on the pricing page; Fable 5.1,
+# not priced here, is 0.025×). Look a new row's read rate up instead of
+# assuming 0.1×: Opus 5.5 was added that way at $0.40 (v1.20.0), and every
+# Final QC cost figure the app showed over-reported its cache-read line 2×
+# until 2026-09-23. tests/test_usage.py pins each row's published multiplier.
+#
+# Cache WRITE is per-TTL, and this table carries both rates: ``cache_write``
+# is the 5-minute ephemeral entry at 1.25× input, ``cache_write_1h`` the
+# one-hour entry at 2.0× input (VERIFIED 2026-07 — the 1h entry lives
+# longer, so it costs more to create). The provider reports the one-hour
+# subtotal INSIDE the cache-creation total, so the two rates apply to
+# disjoint slices (``usage_ledger.estimate_usage_cost``); charging the
+# subtotal at both rates would double-bill it. Final QC's verifier requests
+# are the app's only one-hour writes today (v1.8.0), and Chunk 4.2 puts the
+# interview on them too.
 #
 # Opus 5.5 ($4/$20) is the Final-QC model; Opus 5 ($5/$25) and Fable 5
 # ($10/$50) are retained because BUILD_A_SPEC_QC_MODEL can still select them. Web search bills
@@ -538,7 +548,8 @@ PRICING: dict[str, dict[str, float]] = {
     MODEL_OPUS_55: {
         "input": 4.0 / 1_000_000,
         "output": 20.0 / 1_000_000,
-        "cache_read": 0.40 / 1_000_000,
+        # 0.05× input, not the 0.1× the other rows use (see above).
+        "cache_read": 0.20 / 1_000_000,
         "cache_write": 5.00 / 1_000_000,
         "cache_write_1h": 8.00 / 1_000_000,
     },

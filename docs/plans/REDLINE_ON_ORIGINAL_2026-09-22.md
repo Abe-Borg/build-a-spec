@@ -16,8 +16,14 @@ was written, so a v1.21.0 tag cut from `master` after PR #190 merges ships
 the menu item too, and that entry (not frozen until tagged) would need the
 draft. The new export's real-Word QA rows in `docs/RELEASE_WINDOWS.md` are
 still to run.
+**The two losses Phase 1 recorded in the formatted export are fixed** (a
+follow-up PR, 2026-09-23): a provision holding a hyperlink is spliced like
+any other instead of being rebuilt from its first run, and a new
+sub-provision in a Word-numbered master takes its own numbering level — see
+"Phase 1 follow-up (links and the nesting level) — as built". No release
+entry either; its draft is under "Release-note drafts".
 **Phase 2 is next and not started**; start from the two Phase 1 as-built
-notes.
+notes and the follow-up's.
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
 the Batch 5 diff engine and redline writer (`diffing.py`, `docx_export.py`),
 and the retained upload + formatting map every import already keeps.
@@ -784,6 +790,10 @@ Found, not done (outside this PR):
   sweep's edited provisions). The splice's eligibility widens from here.
 - Phase 0's "Found, not done" list stands unchanged.
 
+(Both fixed on 2026-09-23 — see "Phase 1 follow-up (links and the nesting
+level) — as built" below. The list above is kept as the record of what the
+backend PR found.)
+
 #### Phase 1 (UI PR) — as built
 
 **Built 2026-09-23 in PR #190.** It bumped no VERSION, added no
@@ -885,6 +895,140 @@ stands in for the real-Word QA rows, which are still to run.
 What Phase 2 starts from: unchanged by this PR — the native-moves rendering
 and the real-Word judge above, plus the Phase 1 and Phase 0 "Found, not
 done" lists, none of which this PR touched.
+
+#### Phase 1 follow-up (links and the nesting level) — as built
+
+**Built 2026-09-23**, one PR, fixing the two losses the backend as-built note
+recorded under "Found, not done". Both were losses of *Export Word (keeps
+your formatting)*, so the redline's Accept All reproduced them by
+construction; fixing the export fixes both. It bumped no VERSION, added no
+`release_notes.py` entry and changed no route, payload, SSE event,
+dependency, env knob or project format. The contract is in
+`docs/DOCX_FIDELITY.md` ("Hyperlinks are spliced like the rest of the
+paragraph", and the new-provision bullet); the why and the traps are in
+`CLAUDE.md` → "Links and the nesting level survive the formatted export —
+implemented notes".
+
+Code: `spec_doc/source_splice.py` — the map descends into `w:hyperlink`
+(`_MapBuilder`; atoms, runs and characters remember their link:
+`ParagraphMap.links` / `run_links` / `char_links`), `_place_new_words` /
+`_placements` decide each insertion's `_Placement` (its link, where its
+formatting comes from, and the link start a replacement running into a link
+is written at), `_PieceWalk` keeps a link's zero-width content inside it,
+and both renderings open one copy of a link per stretch of its pieces
+(`_open_link`). `spec_doc/source_render.py` — `_NumberingTables` (the
+importer's own numbering readers over the upload, lazy), `_Walker.depth_at`,
+`_Assembler._nesting_level` → `Record.level` → `_set_numbering_level` in
+`render_inserted`, and two render counts (`level_offset`, `level_kept`).
+Tests: 13 in `tests/test_source_splice.py` (one of them a 600-edit property
+test over a paragraph holding every link shape: Accept All is the clean
+rendering, Reject All the source, the importer reads the edit, no link is
+ever split), 5 link rows and the Word-numbered re-import checks in
+`tests/test_redline_original.py`, 2 link and 7 level tests in
+`tests/test_preserving_export.py`, and 1 in `tests/test_diagnostics.py`. QA
+rows: `docs/RELEASE_WINDOWS.md` → "Links and deeper provisions (redline
+program, Phase 1 follow-up)".
+
+Three questions this left open, decided and pinned:
+
+1. **Where inserted words go at a link's edge: outside it.** New words go in
+   a link only when they are wholly its own — typed over words that all sit
+   in one link, or inserted between two of its characters. At either edge,
+   or replacing words on both sides of one, they go outside every link, so a
+   link never grows to cover words the user added beside it. They take their
+   formatting from the nearest character where they go (in the same link, or
+   outside every link), so a word added after a link is not drawn in its
+   blue underline. A replacement that runs INTO a link from outside it is
+   written at the link's start — written where the script puts it, it would
+   cut the link in two — and a link's own zero-width content (a bookmark
+   closing or opening inside it) stays inside it.
+2. **A link whose words are all deleted: gone.** The clean export does not
+   write it (an empty hyperlink shows nothing), unless a bookmark inside it —
+   never deleted — keeps it; the redline leaves the link holding its deleted
+   runs, so Accept All leaves it empty, which the self-check's comparison
+   drops as Word shows nothing for it. An EMPTY hyperlink in the upload is
+   carried where it was.
+3. **A level the master's numbering does not define: the clone keeps its
+   kin's level.** Word shows it one level up (the old behaviour), but never
+   at a level the master's list cannot draw; the export event counts it
+   (`level_kept`).
+
+Deviations from the backend note's text:
+
+1. **The kin's level is resolved the way Word resolves it** — its own
+   `w:numPr`, else its paragraph style's through `w:basedOn` (the importer's
+   `_effective_numbering`) — because in most office masters the numbering
+   rides the PR1–PR5 styles and a style-numbered kin has no `w:ilvl` of its
+   own to offset. The clone's level is written on its OWN `w:numPr`
+   (`w:ilvl`, then `w:numId`, which is `CT_NumPr`'s order), naming the
+   instance explicitly even when its style names it too, so Word and the
+   importer read one answer. The clone keeps the kin's paragraph style (see
+   "Found, not done").
+2. **"Defines that level" is read as "defines it and draws it as a
+   provision".** A level whose label grammar the importer promotes to a PART
+   or article heading (`_promoted_heading_kind` — say `%2.%3`) is never
+   taken, or the new provision would re-import as an article.
+3. **Only Word-numbered (AUTO) kin is renumbered.** A typed-letter kin
+   carries its level in its label ("1."), which the importer reads.
+4. **`FALLBACK_HYPERLINK` now means only a link inside a link.** Anything
+   else inside a link that the splice cannot map is refused by its own reason
+   (`field`, `content_control`, …), and a plain link is spliced. The export
+   event's `render.fallback` counts therefore changed meaning for
+   `hyperlink`.
+5. **Two existing tests changed knowingly.**
+   `test_unmappable_paragraphs_are_refused_by_name` pinned "a hyperlink is
+   refused"; it now pins what inside a link is refused, by name.
+   `test_a_fallback_paragraph_deletes_all_and_inserts_the_new_text` used a
+   hyperlink to reach the fallback; it now uses `w:sym`, which still falls
+   back, so its subject — the fallback's redline — is unchanged.
+6. **The re-import test checks the TREE for Word-numbered masters too**, as
+   the backend note said it would once this was fixed: typed letters, Word
+   numbering on each paragraph, and Word numbering on the PR1–PR4 styles,
+   ten seeds each. The random edit mix rarely nests (one seed in ten), so two
+   more tests aim at it: every depth a master defines, and a nesting-heavy
+   sweep (23 offsets per master kind, none kept).
+
+Measured (recorded, not asserted):
+
+- **Link-free paragraphs are untouched.** 7,500 seeded renders, clean and
+  redline, of link-free paragraphs came out byte for byte identical to the
+  module before this change. Link paragraphs: 3,000 seeded edits in scratch
+  plus the committed 600 — Accept All is the clean rendering, Reject All the
+  source, the importer reads the edit, and no link is split.
+- **Corpus sweep** (the backend note's shape — 17 corpus masters × 60
+  scripted edit mixes of up to 14 edits, 1,020 renders; seeds
+  `seed × 97 + len(case id)`): no refusal and no failed self-check, before
+  or after. Fallbacks on `master` (d1397ef): 245 of 516 edited provisions
+  (47.5%), every one `hyperlink` (the backend note recorded 230 of 525 with
+  its own seeds). On this PR: **0 of 516** — every edited provision spliced.
+  New sub-provisions: 2 given a level of their own, 78 kept at their kin's —
+  every kept one in a single-level list: the corpus builds its Word-numbered
+  masters from python-docx's default template, whose list definitions
+  define level 0 only, so there is no sub-level to give. Real multilevel
+  masters define nine; the suite's own four-level masters are where the
+  offset is proven.
+- **Revert matrix**: see the `CLAUDE.md` section.
+
+Found, not done (outside this PR):
+
+- **A style-numbered clone keeps its kin's paragraph style.** Its number is
+  right (its own `w:numPr` names the level), but whether Word draws it at
+  the level's indent or the style's depends on how the master defines them —
+  the new QA row finds out. If Word keeps the style's indent, the fix is to
+  take the style the numbering level itself names (`w:lvl/w:pStyle`, which
+  is how most office masters link PR1–PR5 to their list).
+- **A single-level Word list cannot draw a sub-provision**, so the clone
+  keeps its kin's level and re-imports as its parent's sibling. Writing the
+  label as text (numbering cancelled) would draw it right; nothing in the
+  corpus says real masters need it.
+- **In a typed-letter master**, a new provision deeper than any the master
+  has keeps its kin's paragraph formatting: its letter is right and it
+  re-imports right, but it is drawn at its kin's indent where the master
+  sets indents per paragraph or per style (a Phase 0 behaviour).
+- Phase 0's "Found, not done" list stands unchanged.
+
+What Phase 2 starts from: the native-moves rendering and the real-Word judge
+above, plus the "Found, not done" lists — this one's and Phase 0's.
 
 ### Phase 2 — Native moves and real-Word proof
 
@@ -1024,3 +1168,11 @@ changing one is a new decision, recorded here.
   master already carries someone's tracked changes, accept or reject them in
   Word and import it again first; the redline of extracted provisions still
   works either way."
+- **Phase 1 follow-up (links and the nesting level):** "Links and new
+  sub-provisions survive *Export Word (keeps your formatting)* — and so the
+  redline on your original. A provision holding a hyperlink keeps the link,
+  its bold and italic and the tab after its letter when you edit it or it
+  gets relettered, and words you add beside a link are never pulled into it.
+  In a master whose provisions Word numbers, a new sub-provision (the first
+  '1.' under an 'A.') now prints at its own level instead of one level up,
+  whenever your master's numbering defines that level."

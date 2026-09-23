@@ -1673,6 +1673,45 @@ def test_a_style_numbered_kin_gives_the_clone_its_own_level_explicitly(tmp_path)
     assert [depth for depth, _text in _depths(exported, tmp_path)] == [0, 1, 0]
 
 
+def test_a_new_sibling_of_word_numbered_kin_is_its_kins_clone_unchanged(tmp_path):
+    """Kin at the new provision's own depth needs no level of its own: the
+    clone is the kin's paragraph exactly — in a style-numbered master, no
+    ``w:numPr`` of its own beside the style's — and nothing is counted."""
+    from tests.test_import_office_master import _add_style
+    from tests.test_importer import _define_numbering
+
+    document = Document()
+    _define_numbering(
+        document, 70, {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3."), 3: ("decimal", "%4.")}
+    )
+    body = _add_style(document, "SpecBody", num_id=None, ilvl=None)
+    article = _add_style(document, "ART", num_id=70, ilvl=1, based_on=body)
+    provision = _add_style(document, "PR1", num_id=70, ilvl=2, based_on=body)
+    for line in ("SECTION 21 05 00", "COMMON WORK RESULTS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    document.add_paragraph("SUMMARY", style=article)
+    document.add_paragraph("Section includes vibration isolation.", style=provision)
+    document.add_paragraph("Related requirements.", style=provision)
+    document.add_paragraph("END OF SECTION")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    target = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "add_paragraph", "target_id": target.uid, "text": "Spring isolators."}],
+    )
+    stats: dict = {}
+    exported = render_preserving_docx(
+        source_bytes=source, format_map=imported.format_map, current=section, stats=stats
+    )
+    assert (stats["level_offset"], stats["level_kept"]) == (0, 0)
+    added = _paragraph(exported, "Spring isolators.")._p
+    kin = _paragraph(exported, "Related requirements.")._p
+    assert added.find(f"{qn('w:pPr')}/{qn('w:numPr')}") is None
+    assert etree.tostring(added.find(qn("w:pPr"))) == etree.tostring(kin.find(qn("w:pPr")))
+    assert [depth for depth, _text in _depths(exported, tmp_path)] == [0, 0, 0]
+
+
 def test_a_level_the_masters_numbering_does_not_define_keeps_its_kins(tmp_path):
     """The master's list stops at the provision level: there is no number
     to give a sub-provision, so it keeps its kin's level (one level up in
@@ -1707,3 +1746,19 @@ def test_a_typed_letter_kin_is_never_renumbered(tmp_path):
     _section, _exported, stats, numbering = _add_child(tmp_path, source)
     assert (stats["level_offset"], stats["level_kept"]) == (0, 0)
     assert numbering is None
+
+
+def test_numbering_that_cannot_be_read_offsets_nothing():
+    """The export reads the upload's numbering the way the importer does,
+    and degrades the way it does: a package whose numbering or styles cannot
+    be read has none. Nothing raises, and no level is offset — a new
+    sub-provision keeps its kin's."""
+    from backend.spec_doc.source_render import _NumberingTables
+
+    tables = _NumberingTables(b"not a Word package")
+    assert tables.draws_a_provision(0, 1) is False
+    assert (tables.catalog, tables.style_numbering, tables.default_style_id) == (
+        {},
+        {},
+        "",
+    )

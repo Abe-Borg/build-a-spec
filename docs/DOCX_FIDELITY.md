@@ -355,7 +355,9 @@ hyperlink is written once, holding its own pieces: a word changed inside it
 is a `w:del`/`w:ins` inside the `w:hyperlink` (a hyperlink cannot sit inside
 a tracked change; its runs can), a word added beside it is tracked outside
 it, and a link whose words were all deleted keeps its deleted runs, so
-Accept All leaves it empty — which is what the clean export writes.
+Accept All leaves it empty: it shows nothing, exactly as the clean export,
+which does not write it (the self-check's comparison drops an empty
+hyperlink, since Word shows nothing for one).
 
 **Typed letters are tracked; Word numbering is not.** In a typed-letter master
 a provision relettered by an insert above it carries a tracked letter change

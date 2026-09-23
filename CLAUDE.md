@@ -938,7 +938,18 @@ backend/
                            name (SourceRedlineError.reason, a closed
                            vocabulary with server-authored sentences); the
                            D-7 self-check (revisions.py) runs on every export,
-                           then the package audit
+                           then the package audit. A new provision cloned from
+                           Word-numbered (AUTO) kin at ANOTHER depth takes its
+                           own level (_Assembler._nesting_level → Record.level
+                           → _set_numbering_level on the clone's own w:numPr,
+                           numId explicit): the kin's (numId, ilvl) resolved
+                           the way Word does (_NumberingTables: the importer's
+                           _effective_numbering / catalog / style numbering
+                           over the upload, lazy, degrading to none), offset
+                           by the depth difference — only a level the
+                           definition has and draws as a provision
+                           (_promoted_heading_kind says no), else the kin's
+                           level is kept; counted as level_offset / level_kept
   spec_doc/source_splice.py
                            [Redline on your original, D-2; built in Phase 0]
                            the word-level splice shared with the Phase 1
@@ -969,7 +980,23 @@ backend/
                            beside w:ins for the new words, markers outside the
                            wrappers — the same walk, so Accept All is the
                            clean export by construction (pinned by 400 seeded
-                           random edits, accept and reject both)
+                           random edits, accept and reject both). Hyperlinks
+                           are mapped too (the links-and-level follow-up):
+                           atoms, runs and characters remember their link
+                           (ParagraphMap.links / run_links / char_links), and
+                           _place_new_words decides each insert's _Placement
+                           — in a link only when the words are wholly its own
+                           (typed over its words, or between two of its
+                           characters), formatting from the nearest character
+                           where they go, and a replacement running INTO a
+                           link written at the link's start (split) so a link
+                           is never cut in two. Both renderings open ONE copy
+                           of a link (_open_link: attributes, no content) per
+                           stretch of its pieces; an emptied link is simply
+                           never opened. A paragraph with no link renders
+                           byte for byte as before (_placements returns the
+                           script's own choices). Only a nested link (or a
+                           field, content control … inside one) is refused
   spec_doc/revisions.py    [Redline on your original, D-7] the ORACLE, sharing
                            no code with the writer: pure-lxml accept_all /
                            reject_all (wrappers, property changes, rows and
@@ -1546,7 +1573,7 @@ frontend/src/
                            HelpModal (the five help topics + the
                            About footer, which states the license to every
                            user) / TrustDeepDiveModal (the "I'm not
-                           convinced" dossier — fifteen runtime cards; a
+                           convinced" dossier — sixteen runtime cards; a
                            contract, every number real) / Tip (a hover
                            tooltip that works on a DISABLED control — a
                            native title never fires on a disabled button)
@@ -1590,7 +1617,14 @@ tests/
                            formatting rules, 600 seeded random edits), the
                            character map vs the importer, named refusals, runs
                            kept, markers placed, zero-width nodes, a leading
-                           page break staying ahead of prepended words
+                           page break staying ahead of prepended words; and
+                           hyperlinks (the links-and-level follow-up): the map
+                           reading a link as the importer does, what inside a
+                           link is refused by name, the four link rules
+                           (wholly-its-own, nearest formatting, never split,
+                           an emptied link gone), an empty link carried, the
+                           link-free placement pin, and 600 seeded edits over
+                           every link shape, accept and reject both
   test_redline_export.py   [Batch 5] Accept-All==cur & Reject-All==base round-trip
                            (real importer + custom reject reader), XML shapes
                            (author/date/unique id, w:delText not w:t, para-mark
@@ -1608,12 +1642,16 @@ tests/
                            unique and above the package's, author/date,
                            schema order, no sectPr mark deleted); refusals by
                            name; the keep-in-place weights and the writer's
-                           guards directly; re-import (typed letters → the tree; every
+                           guards directly; re-import (typed letters, direct
+                           and style-borne Word numbering → the tree, plus
+                           every depth and a nesting-heavy sweep; every
                            labelling kind → what the formatted export
-                           re-imports as); the corpus sweep under a scripted
-                           edit mix; and the API matrix (route, defaults, 400s,
-                           409s with codes, payload + reason, filename, the
-                           cached scan)
+                           re-imports as); link rows (relettered, edited
+                           inside, added beside, emptied, a replacement
+                           running into one); the corpus sweep under a
+                           scripted edit mix (no hyperlink fallback); and the
+                           API matrix (route, defaults, 400s, 409s with codes,
+                           payload + reason, filename, the cached scan)
   frontend/tests/tour.test.ts
                            [Batch 6] passive tour-data invariants and current anchors
   test_stop.py             [Batch 7] chat stop mid-stream (truncates the live
@@ -13034,6 +13072,195 @@ docstrings and one test only: no code, route, dependency or version change.
   deep-dive remediation README's "Use `venv\Scripts\python` from
   PowerShell" is wrong on both counts, the name and the missing `.\`, and
   stays as history. The form that runs is `.\.venv\Scripts\python`.
+
+## Links and the nesting level survive the formatted export — implemented notes
+
+The two losses the Phase 1 backend PR recorded under "Found, not done" in
+`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`, both in *Export Word (keeps
+your formatting)* and so, by construction, in the redline's Accept All. One
+PR, owner-requested (Abraham, 2026-09-23). No route, SSE event, dependency,
+env knob, project-format change or VERSION bump; the release-note draft is
+in the plan ("Release-note drafts"), and the plan's "Phase 1 follow-up
+(links and the nesting level) — as built" note carries the decisions and
+deviations. This section is the why and the traps.
+
+- **Every fallback in the corpus was a link, and the fallback is a
+  rewrite.** A paragraph holding any `w:hyperlink` was ineligible for the
+  splice, so editing it — or merely RELETTERING it because a sibling was
+  added above — rebuilt it from its first run's `w:rPr`: the link became
+  plain text, bold and italic went, the tab after its letter became a space.
+  Word-saved masters put links in provisions (a referenced standard, another
+  section), and every fallback of Phase 1's corpus sweep was one.
+  Re-measured with this PR's seeds: `master` 245 of 516 edited provisions
+  (47.5%), all `hyperlink`; this PR 0 of 516.
+- **The map reads a link the way the importer does.** python-docx 1.2's
+  `CT_Hyperlink.text` is the join of its direct `w:r` children's
+  `CT_R.text`, and that is what the Accept-All reader saw. `_MapBuilder`
+  descends into a link's runs and markers (bookmarks, `w:proofErr`, XML
+  comments), and every atom, run and character remembers the link it sits in
+  (`ParagraphMap.links` / `run_links` / `char_links`); the map is still
+  checked against the importer's reading and refused as `text_mismatch`
+  when they disagree. Anything else inside a link — a field, a content
+  control — is refused by its own reason, and **`FALLBACK_HYPERLINK` now
+  means only a link inside a link** (the export event's
+  `render.fallback["hyperlink"]` changed meaning with it). An EMPTY
+  `w:hyperlink` has no content to map and is carried where it was, as a
+  marker.
+- **Four rules, each so a link never quietly changes what it covers**
+  (the ask: "a link must not silently grow to cover words the user added
+  beside it"). All four live in the placement and the walk, not
+  in `plan_splice`, which stays pure and link-blind:
+  1. *New words go in a link only when wholly its own* — typed over words
+     that all sit in one link, or inserted between two of its characters.
+     "All in one link" needs only the first and last replaced character:
+     a link's characters are one contiguous run of offsets. Anywhere else —
+     either edge, or a replacement straddling one — they go outside every
+     link.
+  2. *New words never borrow a link's look from outside it.* Word's rule
+     (overtype → the first replaced character, insert → the character
+     before) is refined to the nearest character WHERE THE WORDS GO (same
+     link, or outside every link), ties to the earlier (`_nearest`); with
+     none there, the first run in that container (`first_run_properties`)
+     — for a paragraph that is nothing but a link, words prepended outside
+     it get no `w:rPr` rather than the Hyperlink character style.
+  3. *A link is never split.* A replacement that runs INTO a link from
+     outside it deletes chars on both sides of the link's start; the script
+     writes its words after the deletion — inside the link's span — and a
+     renderer writing them outside the link there would close it and reopen
+     it: two links where there was one. `_Placement.split` names the link's
+     start; `_pieces` advances to it, writes the words, then advances the
+     rest. Zero-width content gets the same care in `_PieceWalk.new_words`:
+     a link the words are not in keeps its own zero-width content at the
+     insertion point (a bookmark closing inside it), and Phase 0's leading
+     rule (deviation 8) now flushes only the leading content where the
+     words go (a bookmark opening a link stays in the link when words are
+     prepended outside it).
+  4. *A link whose words are all deleted is gone.* The clean rendering opens
+     a copy of a link only when a piece in it arrives, so an emptied link is
+     simply never written — unless a marker inside it (never deleted) keeps
+     it. The redline keeps the link holding its `w:del` runs; Accept All
+     leaves it empty, which the D-7 comparison already drops (Word shows
+     nothing for an empty hyperlink).
+- **Both renderings write one copy of a link per stretch of its pieces**
+  (`_open_link`: the source link's attributes — its target — and none of its
+  content), and the redline puts its `w:ins`/`w:del` INSIDE that copy: a
+  hyperlink cannot sit inside a tracked change, its runs can. The pieces of
+  one link are consecutive by construction, which is what makes "one copy"
+  true.
+- **Trap: `CT_Hyperlink.text` is a read-only property** in python-docx 1.2
+  (the text of its runs). `_open_link` clears `.tail` only; assigning `.text`
+  raises `AttributeError`, and the parser keeps no blank text to clear
+  anyway.
+- **A link-free paragraph renders byte for byte as before**, and that is a
+  measured claim, not only a reading: 7,500 seeded renders, clean and
+  redline, identical to the previous module. It holds by construction too —
+  every rule is a no-op without a link. `_place_new_words`' early return for
+  a link-free paragraph is an OPTIMIZATION, not a mechanism: without it,
+  `_nearest` returns `style_at` whenever every character sits outside every
+  link, so removing it changes nothing and has no revert-matrix row (the pin
+  `test_a_paragraph_without_links_keeps_the_scripts_own_choices` asserts the
+  outcome, which holds either way).
+- **The nesting level: why the clone was one level up.**
+  `_Walker.template_for` prefers kin at the new provision's own depth, but a
+  master may have NO provision at that depth anywhere (the first "1." under
+  any "A."). The kin is then shallower, the clone copies its `w:pPr` —
+  `w:numPr` and its `w:ilvl` included — and Word draws it at the kin's
+  level, while the importer (`_TreeBuilder.numbered_paragraph`: depth =
+  `ilvl` minus the article's offset) reads it back as its parent's sibling.
+- **The fix offsets the level, resolved the way Word resolves it.**
+  `_Assembler._nesting_level` returns `(numId, kin_ilvl + depth −
+  kin_depth)` and `render_inserted` writes it with `_set_numbering_level` on
+  the clone's OWN `w:numPr` (`w:ilvl` then `w:numId`, `CT_NumPr`'s order),
+  naming the instance explicitly even when the paragraph style names it too
+  — a style-numbered kin (most office masters: PR1–PR5 carry the list) has
+  no `w:ilvl` of its own to offset, so the level must be read through its
+  style. `_NumberingTables` is the importer's own readers
+  (`_effective_numbering`, `_load_numbering_catalog`,
+  `_load_style_numbering`, `_default_paragraph_style_id`) over a python-docx
+  view of the upload: loaded lazily (only a new provision at another depth
+  asks), degrading like the importer (an unreadable package has no
+  numbering, so nothing is renumbered and nothing raises). Reading with the
+  importer's code is the point: a second reader would be free to disagree
+  with the one the re-import uses.
+- **When the level is not taken.** Only for Word-numbered (AUTO) kin — a
+  typed letter carries its level, and the importer reads the letter. Only a
+  level the definition has AND draws as a provision: a level whose label
+  grammar the importer promotes to a PART or article heading
+  (`_promoted_heading_kind`, e.g. `%2.%3`) would bring the new provision
+  back as an article. Otherwise the clone keeps its kin's level (the old
+  behaviour, never a level the master's list cannot draw), and the export
+  event's `render` block counts both outcomes, `level_offset` and
+  `level_kept` — counts only, and `app.py` needed no change (the stats dict
+  rides the event wholesale). The redline's inserted copy is the same
+  element, so Accept All still equals the export.
+- **The corpus cannot show the offset, and says why.** Of the sweep's 80
+  new provisions cloned from Word-numbered kin at another depth, 2 were
+  offset and 78 kept their kin's level — every kept one in a single-level
+  list, because the corpus builds its Word-numbered masters from
+  python-docx's default template, whose list definitions define level 0
+  only. Real multilevel lists define nine. The
+  offset is proven on the suite's own four-level masters instead
+  (`_deep_numbered_master`, direct numbering; `_style_numbered_master`,
+  numbering on PR1–PR4), where a nesting-heavy sweep gives 23 offsets per
+  master kind and none kept.
+- **The re-import test checks the TREE for Word-numbered masters now**
+  (`_REIMPORT_MASTERS`: typed / numbered / style_numbered × ten seeds), which
+  the Phase 1 backend note said it could not until this was fixed. The
+  random mix nests in only one seed of ten, hence the every-depth test and
+  the nesting-heavy sweep beside it.
+- **Two tests changed knowingly.**
+  `test_unmappable_paragraphs_are_refused_by_name` pinned "a hyperlink is
+  refused"; it now pins what INSIDE a link is refused, by name.
+  `test_a_fallback_paragraph_deletes_all_and_inserts_the_new_text` reached
+  the fallback through a hyperlink; it now uses `w:sym`, which still falls
+  back, so its subject is unchanged.
+- **Found, not done** (in the plan's as-built note, with the likely fixes):
+  a style-numbered clone keeps its kin's paragraph style, so its indent may
+  be the style's (a QA row decides; the numbering level's own
+  `w:lvl/w:pStyle` is the likely fix); a single-level list cannot draw a
+  sub-provision at all; and in a typed-letter master a deeper new provision
+  keeps its kin's indent.
+- **Revert matrix** (each mechanism reverted in place, in an isolated copy
+  of the tree; the splice, preserving-export and redline suites plus the
+  diagnostics pin run; the count is failing tests, each list naming the
+  mechanism's own test): the map descending into links → 21; an empty link
+  carried as a marker → 1; what else sits inside a link refused by name → 1;
+  a replacement kept in a link only when wholly its own → 3; words inserted
+  between two of a link's characters going in it → 2; words inserted at a
+  link's edge kept outside it (the never-grow rule for inserts) → 1;
+  formatting from the nearest character where the words go → 4; the split
+  placement → 2, and the walk honouring it → 2 (both caught by the redline
+  tests: the clean rendering skips deleted pieces, so it cannot tell unless
+  a marker sits in the link); a link's zero-width content kept inside it →
+  1; the leading flush limited to where the words go → 1; the clean
+  rendering's one copy per link → 16; a container's first run when no
+  character sits where the words go → 1; the redline's wrappers inside the
+  link → 8; a link copy carrying none of the source's content → 17; an
+  emptied link left unwritten → 2. The level: the offset at all → 11; the
+  walker's depth record → 11; the style-chain resolution → 4; the
+  defined-level check → 2; the heading-level check → 1; the typed-kin skip →
+  1; the explicit `w:numId` → 1; writing the level at render time → 8;
+  counting `level_offset` → 7 and `level_kept` → 2; the unreadable-numbering
+  degrade → 1. One mechanism had no pin when the matrix first ran: the
+  same-depth early return (reverted, 0 red — a style-numbered sibling's
+  clone would gain a redundant `w:numPr` and count a phantom offset). The
+  pin `test_a_new_sibling_of_word_numbered_kin_is_its_kins_clone_unchanged`
+  was added, and the revert now turns it red (1). The link-free early return
+  in `_place_new_words` has no row, by design (above).
+- **Errata** (append-only, so recorded here): (1) the Layout index said the
+  trust dossier has "fifteen runtime cards"; it has sixteen since compaction
+  Phase 3 (PR #189), and the index now says so. The trust-dossier section's
+  own "Fourteen `<Runtime>` cards" is history: it lists thirteen, and the
+  project brief (v1.17.0), the harvest (Project workspace Phase 4) and the
+  condensed conversation (compaction Phase 3) were added since. (2) "The
+  formatted export stops losing things" (Phase 0) lists a hyperlink among
+  the paragraphs outside the splice's eligibility, and "Redline on your
+  original — implemented notes (Phase 1, backend PR)" records the corpus
+  fallback rate as every one `hyperlink` and a new nested provision keeping
+  its kin's `w:ilvl`, with the re-import test checking the tree for typed
+  letters only. All three changed here: a plain link is spliced, a new
+  sub-provision takes its own level wherever the master's numbering defines
+  it, and the re-import test checks the tree for Word-numbered masters too.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

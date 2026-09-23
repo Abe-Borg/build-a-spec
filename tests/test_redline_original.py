@@ -958,8 +958,9 @@ def test_words_added_beside_a_link_are_tracked_outside_it(tmp_path):
 
 
 def test_deleting_all_of_a_links_words(tmp_path):
-    """The link's runs are deleted inside it; Accept All leaves nothing of
-    the link, which is what the formatted export writes."""
+    """The link's runs are deleted inside it. Accept All leaves the link
+    empty — it shows nothing, and the self-check's comparison drops it —
+    and the formatted export does not write it at all."""
     source = _linked_master()
     imported = _parse(tmp_path, source)
     first = imported.section.parts[0].articles[0].paragraphs[0]
@@ -974,9 +975,10 @@ def test_deleting_all_of_a_links_words(tmp_path):
     redline, _ = _verify(source, imported, section)
     (link,) = _links(_body(redline))
     assert [t.text for t in link.iter(qn("w:delText"))] == ["the client standard"]
-    assert _links(_body(render_preserving_docx(
+    clean = render_preserving_docx(
         source_bytes=source, format_map=imported.format_map, current=section
-    ))) == []
+    )
+    assert _links(_body(clean)) == []
 
 
 def test_a_replacement_running_into_a_link_keeps_the_link_whole(tmp_path):
@@ -1843,11 +1845,12 @@ def test_every_depth_a_word_numbered_master_defines_reimports_as_the_tree(
             section, {"action": "add_paragraph", "target_id": parent, "text": text}
         )
         parent = _find(section, text).uid
-    _redline, stats = _verify(source, imported, section)
+    redline, stats = _verify(source, imported, section)
     assert (stats["level_offset"], stats["level_kept"]) == (3, 0)
-    for payload in (_redline, render_preserving_docx(
+    clean = render_preserving_docx(
         source_bytes=source, format_map=imported.format_map, current=section
-    )):
+    )
+    for payload in (redline, clean):
         (tmp_path / "out.docx").write_bytes(payload)
         assert _shape(parse_master_docx(tmp_path / "out.docx").section) == _shape(
             section
@@ -1886,10 +1889,10 @@ def test_a_nesting_heavy_mix_reimports_as_the_tree(tmp_path, master):
                 section, _ = apply_edits(section, [op])
             except SpecEditError:
                 continue
-        _redline, stats = _verify(source, imported, section, allow_moved_bookmarks=True)
+        redline, stats = _verify(source, imported, section, allow_moved_bookmarks=True)
         offset += stats["level_offset"]
         assert stats["level_kept"] == 0
-        (tmp_path / "redline.docx").write_bytes(_redline)
+        (tmp_path / "redline.docx").write_bytes(redline)
         assert _shape(parse_master_docx(tmp_path / "redline.docx").section) == _shape(
             section
         ), (master, seed)

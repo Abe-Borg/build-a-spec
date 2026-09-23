@@ -22,8 +22,15 @@ other instead of being rebuilt from its first run, and a new sub-provision
 in a Word-numbered master takes its own numbering level — see "Phase 1
 follow-up (links and the nesting level) — as built". No release entry
 either; its draft is under "Release-note drafts".
-**Phase 2 is next and not started**; start from the two Phase 1 as-built
-notes and the follow-up's.
+**Phase 2 lands as two PRs** — a deviation, since the plan sized it as one
+(see "Phase 2 (PR A) — as built"). **PR A, real Word as the judge, is
+built:** a resolve mode for the hidden-Word automation, an optional Windows
+suite in which real Word accepts and rejects every targeted shape and every
+corpus master under the corpus sweep's edits, and a producer recipe that
+records Word's own tracked moves. It changes nothing in the app, so it needs
+no release note. **PR B, native "Moved" marks, starts only after PR A merges
+and the owner's Windows results are in**; start it from PR A's as-built note
+(the evidence it collects, and the questions it leaves for PR B).
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
 the Batch 5 diff engine and redline writer (`diffing.py`, `docx_export.py`),
 and the retained upload + formatting map every import already keeps.

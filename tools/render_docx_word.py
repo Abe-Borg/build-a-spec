@@ -1,9 +1,20 @@
-"""Render a DOCX with a private Microsoft Word instance on Windows.
+"""Drive a private Microsoft Word instance on Windows: render, or resolve.
 
 Word automation runs in a hidden STA Windows PowerShell process.  That bridge
-records and verifies the new WINWORD process before opening the document, so
+records and verifies the new WINWORD process before opening a document, so
 cleanup can never intentionally quit or kill a pre-existing Word instance.
-PDF rasterization stays in the bundled Python runtime via pdf2image/Pillow.
+
+Two modes share that bridge and every one of its safety rules:
+
+* **render** (:func:`render_docx`, the default CLI): one DOCX to page PNGs
+  for the visual-regression suite.  PDF rasterization stays in the bundled
+  Python runtime via pdf2image/Pillow.
+* **resolve** (:func:`resolve_docx`, ``--resolve``): real Word opens each
+  DOCX read-only, runs Accept All or Reject All of its tracked changes (or
+  neither — a plain re-save), and saves the result as a NEW DOCX.  This is
+  the redline on your original's real-Word judge
+  (``tests/test_redline_word_judge.py``, Redline on your original, Phase 2).
+  It needs no rasterizer, so it runs from the repo virtual environment.
 """
 from __future__ import annotations
 
@@ -33,6 +44,19 @@ DEFAULT_WORD_TIMEOUT_SECONDS = 120
 _AUTOMATION_SCRIPT = Path(__file__).with_name("render_docx_word_automation.ps1")
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _PAGE_OUTPUT = re.compile(r"^page-(\d+)\.png$", re.IGNORECASE)
+#: What resolve mode may do to a document before saving it as a new DOCX:
+#: Review > Accept All Changes, Reject All Changes, or nothing (a plain
+#: re-save, which gives the judge Word's own serialization of a reference).
+RESOLVE_ACTIONS = ("accept", "reject", "resave")
+#: Every environment variable the bridge reads, so a render never inherits a
+#: resolve request from its parent environment and vice versa.
+_MODE_VARIABLES = (
+    "BUILD_A_SPEC_WORD_MODE",
+    "BUILD_A_SPEC_WORD_INPUT",
+    "BUILD_A_SPEC_WORD_PDF",
+    "BUILD_A_SPEC_WORD_JOBS",
+    "BUILD_A_SPEC_WORD_RESULT",
+)
 
 
 class WordRendererError(RuntimeError):
@@ -51,7 +75,11 @@ def _positive_int(value: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Render DOCX to page PNGs using an isolated Microsoft Word instance."
+        description=(
+            "Render DOCX to page PNGs using an isolated Microsoft Word instance, "
+            "or (--resolve) have that instance accept or reject every tracked "
+            "change and save the result as a new DOCX."
+        )
     )
     parser.add_argument("input_path", help="Path to the input DOCX file.")
     parser.add_argument(
@@ -74,6 +102,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose",
         action="store_true",
         help="Print captured Word automation diagnostics.",
+    )
+    parser.add_argument(
+        "--resolve",
+        choices=RESOLVE_ACTIONS,
+        default=None,
+        help=(
+            "Instead of rendering: Accept All or Reject All of the input's "
+            "tracked changes in Word (or 'resave' for neither) and save the "
+            "result as the --output DOCX."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="The new DOCX --resolve writes; it must not exist yet.",
     )
     return parser
 
@@ -407,11 +450,42 @@ def _word_environment(
     word_executable: Path,
     ownership_path: Path,
 ) -> dict[str, str]:
-    environment = dict(os.environ)
+    environment = _bridge_environment()
     environment.update(
         {
+            "BUILD_A_SPEC_WORD_MODE": "render",
             "BUILD_A_SPEC_WORD_INPUT": str(input_path),
             "BUILD_A_SPEC_WORD_PDF": str(pdf_path),
+            "BUILD_A_SPEC_WORD_EXECUTABLE": str(word_executable),
+            "BUILD_A_SPEC_WORD_OWNERSHIP": str(ownership_path),
+            "BUILD_A_SPEC_WORD_TOKEN": secrets.token_hex(16),
+            "BUILD_A_SPEC_WORD_CLEANUP_ONLY": "0",
+        }
+    )
+    return environment
+
+
+def _bridge_environment() -> dict[str, str]:
+    """The parent environment minus every variable that picks a mode or its
+    paths — each call names exactly the ones it means."""
+    environment = dict(os.environ)
+    for name in _MODE_VARIABLES:
+        environment.pop(name, None)
+    return environment
+
+
+def _resolve_environment(
+    jobs_path: Path,
+    result_path: Path,
+    word_executable: Path,
+    ownership_path: Path,
+) -> dict[str, str]:
+    environment = _bridge_environment()
+    environment.update(
+        {
+            "BUILD_A_SPEC_WORD_MODE": "resolve",
+            "BUILD_A_SPEC_WORD_JOBS": str(jobs_path),
+            "BUILD_A_SPEC_WORD_RESULT": str(result_path),
             "BUILD_A_SPEC_WORD_EXECUTABLE": str(word_executable),
             "BUILD_A_SPEC_WORD_OWNERSHIP": str(ownership_path),
             "BUILD_A_SPEC_WORD_TOKEN": secrets.token_hex(16),
@@ -436,6 +510,20 @@ def _convert_with_word(
         word_executable,
         ownership_path,
     )
+    _run_owned_word(environment, timeout_seconds=timeout_seconds, verbose=verbose)
+    if not pdf_path.is_file() or pdf_path.stat().st_size <= 0:
+        raise WordRendererError("Word automation did not produce a non-empty PDF.")
+
+
+def _run_owned_word(
+    environment: dict[str, str],
+    *,
+    timeout_seconds: int,
+    verbose: bool,
+) -> None:
+    """Run the bridge once; on every failure path, clean up the Word it
+    proved it started (and only that one)."""
+    ownership_path = Path(environment["BUILD_A_SPEC_WORD_OWNERSHIP"])
     try:
         completed = _run_powershell(environment, timeout_seconds=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
@@ -462,8 +550,6 @@ def _convert_with_word(
         cleanup = _cleanup_owned_word(environment)
         if cleanup:
             raise WordRendererError(cleanup)
-    if not pdf_path.is_file() or pdf_path.stat().st_size <= 0:
-        raise WordRendererError("Word automation did not produce a non-empty PDF.")
 
 
 def _rasterize_pdf(pdf_path: Path, output_dir: Path, *, dpi: int) -> tuple[Path, ...]:
@@ -616,9 +702,255 @@ def render_docx(
         )
 
 
+@dataclass(frozen=True)
+class ResolveJob:
+    """One document for resolve mode: Word opens ``input_path`` read-only,
+    applies ``action`` (one of :data:`RESOLVE_ACTIONS`) and saves the result
+    as the NEW file ``output_path``."""
+
+    input_path: Path
+    output_path: Path
+    action: str
+
+
+@dataclass(frozen=True)
+class ResolvedDocx:
+    """What Word did with one :class:`ResolveJob`.
+
+    ``revisions_before`` is how many tracked changes Word read in the
+    document and ``authors`` their distinct authors — what the Reviewing
+    Pane lists; ``revisions_after`` is how many were left once the action
+    ran. ``error`` is Word's own message when it could not open, resolve or
+    save this document; the rest of the batch still ran."""
+
+    job: ResolveJob
+    ok: bool
+    error: str
+    revisions_before: int
+    revisions_after: int
+    authors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WordResolution:
+    """One owned Word's answers for a batch, in job order."""
+
+    word_version: str
+    word_build: str
+    documents: tuple[ResolvedDocx, ...]
+
+
+def _validated_jobs(jobs: Sequence[ResolveJob]) -> tuple[ResolveJob, ...]:
+    validated: list[ResolveJob] = []
+    outputs: set[str] = set()
+    inputs: set[str] = set()
+    for job in jobs:
+        if job.action not in RESOLVE_ACTIONS:
+            raise WordRendererError(
+                f"Unknown resolve action {job.action!r}; "
+                f"expected one of {', '.join(RESOLVE_ACTIONS)}"
+            )
+        input_path = Path(job.input_path).expanduser().resolve()
+        output_path = Path(job.output_path).expanduser().resolve()
+        if not input_path.is_file():
+            raise WordRendererError(f"Input DOCX does not exist: {input_path}")
+        if input_path.suffix.casefold() != ".docx":
+            raise WordRendererError(f"Word resolves .docx input only: {input_path}")
+        if output_path.suffix.casefold() != ".docx":
+            raise WordRendererError(f"Word saves resolved output as .docx only: {output_path}")
+        if not output_path.parent.is_dir():
+            raise WordRendererError(f"Output directory does not exist: {output_path.parent}")
+        # Word would overwrite silently (alerts are off): refuse instead, so
+        # nothing the caller did not mean to replace is ever replaced.
+        if output_path.exists():
+            raise WordRendererError(f"Resolve output already exists: {output_path}")
+        key = _normalized_windows_path(output_path)
+        if key in outputs:
+            raise WordRendererError(f"Two resolve jobs write {output_path}")
+        outputs.add(key)
+        inputs.add(_normalized_windows_path(input_path))
+        validated.append(ResolveJob(input_path, output_path, job.action))
+    if not validated:
+        raise WordRendererError("Word resolve needs at least one job")
+    if outputs & inputs:
+        raise WordRendererError("A resolve job's output would overwrite an input")
+    return tuple(validated)
+
+
+def _record_count(value) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < -1:
+        raise WordRendererError(f"invalid Word resolve result count: {value!r}")
+    return value
+
+
+def _load_resolution(
+    result_path: Path,
+    jobs: tuple[ResolveJob, ...],
+) -> WordResolution:
+    """Read the bridge's result file, trusting nothing it says without a
+    check against the jobs it was given and the files on disk."""
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise WordRendererError(
+            f"Word automation wrote no readable resolve result: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise WordRendererError("invalid Word resolve result: not an object")
+    records = payload.get("jobs")
+    if isinstance(records, dict):
+        # Windows PowerShell 5.1 can serialize a one-element array as the
+        # element itself.
+        records = [records]
+    if not isinstance(records, list) or len(records) != len(jobs):
+        raise WordRendererError(
+            "invalid Word resolve result: it does not answer every job"
+        )
+    documents: list[ResolvedDocx] = []
+    for job, record in zip(jobs, records):
+        if not isinstance(record, dict):
+            raise WordRendererError("invalid Word resolve result: a job is not an object")
+        if (
+            _normalized_windows_path(str(record.get("input", "")))
+            != _normalized_windows_path(job.input_path)
+            or _normalized_windows_path(str(record.get("output", "")))
+            != _normalized_windows_path(job.output_path)
+            or record.get("action") != job.action
+        ):
+            raise WordRendererError(
+                "invalid Word resolve result: it answers a job it was not given"
+            )
+        ok = record.get("ok")
+        if not isinstance(ok, bool):
+            raise WordRendererError("invalid Word resolve result: ok is not a boolean")
+        error = record.get("error") or ""
+        if not isinstance(error, str):
+            raise WordRendererError("invalid Word resolve result: error is not text")
+        authors = record.get("authors") or []
+        if isinstance(authors, str):
+            authors = [authors]
+        if not isinstance(authors, list) or not all(
+            isinstance(author, str) for author in authors
+        ):
+            raise WordRendererError("invalid Word resolve result: authors are not text")
+        before = _record_count(record.get("revisions_before"))
+        after = _record_count(record.get("revisions_after"))
+        if ok:
+            if before < 0 or after < 0 or error:
+                raise WordRendererError(
+                    "invalid Word resolve result: a finished job is incomplete"
+                )
+            if not job.output_path.is_file() or job.output_path.stat().st_size <= 0:
+                raise WordRendererError(
+                    f"Word reported {job.output_path.name} saved, but it is "
+                    "missing or empty"
+                )
+        elif not error:
+            raise WordRendererError(
+                "invalid Word resolve result: a failed job carries no reason"
+            )
+        documents.append(
+            ResolvedDocx(
+                job=job,
+                ok=ok,
+                error=error,
+                revisions_before=before,
+                revisions_after=after,
+                authors=tuple(sorted(set(authors))),
+            )
+        )
+    return WordResolution(
+        word_version=str(payload.get("word_version") or ""),
+        word_build=str(payload.get("word_build") or ""),
+        documents=tuple(documents),
+    )
+
+
+def resolve_docx(
+    jobs: Sequence[ResolveJob],
+    *,
+    word_executable: Path | None = None,
+    timeout_seconds: int | None = None,
+    verbose: bool = False,
+) -> WordResolution:
+    """Have ONE owned, hidden Word resolve every job, in order.
+
+    Each input is opened read-only and never added to Recent Files; Word
+    runs Accept All Changes, Reject All Changes, or neither, then saves the
+    result as the job's new output DOCX (Word's default format, also kept off
+    Recent Files). A document Word cannot open, resolve or save fails only
+    its own job (:attr:`ResolvedDocx.error`); a timeout, an ownership
+    failure or anything else fails the batch — and every failure path cleans
+    up the Word this process proved it started, never another.
+
+    ``timeout_seconds`` bounds the whole batch. It defaults to the
+    configured per-document timeout (``BUILD_A_SPEC_WORD_TIMEOUT``, 120 s)
+    times the number of jobs: a ceiling for a hung Word, not a target.
+    """
+    validated = _validated_jobs(jobs)
+    word_executable = word_executable or _configured_word_executable()
+    timeout_seconds = timeout_seconds or _configured_word_timeout() * len(validated)
+    with tempfile.TemporaryDirectory(prefix="build_a_spec_word_") as temp_dir:
+        root = Path(temp_dir)
+        jobs_path = root / "resolve-jobs.json"
+        result_path = root / "resolve-result.json"
+        jobs_path.write_text(
+            json.dumps(
+                {
+                    "jobs": [
+                        {
+                            "input": str(job.input_path),
+                            "output": str(job.output_path),
+                            "action": job.action,
+                        }
+                        for job in validated
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        environment = _resolve_environment(
+            jobs_path,
+            result_path,
+            word_executable,
+            root / "word-ownership.txt",
+        )
+        _run_owned_word(environment, timeout_seconds=timeout_seconds, verbose=verbose)
+        return _load_resolution(result_path, validated)
+
+
+def _resolve_main(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.output is None:
+        parser.error("--resolve needs --output (the new DOCX to write)")
+    job = ResolveJob(Path(args.input_path), Path(args.output), args.resolve)
+    try:
+        resolution = resolve_docx([job], verbose=args.verbose)
+    except WordRendererError as exc:
+        parser.exit(1, f"Word renderer error: {exc}\n")
+    (document,) = resolution.documents
+    if not document.ok:
+        parser.exit(
+            1,
+            f"Word could not {args.resolve} {document.job.input_path.name}: "
+            f"{document.error}\n",
+        )
+    authors = ", ".join(document.authors) or "no author"
+    print(
+        f"Word {resolution.word_build or resolution.word_version} read "
+        f"{document.revisions_before} tracked change(s) by {authors}; "
+        f"{document.revisions_after} left after '{args.resolve}'. "
+        f"Saved {document.job.output_path}"
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.resolve is not None:
+        _resolve_main(parser, args)
+        return
+    if args.output is not None:
+        parser.error("--output is only used with --resolve")
     input_path = Path(args.input_path)
     output_dir = (
         Path(args.output_dir)

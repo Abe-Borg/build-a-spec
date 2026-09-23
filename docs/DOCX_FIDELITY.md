@@ -464,6 +464,79 @@ desktop app, **Open redline in Word** (`js_api.open_in_word("preserved",
 Word; it is offered only while the redline is available. *Redline of
 extracted provisions* (`?redline=master&mode=normalized`) stays below them.
 
+### Real Word as the judge
+
+The self-check proves the promise with the app's own resolver.
+`tests/test_redline_word_judge.py` has **real Microsoft Word** check the same
+files (optional, Windows with Word installed, `BUILD_A_SPEC_WORD_JUDGE=1`;
+setup in [DOCX_RENDERER_WINDOWS.md](DOCX_RENDERER_WINDOWS.md)). It renders
+every markup shape the writer emits (word-level splices, typed letters, Word
+numbering, whole provisions, articles and tables deleted, moves plain and
+across section breaks and carrying a bookmark, emptied break holders,
+hyperlinks, a field, the fallback, the untrackable last paragraph, a picture,
+a leading page break, front matter), and every corpus master under the corpus
+sweep's own scripted edit mixes, exactly as the app does. A hidden Word the
+harness starts and owns (`tools/render_docx_word.py --resolve`) then opens
+each redline read-only, runs Accept All Changes or Reject All Changes, and
+saves the result as a new DOCX. The judge requires that:
+
+* Word opened every file and saved every result;
+* Word read every change as `Build-a-Spec`'s (each `Revision.Author`, the name
+  the Reviewing Pane shows), and none was left after Accept All or Reject All;
+* after Accept All the body is the formatted export's, and after Reject All
+  the upload's — losing only the bookmarks a moved copy carried.
+
+**The comparison is symmetric.** A Word save rewrites more than it resolves
+(formatting spelled its own way, table-look flags, a hyperlink's history
+flag), so Word also re-saves the formatted export and the upload, and each
+resolution is compared with Word's own save of its reference. Everything a
+save rewrites the same way on both sides cancels without any tolerance. What
+remains is what a Word save writes on its own, removed from BOTH sides — and
+nothing else:
+
+| Tolerance | Why it is not content |
+|---|---|
+| rsid attributes (`w:rsidR`, `w:rsidRPr`, `w:rsidRDefault`, `w:rsidP`, `w:rsidDel`, `w:rsidTr`, `w:rsidSect`) | Which Word editing session last touched a paragraph, run, row or section. Every save stamps its own session's ids. |
+| `w:proofErr` | Where proofing last flagged a word. It holds no content, and depends on whether proofing ran before the save. |
+| `w:lastRenderedPageBreak` | Word's layout cache of where a page last broke. A real page break (`w:br`) is still compared. |
+| the `_GoBack` bookmark | The Shift+F5 position Word writes after an edit such as Accept All. Every other bookmark, hidden or not, is compared. |
+
+The rest is the self-check's own canonical comparison
+(`revisions.first_difference`): runs re-split, empty containers, `w14` ids,
+XML comments and processing instructions, a formatting-free empty last
+paragraph. The four tolerances live in `tests/word_judge.py` and **never in
+the app**: the self-check compares the app's XML with the app's XML, and
+`tests/test_word_judge.py` pins that it applies none of them. Each is tested
+to remove exactly what it names and nothing more; a fifth needs evidence from
+a real run, a reason in the table and a test. A judge that tolerated more
+would prove nothing, and one that tolerated less would report differences
+that are not there.
+
+**The body is what is compared,** because every tracked change is in it:
+every other part of the redline is the upload's byte for byte (the
+self-check's package check), and neither resolution changes anything outside
+the body. The judge cannot see a repair prompt (alerts are off in an owned
+Word, so a file Word refuses to open fails its job instead) or how the
+Reviewing Pane draws the changes; those stay manual rows in
+`docs/RELEASE_WINDOWS.md`.
+
+It writes a `report.json` — rewritten after every group, so a run that stops
+part way still says what it found: each case's status, the redline's counts,
+the tolerances applied, Word's version and build, and for a failure both
+sides of the first difference — plus every file it handed Word and every file
+Word saved, under `artifacts/word-judge/` (`BUILD_A_SPEC_WORD_JUDGE_DIR` moves
+it). The cases are placeholder text, so the report may carry it; it never
+carries a path. A mix the redline refuses for a structural reason (the corpus
+sweep's own list) is recorded and not sent to Word; any other refusal is a
+failed self-check and fails the judge.
+
+The same suite has Word resolve **its own** tracked moves — the Word-saved
+sample the corpus producer's TrackedMove recipe makes
+([DOCX_FIDELITY_CORPUS.md](DOCX_FIDELITY_CORPUS.md)) — and requires the app's
+resolver (`revisions.accept_all`/`reject_all`, which Phase 2's native moves
+lean on) to give what Word gives, recording where the moved paragraph's
+bookmark lands each way.
+
 ## Distinct user-visible contracts
 
 | Contract | API selection | Package basis | Guarantee |
@@ -1022,6 +1095,11 @@ The fixture layers have different evidentiary value:
 - `tests/test_docx_visual_regression.py` provides optional renderer-backed
   evidence; setup is documented in
   [DOCX_RENDERER_WINDOWS.md](DOCX_RENDERER_WINDOWS.md).
+- `tests/test_redline_word_judge.py` (optional, Windows with Word) has real
+  Word resolve the redline on your original both ways and compares the result
+  with the formatted export and the upload; `tests/word_judge.py` is its
+  comparison, proven without Word by `tests/test_word_judge.py`. See
+  "Real Word as the judge" above.
 
 Synthetic metadata profiles are structural fixtures, not proof that a named
 producer opened or rendered the file. An external fixture counts as producer
@@ -1032,8 +1110,9 @@ client-origin or proprietary content merely to broaden coverage.
 For release closure, run the complete backend suite, frontend capability tests,
 and production frontend build. Materialize and validate the DOCX corpus. Run
 Word and/or LibreOffice visual regression when those renderers are available,
-and report exactly which renderer/version was exercised; do not imply visual
-verification that did not occur.
+and the real-Word judge when Word is, and report exactly which
+renderer/version was exercised; do not imply visual verification that did not
+occur.
 
 ```powershell
 & '.\.venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider

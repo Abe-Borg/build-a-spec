@@ -58,3 +58,43 @@ If the automation host is externally terminated before COM activation returns,
 there is no exact process identity available for forced cleanup. The renderer
 deliberately does not guess at a `WINWORD` process, so it cannot risk stopping a
 user-owned Word session.
+
+## Resolve mode: real Word as the redline judge
+
+The same bridge has a second mode. With `--resolve`, the owned, hidden Word
+opens a DOCX read-only, runs **Accept All Changes** or **Reject All
+Changes** (or neither — `resave`, a plain re-save), and saves the result as a
+new DOCX in Word's default format. Every rule above still holds: hidden STA
+PowerShell, alerts and macros off before anything opens, read-only and off
+Recent Files (the saved copy too), the ownership handshake, and cleanup of
+only the Word it proved it started. It never overwrites: an output that
+already exists is refused. It needs no rasterizer, so it runs from the repo
+virtual environment:
+
+```powershell
+.\.venv\Scripts\python tools\render_docx_word.py --resolve accept --output .\artifacts\accepted.docx .\artifacts\redline.docx
+```
+
+It prints how many tracked changes Word read, by whom, and how many were
+left once the action ran.
+
+The redline judge (`tests/test_redline_word_judge.py`) drives it a batch at a
+time: one owned Word per group of files, each file its own job, and a file
+Word cannot open, resolve or save fails only its own job. It collects as
+clean skips unless asked. Your own Word windows can stay open (the bridge
+only ever touches the Word it started), but do not start a new one while the
+judge runs: two new Word processes appearing at once fail that group's
+ownership check.
+
+```powershell
+$env:BUILD_A_SPEC_WORD_JUDGE = "1"
+.\.venv\Scripts\python -m pytest -q tests\test_redline_word_judge.py
+```
+
+`BUILD_A_SPEC_WORD_EXECUTABLE` and `BUILD_A_SPEC_WORD_TIMEOUT` apply as above;
+the timeout is per document, so a batch's ceiling is that times its jobs. The
+results land in `artifacts\word-judge\` (`BUILD_A_SPEC_WORD_JUDGE_DIR` moves
+it): `report.json`, rewritten after every group, and every file Word was
+handed and saved, by run, group and case. What the judge proves and the four
+things it tolerates are in [DOCX_FIDELITY.md](DOCX_FIDELITY.md) → *Real Word
+as the judge*.

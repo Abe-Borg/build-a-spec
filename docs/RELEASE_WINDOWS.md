@@ -378,11 +378,13 @@ export; only Word proves Word agrees.
       and the Reviewing Pane lists the changes with **Build-a-Spec** as the
       author. In a master with typed letters, the provisions below the added
       one show their letter change (`A.` → `B.`) with the tab after it kept.
-- [ ] **Accept All** (Review → Accept → Accept All Changes) looks like
-      *Export Word (keeps your formatting)* of the same document, side by
-      side. **Reject All** (on a fresh copy of the file) looks like *Download
-      exact original DOCX*: same text, fonts, numbering, headers, footers and
-      page setup.
+      (The judge below checks that Word reads every change as Build-a-Spec's;
+      the repair prompt and the pane itself are this row's.)
+- [ ] **Accept All and Reject All, judged by real Word**: run the judge
+      (*Real Word as the judge*, below). It replaces comparing the two by eye:
+      Word resolves every targeted markup shape and every corpus master under
+      the corpus sweep's edit mixes, both ways, and each result must match
+      Word's own save of the formatted export or of the upload.
 - [ ] **Replace your master with it, end to end.** In Word, accept or reject
       every change, save, and close. Import the saved file into a New session:
       it imports with no tracked-changes warning and reads the way you left
@@ -418,9 +420,11 @@ behave.
 - [ ] **Delete every word of a link**: nothing is left behind — no empty
       link, nothing clickable, no stray underline.
 - [ ] **Redline on your original** of the same edits: Word shows a changed
-      word of a link's text as deleted and inserted inside the link; **Accept
-      All** leaves every surviving link working, and **Reject All** gives
-      back the original links, text and targets.
+      word of a link's text as deleted and inserted inside the link. (That
+      **Accept All** leaves every surviving link in place and **Reject All**
+      gives back the original links and text is the judge's: its
+      `targeted/links` and `targeted/link-with-bookmark` groups.) Click a
+      surviving link after Accept All: it still goes where it went.
 - [ ] **Add the first sub-provision** under a provision of a Word-numbered
       master — the first "1." under an "A." in a master that has none yet.
       In the formatted export, and after Accept All in the redline, it
@@ -434,6 +438,29 @@ behave.
       on the paragraph; its number is right either way). Record what Word
       does — it decides whether the export should also take the level's own
       style.
+
+### Real Word as the judge (redline program, Phase 2)
+
+The suite proves the redline on your original with the app's own resolver;
+this has real Word resolve the same files. On Windows with Microsoft Word,
+from the repo (setup: `docs/DOCX_RENDERER_WINDOWS.md` → *Resolve mode*):
+
+```powershell
+$env:BUILD_A_SPEC_WORD_JUDGE = "1"
+.\.venv\Scripts\python -m pytest -q tests\test_redline_word_judge.py
+```
+
+- [ ] Every group passes. `artifacts\word-judge\report.json` shows no `fail`
+      or `error` case and names the Word version and build that judged it;
+      record them. A failure names the group, the case, the resolution and
+      the body child, with both sides rendered in the report — it is a real
+      disagreement between Word and the app's own resolver, never something
+      to tolerate away.
+- [ ] Once the corpus has Word's own tracked-move sample
+      (`actual_word_16_tracked_move`), the sample test passes too: Word's
+      Accept All and Reject All of the moves Word itself wrote match the
+      app's resolver. Record where the report says the moved bookmark
+      landed each way.
 
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 

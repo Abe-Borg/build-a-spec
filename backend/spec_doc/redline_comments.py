@@ -21,7 +21,10 @@ This module is the WRITER half and it only ever ADDS:
   ``Override`` in ``[Content_Types].xml``. ``word/styles.xml`` is never
   touched: a comment references ``CommentText`` / ``CommentReference`` /
   ``Hyperlink`` only when the upload defines them, and uses direct
-  formatting otherwise.
+  formatting otherwise. Word 2013+'s extension parts (``commentsExtended``,
+  ``commentsIds``, ``commentsExtensible``, ``people``) are left as they are:
+  their entries are all optional ([MS-DOCX]), so Build-a-Spec's comments get
+  none.
 
 It runs AFTER the redline builder and after the D-7 self-check, on copies of
 the body the self-check proved, and it proves itself before anything is
@@ -89,9 +92,6 @@ _W_RANGE_START = qn("w:commentRangeStart")
 _W_RANGE_END = qn("w:commentRangeEnd")
 _W_REFERENCE = qn("w:commentReference")
 _ANCHOR_TAGS = (_W_RANGE_START, _W_RANGE_END, _W_REFERENCE)
-_TRACKED_WRAPPERS = frozenset(
-    qn(f"w:{name}") for name in ("ins", "del", "moveFrom", "moveTo")
-)
 _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 
 #: What the redline shows for an element (the site of a possible comment).
@@ -525,10 +525,11 @@ def _check_pairing(final: list, comments_root, ids: list[str]) -> None:
             comment_id = node.get(_W_ID)
             if comment_id not in order:
                 continue
+            # A direct child of a paragraph is outside every tracked change:
+            # w:ins / w:del / w:moveFrom / w:moveTo hold runs, never
+            # paragraphs, so no separate wrapper test is needed.
             anchor = node if node.tag != _W_REFERENCE else node.getparent()
             if anchor is None or anchor.getparent() is None or anchor.getparent().tag != _W_P:
-                raise CommentPassError(FALLBACK_PAIRING_CHECK)
-            if any(a.tag in _TRACKED_WRAPPERS for a in node.iterancestors()):
                 raise CommentPassError(FALLBACK_PAIRING_CHECK)
             order[comment_id].append(node.tag)
     for tags in order.values():

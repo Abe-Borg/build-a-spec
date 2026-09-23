@@ -420,6 +420,17 @@ def _verify_commented(source, imported, section, comments, *, native_moves=False
             n for n in body.iter(*_ANCHORS) if n.get(qn("w:id")) == comment_id
         ]
         assert [n.tag for n in nodes] == list(_ANCHORS)
+        # The start opens the paragraph's content: right after its w:pPr
+        # (which must stay first), or first when it has none.
+        start = nodes[0]
+        before = [
+            c for c in start.getparent()[: start.getparent().index(start)]
+            if isinstance(c.tag, str)
+        ]
+        assert all(c.tag in (qn("w:pPr"), *_ANCHORS[:1]) for c in before), before
+        assert [c.tag for c in before].count(qn("w:pPr")) <= 1
+        if start.getparent().find(qn("w:pPr")) is not None:
+            assert before and before[0].tag == qn("w:pPr")
         for node in nodes:
             holder = node if node.tag != qn("w:commentReference") else node.getparent()
             assert holder.getparent().tag == qn("w:p")
@@ -578,6 +589,22 @@ def test_consecutive_changes_with_one_basis_share_one_comment(tmp_path):
         {new[0]: shared, new[1]: _basis("Basis: research r-2")},
     )
     assert len(comments) == 2
+    # One basis, but an unchanged provision between them: two comments.
+    apart = _edit(
+        section,
+        {
+            "action": "add_paragraph",
+            "target_id": article.uid,
+            "position": 3,
+            "text": "Provide restraint cables.",
+        },
+    )
+    far = apart.parts[0].articles[0].paragraphs[3].uid
+    _payload, stats, comments = _verify_commented(
+        source, imported, apart, {new[0]: shared, far: shared}
+    )
+    assert len(comments) == 2
+    assert stats["redline"]["comments"]["elements"] == 2
 
 
 def test_a_relettered_provision_is_not_a_change_of_substance(tmp_path):
@@ -669,6 +696,28 @@ def test_a_native_move_carries_its_qc_comment_on_the_moved_copy(tmp_path):
     paragraph = start.getparent()
     # On the moved-HERE copy, and outside its move wrappers.
     assert paragraph.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:moveTo')}") is not None
+
+
+def test_a_pure_move_does_not_carry_its_research_basis(tmp_path):
+    """A research basis speaks for NEW words. A provision moved without a
+    word changed has none, so its research basis says nothing — skipped as
+    having no basis for this change."""
+    source = _numbered_family_master()
+    imported = _parse(tmp_path, source)
+    moved = _provisions(imported.section)[2]
+    section = _edit(
+        imported.section, {"action": "move", "target_id": moved.uid, "position": 0}
+    )
+    payload, stats, comments = _verify_commented(
+        source,
+        imported,
+        section,
+        {moved.uid: _basis("Basis: research r-1")},
+        native_moves=True,
+    )
+    assert stats["redline"]["moves_native"] == 1
+    assert comments == {}
+    assert stats["redline"]["comments"]["skipped"] == {"no_basis": 1}
 
 
 def test_a_deleted_section_break_holder_is_commented_where_its_words_were(tmp_path):

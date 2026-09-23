@@ -114,7 +114,7 @@ see Phase 5.
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
 | 2 | Fetched web-page text out of saved history | **in review** | `a6e5fea` (PR #183) | commit-time + load-time elision; live canary built, its one request (the owner's run) gates the merge — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | gated: D1, D3; ship both halves together |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | unblocked (D1 and D3 decided 2026-09-22); ship both halves together |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
@@ -138,8 +138,12 @@ ones.
   "Before it is on by default".
 - **D4 is yes.** Phase 3's summary lists decisions missing from the
   ledgers, and that list becomes a candidate source for the harvest
-  (project-workspace Phase 4). The wiring can happen once both exist;
-  `project-workspace/04_HARVEST.md` does not mention it yet.
+  (project-workspace Phase 4, merged in PR #185). The harvest spec records
+  the seam (`project-workspace/04_HARVEST.md`, deviation 23): one more
+  framed, neutralized block in `HarvestInputs`, reaching the harvest sheet
+  through the same checks and commit. It gets wired once Phase 3's summary
+  exists. That deviation was written before D1, D3 and D4 were decided, so
+  it still calls them open.
 - **Phase 5** is optional and still waits on a measured before/after on
   real full drafts.
 

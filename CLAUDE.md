@@ -11849,7 +11849,12 @@ exceptions two.
 - **Errata** (append-only): "Conversation engine invariants" → **Strip at
   commit** lists fetched-PDF payloads as the web content elided at commit.
   Since this phase the text of every other fetched page is elided there too;
-  search results and citations still stay.
+  search results and citations still stay. And "Nothing settled is left in
+  the transcript" (Project workspace Phase 4, above) says compaction
+  D1/D3/D4 are open: the owner decided all four on 2026-09-22 (the
+  compaction plan's Decisions table), so compaction Phase 3 is unblocked.
+  Nothing is wired to the harvest yet; the seam is the one that section
+  describes.
 - **Tests**: `tests/test_fetched_page_elision.py` (6 — the chat turn end to
   end: the whole page mid-turn, the note and every kept field in saved
   history and in the next request, the citation intact, the diagnostics

@@ -15005,14 +15005,15 @@ release-note draft.
     Windows run is the first time real Word opens these files, since no
     corpus master holds inline custom XML (Word strips it on save).
 - **Revert matrix.** Each mechanism was reverted in place, its exact text
-  restored after, with `git diff` checked unchanged after every row:
+  restored after, with `git diff` checked unchanged after every row (on the
+  tree merged with PR B, where each row runs under both renderings):
 
   | Mechanism reverted | Tests red |
   |---|---|
-  | the writer wrapping custom XML whole | 10 (five rows, the writer test, four judge tests) |
-  | `w:customXmlPr` wrapped with the rest | 6 |
+  | the writer wrapping custom XML whole | 15 (ten rows, the writer test, four judge tests) |
+  | `w:customXmlPr` wrapped with the rest | 11 |
   | no refusal inside what is wrapped whole | 5 |
-  | the comparison keeping an emptied element | 8 |
+  | the comparison keeping an emptied element | 10 |
   | the join counting one as content | 2 |
   | nested emptied elements not recognised | 1 |
   | the self-check guard | 1 |

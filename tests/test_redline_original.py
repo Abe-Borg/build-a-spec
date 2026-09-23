@@ -573,9 +573,9 @@ def test_neutralizing_the_last_paragraph_leaves_a_section_break_where_it_is():
     assert paragraph.find(f"{qn('w:pPr')}/{qn('w:rPr')}") is None
 
 
-def test_a_deleted_row_keeps_its_flag_after_its_other_properties(tmp_path):
-    """A row that already carries properties (cannot split, repeats as a
-    header) is flagged after them — Word's schema order for ``w:trPr``."""
+def _row_properties_master() -> bytes:
+    """A schedule whose rows already carry properties (cannot split, repeats
+    as a header)."""
     from docx.oxml import OxmlElement
 
     document = Document()
@@ -595,7 +595,13 @@ def test_a_deleted_row_keeps_its_flag_after_its_other_properties(tmp_path):
         properties.append(OxmlElement("w:tblHeader"))
     document.add_paragraph("B. Coordinate with the schedule.")
     document.add_paragraph("END OF SECTION")
-    source = _save(document)
+    return _save(document)
+
+
+def test_a_deleted_row_keeps_its_flag_after_its_other_properties(tmp_path):
+    """A row that already carries properties (cannot split, repeats as a
+    header) is flagged after them — Word's schema order for ``w:trPr``."""
+    source = _row_properties_master()
     imported = _parse(tmp_path, source)
     article = imported.section.parts[0].articles[0]
     block = next(p for p in article.paragraphs if p.locked == "table")
@@ -608,9 +614,8 @@ def test_a_deleted_row_keeps_its_flag_after_its_other_properties(tmp_path):
         assert tags == ["cantSplit", "tblHeader", "del"]
 
 
-def test_a_deleted_mark_with_its_own_formatting_is_flagged_first(tmp_path):
-    """A paragraph mark that already carries run properties (a bold mark):
-    the deletion flag is the FIRST child of ``w:pPr/w:rPr``."""
+def _bold_mark_master() -> bytes:
+    """Provision B's paragraph mark carries run properties of its own."""
     from docx.oxml import OxmlElement
 
     document = Document()
@@ -628,7 +633,13 @@ def test_a_deleted_mark_with_its_own_formatting_is_flagged_first(tmp_path):
     bold_mark._p.get_or_add_pPr().append(mark)
     document.add_paragraph("C. Quality assurance.")
     document.add_paragraph("END OF SECTION")
-    source = _save(document)
+    return _save(document)
+
+
+def test_a_deleted_mark_with_its_own_formatting_is_flagged_first(tmp_path):
+    """A paragraph mark that already carries run properties (a bold mark):
+    the deletion flag is the FIRST child of ``w:pPr/w:rPr``."""
+    source = _bold_mark_master()
     imported = _parse(tmp_path, source)
     article = imported.section.parts[0].articles[0]
     section = _edit(imported.section, {"action": "delete", "target_id": article.paragraphs[1].uid})
@@ -675,10 +686,8 @@ def test_a_reorder_that_also_edits_the_moved_provision(tmp_path):
     assert "B. Related requirements." in _tracked(redline, "w:del")
 
 
-def test_a_moved_provision_keeps_its_bookmarks_on_the_new_copy(tmp_path):
-    """D-6: the copy that survives Accept All keeps the bookmark; Reject All
-    restores the text at the old place, but not the bookmark — the one
-    documented limit. No name ever appears twice."""
+def _bookmarked_master() -> bytes:
+    """Provision B carries a bookmark (``_Ref77``) around its text."""
     document = Document()
     for line in (
         "SECTION 23 05 48",
@@ -696,7 +705,14 @@ def test_a_moved_provision_keeps_its_bookmarks_on_the_new_copy(tmp_path):
     end = etree.SubElement(marked._p, qn("w:bookmarkEnd"))
     end.set(qn("w:id"), "77")
     document.add_paragraph("END OF SECTION")
-    source = _save(document)
+    return _save(document)
+
+
+def test_a_moved_provision_keeps_its_bookmarks_on_the_new_copy(tmp_path):
+    """D-6: the copy that survives Accept All keeps the bookmark; Reject All
+    restores the text at the old place, but not the bookmark — the one
+    documented limit. No name ever appears twice."""
+    source = _bookmarked_master()
     imported = _parse(tmp_path, source)
     article = imported.section.parts[0].articles[0]
     section = _edit(
@@ -771,10 +787,8 @@ def test_moving_a_break_holder_leaves_the_break_where_it_was(tmp_path):
     assert breaks[0].find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:del')}") is None
 
 
-def test_a_deleted_word_numbered_break_holder_records_its_numbering_cancel(tmp_path):
-    """Deviation 6: the clean export's leftover takes ``w:numId 0``, so the
-    redline's emptied holder records that as a paragraph-property change —
-    Accept All cancels the number, Reject All restores it."""
+def _numbered_holder_master() -> bytes:
+    """A Word-numbered master whose provision B holds the section break."""
     from tests.test_importer import _define_numbering, _numbered
 
     document = Document()
@@ -790,7 +804,14 @@ def test_a_deleted_word_numbered_break_holder_records_its_numbering_cancel(tmp_p
     _hold_break(holder, document)
     _numbered(document, "SCHEDULE", 1, "50")
     _numbered(document, "Provide isolators as scheduled.", 2, "50")
-    source = _save(document)
+    return _save(document)
+
+
+def test_a_deleted_word_numbered_break_holder_records_its_numbering_cancel(tmp_path):
+    """Deviation 6: the clean export's leftover takes ``w:numId 0``, so the
+    redline's emptied holder records that as a paragraph-property change —
+    Accept All cancels the number, Reject All restores it."""
+    source = _numbered_holder_master()
     imported = _parse(tmp_path, source)
     summary = imported.section.parts[0].articles[0]
     section = _edit(
@@ -820,11 +841,9 @@ def test_a_section_renumber_on_a_header_line(tmp_path):
     assert "49" in _tracked(redline, "w:ins")
 
 
-def test_a_fallback_paragraph_deletes_all_and_inserts_the_new_text(tmp_path):
-    """A paragraph the splice cannot map — a ``w:sym`` symbol here — is
-    rewritten whole: everything it held deleted, one run inserted. It also
-    holds a hyperlink (no longer a fallback reason on its own), whose runs
-    are deleted where they sit: a hyperlink cannot be wrapped in ``w:del``."""
+def _symbol_master() -> bytes:
+    """Provision A holds a hyperlink and a ``w:sym`` symbol — the symbol
+    sends it to the fallback."""
     from tests.docx_fidelity_helpers import _append_hyperlink
 
     document = Document()
@@ -840,7 +859,15 @@ def test_a_fallback_paragraph_deletes_all_and_inserts_the_new_text(tmp_path):
     symbol = linked.add_run(" for isolators ")
     etree.SubElement(symbol._r, qn("w:sym")).set(qn("w:char"), "F0B7")
     document.add_paragraph("END OF SECTION")
-    source = _save(document)
+    return _save(document)
+
+
+def test_a_fallback_paragraph_deletes_all_and_inserts_the_new_text(tmp_path):
+    """A paragraph the splice cannot map — a ``w:sym`` symbol here — is
+    rewritten whole: everything it held deleted, one run inserted. It also
+    holds a hyperlink (no longer a fallback reason on its own), whose runs
+    are deleted where they sit: a hyperlink cannot be wrapped in ``w:del``."""
+    source = _symbol_master()
     imported = _parse(tmp_path, source)
     first = imported.section.parts[0].articles[0].paragraphs[0]
     section = _edit(
@@ -1004,7 +1031,8 @@ def test_a_replacement_running_into_a_link_keeps_the_link_whole(tmp_path):
         assert link.find(qn("w:bookmarkEnd")) is not None
 
 
-def test_a_complex_field_in_a_rewritten_provision_is_deleted_as_runs(tmp_path):
+def _page_field_master() -> bytes:
+    """Provision A holds a complex PAGE field."""
     from tests.docx_fidelity_helpers import _append_page_field
 
     document = Document()
@@ -1018,7 +1046,11 @@ def test_a_complex_field_in_a_rewritten_provision_is_deleted_as_runs(tmp_path):
     fielded = document.add_paragraph("A. See page ")
     _append_page_field(fielded)
     document.add_paragraph("END OF SECTION")
-    source = _save(document)
+    return _save(document)
+
+
+def test_a_complex_field_in_a_rewritten_provision_is_deleted_as_runs(tmp_path):
+    source = _page_field_master()
     imported = _parse(tmp_path, source)
     first = imported.section.parts[0].articles[0].paragraphs[0]
     section = _edit(
@@ -1114,17 +1146,23 @@ def test_a_master_with_pending_revisions_is_refused_by_name(tmp_path):
     assert "extracted provisions" in message
 
 
-def test_track_changes_merely_switched_on_is_not_a_refusal(tmp_path):
-    """``w:trackRevisions`` with nothing pending does not break Reject All."""
+def _tracking_on_master() -> bytes:
+    """The styled master with Track Changes switched ON in its settings and
+    nothing pending."""
     from tests.docx_fidelity_helpers import rewrite_zip_members
 
     source = _master_bytes()
     settings = _member(source, "word/settings.xml").decode("utf-8")
     switched = settings.replace("<w:zoom", "<w:trackRevisions/><w:zoom", 1)
     assert switched != settings
-    tracked = rewrite_zip_members(
+    return rewrite_zip_members(
         source, replacements={"word/settings.xml": switched.encode("utf-8")}
     )
+
+
+def test_track_changes_merely_switched_on_is_not_a_refusal(tmp_path):
+    """``w:trackRevisions`` with nothing pending does not break Reject All."""
+    tracked = _tracking_on_master()
     imported = _parse(tmp_path, tracked)
     first = imported.section.parts[0].articles[0].paragraphs[0]
     section = _edit(
@@ -1180,9 +1218,8 @@ def test_the_upload_is_never_modified(tmp_path):
     assert source == snapshot
 
 
-def test_a_deleted_last_paragraph_keeps_words_marks_and_mark(tmp_path):
-    """Word cannot track a document's last paragraph mark: its words are
-    deleted and the mark is left alone."""
+def _plain_last_master() -> bytes:
+    """No END OF SECTION: the last body paragraph is a plain provision."""
     document = Document()
     for line in (
         "SECTION 23 05 48",
@@ -1193,7 +1230,13 @@ def test_a_deleted_last_paragraph_keeps_words_marks_and_mark(tmp_path):
         "B. Related requirements.",
     ):
         document.add_paragraph(line)
-    source = _save(document)
+    return _save(document)
+
+
+def test_a_deleted_last_paragraph_keeps_words_marks_and_mark(tmp_path):
+    """Word cannot track a document's last paragraph mark: its words are
+    deleted and the mark is left alone."""
+    source = _plain_last_master()
     imported = _parse(tmp_path, source)
     article = imported.section.parts[0].articles[0]
     section = _edit(
@@ -1460,9 +1503,8 @@ def test_a_reversal_across_two_section_breaks_stays_exact(tmp_path):
     assert len(breaks) == 2
 
 
-def test_a_moved_table_is_deleted_there_and_inserted_here(tmp_path):
-    """Two provisions follow the schedule; moving the schedule below both
-    keeps them in place and moves the table (the longest order kept)."""
+def _schedule_first_master() -> bytes:
+    """A schedule table followed by two provisions."""
     document = Document()
     for line in (
         "SECTION 23 05 48",
@@ -1478,7 +1520,13 @@ def test_a_moved_table_is_deleted_there_and_inserted_here(tmp_path):
     document.add_paragraph("A. Provide isolators as scheduled.")
     document.add_paragraph("B. Coordinate with the structural engineer.")
     document.add_paragraph("END OF SECTION")
-    source = _save(document)
+    return _save(document)
+
+
+def test_a_moved_table_is_deleted_there_and_inserted_here(tmp_path):
+    """Two provisions follow the schedule; moving the schedule below both
+    keeps them in place and moves the table (the longest order kept)."""
+    source = _schedule_first_master()
     imported = _parse(tmp_path, source)
     schedule = imported.section.parts[0].articles[0]
     block = next(p for p in schedule.paragraphs if p.locked == "table")
@@ -1501,9 +1549,8 @@ def test_a_moved_table_is_deleted_there_and_inserted_here(tmp_path):
     assert sorted(flags, key=sorted) == [{"del"}, {"ins"}]
 
 
-def test_deleting_a_picture_block(tmp_path):
-    """A provision holding a picture is a preserved block; deleting it is a
-    tracked deletion of the paragraph, drawing and all."""
+def _picture_master() -> bytes:
+    """Provision B holds a picture — a preserved block."""
     from tests.docx_fidelity_helpers import _png_bytes
 
     document = Document()
@@ -1519,7 +1566,13 @@ def test_deleting_a_picture_block(tmp_path):
     figure.add_run().add_picture(io.BytesIO(_png_bytes()))
     document.add_paragraph("C. See the figure above.")
     document.add_paragraph("END OF SECTION")
-    source = _save(document)
+    return _save(document)
+
+
+def test_deleting_a_picture_block(tmp_path):
+    """A provision holding a picture is a preserved block; deleting it is a
+    tracked deletion of the paragraph, drawing and all."""
+    source = _picture_master()
     imported = _parse(tmp_path, source)
     article = imported.section.parts[0].articles[0]
     picture = next(p for p in article.paragraphs if p.locked == "image")
@@ -1612,8 +1665,9 @@ _MIX_WORDS = ("seismic", "isolation", "Provide", "restraints", "per", "spring")
 
 #: Named refusals a real master can legitimately earn. A failed self-check
 #: (accept / reject / bookmarks / package) or unaccounted content is never
-#: one of them: those mean the writer broke its own promise.
-_STRUCTURAL_REFUSALS = frozenset(
+#: one of them: those mean the writer broke its own promise. The real-Word
+#: judge (``tests/word_judge.py``) reads the same set.
+STRUCTURAL_REFUSALS = frozenset(
     {
         "pending_revisions",
         "revision_scan_unavailable",
@@ -1725,6 +1779,18 @@ def _edit_mix(section, seed: int, count: int):
         except SpecEditError:
             continue
     return section
+
+
+#: The corpus sweep's edit mixes: three per master, six scripted edits each.
+#: The real-Word judge (``tests/test_redline_word_judge.py``) replays exactly
+#: these, so Word resolves the same redlines this suite proves.
+CORPUS_SWEEP_SEEDS = (0, 1, 2)
+CORPUS_SWEEP_EDITS = 6
+
+
+def corpus_sweep_edits(case_id: str, section, seed: int):
+    """The sweep's ``seed``-th edit mix for corpus master ``case_id``."""
+    return _edit_mix(section, seed * 31 + len(case_id), CORPUS_SWEEP_EDITS)
 
 
 def _shape(section):
@@ -1957,14 +2023,14 @@ def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path):
     for case in corpus_cases():
         source = build_case(case, tmp_path)
         imported = _parse(tmp_path, source, f"{case.case_id}.docx")
-        for seed in range(3):
-            section = _edit_mix(imported.section, seed * 31 + len(case.case_id), 6)
+        for seed in CORPUS_SWEEP_SEEDS:
+            section = corpus_sweep_edits(case.case_id, imported.section, seed)
             try:
                 _redline, stats = _verify(
                     source, imported, section, allow_moved_bookmarks=True
                 )
             except SourceRedlineError as exc:
-                assert exc.reason in _STRUCTURAL_REFUSALS, (
+                assert exc.reason in STRUCTURAL_REFUSALS, (
                     case.case_id,
                     seed,
                     exc.reason,

@@ -212,6 +212,22 @@
       "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
     },
     {
+      "id": "tracked_move_source",
+      "filename": "tracked-move-source.docx",
+      "recipe": "tracked_move_source",
+      "description": "Placeholder spec with typed-letter provisions, one wrapped in a bookmark: the source the Word producer's TrackedMove recipe opens to record Word's own tracked moves.",
+      "categories": ["tracked-move-source", "bookmarks", "typed-letters", "producer-source"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Placeholder source for a Word tracked-move sample",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally with placeholder text and no revisions; it is not the Word-saved tracked-move sample."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
       "id": "actual_word_16_rich",
       "filename": "actual-word-16-rich.docx",
       "fixture": "external/microsoft-word-16-rich.docx",

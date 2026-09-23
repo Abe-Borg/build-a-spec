@@ -91,6 +91,23 @@ if ($env:BUILD_A_SPEC_WORD_CLEANUP_ONLY -eq "1") {
     exit 0
 }
 
+# Two modes share every safety rule below (hidden STA instance, ownership
+# handshake, alerts and macros off, read-only open, never added to Recent
+# Files, only the owned WINWORD is ever quit or stopped):
+#   render  - export one DOCX to PDF (the visual-regression renderer);
+#   resolve - for each job in a JSON list, open the DOCX, Accept All or
+#             Reject All of its tracked changes (or neither: a plain
+#             re-save), and save the result as a NEW DOCX.  This is the
+#             redline's real-Word judge.  Paths only ever arrive in files and
+#             environment variables, never on a command line.
+$automationMode = $env:BUILD_A_SPEC_WORD_MODE
+if ([string]::IsNullOrWhiteSpace($automationMode)) {
+    $automationMode = "render"
+}
+if ($automationMode -ne "render" -and $automationMode -ne "resolve") {
+    throw "Unknown Word automation mode '$automationMode'."
+}
+
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -105,8 +122,35 @@ public static class BuildASpecWordNativeMethods
 }
 "@
 
-$inputPath = [IO.Path]::GetFullPath($env:BUILD_A_SPEC_WORD_INPUT)
-$pdfPath = [IO.Path]::GetFullPath($env:BUILD_A_SPEC_WORD_PDF)
+$inputPath = $null
+$pdfPath = $null
+$resolveJobs = @()
+$resolveResultPath = $null
+if ($automationMode -eq "render") {
+    $inputPath = [IO.Path]::GetFullPath($env:BUILD_A_SPEC_WORD_INPUT)
+    $pdfPath = [IO.Path]::GetFullPath($env:BUILD_A_SPEC_WORD_PDF)
+}
+else {
+    $resolveJobsPath = [IO.Path]::GetFullPath($env:BUILD_A_SPEC_WORD_JOBS)
+    $resolveResultPath = [IO.Path]::GetFullPath($env:BUILD_A_SPEC_WORD_RESULT)
+    # The list is wrapped in an object: Windows PowerShell 5.1's
+    # ConvertFrom-Json emits a bare top-level array as ONE pipeline object.
+    $resolveManifest = ConvertFrom-Json -InputObject (
+        [IO.File]::ReadAllText($resolveJobsPath)
+    )
+    $resolveJobs = @($resolveManifest.jobs)
+    if ($resolveJobs.Count -eq 0) {
+        throw "The Word resolve job list is empty."
+    }
+    foreach ($resolveJob in $resolveJobs) {
+        $requestedAction = [string]$resolveJob.action
+        if ($requestedAction -ne "accept" -and
+            $requestedAction -ne "reject" -and
+            $requestedAction -ne "resave") {
+            throw "Unknown Word resolve action '$requestedAction'."
+        }
+    }
+}
 $expectedWordPath = [IO.Path]::GetFullPath($env:BUILD_A_SPEC_WORD_EXECUTABLE)
 $ownershipPath = [IO.Path]::GetFullPath($env:BUILD_A_SPEC_WORD_OWNERSHIP)
 $beforeWordIdentities = @{}
@@ -201,46 +245,204 @@ try {
     $word.AutomationSecurity = 3
 
     $documents = $word.Documents
-    $openPath = $inputPath
-    $confirmConversions = $false
-    $openReadOnly = $true
-    $addToRecentFiles = $false
-    $document = $documents.Open(
-        [ref]$openPath,
-        [ref]$confirmConversions,
-        [ref]$openReadOnly,
-        [ref]$addToRecentFiles
-    )
-    $documentWindow = $document.ActiveWindow
-    [uint32]$documentWindowProcessId = 0
-    [void][BuildASpecWordNativeMethods]::GetWindowThreadProcessId(
-        [IntPtr]([int64]$documentWindow.Hwnd),
-        [ref]$documentWindowProcessId
-    )
-    if ($documentWindowProcessId -ne $wordProcessId) {
-        throw "The opened document window does not belong to the owned WINWORD process."
+    if ($automationMode -eq "resolve") {
+        $resolveResults = New-Object System.Collections.ArrayList
+        $ownershipViolation = $false
+        foreach ($resolveJob in $resolveJobs) {
+            $jobInput = [IO.Path]::GetFullPath([string]$resolveJob.input)
+            $jobOutput = [IO.Path]::GetFullPath([string]$resolveJob.output)
+            $jobAction = [string]$resolveJob.action
+            $jobResult = [ordered]@{
+                input = $jobInput
+                output = $jobOutput
+                action = $jobAction
+                ok = $false
+                error = ""
+                revisions_before = -1
+                revisions_after = -1
+                authors = @()
+            }
+            try {
+                $jobOpenPath = $jobInput
+                $jobConfirmConversions = $false
+                $jobReadOnly = $true
+                $jobAddToRecentFiles = $false
+                $document = $documents.Open(
+                    [ref]$jobOpenPath,
+                    [ref]$jobConfirmConversions,
+                    [ref]$jobReadOnly,
+                    [ref]$jobAddToRecentFiles
+                )
+                $documentWindow = $document.ActiveWindow
+                [uint32]$jobWindowProcessId = 0
+                [void][BuildASpecWordNativeMethods]::GetWindowThreadProcessId(
+                    [IntPtr]([int64]$documentWindow.Hwnd),
+                    [ref]$jobWindowProcessId
+                )
+                if ($jobWindowProcessId -ne $wordProcessId) {
+                    # Never carry on in a Word this script did not start: the
+                    # whole batch stops, not just this job.
+                    $ownershipViolation = $true
+                    throw "The opened document window does not belong to the owned WINWORD process."
+                }
+
+                # What Word read: every tracked change and its author, the
+                # way the Reviewing Pane lists them.
+                $jobAuthors = [System.Collections.Generic.HashSet[string]]::new(
+                    [StringComparer]::Ordinal
+                )
+                $jobRevisions = $document.Revisions
+                try {
+                    $jobRevisionCount = [int]$jobRevisions.Count
+                    for ($revisionIndex = 1; $revisionIndex -le $jobRevisionCount; $revisionIndex++) {
+                        $jobRevision = $jobRevisions.Item($revisionIndex)
+                        try {
+                            [void]$jobAuthors.Add([string]$jobRevision.Author)
+                        }
+                        finally {
+                            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($jobRevision)
+                        }
+                    }
+                }
+                finally {
+                    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($jobRevisions)
+                }
+                $jobResult.revisions_before = $jobRevisionCount
+                $jobResult.authors = @($jobAuthors)
+
+                # Review > Accept > Accept All Changes, or Reject All Changes:
+                # every tracked change in the document, whatever the markup
+                # view shows.
+                if ($jobAction -eq "accept") {
+                    $document.AcceptAllRevisions()
+                }
+                elseif ($jobAction -eq "reject") {
+                    $document.RejectAllRevisions()
+                }
+                $jobRemaining = $document.Revisions
+                try {
+                    $jobResult.revisions_after = [int]$jobRemaining.Count
+                }
+                finally {
+                    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($jobRemaining)
+                }
+
+                # A NEW file (the input was opened read-only), in Word's
+                # default document format (16, .docx), kept off Recent Files.
+                $jobSavePath = $jobOutput
+                $jobSaveFormat = 16
+                $jobLockComments = $false
+                $jobPassword = ""
+                $jobSaveAddToRecentFiles = $false
+                $document.SaveAs2(
+                    [ref]$jobSavePath,
+                    [ref]$jobSaveFormat,
+                    [ref]$jobLockComments,
+                    [ref]$jobPassword,
+                    [ref]$jobSaveAddToRecentFiles
+                )
+                if (-not (Test-Path -LiteralPath $jobOutput -PathType Leaf) -or
+                    (Get-Item -LiteralPath $jobOutput).Length -le 0) {
+                    throw "Word did not produce a non-empty DOCX."
+                }
+                $jobResult.ok = $true
+            }
+            catch {
+                if ($ownershipViolation) {
+                    throw
+                }
+                # One document Word could not open, resolve or save fails that
+                # job only; the rest of the batch still runs.
+                $jobResult.error = $_.Exception.Message
+            }
+            finally {
+                if ($null -ne $documentWindow) {
+                    try {
+                        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($documentWindow)
+                    }
+                    catch {
+                        $cleanupErrors += "Window COM release failed: $($_.Exception.Message)"
+                    }
+                    $documentWindow = $null
+                }
+                if ($null -ne $document) {
+                    try {
+                        $closeSaveChanges = 0
+                        $document.Close([ref]$closeSaveChanges)
+                    }
+                    catch {
+                        $cleanupErrors += "Document.Close failed: $($_.Exception.Message)"
+                    }
+                    finally {
+                        try {
+                            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($document)
+                        }
+                        catch {
+                            $cleanupErrors += "Document COM release failed: $($_.Exception.Message)"
+                        }
+                        $document = $null
+                    }
+                }
+            }
+            [void]$resolveResults.Add($jobResult)
+        }
+        $resolution = [ordered]@{
+            word_version = [string]$word.Version
+            word_build = [string]$word.Build
+            jobs = $resolveResults.ToArray()
+        }
+        $resolutionJson = ConvertTo-Json -InputObject $resolution -Depth 6 -Compress
+        $pendingResultPath = $resolveResultPath + ".pending"
+        [IO.File]::WriteAllText(
+            $pendingResultPath,
+            $resolutionJson,
+            [Text.Encoding]::UTF8
+        )
+        Move-Item -LiteralPath $pendingResultPath -Destination $resolveResultPath -Force
+        Write-Output ("Resolved {0} document(s) with Word {1}." -f $resolveResults.Count, $word.Version)
     }
-    $document.ExportAsFixedFormat(
-        $pdfPath,
-        17,
-        $false,
-        0,
-        0,
-        1,
-        1,
-        0,
-        $true,
-        $false,
-        1,
-        $true,
-        $true,
-        $false
-    )
-    if (-not (Test-Path -LiteralPath $pdfPath -PathType Leaf) -or
-        (Get-Item -LiteralPath $pdfPath).Length -le 0) {
-        throw "Word did not produce a non-empty PDF."
+    else {
+        $openPath = $inputPath
+        $confirmConversions = $false
+        $openReadOnly = $true
+        $addToRecentFiles = $false
+        $document = $documents.Open(
+            [ref]$openPath,
+            [ref]$confirmConversions,
+            [ref]$openReadOnly,
+            [ref]$addToRecentFiles
+        )
+        $documentWindow = $document.ActiveWindow
+        [uint32]$documentWindowProcessId = 0
+        [void][BuildASpecWordNativeMethods]::GetWindowThreadProcessId(
+            [IntPtr]([int64]$documentWindow.Hwnd),
+            [ref]$documentWindowProcessId
+        )
+        if ($documentWindowProcessId -ne $wordProcessId) {
+            throw "The opened document window does not belong to the owned WINWORD process."
+        }
+        $document.ExportAsFixedFormat(
+            $pdfPath,
+            17,
+            $false,
+            0,
+            0,
+            1,
+            1,
+            0,
+            $true,
+            $false,
+            1,
+            $true,
+            $true,
+            $false
+        )
+        if (-not (Test-Path -LiteralPath $pdfPath -PathType Leaf) -or
+            (Get-Item -LiteralPath $pdfPath).Length -le 0) {
+            throw "Word did not produce a non-empty PDF."
+        }
+        Write-Output ("Rendered with Word {0}." -f $word.Version)
     }
-    Write-Output ("Rendered with Word {0}." -f $word.Version)
 }
 catch {
     $primaryError = $_

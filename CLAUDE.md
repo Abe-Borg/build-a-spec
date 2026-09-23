@@ -1680,7 +1680,38 @@ tests/
                            running into one); the corpus sweep under a
                            scripted edit mix (no hyperlink fallback); and the
                            API matrix (route, defaults, 400s, 409s with codes,
-                           payload + reason, filename, the cached scan)
+                           payload + reason, filename, the cached scan).
+                           Its sweep's edit mixes and refusal list are public
+                           (CORPUS_SWEEP_SEEDS / corpus_sweep_edits /
+                           STRUCTURAL_REFUSALS): the real-Word judge replays
+                           exactly them
+  word_judge.py            [Redline on your original, Phase 2 PR A] real Word
+                           as the redline's judge, minus Word: the targeted
+                           groups (every markup shape the writer emits) + the
+                           corpus sweep's groups, build_judge_cases (rendered
+                           exactly as the app does), judge_batch (one Word per
+                           group, resolver injected), the SYMMETRIC comparison
+                           (Word's resolution vs Word's re-save of the
+                           reference) under exactly four WORD_SAVE_TOLERANCES
+                           (rsids, w:proofErr, w:lastRenderedPageBreak,
+                           _GoBack — never in the app), the tracked-move
+                           sample check, JudgeReport (report.json, file names
+                           never paths)
+  test_word_judge.py       [Phase 2 PR A] the judge proven without Word: each
+                           tolerance removes exactly what it names, the
+                           self-check applies none, the targeted cases cover
+                           every shape, and fake Words — faithful (plain or
+                           with a model of a Word save: a same-everywhere
+                           rewrite plus randomly placed save markup), wrong,
+                           swapped, mis-authored, leaving changes, losing a
+                           bookmark, unreadable — pass or fail as they should,
+                           over every targeted and corpus case
+  test_redline_word_judge.py
+                           [Phase 2 PR A] the gated Windows suite (skips
+                           unless BUILD_A_SPEC_WORD_JUDGE=1): one test per
+                           group, real Word via tools/render_docx_word.
+                           resolve_docx, plus Word's own tracked-move sample
+                           once the corpus has it
   frontend/tests/tour.test.ts
                            [Batch 6] passive tour-data invariants and current anchors
   test_stop.py             [Batch 7] chat stop mid-stream (truncates the live
@@ -13658,6 +13689,189 @@ and bumps no version; one knob's default moves.
   3. The Layout entry for `settings.py` said routine condensing was "OFF
      until the paid recall check". It is maintained current, so it was
      corrected in place.
+
+## Real Word as the judge — implemented notes (Redline on your original, Phase 2, PR A)
+
+The first of Phase 2's two pull requests, PR #197 (a deviation: the plan sized
+Phase 2 as one — see the plan's "Phase 2 (PR A) — as built", which carries
+the deviations and what PR B inherits). The redline on your original has
+always proven its own promise with the app's own resolver; this has real
+Microsoft Word resolve the same files, both ways, on the owner's machine.
+It changes nothing in the app: no route, SSE event, env knob the app reads,
+dependency, project-format change, VERSION bump or release-note entry. The
+contract lives in `docs/DOCX_FIDELITY.md` → "Real Word as the judge"; setup
+in `docs/DOCX_RENDERER_WINDOWS.md` → "Resolve mode". This section is the why
+and the traps.
+
+- **Resolve mode is a branch inside the bridge's one owned Word, never a
+  second activation.** `tools/render_docx_word_automation.ps1` reads
+  `BUILD_A_SPEC_WORD_MODE` (render is the default), and the resolve loop runs
+  inside the same owned-Word `try` as the render: hidden STA, alerts and
+  macros off before anything opens, each job opened read-only and off Recent
+  Files in a window the owned WINWORD holds (else `$ownershipViolation` and
+  the batch stops), `AcceptAllRevisions()`/`RejectAllRevisions()`, then
+  `SaveAs2` format 16 to a NEW file off Recent Files, closed without saving.
+  A file Word cannot open, resolve or save fails only its own job (per-job
+  `catch`); anything else fails the batch, and every failure path cleans up
+  only the Word the handshake proved it started. The render path is wrapped
+  in the `else`, unchanged. `_MODE_VARIABLES` are stripped from the parent
+  environment (`_bridge_environment`) so a render never inherits a resolve
+  request, and vice versa.
+- **Windows PowerShell 5.1 never runs in CI, so its traps are pinned in
+  Python.** (1) `ConvertFrom-Json` emits a top-level JSON array as ONE
+  object, so the job file is `{"jobs": [...]}`; (2) `ConvertTo-Json` may
+  write a one-element array as its element and a one-string array as a bare
+  string — `_load_resolution` reads both; (3) `[Text.Encoding]::UTF8` writes
+  a BOM, so the result is read as `utf-8-sig`; (4) 5.1 has no `??`, `?.`,
+  ternary or `&&`/`||` — `test_the_powershell_scripts_parse_for_windows_
+  powershell` parses both scripts with `pwsh` (on CI's Linux runner) and
+  refuses 7-only syntax by AST node and token kind.
+- **The Python side trusts nothing the bridge says without a check**
+  (`_load_resolution`): every job answered, in order, with its own input,
+  output and action; a finished job's output exists and is not empty;
+  counts are ints ≥ -1 and never bools (`isinstance(True, int)` — the usage
+  ledger's trap, again); a failed job carries a reason. `_validated_jobs`
+  refuses before Word starts: an output that exists (alerts are off, so Word
+  would overwrite silently), two jobs writing one output, and an output that
+  IS an input under Windows' case rules — that last only reachable on a
+  case-sensitive filesystem, so the test asserts whichever check fires.
+  The batch timeout is the per-document timeout times the jobs: a ceiling
+  for a hung Word, not a target.
+- **Symmetry is the design, not a convenience.** Comparing Word's Accept All
+  with the app's own formatted export would need a tolerance for everything
+  a Word save rewrites (formatting spelled its own way, table-look flags, a
+  hyperlink's `w:history`, a run's language) — dozens of them, each a hole.
+  Instead the same Word re-saves the formatted export and the upload, and
+  each resolution is compared with Word's save of its reference: everything
+  a save rewrites the same way on both sides cancels. What remains is what a
+  save writes ON ITS OWN, differently per file — exactly four tolerances in
+  `tests/word_judge.py` (`WORD_SAVE_TOLERANCES`): rsid attributes,
+  `w:proofErr`, `w:lastRenderedPageBreak`, the `_GoBack` bookmark — removed
+  from both sides, then `revisions.first_difference` does the rest. **They
+  live in the test tree and never in the app**:
+  `test_the_apps_own_self_check_applies_none_of_the_tolerances` pins that
+  the self-check still reports each one. A fifth tolerance needs evidence
+  from a real run, a reason in the table and a test.
+- **The body is what is compared,** because every tracked change is in it:
+  every other part is the upload's byte for byte (the self-check's package
+  check), and neither resolution changes anything outside the body. The
+  judge also cannot see a repair prompt (alerts are off, so a file Word
+  refuses fails its job instead; one Word silently repairs cannot be told
+  apart) or how the Reviewing Pane draws the changes — those rows stay
+  manual in `docs/RELEASE_WINDOWS.md`. What it can see of the pane is who
+  Word says wrote each change (`Revision.Author`), and it requires
+  `Build-a-Spec` for every one.
+- **The judge replays the sweep, not a copy of it.** `CORPUS_SWEEP_SEEDS`,
+  `CORPUS_SWEEP_EDITS`, `corpus_sweep_edits` and `STRUCTURAL_REFUSALS` were
+  lifted to public names in `tests/test_redline_original.py` (a pure
+  refactor; the sweep test is otherwise unchanged), and the judge's corpus
+  groups call them. A refusal in that set is recorded and not sent to Word;
+  any other refusal is a failed self-check and fails the judge
+  (`structural_refusals()` reads the one set). Targeted groups must not be
+  refused at all.
+- **A fake Word debugged the harness before real Word could.** The whole
+  gated suite was run with `resolve_docx` swapped for a fake — the app's
+  oracle plus a model of a Word save — and it caught two bugs, both in the
+  FAKE and both found by the judge doing its job: a "proofing split" that
+  deep-copied a run holding `w:t`, `w:tab`, `w:t` (so the tab appeared
+  twice — Word splits a run into runs holding their share of the text), and
+  a `_GoBack` bookmark numbered 0 beside the corpus source's real bookmark 0
+  (the canonical comparison names a `bookmarkEnd` through its id, so the
+  collision paired the wrong start and end — Word numbers `_GoBack` like any
+  other bookmark). Trap for whoever edits `_add_word_noise`: a model of a
+  Word save must never duplicate content or reuse an id, and anything it
+  writes must be either one of the four tolerances or the same in every
+  file. `test_a_faithful_noisy_word_passes_every_corpus_mix` now runs the
+  exact batches the Windows run hands Word, so a failure there is real Word
+  disagreeing, never the harness; `_rewrite_like_word` (the same-everywhere
+  half) is what `test_only_a_symmetric_comparison_survives_what_word_rewrites`
+  needs to prove symmetry is load-bearing.
+- **Word's own tracked moves are PR B's evidence.** The corpus gains
+  `tracked_move_source` (a placeholder spec, provision B wrapped in a
+  bookmark) and `generate_word_fixtures.ps1` a `TrackedMove` recipe: Track
+  Changes and `Document.TrackMoves` on, two whole paragraphs cut and pasted
+  (Word records a paste after a cut of a whole paragraph as a move; a
+  `FormattedText` copy would be a deletion plus an insertion), saved as
+  `microsoft-word-16-tracked-move.docx`. The paragraphs are found by text
+  BEFORE the first cut — once a cut is tracked the moved-from copy stays in
+  the document beside the new one — and the functions return a COM Range
+  with `return , $x` so PowerShell never unrolls it. `-Recipes` names which
+  fixtures to produce (every committed one is pinned, so producing one again
+  changes its bytes), and `-ScratchRoot` is needed only by LegacyDoc.
+- **The name trap, and three layers against it.** Word records the Office
+  user as every change's `w:author` in `word/document.xml` (and in
+  `word/people.xml`), which `sanitize_external_fixtures.py` never touches.
+  (1) The recipe sets a placeholder identity (`Build-a-Spec Corpus`, `BASC`,
+  plus `Options.UseLocalUserInfo` — without it a signed-in account's name
+  wins) before opening anything, restores the owner's in a `finally`, and
+  warns if it finds the placeholder already set (an earlier run was killed
+  before it could restore). (2) Before saving it requires every
+  `Revision.Author` to be the placeholder, both moves recorded as moves
+  (types 14/15), and the bookmark kept; after saving it scans every XML part
+  — the local identity as a WHOLE word (a short Windows user name like
+  "user" must not match inside `w15:userId`), the corpus's own user-folder
+  pattern, every `w:author`/`w15:author` the placeholder, no `providerId`
+  but `None` in `people.xml` — and deletes the file on any finding. The
+  owner's identity is compared and restored, and never printed: a pin
+  refuses any line that names it and builds a string, writes output or
+  throws. (3) `tests/test_docx_corpus.py` holds every corpus package to a
+  POSITIVE list of placeholder identities wherever a producer records a
+  person: the `_FORBIDDEN_TEXT` denylist catches one spelling of one name,
+  and an allowlist catches every name. The recipe's package scan is also
+  EXECUTED here: lifted out of the script by its syntax tree
+  (`FunctionDefinitionAst` + the `$trackedMoveAuthor` assignment) and run
+  under `pwsh` against seven hand-built packages — pure PowerShell, no COM,
+  so it needs no Word.
+- **The sanitizer runs as a module.** `python tests/fixtures/docx_corpus/
+  sanitize_external_fixtures.py` cannot import `backend` (the script's
+  folder, not the repo root, is on `sys.path`);
+  `python -m tests.fixtures.docx_corpus.sanitize_external_fixtures` from the
+  repo root works (namespace packages). Every doc now says the module form.
+- **The fixture's manifest entry waits for the fixture.** An entry naming a
+  missing file would break every corpus test (`build_case` verifies the
+  checksum), and nothing checks for an unreferenced file in `external/`, so
+  the owner can push the file first and the pin follows.
+  `test_a_word_shaped_tracked_move_sample_meets_its_future_manifest_entry`
+  already proves a hand-built Word-shaped sample gets exactly the entry's
+  expectations: the Accept-All view (charlie, alpha, delta, bravo), exact-
+  original only (`tracked_changes`), exact no-op, and the redline refusing it
+  as `pending_revisions`.
+- **Where things land.** The judge writes under `artifacts/word-judge/`
+  (`BUILD_A_SPEC_WORD_JUDGE_DIR` moves it), so `/artifacts/` joined
+  `.gitignore` (the corpus materializer's documented output was already
+  under it, just never ignored). A run never reuses a folder
+  (`run-<stamp>[-n]`), and `report.json` is rewritten after every group, both
+  at the root and in the run folder.
+- **Tests.** `tests/test_word_judge.py` (32),
+  `tests/test_redline_word_judge.py` (44, skipped unless asked), 5 new in
+  `tests/test_docx_corpus.py`, and 14 new in
+  `tests/test_render_docx_word.py` (the resolve mode, its CLI, and the parse
+  test over both PowerShell scripts, which runs wherever `pwsh` is on `PATH`
+  and skips cleanly where it is not). Revert matrix, each mechanism reverted
+  in place and restored from its exact text: 44 mechanisms, 44 red. The
+  bridge's Python side, each → 1: refusing an existing output, an output
+  that two jobs write, an output that is an input under Windows' case rules,
+  an answer for a job it was not given, 5.1's one-element array, 5.1's BOM,
+  a finished job whose file is missing, a count that is a bool, a failed job
+  with no reason, a render inheriting a resolve request, the per-document
+  timeout, `--resolve` without `--output`. The bridge's PowerShell pins,
+  each → 1: the read-only open, the owned-window check, format 16. The
+  judge: each of rsids / `w:proofErr` / `w:lastRenderedPageBreak` → 4;
+  `_GoBack` → 2 on the first run — only the faithful-Word tests caught it,
+  because the tolerance unit tests went through a COPY of the comparison.
+  They now call `body_difference`, the one comparison every verdict goes
+  through, and the row re-ran at 4. Symmetry (comparing with the app's files
+  as written) → 2; the author check, changes left, markup left, a bookmark
+  lost by no move, the lost bookmark excluded from Reject All's comparison,
+  a non-structural refusal, Word's per-file error, file names not paths, the
+  sweep's seeds, the sample's author and leftovers, the gated suite's skip →
+  1 each; which bookmarks a moved copy carries → 2. The corpus source's
+  bookmark, the recipe's needles, the placeholder set before opening, the
+  owner's identity restored in the `finally`, authors checked before saving,
+  the identity never printed, each package-scan rule (whole-word identity,
+  user-folder path, every author, presence) and the 5.1 parse → 1 each. The
+  matrix script restores each file from the exact text it read and checks
+  `git diff` is clean after every row.
 
 ## The compaction plan's last two pieces are dropped — notes
 

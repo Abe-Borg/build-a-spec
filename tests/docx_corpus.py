@@ -829,6 +829,56 @@ def _manual_comments_ooxml(workspace: Path) -> bytes:
     )
 
 
+#: What the Word producer's TrackedMove recipe
+#: (``generate_word_fixtures.ps1 -Recipes TrackedMove``) looks for in
+#: :func:`_tracked_move_source`: each move is (the paragraph to move, the
+#: paragraph it lands after), found by text, so every one stays unique.
+TRACKED_MOVES = (
+    ("Placeholder provision alpha.", "Placeholder provision charlie."),
+    ("Placeholder provision bravo.", "Placeholder provision delta."),
+)
+#: The bookmark the second moved paragraph carries.
+TRACKED_MOVE_BOOKMARK = "Placeholder_Moved_Anchor"
+
+
+def _tracked_move_source(workspace: Path) -> bytes:
+    """The placeholder spec the Word producer's TrackedMove recipe opens.
+
+    Four typed-letter provisions under one article, the second wrapped in a
+    bookmark. With Track Changes on, the recipe moves the first below the
+    third and the bookmarked one below the fourth, so Word writes its own
+    ``w:moveFrom``/``w:moveTo`` markup — the sample Redline on your original
+    Phase 2 settles its native-move writing against. This source holds no
+    revisions and is an ordinary ready case in its own right."""
+    document = Document()
+    for text in (
+        "SECTION 21 13 19",
+        "PLACEHOLDER TRACKED MOVE SOURCE",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+        f"A. {TRACKED_MOVES[0][0]}",
+        f"B. {TRACKED_MOVES[1][0]}",
+        f"C. {TRACKED_MOVES[0][1]}",
+        f"D. {TRACKED_MOVES[1][1]}",
+        "1.2 QUALITY ASSURANCE",
+        "A. Placeholder provision echo.",
+        "END OF SECTION 21 13 19",
+    ):
+        paragraph = document.add_paragraph(text)
+        if text.endswith(TRACKED_MOVES[1][0]):
+            run = paragraph.runs[0]._r
+            start = etree.Element(f"{{{_W_NS}}}bookmarkStart")
+            start.set(f"{{{_W_NS}}}id", "0")
+            start.set(f"{{{_W_NS}}}name", TRACKED_MOVE_BOOKMARK)
+            end = etree.Element(f"{{{_W_NS}}}bookmarkEnd")
+            end.set(f"{{{_W_NS}}}id", "0")
+            run.addprevious(start)
+            run.addnext(end)
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
 _RECIPES: dict[str, Callable[[Path], bytes]] = {
     "word_like_rich": _word_like_rich,
     "libreoffice_like_metadata": _libreoffice_like_metadata,
@@ -843,6 +893,7 @@ _RECIPES: dict[str, Callable[[Path], bytes]] = {
     "zip_comment_and_extra": _zip_comment_and_extra,
     "manual_notes_ooxml": _manual_notes_ooxml,
     "manual_comments_ooxml": _manual_comments_ooxml,
+    "tracked_move_source": _tracked_move_source,
 }
 
 
@@ -935,6 +986,8 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "TRACKED_MOVES",
+    "TRACKED_MOVE_BOOKMARK",
     "CorpusCase",
     "build_case",
     "corpus_cases",

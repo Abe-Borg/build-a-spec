@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from types import ModuleType
@@ -497,3 +499,455 @@ def test_main_accepts_docx_render_harness_cli(monkeypatch, tmp_path, capsys):
         )
     ]
     assert "Pages rendered to" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Resolve mode: Accept All / Reject All + save as a new DOCX (the redline's
+# real-Word judge — Redline on your original, Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _bridge_script() -> str:
+    return renderer._AUTOMATION_SCRIPT.read_text(encoding="utf-8")
+
+
+def test_resolve_mode_runs_behind_the_same_safety_contract():
+    """Resolve mode is a branch INSIDE the owned, hidden, alerts-off,
+    macros-off Word the render mode already proves — never a second
+    activation with rules of its own."""
+    script = _bridge_script()
+    for requirement in (
+        "$env:BUILD_A_SPEC_WORD_MODE",
+        "$env:BUILD_A_SPEC_WORD_JOBS",
+        "$env:BUILD_A_SPEC_WORD_RESULT",
+        "Unknown Word resolve action",
+        # Every job: opened read-only and kept off Recent Files...
+        "[ref]$jobReadOnly",
+        "$jobReadOnly = $true",
+        "[ref]$jobAddToRecentFiles",
+        "$jobAddToRecentFiles = $false",
+        # ...in a window the owned WINWORD holds, or the whole batch stops.
+        "$jobWindowProcessId -ne $wordProcessId",
+        "$ownershipViolation = $true",
+        # What Word read, the way the Reviewing Pane lists it.
+        "$jobAuthors.Add([string]$jobRevision.Author)",
+        # Accept All / Reject All Changes, whatever the markup view shows.
+        "$document.AcceptAllRevisions()",
+        "$document.RejectAllRevisions()",
+        # Saved as a NEW .docx (Word's default format), off Recent Files.
+        "$jobSaveFormat = 16",
+        "[ref]$jobSaveAddToRecentFiles",
+        "$jobSaveAddToRecentFiles = $false",
+        # Closed without saving over anything.
+        "$document.Close([ref]$closeSaveChanges)",
+    ):
+        assert requirement in script, requirement
+    # One activation, one set of safety settings, shared by both modes.
+    for shared in (
+        "New-Object -ComObject Word.Application",
+        "$word.Visible = $false",
+        "$word.DisplayAlerts = 0",
+        "$word.AutomationSecurity = 3",
+        "Stop-OwnedWordProcess -WaitSeconds 10",
+    ):
+        assert script.count(shared) == 1, shared
+    # Nothing is opened before alerts and macros are off.
+    guarded = script.index("$word.AutomationSecurity = 3")
+    opens = [
+        index
+        for index in range(len(script))
+        if script.startswith("$documents.Open(", index)
+    ]
+    assert len(opens) == 2 and all(index > guarded for index in opens)
+    # Accept/Reject never runs on a document the bridge did not first
+    # prove is its own.
+    assert script.index("$jobWindowProcessId -ne $wordProcessId") < script.index(
+        "$document.AcceptAllRevisions()"
+    )
+
+
+def test_every_bridge_environment_names_its_own_mode(monkeypatch, tmp_path):
+    """A render never inherits a resolve request from its parent environment,
+    and a resolve never inherits a render's paths."""
+    for name, value in (
+        ("BUILD_A_SPEC_WORD_MODE", "resolve"),
+        ("BUILD_A_SPEC_WORD_JOBS", "stale-jobs.json"),
+        ("BUILD_A_SPEC_WORD_RESULT", "stale-result.json"),
+        ("BUILD_A_SPEC_WORD_INPUT", "stale.docx"),
+        ("BUILD_A_SPEC_WORD_PDF", "stale.pdf"),
+    ):
+        monkeypatch.setenv(name, value)
+
+    render = renderer._word_environment(
+        tmp_path / "in.docx",
+        tmp_path / "out.pdf",
+        tmp_path / "WINWORD.EXE",
+        tmp_path / "owner.txt",
+    )
+    assert render["BUILD_A_SPEC_WORD_MODE"] == "render"
+    assert "BUILD_A_SPEC_WORD_JOBS" not in render
+    assert "BUILD_A_SPEC_WORD_RESULT" not in render
+
+    resolve = renderer._resolve_environment(
+        tmp_path / "jobs & more.json",
+        tmp_path / "result 'quoted'.json",
+        tmp_path / "Office 16" / "WINWORD.EXE",
+        tmp_path / "owner.txt",
+    )
+    assert resolve["BUILD_A_SPEC_WORD_MODE"] == "resolve"
+    assert resolve["BUILD_A_SPEC_WORD_JOBS"] == str(tmp_path / "jobs & more.json")
+    assert resolve["BUILD_A_SPEC_WORD_RESULT"] == str(tmp_path / "result 'quoted'.json")
+    assert "BUILD_A_SPEC_WORD_INPUT" not in resolve
+    assert "BUILD_A_SPEC_WORD_PDF" not in resolve
+    assert resolve["BUILD_A_SPEC_WORD_CLEANUP_ONLY"] == "0"
+    assert len(resolve["BUILD_A_SPEC_WORD_TOKEN"]) == 32
+    assert resolve["BUILD_A_SPEC_WORD_TOKEN"] != render["BUILD_A_SPEC_WORD_TOKEN"]
+
+
+def _docx(tmp_path, name: str) -> Path:
+    path = tmp_path / name
+    path.write_bytes(b"PK input " + name.encode())
+    return path
+
+
+class _FakeResolveWord:
+    """Stands in for the bridge: reads the job file it was handed, writes
+    each output, and answers the way the PowerShell does (a BOM included)."""
+
+    def __init__(self, *, edit=None):
+        self.calls: list[dict] = []
+        self.edit = edit
+
+    def __call__(self, environment, *, timeout_seconds):
+        self.calls.append({"environment": environment, "timeout": timeout_seconds})
+        manifest = json.loads(
+            Path(environment["BUILD_A_SPEC_WORD_JOBS"]).read_text(encoding="utf-8")
+        )
+        records = []
+        for job in manifest["jobs"]:
+            Path(job["output"]).write_bytes(b"PK " + job["action"].encode())
+            records.append(
+                {
+                    "input": job["input"],
+                    "output": job["output"],
+                    "action": job["action"],
+                    "ok": True,
+                    "error": "",
+                    "revisions_before": 0 if job["action"] == "resave" else 3,
+                    "revisions_after": 0,
+                    "authors": [] if job["action"] == "resave" else ["Build-a-Spec"],
+                }
+            )
+        payload = {"word_version": "16.0", "word_build": "16.0.1234.5678", "jobs": records}
+        if self.edit is not None:
+            payload = self.edit(payload) or payload
+        Path(environment["BUILD_A_SPEC_WORD_RESULT"]).write_text(
+            json.dumps(payload), encoding="utf-8-sig"
+        )
+        return subprocess.CompletedProcess(
+            args=["powershell"], returncode=0, stdout="Resolved", stderr=""
+        )
+
+
+def _resolve(tmp_path, jobs, **kwargs):
+    return renderer.resolve_docx(
+        jobs, word_executable=tmp_path / "WINWORD.EXE", **kwargs
+    )
+
+
+def test_resolve_hands_word_a_job_file_and_reads_its_answers(monkeypatch, tmp_path):
+    fake = _FakeResolveWord()
+    monkeypatch.setattr(renderer, "_run_powershell", fake)
+    redline = _docx(tmp_path, "redline & copy.docx")
+    reference = _docx(tmp_path, "reference.docx")
+    jobs = [
+        renderer.ResolveJob(redline, tmp_path / "accepted.docx", "accept"),
+        renderer.ResolveJob(redline, tmp_path / "rejected.docx", "reject"),
+        renderer.ResolveJob(reference, tmp_path / "resaved.docx", "resave"),
+    ]
+
+    resolution = _resolve(tmp_path, jobs, timeout_seconds=45)
+
+    assert (resolution.word_version, resolution.word_build) == ("16.0", "16.0.1234.5678")
+    assert [d.job.action for d in resolution.documents] == ["accept", "reject", "resave"]
+    assert all(d.ok and d.error == "" for d in resolution.documents)
+    assert resolution.documents[0].authors == ("Build-a-Spec",)
+    assert resolution.documents[0].revisions_before == 3
+    assert resolution.documents[2].authors == ()
+    (call,) = fake.calls
+    assert call["timeout"] == 45
+    environment = call["environment"]
+    assert environment["BUILD_A_SPEC_WORD_MODE"] == "resolve"
+    # The paths travel in the job file, never on a command line.
+    assert all(str(redline) not in value for value in environment.values())
+
+
+def test_resolve_times_out_per_document(monkeypatch, tmp_path):
+    fake = _FakeResolveWord()
+    monkeypatch.setattr(renderer, "_run_powershell", fake)
+    monkeypatch.setenv("BUILD_A_SPEC_WORD_TIMEOUT", "7")
+    source = _docx(tmp_path, "source.docx")
+    jobs = [
+        renderer.ResolveJob(source, tmp_path / f"out-{index}.docx", "resave")
+        for index in range(3)
+    ]
+    _resolve(tmp_path, jobs)
+    assert fake.calls[0]["timeout"] == 21
+
+
+def test_one_document_word_cannot_resolve_fails_only_its_job(monkeypatch, tmp_path):
+    def break_second(payload):
+        second = payload["jobs"][1]
+        Path(second["output"]).unlink()
+        second.update(ok=False, error="Word could not open the file.", revisions_before=-1)
+
+    monkeypatch.setattr(renderer, "_run_powershell", _FakeResolveWord(edit=break_second))
+    source = _docx(tmp_path, "source.docx")
+    jobs = [
+        renderer.ResolveJob(source, tmp_path / "a.docx", "accept"),
+        renderer.ResolveJob(source, tmp_path / "b.docx", "reject"),
+    ]
+    first, second = _resolve(tmp_path, jobs).documents
+    assert first.ok
+    assert not second.ok and second.error == "Word could not open the file."
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (lambda p: p["jobs"].reverse(), "answers a job it was not given"),
+        (lambda p: p["jobs"].pop(), "does not answer every job"),
+        (lambda p: Path(p["jobs"][0]["output"]).unlink(), "missing or empty"),
+        (lambda p: p["jobs"][0].update(ok="yes"), "ok is not a boolean"),
+        (lambda p: p["jobs"][0].update(revisions_after=-1), "incomplete"),
+        (lambda p: p["jobs"][0].update(ok=False), "carries no reason"),
+        (lambda p: p["jobs"][0].update(revisions_before=True), "count"),
+        (lambda p: p["jobs"][0].update(authors=[3]), "authors are not text"),
+        (lambda p: ["not", "an", "object"], "not an object"),
+    ],
+)
+def test_resolve_trusts_nothing_word_says_without_a_check(
+    monkeypatch, tmp_path, edit, message
+):
+    monkeypatch.setattr(renderer, "_run_powershell", _FakeResolveWord(edit=edit))
+    source = _docx(tmp_path, "source.docx")
+    jobs = [
+        renderer.ResolveJob(source, tmp_path / "a.docx", "accept"),
+        renderer.ResolveJob(source, tmp_path / "b.docx", "reject"),
+    ]
+    with pytest.raises(renderer.WordRendererError, match=message):
+        _resolve(tmp_path, jobs)
+
+
+def test_windows_powershell_shapes_of_one_job_are_read(monkeypatch, tmp_path):
+    """PowerShell 5.1 may write a one-element array as its element, and a
+    one-author list as a bare string."""
+
+    def unwrap(payload):
+        (record,) = payload["jobs"]
+        record["authors"] = "Build-a-Spec"
+        payload["jobs"] = record
+
+    monkeypatch.setattr(renderer, "_run_powershell", _FakeResolveWord(edit=unwrap))
+    source = _docx(tmp_path, "source.docx")
+    (document,) = _resolve(
+        tmp_path, [renderer.ResolveJob(source, tmp_path / "a.docx", "accept")]
+    ).documents
+    assert document.authors == ("Build-a-Spec",)
+
+
+def test_a_bridge_that_writes_no_answer_is_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        renderer,
+        "_run_powershell",
+        lambda environment, timeout_seconds: subprocess.CompletedProcess(
+            args=["powershell"], returncode=0, stdout="", stderr=""
+        ),
+    )
+    source = _docx(tmp_path, "source.docx")
+    with pytest.raises(renderer.WordRendererError, match="no readable resolve result"):
+        _resolve(tmp_path, [renderer.ResolveJob(source, tmp_path / "a.docx", "accept")])
+
+
+@pytest.mark.parametrize("failure", ["timeout", "exit"])
+def test_resolve_failures_clean_up_the_owned_word(monkeypatch, tmp_path, failure):
+    cleanup_calls = []
+
+    def fail(environment, *, timeout_seconds):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("powershell", timeout_seconds)
+        return subprocess.CompletedProcess(
+            args=["powershell"], returncode=1, stdout="", stderr="COM failed"
+        )
+
+    monkeypatch.setattr(renderer, "_run_powershell", fail)
+    monkeypatch.setattr(
+        renderer,
+        "_cleanup_owned_word",
+        lambda environment: cleanup_calls.append(environment) or "",
+    )
+    source = _docx(tmp_path, "source.docx")
+    with pytest.raises(renderer.WordRendererError, match="timed out|COM failed"):
+        _resolve(tmp_path, [renderer.ResolveJob(source, tmp_path / "a.docx", "accept")])
+    assert len(cleanup_calls) == 1
+    assert cleanup_calls[0]["BUILD_A_SPEC_WORD_MODE"] == "resolve"
+
+
+def test_resolve_refuses_bad_jobs_before_word_starts(monkeypatch, tmp_path):
+    fake = _FakeResolveWord()
+    monkeypatch.setattr(renderer, "_run_powershell", fake)
+    source = _docx(tmp_path, "source.docx")
+    taken = _docx(tmp_path, "taken.docx")
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    bad = [
+        ([renderer.ResolveJob(source, taken, "accept")], "already exists"),
+        ([renderer.ResolveJob(source, tmp_path / "a.docx", "approve")], "Unknown resolve action"),
+        ([renderer.ResolveJob(tmp_path / "missing.docx", tmp_path / "a.docx", "accept")], "does not exist"),
+        ([renderer.ResolveJob(tmp_path / "notes.txt", tmp_path / "a.docx", "accept")], ".docx input only"),
+        ([renderer.ResolveJob(source, tmp_path / "a.pdf", "accept")], "as .docx only"),
+        ([renderer.ResolveJob(source, tmp_path / "no" / "a.docx", "accept")], "directory does not exist"),
+        (
+            [
+                renderer.ResolveJob(source, tmp_path / "a.docx", "accept"),
+                renderer.ResolveJob(source, tmp_path / "A.DOCX", "reject"),
+            ],
+            "Two resolve jobs",
+        ),
+        ([], "at least one job"),
+    ]
+    # An output that IS an input under Windows' case rules: a case-insensitive
+    # filesystem already says it exists; on any other, the path comparison
+    # (Windows-normalized) still refuses it.
+    shouting = tmp_path / "SOURCE.DOCX"
+    bad.append(
+        (
+            [renderer.ResolveJob(source, shouting, "accept")],
+            "already exists" if shouting.exists() else "would overwrite an input",
+        )
+    )
+    for jobs, message in bad:
+        with pytest.raises(renderer.WordRendererError, match=message):
+            _resolve(tmp_path, jobs)
+    assert fake.calls == []
+    assert taken.read_bytes() == b"PK input taken.docx"
+    assert source.read_bytes() == b"PK input source.docx"
+
+
+def test_resolve_cli_resolves_one_file(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def resolve(jobs, **kwargs):
+        calls.append((jobs, kwargs))
+        (job,) = jobs
+        return renderer.WordResolution(
+            word_version="16.0",
+            word_build="16.0.1234.5678",
+            documents=(
+                renderer.ResolvedDocx(
+                    job=job,
+                    ok=True,
+                    error="",
+                    revisions_before=4,
+                    revisions_after=0,
+                    authors=("Build-a-Spec",),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(renderer, "resolve_docx", resolve)
+    renderer.main(
+        [str(tmp_path / "in.docx"), "--resolve", "reject", "--output", str(tmp_path / "out.docx")]
+    )
+    ((jobs, kwargs),) = calls
+    assert jobs == [renderer.ResolveJob(tmp_path / "in.docx", tmp_path / "out.docx", "reject")]
+    assert kwargs == {"verbose": False}
+    out = capsys.readouterr().out
+    assert "4 tracked change(s) by Build-a-Spec; 0 left after 'reject'" in out
+
+
+def test_resolve_cli_reports_words_own_reason(monkeypatch, tmp_path, capsys):
+    def resolve(jobs, **kwargs):
+        (job,) = jobs
+        return renderer.WordResolution(
+            "16.0",
+            "16.0.1",
+            (renderer.ResolvedDocx(job, False, "The file is corrupt.", -1, -1, ()),),
+        )
+
+    monkeypatch.setattr(renderer, "resolve_docx", resolve)
+    with pytest.raises(SystemExit) as exited:
+        renderer.main(
+            [str(tmp_path / "in.docx"), "--resolve", "accept", "--output", str(tmp_path / "o.docx")]
+        )
+    assert exited.value.code == 1
+    assert "The file is corrupt." in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["in.docx", "--resolve", "accept"],
+        ["in.docx", "--output", "out.docx"],
+    ],
+    ids=["resolve-without-output", "output-without-resolve"],
+)
+def test_resolve_cli_flags_come_as_a_pair(monkeypatch, argv):
+    monkeypatch.setattr(renderer, "resolve_docx", lambda *a, **k: pytest.fail("ran"))
+    monkeypatch.setattr(renderer, "render_docx", lambda *a, **k: pytest.fail("ran"))
+    with pytest.raises(SystemExit) as exited:
+        renderer.main(argv)
+    assert exited.value.code == 2
+
+
+#: Every PowerShell script the repo ships. Windows PowerShell 5.1 runs them;
+#: CI's Linux runner has PowerShell 7, whose parser reads a superset.
+_POWERSHELL_SCRIPTS = (
+    renderer._AUTOMATION_SCRIPT,
+    Path(__file__).parent / "fixtures" / "docx_corpus" / "generate_word_fixtures.ps1",
+)
+_WINDOWS_POWERSHELL_CHECK = r"""
+$path = $env:BUILD_A_SPEC_PS_CHECK
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $path, [ref]$tokens, [ref]$parseErrors
+)
+$newer = @()
+$newer += @($ast.FindAll({
+    param($node)
+    $node.GetType().Name -in @("TernaryExpressionAst", "PipelineChainAst")
+}, $true) | ForEach-Object { $_.GetType().Name })
+$newer += @($tokens | Where-Object {
+    $_.Kind.ToString() -in @(
+        "QuestionQuestion", "QuestionQuestionEquals", "QuestionDot",
+        "QuestionLBracket", "AndAnd", "OrOr"
+    )
+} | ForEach-Object { $_.Kind.ToString() })
+ConvertTo-Json -Compress -InputObject ([ordered]@{
+    errors = @($parseErrors | ForEach-Object { $_.Message })
+    newer = $newer
+})
+"""
+
+
+@pytest.mark.parametrize("script", _POWERSHELL_SCRIPTS, ids=lambda path: path.name)
+def test_the_powershell_scripts_parse_for_windows_powershell(script):
+    """The bridge and the fixture producer never run in CI (they need Word),
+    so a syntax error would first surface on the owner's machine. PowerShell
+    7 parses a superset of 5.1: this also refuses the 7-only syntax (``??``,
+    ``?.``, ternaries, ``&&``/``||`` chains) that 5.1 cannot run."""
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell 7 (pwsh) is not installed; CI's Linux runner has it")
+    completed = subprocess.run(
+        [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_POWERSHELL_CHECK],
+        env={**os.environ, "BUILD_A_SPEC_PS_CHECK": str(script)},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["errors"] == []
+    assert result["newer"] == []

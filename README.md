@@ -483,7 +483,12 @@ again whenever it needs the exact wording, and during the turn nothing
 changes: it reads the whole page while it works. Fetched PDFs are already
 trimmed this way and keep their own note. A project saved by an earlier
 version is trimmed the same way when it is opened (the file itself changes
-at the next save). Nothing you see in the chat changes.
+at the next save), with one exception. When a reply quoted a passage that
+another page in the project also holds (a page read twice, or a mirror),
+both pages keep their text. The numbers a saved reply uses to point at a
+page can't be trusted once the conversation was condensed, so opening the
+project can't tell which page was quoted, and guessing could save the quote
+under the wrong page. Nothing you see in the chat changes.
 
 **It is on by default since its live check passed on 2026-09-23.** The
 1.21.0 closeout had set it off (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`), because
@@ -507,8 +512,8 @@ more with `--control`. That sends the same conversation with the page text
 kept, which tells a refused trim apart from a refused test conversation.
 `0` keeps fetched page text in saved conversations exactly as earlier
 versions did. Either way, **History makeup** and the offline profiler count
-the fetched pages that still carry their text, which is none while the trim
-is on.
+the fetched pages that still carry their text. While the trim is on, that is
+none, apart from the pages an older project kept under the exception above.
 
 ### A long conversation is condensed, never deleted (Phase 3)
 

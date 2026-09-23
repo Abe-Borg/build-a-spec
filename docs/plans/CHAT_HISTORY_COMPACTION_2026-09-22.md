@@ -313,6 +313,17 @@ updating that ground rule in the same change.
   left alone. A trimmed page is recognized by the note's prefix, because a
   note with quotes is longer than a bare one. The canary sends the new
   shape and refuses to send the old one.
+- **Opening a project reads no citation numbers (PR #194).** Once the
+  default was on, Codex showed that the load-time trim read each citation's
+  index against the whole saved history. A reply written after the
+  conversation was condensed was numbered against the condensed view, and
+  nothing saved says which replies those were. So, for a passage two pages
+  hold (a page read twice, or a mirror), the quote could be filed under
+  the wrong page and its citation removed, and the next save would keep
+  that. Load now passes `document_offset=None`: a passage only one page
+  holds still folds into it, and one that more than one page holds leaves
+  those pages and their citations as they are. The offline profiler does
+  the same, and a commit, whose numbering is exact, is unchanged.
 - Tests: `tests/test_fetched_page_elision.py` (6) and
   `tests/test_fetch_elision_canary.py` (6). Each mechanism was reverted in
   place to prove it load-bearing: the commit wiring → 4 red, the load wiring

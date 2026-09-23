@@ -1125,7 +1125,9 @@ backend/
                            go — the canary's first run was refused on
                            those; a trimmed page is recognized by
                            FETCHED_PAGE_NOTE_PREFIX; a fetched PDF keeps
-                           its own note) out of
+                           its own note; opening a project passes
+                           document_offset=None, so a passage more than one
+                           page holds leaves those pages alone) out of
                            COMMITTED history — COW, same list object when
                            nothing changed, applied by _committed_messages
                            and by project load (the page-text half only
@@ -1822,9 +1824,11 @@ tests/
                            request untouched, a PDF note, the trim's quote
                            folding (dedupe, budget, never growing a page, a
                            kept document, the page the citation names over
-                           a mirror, the commit's document offset), and end
-                           to end through the chat and the summary call
-                           (byte-identical prefix)
+                           a mirror, the commit's document offset, an
+                           opened project's unknown numbering leaving a
+                           mirrored passage's pages alone), and end to end
+                           through the chat, project load, the profiler and
+                           the summary call (byte-identical prefix)
   test_fetch_elision_canary.py
                            [compaction Phase 2] the live canary without a
                            network: nothing sent without --run, the committed
@@ -13266,6 +13270,39 @@ bumps no version.
   covers `=0`. "Condensing after web lookups" checks the citation repair on
   a condensed view. With the trim on, a saved reply keeps no citation into
   a fetched page, so that row now runs with the trim off.
+- **Opening a project no longer guesses which page a quote came from**
+  (Codex, PR #194). With the default on, opening a project saved with the
+  trim off trims every page it holds, and the load path read each
+  citation's `document_index` against the whole saved history
+  (`document_offset=0`). A reply written after the conversation was
+  condensed was numbered against the condensed view, and nothing saved
+  says which replies those were. So when a passage appears on two pages
+  (a page read twice, or a mirror), the quote could be filed under the
+  wrong page's address and its citation removed, and the next save made
+  that permanent. This was reproduced on the unfixed code: turn 2's quote
+  went under mirror A and mirror B's note held no quote at all.
+  `elide_fetched_page_text` now takes `document_offset=None`, meaning the
+  numbering is unknown, and load and the offline profiler both pass it:
+  - a passage exactly one page holds still folds into that page, since no
+    index is needed to say where it came from;
+  - a passage more than one page holds leaves every one of those pages'
+    text in place, and every citation into them;
+  - the request repair keeps what is sent valid either way.
+
+  The commit path is unchanged, because its offset is exact. The load log
+  now counts the pages actually trimmed, not every page it looked at.
+  Tests: 4 new in `test_citation_repair.py` (both unit cases, opening a
+  condensed project end to end with the next request checked, and the
+  profiler). Each mechanism was reverted in place:
+
+  | Reverted in place | Tests red |
+  |---|---|
+  | load reading indexes as whole-history numbers | 1 |
+  | nothing held back when numbering is unknown | 3 |
+  | the log counting every page it looked at | 1 |
+  | the same-list return when nothing is left to trim | 1 |
+  | the profiler reading indexes as whole-history numbers | 1 |
+  | a citation into a held page not skipped | 2 |
 - **The release note is owed, not written.** Phase 2's draft stays in the
   compaction plan, and the plan's Release policy says whichever release
   next ships from `master` must carry it beside Phase 3's. 1.21.0's entry
@@ -13295,7 +13332,9 @@ bumps no version.
   2. "Fetched page text stays out of saved history (compaction Phase 2)"
      says its `fetched_page_texts` count is zero for anything this build
      committed or loaded. That stopped being true by default at the 1.21.0
-     closeout, and it is true by default again.
+     closeout. It is true by default again, with one exception: an opened
+     project keeps a page whose quoted passage another of its pages also
+     holds (the bullet above).
   3. "Citations must fit the request that carries them" says "The trim
      stays OFF" and that "only a recorded pass flips the default". The pass
      is now recorded, and this change flips the default.

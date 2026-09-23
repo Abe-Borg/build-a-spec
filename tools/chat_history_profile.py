@@ -109,7 +109,7 @@ def _profile(path: Path) -> HistoryProfile:
     # page-text trim only while its switch is on, exactly as in the app.
     trimmed = elide_stale_outlines(history)
     if settings.ELIDE_FETCHED_PAGE_TEXT:
-        trimmed = elide_fetched_page_text(trimmed)
+        trimmed = elide_fetched_page_text(trimmed, document_offset=None)
     profile.trimmed = history_composition(trimmed)
     return profile
 

@@ -21,8 +21,10 @@ A fresh session starts from the folder README's "How to hand this off"
 section, not here.
 
 **[Chat history compaction](CHAT_HISTORY_COMPACTION_2026-09-22.md)** —
-opened 2026-09-22. Keep the chat history the model re-reads every turn
-bounded without losing what only the conversation holds: stop saving data
+**complete** (opened 2026-09-22; its code is all on `master`, and its
+release notes are owed to the next release). Keep the chat history the
+model re-reads every turn bounded without losing what only the
+conversation holds: stop saving data
 stored elsewhere (Phase 1, stale edit outlines — complete, PR #182; Phase 2,
 fetched page text — merged in PR #183 and switched off; its live canary's
 first run on 2026-09-23 was refused, the trim was reworked in PR #192, and
@@ -34,13 +36,15 @@ the owner turned it on by default on 2026-09-23 without that check (D5,
 PR #196); PR #192 also repairs citations that a condensed view had left
 pointing at the wrong page). A real project the owner measured on
 2026-09-23 confirmed the stale outlines were most of what an older build
-re-sent (75.5%). The plan's
+re-sent (75.5%). The same day the owner dropped the last two pieces: Phase
+5, a trim within a single full-draft turn (D6), and, for now, the "promote
+before prune" hand-off that would have passed the summary's unrecorded
+decisions to the project workspace's harvest (D4). The plan's
 implementation record is the only authority on where each phase stands; this
-line is a summary of it. The file is the plan, the owner decisions (D1–D5)
-and the implementation record; its
-"promote before prune" phase is handed to the project workspace's harvest.
-Phases 1–2 ship in the project workspace's release, 1.21.0 (same release
-policy).
+line is a summary of it. The file is the plan, the owner decisions (D1–D6)
+and the implementation record. Phases 1–2 ship in the project workspace's
+release, 1.21.0 (same release policy); whichever release next ships from
+`master` owes Phase 2's and Phase 3's release-note drafts.
 
 **[Deep-dive remediation](deep-dive-remediation/README.md)** — **complete**.
 Six phases, 24 chunks (1.1–6.5), all landed: direct server-tool callers,

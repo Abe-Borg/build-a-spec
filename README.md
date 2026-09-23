@@ -474,7 +474,7 @@ Part B — rendering the research relevance-first — is not built. It waits on
 that measurement, taken on a real second section of a hyperscale project (see
 `docs/plans/project-workspace/05_RELEVANCE_TRIM.md`).
 
-## Chat history compaction (in progress)
+## Chat history compaction
 
 Every chat turn re-sends the whole conversation, and nothing bounded it: a
 long enough session would eventually exceed the model's 1M-token window,
@@ -485,8 +485,11 @@ conversation rarely between turns, with the original transcript always
 kept and recallable. Phases 1 and 2 ship in v1.21.0. Phase 2's trim is on
 by default since its live check passed on 2026-09-23 (below). Condensing the
 conversation (Phase 3) is on `master` too, and routine condensing is on by
-default since 2026-09-23 (below). An optional trim within a single turn
-(Phase 5) is still to come, so the program is still in progress.
+default since 2026-09-23 (below). That finishes the program's code. On
+2026-09-23 the owner dropped the plan's two remaining pieces: an optional
+trim within a single full-draft turn (Phase 5), and, for now, passing the
+summary's list of unrecorded decisions to the fact harvest. The release
+notes for Phases 2 and 3 wait for the next release.
 
 ### Stale outlines stay out of the conversation (Phase 1)
 

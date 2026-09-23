@@ -817,7 +817,11 @@ backend/
                            which the refusal message and the tool
                            description are built from); _paragraph_label
                            is the ONE label writer — see "The fifth
-                           paragraph level"
+                           paragraph level"; sibling_refs is the ONE ref
+                           rule iter_paragraphs reads (numbered through
+                           labelled_paragraphs; a preserved block's own ref
+                           "1.2 [preserved table after B]" — see "Phase 0's
+                           four leftovers")
   spec_doc/diffing.py      [Batch 5] pure diff_sections(base, cur) -> SectionDiff:
                            uid join (unchanged/changed/inserted/deleted, deleted at
                            base position, moves unmarked), word-level token_runs
@@ -928,7 +932,16 @@ backend/
                            heading / part heading — last emitted, then first in
                            the upload), taking its label kind and separator
                            ("A.<tab>", "1.01", " - "), never its sectPr, w14 ids,
-                           bookmarks or comment anchors (clone hygiene). A
+                           bookmarks, comment anchors or pending revisions
+                           (clone hygiene; _strip_revisions: w:pPrChange, the
+                           mark's ins/del/moveFrom/moveTo/rPrChange, numPr's
+                           ins/numberingChange, the copied run's rPrChange).
+                           A non-spec import's placeholder PART/article
+                           headings are left out while the section has no
+                           number or title (_importer_placeholders, applied
+                           by _plan_for for both renderings; the caller
+                           passes unstructured_import= and the imported
+                           tree). A
                            manual article heading keeps the master's number
                            format (_article_style). _Assembler assigns every
                            unmodelled body child to exactly ONE place: the tail
@@ -1197,7 +1210,9 @@ backend/
                            NORMALIZED export only (single-token lvlTexts —
                            which is what keeps the importer's PART/article
                            numbering grammar from ever matching the app's
-                           own output); never imported by a preserving path
+                           own output); never imported by a preserving path.
+                           A preserved block is left out of the list, at
+                           text_indent_twips(level)
   spec_doc/xml_lexical.py  strict lexical byte indexing for source-preserving
                            XML edits: recomputes byte locality from the
                            immutable source XML per mutation, and a byte
@@ -1420,7 +1435,10 @@ frontend/src/
                            splitStableTail (cheap-markdown prefix/tail split)
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
                            queue as a document-order walk (port of iter_paragraphs);
-                           reviewCounts (outstanding imported/assumed)
+                           reviewCounts (outstanding imported/assumed);
+                           siblingRefs = model.sibling_refs character for
+                           character, pinned by tests/fixtures/
+                           review_queue_refs.json (both suites read it)
   lib/qcReport.ts          pure audit-report helpers: coverage/limitations,
                            safe source links, formatting for identity, lens/seat
                            telemetry, operations/dispositions, usage and cost;
@@ -2046,6 +2064,24 @@ tests/
                            and still sound once folded; and one lint pass per
                            committed version across payload, readiness, turn
                            context and the lint event
+  test_preserved_block_refs.py
+                           after a preserved table the provision the panel
+                           calls B is 1.1.B in the importer's warnings, open
+                           items, lint, Final QC's reviewed_ref, the Word
+                           schedules and the diff; the table's own ref
+  test_nonspec_import_export.py
+                           a memo exports element for element through the
+                           API; the redline on the original shows no
+                           invented heading; the capture threads the flag
+                           and the imported tree; naming the section brings
+                           the headings back; an added or renamed heading is
+                           the user's; the redline inherits the rule
+  fixtures/review_queue_refs.json
+                           the refs contract both iter_paragraphs and the
+                           frontend's siblingRefs are held to
+  frontend/tests/reviewQueue.test.ts
+                           siblingRefs against that fixture, the queue's
+                           order, and no ref shared by two paragraphs
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -14878,6 +14914,184 @@ and the list of what real Word must check first are in the plan's "Phase 2
   3. The Layout entries for `settings.py`, `source_render.py`,
      `revisions.py`, `revision_marks.py` and the redline and judge tests are
      maintained current and were updated in place.
+
+## Phase 0's four leftovers — implemented notes
+
+The four "Found, not done (outside Phase 0)" items in
+`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`, fixed together (owner
+request, 2026-09-23). No route, SSE event, dependency, env knob or
+project-format change, and no VERSION bump or `release_notes.py` entry: the
+owner picks the release, and the draft is in the plan ("Release-note
+drafts"). The contract changes are in `docs/DOCX_FIDELITY.md`; the plan's
+"Phase 0 follow-up — as built" note carries the deviations.
+
+- **Refs counted preserved blocks.** `iter_paragraphs` built each ref from
+  `_paragraph_label(depth, i)` over the RAW sibling index, while the panel,
+  `outline()` and the formatting-preserving export number through
+  `labelled_paragraphs`, where a locked block takes no letter. So after a
+  table, the provision the panel calls "B" was "1.2.C" in the open items,
+  lint, Final QC's `reviewed_ref`, the Word schedules, importer warnings and
+  the diff's refs. `model.sibling_refs` is now the one rule: a provision is
+  numbered through `labelled_paragraphs`, and a preserved block gets a ref
+  of its own — `1.2 [preserved table after B]`, `before A` when no provision
+  precedes it in its list, no position when its list holds none, and a count
+  for a second block of one kind in one spot (`[preserved table 2 after
+  B]`). It always holds `" [preserved "`, which a provision ref (letters and
+  digits after a dot) cannot, so the two never collide. The kind is the
+  lock code with `_` read as a space; `outline()` keeps its own
+  `[preserved <code>]` marker, which is a label, not a ref.
+- **The frontend builds the identical string, and one fixture holds both
+  sides to it.** `reviewQueue.siblingRefs` is a character-for-character
+  port (it used to give a block `1.2.` — the dot, then its empty label).
+  `tests/fixtures/review_queue_refs.json` is the serialized document plus
+  the backend's rows; `test_the_shared_review_queue_fixture_is_what_
+  iter_paragraphs_yields` fails when the backend drifts from it (regenerate
+  with `write_review_queue_fixture()` after a deliberate change) and
+  `frontend/tests/reviewQueue.test.ts` fails when the frontend does. The
+  review queue already agreed for provisions (it reads serialized labels);
+  the fixture is what makes "agrees" a checked claim rather than a reading.
+- **Nothing retained moves.** `finding_id` and `origin_id` hash
+  `element_id` and `reviewed_text`, never `reviewed_ref`; the QC input
+  manifest carries no ref — its document fingerprint is `to_dict()`, whose
+  labels already came from `labelled_paragraphs`, and the source-guard
+  facts are uids and blockers. So retained Final QC results stay current,
+  dismissals carry, and a saved report keeps the ref it was written with.
+  Chat PROJECT CONTEXT renders lint and open items with refs, so those bytes
+  change, but that block is rebuilt every turn and never cached.
+- **The styled export numbered a preserved block.**
+  `docx_export._render_clean_body` called `numbering.apply()` on every
+  paragraph. A locked one now gets no `w:numPr` — Word numbers a list by
+  counting its numbered paragraphs, so the provision after the block
+  follows the one before it — and a left indent at its level's text
+  position (`SectionFormatNumbering.text_indent_twips`, a deviation: the ask
+  said only "without numbering"). A document with no locked block exports
+  byte for byte as before, proven against the previous module on 20
+  sections (18 corpus masters, the showcase, the five-level fixture — the
+  scratch comparison is not committed), and pinned in the suite by a
+  relative test: remove the block's paragraph from the export and every
+  member equals the same document exported without it. The block is
+  `confirmed` there on purpose — an `imported` one adds a schedule row, and
+  the first draft of the test failed on exactly that.
+- **A non-spec import's placeholder headings were exported.** The condition
+  is the panel's `bareImport`: `SessionState.import_is_unstructured()` and a
+  section with no number or title. There `source_render._render_parts`
+  printed the importer's `PART 1 - GENERAL` and synthetic
+  `1.1 IMPORTED CONTENT` — no origin in the upload — so an untouched memo
+  gained two headings and the redline on the original showed them as
+  insertions. `_importer_placeholders(current, baseline, walker)` decides
+  which headings are the importer's: no origin in the upload, the same
+  element present in the imported baseline (ids are never reused, so an
+  added heading is not), title unchanged since the import, and — for a PART
+  heading — every article under it a placeholder too, so an article
+  somebody added is never printed headless (it keeps the number the panel
+  shows, even with the importer's article before it left out). A renamed
+  container is the user's heading. Once the section has a number or a title
+  every heading comes back, exactly as the panel's scaffolding does.
+- **It lives in the plan both renderings read.** `_plan_for` computes the
+  set and hands it to `_render_body` → `_render_parts` → `_render_article`,
+  so the redline on the original inherits it: its clean body is the same
+  plan, Accept All still equals the formatted export and the D-7 self-check
+  still passes (pinned by an API test and a direct one). The renderers take
+  `unstructured_import=` (both) and `baseline=` (the clean one; the redline
+  has its own); both default off, so every existing caller — the structured
+  corpus, the no-op round trip — renders byte for byte as before.
+- **The capture carries the condition; the render never reads the session.**
+  `_ExportInputs.unstructured_import` is read under the guard in
+  `_capture_export_inputs`, and the clean preserved branch captures the
+  imported tree with `_source_baseline` only when the import was
+  unstructured (a detached copy — `from_dict` of the version record). Pinned
+  by a test that records the renderer's kwargs. The section-has-no-header
+  half is read from the captured tree inside the renderer, so it cannot
+  disagree with the tree being rendered.
+- **The Word judge passes the same flag** (`not imported.spec_shape_
+  detected` and the imported tree), so "rendered exactly as the app does"
+  stays true. Every judged corpus master is structured today, so no test
+  can go red on it; it is alignment, stated as such.
+- **`render.placeholders_omitted`** joins the export event's render counts.
+- **A template clone kept its revision records.**
+  `_Assembler.render_inserted` deep-copied the kin and stripped its section
+  break and `w14` ids, not the revision records in its `w:pPr`. The
+  formatted export runs on masters that still carry pending tracked changes
+  (only the redline refuses them), so a new provision could inherit another
+  author's `w:pPrChange` or tracked paragraph mark. `_strip_revisions`
+  (called right after `_strip_identity`) drops `w:pPrChange`, the mark's
+  `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange`, `w:numPr`'s `w:ins`
+  and `w:numberingChange` — and, a deviation, the `w:rPrChange` of the
+  direct runs, because `_write_paragraph_text` copies the first run's
+  `w:rPr` onto the new run and a pending formatting change there is the
+  same defect one level down. The formatting beside the records (the mark's
+  `w:b`) stays.
+- **The clone test runs twice, and why.** Phase 0 deviation 2 still holds:
+  a paragraph with pending revisions is rebuilt by the fallback even when
+  UNTOUCHED, keeping its `w:pPr` and first run's properties and dropping the
+  rest — its bookmark included. Putting the revision records on the
+  existing test's kin therefore broke that test's bookmark assertion for a
+  reason that has nothing to do with the clone. So
+  `test_a_cloned_template_carries_no_break_identity_or_anchors` renders a
+  kin without revisions (every original assertion) and then a kin with every
+  record (the clone carries none; the kin keeps its own history).
+- **Tests**: `tests/test_preserved_block_refs.py` (6 — one real imported
+  master with a table between A and B, asked by every consumer what it calls
+  B and the table), 2 in `tests/test_spec_doc.py` (the contract test
+  extended with a locked block, and the shared fixture),
+  `frontend/tests/reviewQueue.test.ts` (3), 1 in
+  `tests/test_normalized_word_numbering.py`,
+  `tests/test_nonspec_import_export.py` (9), and the extended clone test in
+  `tests/test_preserving_export.py`.
+- **Revert matrix** (each mechanism reverted in place, one at a time, the
+  exact text restored after, `git diff` clean after every row; its own
+  tests run):
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | refs: `iter_paragraphs` back to the raw sibling index | 8 |
+  | refs: a block's ref names no position | 5 |
+  | refs: no count for a second block in one spot | 1 |
+  | refs: no "before" position | 1 |
+  | refs: the lock code's underscore kept | 1 |
+  | frontend `siblingRefs` back to `prefix.label` | 2 |
+  | frontend: the lock code's underscore kept | 2 |
+  | frontend: no count | 2 |
+  | styled export: a block is numbered | 1 |
+  | styled export: no indent for a block | 1 |
+  | rule: no placeholders at all | 4 |
+  | rule: the origin test dropped | 1 |
+  | rule: baseline membership and title dropped (any no-origin heading) | 2 |
+  | rule: the title check dropped | 1 |
+  | rule: a PART keeping its heading for an added article dropped | 2 |
+  | rule: still applied once the section is named | 1 |
+  | plan: the redline not handed the flag | 2 |
+  | plan: the clean render not handed the flag | 4 |
+  | `render.placeholders_omitted` not counted | 2 |
+  | capture: the clean branch reads no flag | 3 |
+  | capture: the redline branch reads no flag | 1 |
+  | capture: the imported tree not captured | 3 |
+  | render: the clean render drops the captured inputs | 3 |
+  | render: the redline drops the captured flag | 1 |
+  | judge: the flag not passed | 0 — alignment only; no judged master is unstructured |
+  | clone: `_strip_revisions` not called | 1 |
+  | clone: each record kept on its own — `w:pPrChange`; the mark's `w:ins`, `w:del`, `w:moveFrom`, `w:moveTo`, `w:rPrChange`; `w:numPr`'s `w:ins`, `w:numberingChange`; the copied run's `w:rPrChange` | 1 each (9 rows) |
+
+- **Found, not done.** The fallback that rebuilds an untouched paragraph
+  with pending revisions (Phase 0 deviation 2) is unchanged. And the
+  normalized export of a preserved block re-imports as an unlabelled
+  paragraph rather than a lettered provision; the normalized export was
+  never a round trip for one (a table is already flattened to ` | ` text
+  there).
+- **Errata** (the notes are append-only, so corrections to earlier sections
+  go here):
+  1. "The formatted export stops losing things" (Phase 0) lists four
+     follow-ups under "Follow-ups found, not done" and says clone hygiene
+     "does NOT strip a template's own revision marks". All four are fixed
+     here; the clone now strips them. Its parenthesis "the frontend review
+     queue reads the serialized labels and already agrees" was right for
+     provisions only — a preserved block's own ref was `1.2.`.
+  2. "Keep the formatting, edit the content" says a locked block takes no
+     label slot in `_paragraph_to_dict`, `outline` and the renderer. So it
+     does now in `iter_paragraphs`, and so in every ref.
+  3. "Non-spec uploads" describes the honest framing as panel, lint and
+     model context only. The formatting-preserving export and the redline on
+     the original now follow it too, under the same condition.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

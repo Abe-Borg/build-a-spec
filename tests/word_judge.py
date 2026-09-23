@@ -386,12 +386,19 @@ def build_judge_cases(group: JudgeGroup, workspace: Path) -> JudgeBatch:
                 date=JUDGE_DATE,
                 stats=stats,
                 native_moves=settings.REDLINE_NATIVE_MOVES,
+                # What the app captures (``import_is_unstructured``): a
+                # non-spec master exports without the importer's headings.
+                unstructured_import=not imported.spec_shape_detected,
             )
         except SourceRedlineError as exc:
             cases.append(RefusedCase(name, exc.reason))
             continue
         clean = render_preserving_docx(
-            source_bytes=upload, format_map=imported.format_map, current=section
+            source_bytes=upload,
+            format_map=imported.format_map,
+            current=section,
+            unstructured_import=not imported.spec_shape_detected,
+            baseline=imported.section,
         )
         cases.append(
             JudgeCase(

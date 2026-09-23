@@ -1,6 +1,9 @@
 """Unit tests for the document model: ids, transactions, versions, items."""
 from __future__ import annotations
 
+import json
+import pathlib
+
 import pytest
 
 from backend.spec_doc import DocumentStore, SpecEditError, open_questions, outline
@@ -569,7 +572,13 @@ def test_iter_paragraphs_document_order_is_the_review_queue_contract():
     """Batch 3, WI2: the review queue (frontend ``buildQueue``) is a straight
     port of ``iter_paragraphs`` document order. This pins that contract —
     parts, then articles, then nested paragraphs depth-first — with the human
-    ``ref`` each entry carries, across mixed provenance statuses."""
+    ``ref`` each entry carries, across mixed provenance statuses.
+
+    A preserved (locked) block takes no letter — the panel's numbering, via
+    ``labelled_paragraphs`` — so the provision after it is still "B", and the
+    block gets a ref of its own that can never be a provision's. The
+    frontend builds the identical strings from the serialized labels; the
+    shared fixture below pins that half."""
     store = _store_with(
         [
             {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
@@ -582,12 +591,18 @@ def test_iter_paragraphs_document_order_is_the_review_queue_contract():
             {
                 "action": "add_paragraph",
                 "target_id": "pt1.a1",
+                "text": "Equipment | Deflection",
+                "status": "imported",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
                 "text": "Assumed provision.",
                 "status": "assumed",
             },
             {
                 "action": "add_paragraph",
-                "target_id": "pt1.a1.p2",
+                "target_id": "pt1.a1.p3",
                 "text": "Nested confirmed subparagraph.",
                 "status": "confirmed",
             },
@@ -600,6 +615,8 @@ def test_iter_paragraphs_document_order_is_the_review_queue_contract():
             },
         ]
     )
+    # The importer is the only thing that makes a block preserved.
+    store.doc.parts[0].articles[0].paragraphs[1].locked = "table"
     rows = [
         (ref, p.uid, p.status)
         for _part, _article, p, _depth, ref in iter_paragraphs(store.doc)
@@ -607,16 +624,21 @@ def test_iter_paragraphs_document_order_is_the_review_queue_contract():
     # Document order, with the article number + stripped paragraph labels.
     assert [ref for ref, _uid, _status in rows] == [
         "1.1.A",
+        "1.1 [preserved table after A]",
         "1.1.B",
         "1.1.B.1",
         "2.1.A",
     ]
     assert [status for _ref, _uid, status in rows] == [
         "imported",
+        "imported",
         "assumed",
         "confirmed",
         "assumed",
     ]
+    # The ref names the provision the panel shows: its serialized label.
+    labels = [p["label"] for p in store.snapshot()["parts"][0]["articles"][0]["paragraphs"]]
+    assert labels == ["A.", "", "B."]
 
     # The frontend "all" queue derives from this: reviewable statuses only
     # (imported / assumed), imported group first, each in document order.
@@ -626,7 +648,137 @@ def test_iter_paragraphs_document_order_is_the_review_queue_contract():
     all_order = [r for r in reviewable if r[1] == "imported"] + [
         r for r in reviewable if r[1] == "assumed"
     ]
-    assert all_order == [("1.1.A", "imported"), ("1.1.B", "assumed"), ("2.1.A", "assumed")]
+    assert all_order == [
+        ("1.1.A", "imported"),
+        ("1.1 [preserved table after A]", "imported"),
+        ("1.1.B", "assumed"),
+        ("2.1.A", "assumed"),
+    ]
+
+
+#: Read by ``frontend/tests/reviewQueue.test.ts`` too: the one fixture both
+#: languages derive their refs from, so a rule changed on one side alone
+#: fails a suite. Regenerate after a deliberate change with
+#: ``python -c "from tests.test_spec_doc import write_review_queue_fixture;
+#: write_review_queue_fixture()"`` from the repository root.
+REVIEW_QUEUE_FIXTURE = (
+    pathlib.Path(__file__).parent / "fixtures" / "review_queue_refs.json"
+)
+
+
+def _review_queue_contract() -> dict:
+    """Every place a preserved block can sit: before the first provision,
+    after one, twice after one (the count), a different kind in the same
+    spot, nested under a provision, and alone in an article."""
+    store = _store_with(
+        [
+            {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            *[
+                {
+                    "action": "add_paragraph",
+                    "target_id": "pt1.a1",
+                    "text": text,
+                    "status": status,
+                }
+                for text, status in (
+                    ("Leading table.", "imported"),  # p1
+                    ("Provision A.", "imported"),  # p2
+                    ("First table after A.", "imported"),  # p3
+                    ("Second table after A.", "assumed"),  # p4
+                    ("Picture after A.", "imported"),  # p5
+                    ("Provision B.", "assumed"),  # p6
+                    ("Provision C.", "confirmed"),  # p7
+                )
+            ],
+            *[
+                {
+                    "action": "add_paragraph",
+                    "target_id": "pt1.a1.p6",
+                    "text": text,
+                    "status": status,
+                }
+                for text, status in (
+                    ("Sub 1.", "imported"),  # p6.p1
+                    ("Embedded object after 1.", "imported"),  # p6.p2
+                    ("Sub 2.", "assumed"),  # p6.p3
+                )
+            ],
+            {"action": "add_article", "target_id": "pt1", "text": "SCHEDULE"},
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a2",
+                "text": "The schedule table.",
+                "status": "imported",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a2",
+                "text": "A content control.",
+                "status": "assumed",
+            },
+            {"action": "add_article", "target_id": "pt2", "text": "PRODUCTS"},
+            {
+                "action": "add_paragraph",
+                "target_id": "pt2.a1",
+                "text": "Plain provision.",
+                "status": "assumed",
+            },
+        ]
+    )
+    locks = {
+        "pt1.a1.p1": "table",
+        "pt1.a1.p3": "table",
+        "pt1.a1.p4": "table",
+        "pt1.a1.p5": "image",
+        "pt1.a1.p6.p2": "embedded_object",
+        "pt1.a2.p1": "table",
+        "pt1.a2.p2": "content_control",
+    }
+    for _part, _article, paragraph, _depth, _ref in iter_paragraphs(store.doc):
+        paragraph.locked = locks.get(paragraph.uid, "")
+    return {
+        "doc": store.doc.to_dict(),
+        "rows": [
+            [ref, p.uid, p.status]
+            for _part, _article, p, _depth, ref in iter_paragraphs(store.doc)
+        ],
+    }
+
+
+def write_review_queue_fixture() -> None:
+    REVIEW_QUEUE_FIXTURE.write_text(
+        json.dumps(_review_queue_contract(), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_the_shared_review_queue_fixture_is_what_iter_paragraphs_yields():
+    """The fixture the frontend's ``siblingRefs`` is checked against is the
+    backend's own answer — every position a preserved block can take, each
+    ref distinct from every provision's."""
+    contract = _review_queue_contract()
+    assert [row[0] for row in contract["rows"]] == [
+        "1.1 [preserved table before A]",
+        "1.1.A",
+        "1.1 [preserved table after A]",
+        "1.1 [preserved table 2 after A]",
+        "1.1 [preserved image after A]",
+        "1.1.B",
+        "1.1.B.1",
+        "1.1.B [preserved embedded object after 1]",
+        "1.1.B.2",
+        "1.1.C",
+        "1.2 [preserved table]",
+        "1.2 [preserved content control]",
+        "2.1.A",
+    ]
+    refs = [row[0] for row in contract["rows"]]
+    assert len(set(refs)) == len(refs)
+    stored = json.loads(REVIEW_QUEUE_FIXTURE.read_text(encoding="utf-8"))
+    assert stored == contract, (
+        "tests/fixtures/review_queue_refs.json is stale; regenerate it with "
+        "write_review_queue_fixture() after a deliberate change"
+    )
 
 
 def test_outline_lists_ids_and_statuses():

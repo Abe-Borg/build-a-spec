@@ -1027,6 +1027,13 @@ class _ExportInputs:
     #: The upload's own name, captured with its bytes: the redline on the
     #: original is named after it, so replacing the master is a rename.
     source_filename: str = ""
+    #: ``SessionState.import_is_unstructured()`` at capture: the import found
+    #: no spec structure, so while the section has no number or title the
+    #: appearance-preserving renders leave out the PART and article headings
+    #: the importer supplied (``source_render._importer_placeholders``, which
+    #: also needs the imported tree — ``baseline`` for the clean render,
+    #: ``redline_base`` for the redline on the original).
+    unstructured_import: bool = False
 
 
 # The QC apply machinery moved to ``backend/qc/apply.py`` so the
@@ -5009,6 +5016,7 @@ def create_app(
                 source_bytes=session.source_docx_bytes,
                 format_map=format_map,
                 source_filename=session.source_docx_filename or "",
+                unstructured_import=session.import_is_unstructured(),
             )
         if selected_mode == "preserved":
             if not preserving_available:
@@ -5022,11 +5030,18 @@ def create_app(
                     },
                     status_code=409,
                 )
+            unstructured_import = session.import_is_unstructured()
             return _ExportInputs(
                 selected_mode="preserved",
                 current=current,
                 source_bytes=session.source_docx_bytes,
                 format_map=format_map,
+                unstructured_import=unstructured_import,
+                # A detached copy, read only to recognize the importer's
+                # placeholder headings — so only when there can be any.
+                baseline=(
+                    _source_baseline(session) if unstructured_import else None
+                ),
             )
         if selected_mode == "source":
             if getattr(store, "source_detached", False):
@@ -5120,6 +5135,7 @@ def create_app(
                 stats=stats,
                 # Read per request, never bound at import (Phase 2 PR B).
                 native_moves=settings.REDLINE_NATIVE_MOVES,
+                unstructured_import=inputs.unstructured_import,
             )
         except SourceRedlineError as exc:
             if refusal is not None:
@@ -5172,6 +5188,8 @@ def create_app(
                     format_map=inputs.format_map,
                     current=inputs.current,
                     stats=stats,
+                    unstructured_import=inputs.unstructured_import,
+                    baseline=inputs.baseline,
                 )
             except SourceRenderError as exc:
                 return JSONResponse(

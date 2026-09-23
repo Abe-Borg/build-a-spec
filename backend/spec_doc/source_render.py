@@ -234,6 +234,50 @@ def _strip_identity(element) -> None:
             del element.attrib[attribute]
 
 
+#: Revision records a template clone must never inherit. The formatted
+#: export runs on masters that still carry pending tracked changes (only the
+#: redline refuses them), and a new provision cloned from a kin with another
+#: author's pending change would show that change as its own — in Word, a
+#: change nobody made. Paragraph level: the recorded old properties
+#: (``w:pPrChange``), the numbering's (``w:numberingChange``, ``w:ins``), and
+#: the paragraph mark's own tracking (``w:ins``/``w:del``/``w:moveFrom``/
+#: ``w:moveTo``) and recorded old formatting (``w:rPrChange``).
+_W_PPR_CHANGE = qn("w:pPrChange")
+_W_RPR_CHANGE = qn("w:rPrChange")
+_MARK_REVISIONS = frozenset(
+    qn(f"w:{tag}") for tag in ("ins", "del", "moveFrom", "moveTo", "rPrChange")
+)
+_NUMBERING_REVISIONS = frozenset(
+    qn(f"w:{tag}") for tag in ("ins", "numberingChange")
+)
+
+
+def _strip_revisions(element) -> None:
+    """Drop every revision record from a clone's paragraph properties, and
+    the recorded old formatting from the runs ``_write_paragraph_text``
+    copies its run properties from — the kin's formatting, never its
+    history."""
+    properties = element.find(_W_PPR)
+    if properties is not None:
+        for change in properties.findall(_W_PPR_CHANGE):
+            properties.remove(change)
+        mark = properties.find(_W_RPR)
+        if mark is not None:
+            for child in list(mark):
+                if child.tag in _MARK_REVISIONS:
+                    mark.remove(child)
+        numbering = properties.find(_W_NUMPR)
+        if numbering is not None:
+            for child in list(numbering):
+                if child.tag in _NUMBERING_REVISIONS:
+                    numbering.remove(child)
+    for run in element.iterchildren(_W_R):
+        run_properties = run.find(_W_RPR)
+        if run_properties is not None:
+            for change in run_properties.findall(_W_RPR_CHANGE):
+                run_properties.remove(change)
+
+
 def _numbering_properties(element):
     """``element``'s own ``w:numPr``, created at its schema position."""
     properties = element.find(_W_PPR)
@@ -555,10 +599,71 @@ class _Walker:
         )
 
 
+def _importer_placeholders(
+    current: SpecSection, baseline: SpecSection | None, walker: _Walker
+) -> frozenset[str]:
+    """The PART and article headings an unstructured import's IMPORTER
+    supplied, while the section is still a non-spec document.
+
+    Call it only for an import that found no spec structure
+    (``SessionState.import_is_unstructured()``). The importer wraps such a
+    file's content in "PART 1 - GENERAL" and a synthetic "IMPORTED CONTENT"
+    article so the SectionFormat tree has somewhere to put it; the panel
+    shows them as editor scaffolding under a note that the file had no spec
+    structure. They are not the file's content, so exporting them would add
+    headings the upload never had — and the redline on the original would
+    show them as insertions nobody made.
+
+    A heading is the importer's when all of these hold:
+
+    - it has no origin in the upload (the format map anchors no element of
+      the file to it — a heading the file really had always has one);
+    - the imported baseline holds the same element (ids are never reused,
+      so a heading the user or the model added is not there);
+    - its title is unchanged since the import (renaming the container makes
+      it the user's heading);
+    - for a PART heading, every article under it is itself a placeholder: a
+      part that holds an article somebody added keeps its heading, so that
+      article is never printed without its part.
+
+    None of it applies once the section has a number or a title — the same
+    moment the panel brings back the SECTION header and END OF SECTION, since
+    the file is then being made into a spec: every heading is exported again,
+    and the redline shows them as insertions, which by then they are.
+    """
+    if baseline is None or current.number or current.title:
+        return frozenset()
+    imported_titles: dict[str, str] = {}
+    for part in baseline.parts:
+        imported_titles[part.uid] = part.title
+        for article in part.articles:
+            imported_titles[article.uid] = article.title
+
+    def supplied(uid: str, title: str) -> bool:
+        return (
+            walker.origin(uid) == NO_ORIGIN
+            and uid in imported_titles
+            and imported_titles[uid] == title
+        )
+
+    found: set[str] = set()
+    for part in current.parts:
+        articles = [a.uid for a in part.articles if supplied(a.uid, a.title)]
+        found.update(articles)
+        if (
+            part.articles
+            and len(articles) == len(part.articles)
+            and supplied(part.uid, part.title)
+        ):
+            found.add(part.uid)
+    return frozenset(found)
+
+
 def _render_body(
     section: SpecSection,
     walker: _Walker,
     format_map: SourceFormatMap,
+    placeholders: frozenset[str] = frozenset(),
 ) -> None:
     if section.number or section.title:
         # While the section identity is exactly what was imported, reproduce
@@ -574,7 +679,7 @@ def _render_body(
         )
         if unchanged_identity and walker.add_verbatim("sec", "section"):
             walker.add_verbatim(SECTION_TITLE_UID, "section")
-            return _render_parts(section, walker)
+            return _render_parts(section, walker, placeholders)
         if format_map.header_source in (
             HEADER_SOURCE_FRONT_MATTER,
             HEADER_SOURCE_CHROME,
@@ -584,7 +689,7 @@ def _render_body(
             # page header/footer — so there is no header element to rewrite
             # and inventing one would print the section twice. A changed
             # identity is reported by the stale-identifier lint instead.
-            return _render_parts(section, walker)
+            return _render_parts(section, walker, placeholders)
         header = " ".join(part for part in ("SECTION", section.number) if part)
         if walker.origin(SECTION_TITLE_UID) != NO_ORIGIN:
             walker.add_text("sec", "section", header.strip())
@@ -592,15 +697,28 @@ def _render_body(
         else:
             combined = f"{header} {section.title}".strip() if section.title else header
             walker.add_text("sec", "section", combined.strip())
-    _render_parts(section, walker)
+    _render_parts(section, walker, placeholders)
 
 
-def _render_parts(section: SpecSection, walker: _Walker) -> None:
+def _render_parts(
+    section: SpecSection,
+    walker: _Walker,
+    placeholders: frozenset[str] = frozenset(),
+) -> None:
     for part in section.parts:
         if not part.articles and walker.origin(part.uid) == NO_ORIGIN:
             # SectionFormat always has three parts; the master may not have
             # written all three. Emitting a heading the upload never carried
             # would ADD content to the user's file.
+            continue
+        if part.uid in placeholders:
+            # The importer's scaffolding around a non-spec file
+            # (``_importer_placeholders``): its articles' content is
+            # exported, the heading is not.
+            for article_index, article in enumerate(part.articles):
+                _render_article(
+                    part.number, article_index, article, walker, placeholders
+                )
             continue
         # ``Part.title`` already carries the whole heading line
         # ("PART 1 - GENERAL"), so an auto-numbered master is the only case
@@ -613,7 +731,9 @@ def _render_parts(section: SpecSection, walker: _Walker) -> None:
         else:
             walker.add_text(part.uid, "part", part.title)
         for article_index, article in enumerate(part.articles):
-            _render_article(part.number, article_index, article, walker)
+            _render_article(
+                part.number, article_index, article, walker, placeholders
+            )
 
 
 def _part_title_only(part) -> str:
@@ -623,8 +743,17 @@ def _part_title_only(part) -> str:
 
 
 def _render_article(
-    part_number: int, index: int, article: Article, walker: _Walker
+    part_number: int,
+    index: int,
+    article: Article,
+    walker: _Walker,
+    placeholders: frozenset[str] = frozenset(),
 ) -> None:
+    if article.uid in placeholders:
+        # The synthetic container around a non-spec file's content.
+        for paragraph, label_index in labelled_paragraphs(article.paragraphs):
+            _render_paragraph(paragraph, 0, label_index, walker)
+        return
     label_kind = walker.label_kind(article.uid)
     if label_kind:
         style = walker.article_style_of(article.uid)
@@ -1211,9 +1340,11 @@ class _Assembler:
             element = _blank_template(False)
         else:
             element = copy.deepcopy(self._children[record.template])
-            # Clone hygiene: the kin's formatting, never its identity.
+            # Clone hygiene: the kin's formatting, never its identity or
+            # its pending revisions.
             _strip_break(element)
             _strip_identity(element)
+            _strip_revisions(element)
             if record.level is not None:
                 _set_numbering_level(element, *record.level)
         _write_paragraph_text(element, record.item.text)
@@ -1321,16 +1452,33 @@ def _serialize(loaded: _LoadedBody, elements: list) -> bytes:
     )
 
 
-def _plan_for(loaded: _LoadedBody, format_map: SourceFormatMap, current: SpecSection):
+def _plan_for(
+    loaded: _LoadedBody,
+    format_map: SourceFormatMap,
+    current: SpecSection,
+    *,
+    unstructured_import: bool = False,
+    baseline: SpecSection | None = None,
+):
+    """The one plan both renderings read — so the redline on the original
+    inherits every decision the formatted export makes, the placeholder
+    headings of a non-spec import included."""
     walker = _Walker(loaded.content, format_map)
-    _render_body(current, walker, format_map)
-    return _Assembler(
+    placeholders = (
+        _importer_placeholders(current, baseline, walker)
+        if unstructured_import
+        else frozenset()
+    )
+    _render_body(current, walker, format_map, placeholders)
+    assembler = _Assembler(
         loaded.content,
         format_map,
         walker,
         current,
         _NumberingTables(loaded.source_bytes),
     )
+    assembler.stats["placeholders_omitted"] = len(placeholders)
+    return assembler
 
 
 def render_preserving_docx(
@@ -1339,6 +1487,8 @@ def render_preserving_docx(
     format_map: SourceFormatMap,
     current: SpecSection,
     stats: dict | None = None,
+    unstructured_import: bool = False,
+    baseline: SpecSection | None = None,
 ) -> bytes:
     """Return the upload with a rebuilt body carrying ``current``.
 
@@ -1346,10 +1496,24 @@ def render_preserving_docx(
     diagnostics: elements cloned, spliced, rebuilt by the fallback (by
     reason), inserted and preserved; empty paragraphs left holding a
     displaced provision's section break (``break_leftovers``); stale
-    "(Not used.)" lines dropped. Counts only — never provision text.
+    "(Not used.)" lines dropped; importer placeholder headings left out
+    (``placeholders_omitted``). Counts only — never provision text.
+
+    ``unstructured_import`` says the import found no spec structure
+    (``SessionState.import_is_unstructured()``), and ``baseline`` is the
+    imported tree. Together, while ``current`` has no section number or
+    title, they leave out the headings the importer supplied
+    (``_importer_placeholders``). Both are captured with the rest of the
+    export's inputs; the render never reads the live session.
     """
     loaded = _load_body(source_bytes, format_map)
-    assembler = _plan_for(loaded, format_map, current)
+    assembler = _plan_for(
+        loaded,
+        format_map,
+        current,
+        unstructured_import=unstructured_import,
+        baseline=baseline,
+    )
     rendered = assembler.assemble()
     if stats is not None:
         stats.update(assembler.stats)
@@ -2142,6 +2306,7 @@ def render_preserving_redline(
     date: str,
     stats: dict | None = None,
     native_moves: bool = False,
+    unstructured_import: bool = False,
 ) -> bytes:
     """The upload with every change since ``baseline`` as a Word tracked
     change: Accept All gives :func:`render_preserving_docx`'s output and
@@ -2159,6 +2324,11 @@ def render_preserving_redline(
     Native moves never add a refusal: a native render that fails any check
     is rendered again without them (``redline.moves_fallback["self_check"]``
     counts the moves that lost their marks) before anything is refused.
+
+    ``unstructured_import`` is :func:`render_preserving_docx`'s: the clean
+    export this redline's Accept All must equal is planned by the same
+    ``_plan_for``, so a non-spec import's placeholder headings are left out
+    of both, and are never shown as insertions.
     """
     from .diffing import diff_sections
     from .revision_marks import RevisionMarks, highest_annotation_id
@@ -2176,7 +2346,13 @@ def render_preserving_redline(
             if pending == PENDING_REVISIONS
             else REDLINE_REVISION_SCAN
         )
-    assembler = _plan_for(loaded, format_map, current)
+    assembler = _plan_for(
+        loaded,
+        format_map,
+        current,
+        unstructured_import=unstructured_import,
+        baseline=baseline,
+    )
     records, removed = assembler.plan()
     clean = [
         element

@@ -88,7 +88,14 @@ package part. Inside the body:
   or typed) and separator (a typed letter's tab, an article number's
   `1.01` width or ` - ` dash). It never copies the kin's identity (`w14:paraId`
   / `w14:textId`, which Word expects to be unique), bookmarks, comment
-  anchors or section break. When the kin sits at ANOTHER depth — the first
+  anchors or section break — nor its pending revisions: the formatted export
+  runs on masters that still carry tracked changes (only the redline refuses
+  them), and another author's change on the kin would show on the new
+  provision as a change nobody made. So the clone drops `w:pPrChange`; the
+  paragraph mark's `w:ins`, `w:del`, `w:moveFrom`, `w:moveTo` and
+  `w:rPrChange` (in `w:pPr/w:rPr`); `w:numPr`'s `w:numberingChange` and
+  `w:ins`; and the `w:rPrChange` of the run its formatting is copied from. It
+  keeps the formatting those records sit beside. When the kin sits at ANOTHER depth — the first
   sub-provision anywhere under an "A." has no kin at its own depth — a
   Word-numbered clone takes its own level: the kin's `w:ilvl` offset by the
   depth difference (the importer reads `ilvl` relative to the article's
@@ -142,6 +149,31 @@ and no edit loses or duplicates one:
   element that was above it. Breaks never cross each other, so sections keep
   their order. A section whose content was all deleted keeps its break (and
   so an empty page); removing it is a Word edit.
+
+**A non-spec import exports as the file it was.** An import that found no
+spec structure (a memo: no SECTION line, PART heading or numbered article)
+is still held as a SectionFormat tree, so the importer wraps its content in
+`PART 1 - GENERAL` and a synthetic `1.1 IMPORTED CONTENT` article. The panel
+shows them as editor scaffolding under a note that the file had no spec
+structure; they are not the file's content, so while the section has no
+number or title the export leaves them out, and an untouched memo exports
+element for element as its upload. A heading counts as the importer's when
+it has no origin in the upload, the imported baseline holds the same element
+(ids are never reused, so a heading added since is not there) and its title
+is unchanged; a PART heading also needs every article under it to be the
+importer's, so an article somebody added is never printed without its part
+(it keeps the number the panel shows, even when the importer's article before
+it is left out). A renamed container is the user's heading and is exported.
+Once the section has a number or a title — the same moment the panel brings
+back the SECTION header and END OF SECTION — every heading is exported again:
+the file is then being made into a spec. The rule is decided once, in the
+plan both renderings read (`source_render._importer_placeholders`), from the
+import's verdict and the imported tree captured with the export's other
+inputs; so the redline on the original never shows the placeholders as
+insertions, and Accept All still equals this export. A structured import
+never takes this path: its synthetic `IMPORTED CONTENT` article (content
+before its first article) is exported as before. The `export` event counts
+the headings left out (`render.placeholders_omitted`).
 
 **Article numbers keep the master's format.** A heading typed `1.01 SUMMARY`
 or `1.2 - SUBMITTALS` is reproduced in that form (width, trailing dot, dash
@@ -647,7 +679,10 @@ the way the panel numbers provisions (`model.labelled_paragraphs`), so a
 preserved block takes no letter and shifts no sibling's. Accept-All is
 text-faithful to the current semantic document, and Reject-All is text-faithful
 to the selected semantic baseline. Clean normalized exports, in contrast, use
-genuine Word numbering definitions and `w:numPr` bindings.
+genuine Word numbering definitions and `w:numPr` bindings — every provision
+but a preserved block, which is left out of the list (no `w:numPr`, at its
+level's text indent), so Word numbers the provision after it from the one
+before it, as the panel does.
 
 `pass_through_only` is a document state, not a sixth export format. In that
 state exact-original download and exact source no-op remain available, while

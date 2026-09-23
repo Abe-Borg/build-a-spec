@@ -147,6 +147,10 @@ name a section your memo does not have.
   gone. Everything else still applies — a stale edition citation is worth
   flagging in any document. Your original file is retained exactly and
   downloads unchanged, as always.
+- **The formatted export agrees.** *Export Word (keeps your formatting)*
+  and the redline on your original leave out the placeholder PART and
+  article headings too (Phase 0 follow-up, in "Redline on your original"
+  below), so an untouched memo exports exactly as it was uploaded.
 - **It is a view, not a decision.** The moment a section number and title
   exist — you set them, or you ask the assistant to turn the content into a
   spec section — the normal spec presentation comes back. Nothing is
@@ -642,7 +646,8 @@ built too: its backend is in v1.21.0, and its Export-menu item and *Open
 redline in Word* are on `master`, with no release entry yet — which release
 announces the redline is the owner's pick. So are fixes for the two losses
 Phase 1 recorded in the formatted export (links, and the level of a new
-sub-provision — below). Phase 2 landed as two pull requests: first real
+sub-provision — below), and for the four things Phase 0 left behind (the
+Phase 0 follow-up, below). Phase 2 landed as two pull requests: first real
 Microsoft Word as the redline's judge (PR #197, below), then Word's own "Moved"
 marks (below) — built before anyone had run that judge on Windows, a gate the
 owner waived, so a switch turns them off. The program is still in progress
@@ -698,6 +703,37 @@ provisions" below.) Each export's diagnostics event (Settings → Developer
 tools) records the mode that ran and counts what the export did — provisions
 cloned, spliced, rebuilt by reason, added, preserved, and new provisions
 given a numbering level of their own — never their text.
+
+### Four things Phase 0 left behind, fixed (Phase 0 follow-up)
+
+On `master`, with no release entry yet (its draft is in the plan).
+
+- **Every list names a provision the way the panel does.** A preserved
+  table, picture or other block takes no letter in the panel, but the open
+  items, the Issues list, Final QC's findings, the Word export's schedules,
+  the import notes and the compare view used to count it — so after a
+  table, the provision the panel calls "B" was "1.2.C" everywhere else.
+  They all say "1.2.B" now, and the block itself is named for what it is
+  and where it sits: "1.2 [preserved table after B]". Final QC reports
+  already saved keep the names they were written with; nothing about a
+  saved review or a dismissal changes.
+- ***Export as Build-a-Spec styled Word* no longer numbers a preserved
+  block.** Word gave a table a letter and moved every provision after it
+  down one; the block now sits among the provisions without a number, and
+  the provision after it follows the one before it.
+- **A non-spec file exports as the file it was.** A memo imported without
+  any spec structure is kept under "PART 1 - GENERAL" and "1.1 IMPORTED
+  CONTENT" in the panel so it has somewhere to live; *Export Word (keeps
+  your formatting)* used to print those headings into your file, and the
+  redline on your original showed them as changes. Until you give the
+  section a number or a title they are left out of both. A heading you add
+  or rename is yours and is exported; once the section is named, the
+  headings come back, as they do in the panel.
+- **A new provision never inherits someone else's tracked change.** In a
+  master that still carries pending tracked changes, a provision you add is
+  cloned from a neighbour's formatting — and used to bring along that
+  neighbour's pending formatting change or tracked paragraph mark, which
+  Word then showed as a change nobody made. It brings the formatting only.
 
 ### The redline itself (Phase 1)
 

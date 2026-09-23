@@ -698,6 +698,28 @@ def test_word_and_the_oracle_resolve_a_move_sample_alike(tmp_path):
     assert places["after_word_reject"] == []
 
 
+@pytest.mark.parametrize(
+    ("fake", "message"),
+    [
+        (_fake_word(authors=("Someone Else",)), "Word read the sample's authors as"),
+        (
+            _fake_word(authors=(judge.TRACKED_MOVE_AUTHOR,), left_behind=1),
+            "1 tracked change(s) left after 'accept'",
+        ),
+        (
+            _fake_word(authors=(judge.TRACKED_MOVE_AUTHOR,), fail="sample.docx"),
+            "Word could not handle accept",
+        ),
+    ],
+    ids=["another-author", "changes-left", "unreadable"],
+)
+def test_the_sample_is_judged_for_what_word_read_and_left(tmp_path, fake, message):
+    report = judge.judge_tracked_move_sample(
+        _word_shaped_move_sample(), tmp_path, resolve=fake
+    )
+    assert any(message in problem for problem in report["problems"]), report["problems"]
+
+
 def test_a_word_that_resolves_moves_its_own_way_is_caught(tmp_path):
     report = judge.judge_tracked_move_sample(
         _word_shaped_move_sample(),

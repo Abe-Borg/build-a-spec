@@ -301,10 +301,14 @@ updating that ground rule in the same change.
   text. The trim now removes the citations into a page it trims and writes
   each quoted passage into the page's note, deduped, in quoting order,
   within 4,000 characters per page and with a disclosed count of what did
-  not fit, never growing the page. A citation that also fits a document
-  the trim keeps is left alone. A trimmed page is recognized by the note's
-  prefix, because a note with quotes is longer than a bare one. The canary
-  sends the new shape and refuses to send the old one.
+  not fit, never growing the page. The passage goes to the page the
+  citation names (its index, read against the request it was written in,
+  so a commit passes how many documents its view sent ahead of the turn),
+  because a page fetched twice or a mirror can hold the same passage
+  (Codex, PR #192). A citation that also fits a document the trim keeps is
+  left alone. A trimmed page is recognized by the note's prefix, because a
+  note with quotes is longer than a bare one. The canary sends the new
+  shape and refuses to send the old one.
 - Tests: `tests/test_fetched_page_elision.py` (6) and
   `tests/test_fetch_elision_canary.py` (6). Each mechanism was reverted in
   place to prove it load-bearing: the commit wiring → 4 red, the load wiring

@@ -1819,8 +1819,10 @@ tests/
                            documents only, prefix stability, an ordinary
                            request untouched, a PDF note, the trim's quote
                            folding (dedupe, budget, never growing a page, a
-                           kept document), and end to end through the chat
-                           and the summary call (byte-identical prefix)
+                           kept document, the page the citation names over
+                           a mirror, the commit's document offset), and end
+                           to end through the chat and the summary call
+                           (byte-identical prefix)
   test_fetch_elision_canary.py
                            [compaction Phase 2] the live canary without a
                            network: nothing sent without --run, the committed
@@ -13035,6 +13037,18 @@ dependency or env knob, changes no project format, and bumps no version.
     to hold its quote gets the bare note.
   - A citation that also fits a document the trim keeps is left alone; the
     request repair re-points it.
+  - The passage goes to the page the citation NAMES, not merely the nearest
+    page it fits (Codex, PR #192). Two pages can hold the same passage
+    under the same title: a page fetched twice, or a mirror. Only the index
+    tells them apart, and it is counted over the request the reply was
+    written in. A committed turn is the tail of that request, so the
+    commit passes `document_offset`: the number of documents the turn's
+    view sent ahead of it. A condensed view is not the whole history, and
+    counting the whole history or nothing both file the quote under the
+    wrong mirror (both revert-proven). An index that lands on no page the
+    citation fits falls back to the nearest page it does fit. Project load
+    passes 0, which is right for citations written against the whole
+    history.
   - The Phase 2 design expected the reply's citations to carry the quote on
     later turns. But the API does not bill `cited_text` as input when it is
     passed back, which suggests it is not re-sent as text. With the page
@@ -13052,10 +13066,10 @@ dependency or env knob, changes no project format, and bumps no version.
   on the way out, so saved files keep them but no request carries them.
   Folding a PDF's quotes into its note is left for the next change to that
   ported module.
-- **Tests.** `tests/test_citation_repair.py` has 18 tests, and
+- **Tests.** `tests/test_citation_repair.py` has 21 tests, and
   `test_fetch_elision_canary.py` gains 1.
   `test_fetched_page_elision.py` was updated on purpose, because a saved
-  turn no longer keeps the citation. Revert matrix: nineteen mechanisms
+  turn no longer keeps the citation. Revert matrix: twenty-two mechanisms
   were reverted in place, and each turned its own tests red:
 
   | Mechanism reverted | Tests red |
@@ -13079,6 +13093,9 @@ dependency or env knob, changes no project format, and bumps no version.
   | dedupe | 1 |
   | the note staying shorter than the page | 1 |
   | the canary's fold guard | 1 |
+  | the page the citation names over the nearest match | 3 |
+  | the commit counting no documents ahead of the turn | 1 |
+  | the commit counting the whole history's documents | 1 |
 
   The canary's own repair call turned 0 tests red, as expected. The shape
   the canary sends needs no repair; the call is there so the canary sends

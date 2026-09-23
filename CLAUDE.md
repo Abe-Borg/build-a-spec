@@ -11,9 +11,14 @@ file is the working reference for AI-assisted development sessions.
 - Tests are hermetic: no network, no real API key. `tests/conftest.py` injects
   a placeholder `ANTHROPIC_API_KEY`; anything touching the API monkeypatches
   `backend.llm.conversation.get_client` with a fake streaming client.
-  `tools/qc_verifier_canary.py --run` is the sole explicit paid exception: one
-  low-token QC verifier request for provider-side strict-schema acceptance,
-  never a full Final QC run. Without `--run` it performs no request.
+  Two canaries are the only explicit paid exceptions, and each is a
+  single low-token request. `tools/qc_verifier_canary.py --run` checks that
+  the provider accepts the strict QC verifier schema; it never runs a full
+  Final QC. `tools/fetch_elision_canary.py --run` checks that the provider
+  accepts a saved chat history whose fetched page text was elided while a
+  reply still cites it (compaction plan Phase 2). Its optional `--control`
+  run is one more request, made only on demand. Without `--run`, neither
+  canary sends anything.
 - Reused Spec Critic code is **copied in and adapted**, never imported across
   repos. When porting a file, keep its design and docstring posture, update
   identity strings (BuildASpec / BUILD_A_SPEC_*), and note the provenance in
@@ -1077,12 +1082,17 @@ backend/
                            (conversation, resend_sanitizer, project load) and
                            a private helper in conversation.py could not be
                            reached from resend_sanitizer without a cycle
-  llm/history_hygiene.py   [compaction Phase 1] keeps stale document outlines
-                           out of COMMITTED history (elide_stale_outlines,
-                           COW, same list object when nothing changed) —
-                           applied by _committed_messages and by project
-                           load; history_composition = sizes by category,
-                           never text (Developer tools, the support bundle,
+  llm/history_hygiene.py   [compaction Phases 1–2] keeps stale document
+                           outlines (elide_stale_outlines) and the text of
+                           fetched web pages (elide_fetched_page_text: the
+                           URL, title, retrieval time and document block
+                           stay; a fetched PDF keeps its own note) out of
+                           COMMITTED history — COW, same list object when
+                           nothing changed, applied by _committed_messages
+                           and by project load; history_composition = sizes
+                           by category plus the stale_outlines /
+                           fetched_page_texts canaries, never text
+                           (Developer tools, the support bundle,
                            tools/chat_history_profile.py). Leaf module: the
                            server_tool_pairing precedent (project.py needs
                            it and cannot import the engine)
@@ -1654,6 +1664,21 @@ tests/
                            and a monotonic sequence; requests carry a
                            correlation id, outcome code and workspace
                            generation before/after
+  test_history_hygiene.py  [compaction Phase 1] the outline mid-turn and the
+                           note after commit, a rejected batch, an older
+                           project trimmed on open, COW/idempotence, the
+                           composition partition, diagnostics, the profiler
+  test_fetched_page_elision.py
+                           [compaction Phase 2] the page mid-turn and the
+                           note after commit (URL, title, citation kept), a
+                           fetched PDF keeping its own note, an older project
+                           trimmed on open, COW/idempotence/scoping, the
+                           composition canary, the profiler
+  test_fetch_elision_canary.py
+                           [compaction Phase 2] the live canary without a
+                           network: nothing sent without --run, the committed
+                           request shape, the unelided-page refusal, pass and
+                           400 reporting
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -11876,6 +11901,107 @@ additive `.baspec` key.
   keeping it, a merged edit carrying it, the binding's reply identity, the
   `harvestable` flag) and two frontend ones (the panel rendering on the
   hint, `canHarvest` counting replies).
+
+## Fetched page text stays out of saved history — implemented notes (compaction Phase 2)
+
+Phase 2 of `docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`, built on owner
+decision D2 (Abraham, 2026-09-22: "yes, drop fetched page text when a turn
+is saved"). No new route, no new SSE event, no new dep, no new env knob, no
+project-format change, no version bump (the plan carries the release-note
+draft). One new tool, the live canary, which makes the ground rule's paid
+exceptions two.
+
+- **What it removes.** A chat `web_fetch` returns the page's whole text as a
+  `document` inside its `web_fetch_tool_result` — up to
+  `WEB_FETCH_MAX_CONTENT_TOKENS` (50k) per fetch, `CHAT_MAX_FETCHES` per
+  round — and commit kept all of it, so every later turn re-sent it. Only
+  fetched PDFs were elided (`elide_all_pdf_sources`, since v0.6.0).
+  `history_hygiene.elide_fetched_page_text` now replaces the text source's
+  `data` with `FETCHED_PAGE_NOTE`, which names the URL.
+- **What it keeps, and why each piece.** The document BLOCK stays: a
+  citation's `document_index` counts every document block in the request
+  across all messages (Anthropic's citations doc), so removing one would
+  re-point every later citation at the wrong page. So do `url` (a prior
+  fetch result is one of the places web fetch accepts a URL from, so the
+  model can fetch it again), `retrieved_at`, `title`, `citations: {enabled:
+  true}`, and the source's `type`/`media_type`. The reply's `char_location`
+  citations keep `cited_text` — the passages it quoted — and the API does
+  not bill `cited_text` as input when it is passed back (same doc). The
+  `server_tool_use` stays too: it is small and pairs the result.
+- **Where it lives — not in the ported sanitizer.** `resend_sanitizer` is
+  ported ≈verbatim and shared with the research and QC continuation paths,
+  which must keep page text mid-run. The new function sits in the leaf
+  `history_hygiene` beside Phase 1's and runs only on committed history:
+  `_committed_messages` (right after the PDF elision) and `load_project`.
+- **The PDF note is left alone, and that check is load-bearing.** PDFs are
+  elided first, into a text note starting `[Fetched PDF content elided`
+  (`PDF_ELISION_NOTE_PREFIX` — a literal, to keep the module a leaf, pinned
+  by a test against the sanitizer's own `_ELISION_NOTE`). With a short URL
+  the page note is the shorter of the two, so without the check it would
+  overwrite the page count the PDF note records.
+- **It can only shrink, and that is also its idempotence.** A page no
+  longer than its note is left alone, and so are error results, PDF
+  sources and anything in a user message (server results only ever sit in
+  assistant messages). A note already in place is exactly as long as its
+  replacement, so a second pass returns the SAME list (COW, Phase 1's
+  posture). A first draft also skipped its own note by prefix; the shrink
+  rule already covers that, and a check no revert can prove was dropped
+  rather than shipped.
+- **Older projects too — a recorded deviation.** The spec said "at commit";
+  `load_project` also applies it, after Phase 1's outline trim (INFO log on
+  `buildaspec.project`, copy-on-write, the file changes at the next save),
+  because an older file otherwise re-sends every page it ever fetched on
+  every turn. Phase 1 set that posture. Opening such a file changes its saved
+  prefix once, so its first turn writes the cache fresh; commits by this
+  build stay cache-free, as Phase 1's are.
+- **Measured.** `history_composition` gains `fetched_page_texts` (the same
+  kind of canary as `stale_outlines`: 0 for anything this build committed or
+  loaded) and splits removable text into its own category, "page text in
+  fetched web pages", sized as serialized both ways so the categories still
+  add up to exactly what the block weighed. It counts assistant messages
+  only — the test caught a first draft counting a fetch-shaped block in a
+  user message that the elision never touches. Developer tools' **History
+  makeup** row shows the count when it is nonzero; `tools/chat_history_
+  profile.py`'s **Now** applies both trims in load order and reports fetched
+  pages per file.
+- **The live check: `tools/fetch_elision_canary.py`.** Whether the API
+  validates a historical `char_location` citation against a document whose
+  text was replaced is undocumented, and a rejected history would fail every
+  later turn of its project — the unpaired-`server_tool_use` precedent. The
+  canary sends that shape once: a synthetic cited fetch pushed through the
+  production `_committed_messages`, with the production `_chat_tools()` and
+  through `sanitize_messages_for_resend`, on the interview model with a
+  one-line system prompt, adaptive thinking at `low` effort and a small
+  output ceiling. It refuses to send if the commit transform did not really
+  replace the page (a pass would prove nothing), sends nothing without
+  `--run`, and `--control` sends the same conversation unelided — one more
+  request, only to tell "the elided page is refused" apart from "this
+  synthetic conversation is refused". Unlike the QC canary it has hermetic
+  tests. Its result is recorded in the plan's Phase 2 section, and the
+  elision should not merge before it passes.
+- **Errata** (append-only): "Conversation engine invariants" → **Strip at
+  commit** lists fetched-PDF payloads as the web content elided at commit.
+  Since this phase the text of every other fetched page is elided there too;
+  search results and citations still stay. And "Nothing settled is left in
+  the transcript" (Project workspace Phase 4, above) says compaction
+  D1/D3/D4 are open: the owner decided all four on 2026-09-22 (the
+  compaction plan's Decisions table), so compaction Phase 3 is unblocked.
+  Nothing is wired to the harvest yet; the seam is the one that section
+  describes.
+- **Tests**: `tests/test_fetched_page_elision.py` (6 — the chat turn end to
+  end: the whole page mid-turn, the note and every kept field in saved
+  history and in the next request, the citation intact, the diagnostics
+  canary at 0; a fetched PDF keeping its own note; an older project trimmed
+  on open with the transcript unchanged and the next save trimmed; COW,
+  idempotence and scoping over every result shape; the composition partition
+  with no text in it; the profiler's report) and
+  `tests/test_fetch_elision_canary.py` (6 — nothing sent without `--run`,
+  the request is the committed shape with the citation past the note's end,
+  the refusal to send an unelided page, acceptance and a 400 each reported
+  plainly, the output-ceiling bound). Reverted in place: the commit wiring →
+  4 red, the load wiring → 1, the PDF-note check → 3, the shrink rule → 4
+  (idempotence goes with it), the composition split → 2, its assistant-only
+  scope → 1, the profiler's second trim → 1, the canary's guard → 1.
 
 ## Redline on your original — implemented notes (Phase 1, backend PR)
 

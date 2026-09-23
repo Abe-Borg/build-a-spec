@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Measure what a saved project's chat history is made of.
 
-This is the measurement half of Phase 1 of the chat-history compaction plan
+This is the measurement half of the chat-history compaction plan
 (``docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md``). The plan's numbers
 came from a synthetic section; this script replaces them with real ones.
 For each project file it reports the saved conversation by category —
-the history every chat turn re-sends — and how much of it the stale-outline
-elision (commit-time since Phase 1, and applied when an older file is
-opened) removes. It also shows how much web research the history keeps,
-which is what decides Phase 2.
+the history every chat turn re-sends — and how much of it this build's two
+saved-history trims remove: stale document outlines (Phase 1) and the text
+of fetched web pages (Phase 2). Both run at commit and again when an older
+file is opened. It also shows how much web research the history still
+keeps once they have run.
 
 READ-ONLY. It never imports the client factory, never builds a session,
 never makes a model request, and never prints conversation text, tool
@@ -44,13 +45,17 @@ if str(_REPO_ROOT) not in sys.path:
 
 from backend.llm.history_hygiene import (  # noqa: E402
     CHARS_PER_TOKEN,
+    FETCHED_PAGE_CATEGORY,
     OUTLINE_CATEGORY,
+    elide_fetched_page_text,
     elide_stale_outlines,
     history_composition,
 )
 from backend.spec_doc.project_package import parse_project_file  # noqa: E402
 
-# Web research the history keeps: what Phase 2 would act on.
+# Web research the history still keeps once both trims have run: search
+# results (encrypted, so they can only ever leave inside a condensed span —
+# Phase 3) and what is left of each fetched page (its URL, title and note).
 _WEB_CATEGORIES = ("fetched web pages", "web search results")
 
 
@@ -98,7 +103,10 @@ def _profile(path: Path) -> HistoryProfile:
         return profile
     profile.turns = _user_turns(history)
     profile.saved = history_composition(history)
-    profile.trimmed = history_composition(elide_stale_outlines(history))
+    # The same two trims, in the same order, that opening the file applies.
+    profile.trimmed = history_composition(
+        elide_fetched_page_text(elide_stale_outlines(history))
+    )
     return profile
 
 
@@ -132,10 +140,10 @@ def _markdown(profiles: list[HistoryProfile]) -> str:
     )
     lines.append("")
     lines.append(
-        "| File | Turns | As saved (~tokens) | Stale outlines | Removed | "
-        "Now (~tokens) | Web research kept |"
+        "| File | Turns | As saved (~tokens) | Stale outlines | Fetched pages | "
+        "Removed | Now (~tokens) | Web research kept |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
     for profile in profiles:
         if profile.note:
             continue
@@ -146,6 +154,7 @@ def _markdown(profiles: list[HistoryProfile]) -> str:
             f"| `{profile.artifact}` | {profile.turns} | "
             f"~{saved.get('estimated_tokens', 0):,} | "
             f"{saved.get('stale_outlines', 0)} | "
+            f"{saved.get('fetched_page_texts', 0)} | "
             f"{_share(profile.removed_chars, saved.get('chars', 0))} | "
             f"~{trimmed.get('estimated_tokens', 0):,} | "
             f"{_share(web, trimmed.get('chars', 0))} |"
@@ -165,6 +174,12 @@ def _markdown(profiles: list[HistoryProfile]) -> str:
         lines.append(
             f"- Stale document outlines: {profile.saved.get('stale_outlines', 0)} "
             f"(~{_category_chars(profile.saved, OUTLINE_CATEGORY) // CHARS_PER_TOKEN:,} "
+            "tokens) — removed when the file is opened."
+        )
+        lines.append(
+            "- Fetched web pages still carrying their text: "
+            f"{profile.saved.get('fetched_page_texts', 0)} "
+            f"(~{_category_chars(profile.saved, FETCHED_PAGE_CATEGORY) // CHARS_PER_TOKEN:,} "
             "tokens) — removed when the file is opened."
         )
         lines.append("- By category, as this build sends it:")
@@ -187,18 +202,20 @@ def _markdown(profiles: list[HistoryProfile]) -> str:
         lines.append(
             f"Largest history: ~{largest.saved.get('estimated_tokens', 0):,} "
             f"estimated tokens as saved, ~{largest.trimmed.get('estimated_tokens', 0):,} "
-            f"after the outline elision ({_share(largest.removed_chars, largest.saved.get('chars', 0))} "
+            f"after the outline and page-text trims ({_share(largest.removed_chars, largest.saved.get('chars', 0))} "
             "removed)."
         )
         lines.append("")
         lines.append(
-            "- A large **Web research kept** share is the case for Phase 2 "
-            "(dropping fetched page text at commit)."
+            "- **Web research kept** is what the trims cannot touch: search "
+            "results, whose encrypted content the API needs intact, plus what "
+            "is left of each fetched page (its URL, title and a short note). "
+            "Only Phase 3's condensing can remove search results."
         )
         lines.append(
-            "- What remains after both is conversation — the part Phase 3 "
-            "condenses. Its trigger (decision D1) should sit well above a "
-            "typical session's total here and well below the 1M window."
+            "- What remains after the trims is conversation — the part Phase 3 "
+            "condenses once it passes the trigger the owner set (decision D1 "
+            "in the plan)."
         )
     lines.append("")
     return "\n".join(lines)

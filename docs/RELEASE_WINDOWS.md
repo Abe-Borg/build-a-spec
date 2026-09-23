@@ -548,6 +548,24 @@ proves Word's layout:
       is disabled and its tooltip says why.
 - [ ] **In the tour** the Project facts step never shows *Harvest facts…*.
 
+### Chat history compaction (Phases 1–2)
+
+- [ ] **The fetch elision canary passes** before any release that carries
+      Phase 2: `.venv\Scripts\python tools\fetch_elision_canary.py --run`
+      (one request, about two cents at most). It sends a saved conversation
+      whose fetched page text was trimmed while a reply still cites the page,
+      and must report that the provider accepted it. If it reports a refusal,
+      do not release; run it again with `--control` and record both outputs
+      in the compaction plan's Phase 2 section.
+- [ ] **A fetched page leaves the saved conversation.** Ask the assistant to
+      read a public web page and quote something from it. After the reply,
+      Settings → Developer tools → Session state → **History makeup** does
+      not mention "fetched pages still carrying text", and the next message
+      still gets an answer (the assistant may read the page again). Save,
+      copy the `.baspec` to a `.zip` and open its `project.json`: the page's
+      address and title are there and its body text is not. The quoted
+      passage is still there, inside the reply's citation.
+
 ### State that must recover (v1.17.0)
 
 None of these have a DOM harness; the source-level pins in

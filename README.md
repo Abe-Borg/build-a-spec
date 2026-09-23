@@ -419,6 +419,34 @@ hash:
 .venv\Scripts\python tools\chat_history_profile.py "C:\specs\*.baspec" --out history-measurement.md
 ```
 
+### Fetched web pages stay out of the conversation (Phase 2)
+
+When the assistant reads a web page during a chat, the page's text (up to
+about 50,000 tokens a page) used to be saved into the conversation, so every
+later message re-sent every page the session had ever read. Now a saved turn
+keeps the page's address, its title and when it was read, plus the passages
+the reply quoted (they stay in the reply's citations), and drops the rest of
+the text. The assistant can open the page again whenever it needs the exact
+wording, and during the turn nothing changes: it reads the whole page while
+it works. Fetched PDFs were already trimmed this way and keep their own
+note. A project saved by an earlier version is trimmed the same way when it
+is opened (the file itself changes at the next save), and **History makeup**
+and the offline profiler both count fetched pages that still carry their
+text. Nothing you see in the chat changes.
+
+The trim relies on the API accepting a saved reply whose citations point
+into a page whose text has been replaced, which Anthropic does not document.
+A one-request live check ships with it. It costs about two cents at most,
+and without `--run` it sends nothing:
+
+```
+.venv\Scripts\python tools\fetch_elision_canary.py --run
+```
+
+If it reports a refusal, run it once more with `--control` as well. That
+sends the same conversation with the page text kept, which tells a refused
+trim apart from a refused test conversation.
+
 ## Redline on your original (in progress)
 
 The redline-on-your-original program
@@ -2025,6 +2053,16 @@ sends one low-token QC verifier request and never runs a full Final QC:
 ```
 
 Without `--run`, the command only reports whether a key is configured.
+
+The second paid check, also opt-in and also a single low-token request,
+confirms the provider accepts a saved chat history whose fetched page text
+was trimmed while a reply still cites it (see "Fetched web pages stay out of
+the conversation" above; `--control` sends the untrimmed conversation when a
+refusal needs diagnosing):
+
+```
+.venv\Scripts\python tools\fetch_elision_canary.py --run
+```
 
 The DOCX fidelity contract, fixture layers, frontend checks, and release
 verification commands are documented in

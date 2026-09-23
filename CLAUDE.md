@@ -13843,7 +13843,7 @@ and the traps.
   (`run-<stamp>[-n]`), and `report.json` is rewritten after every group, both
   at the root and in the run folder.
 - **Tests.** `tests/test_word_judge.py` (32),
-  `tests/test_redline_word_judge.py` (43, skipped unless asked), 5 new in
+  `tests/test_redline_word_judge.py` (44, skipped unless asked), 5 new in
   `tests/test_docx_corpus.py`, and 14 new in
   `tests/test_render_docx_word.py` (the resolve mode, its CLI, and the parse
   test over both PowerShell scripts, which runs wherever `pwsh` is on `PATH`

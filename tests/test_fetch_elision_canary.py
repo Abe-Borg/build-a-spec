@@ -99,7 +99,9 @@ def test_the_canary_forces_the_trim_on_whatever_the_switch_says(monkeypatch):
 
 def test_the_canary_refuses_to_send_an_unelided_page_as_elided(monkeypatch):
     # If commit ever stopped trimming page text, a pass would prove nothing.
-    monkeypatch.setattr(conversation, "elide_fetched_page_text", lambda messages: messages)
+    monkeypatch.setattr(
+        conversation, "elide_fetched_page_text", lambda messages, **_kwargs: messages
+    )
     with pytest.raises(AssertionError, match="did not replace"):
         canary.build_request(max_tokens=512)
 
@@ -111,7 +113,7 @@ def test_the_canary_refuses_to_send_the_shape_its_first_run_was_refused_on(
     shape the provider refused on 2026-09-23. Sending it again would only
     repeat that answer, so the canary will not call it the new shape."""
 
-    def phase_two_trim(messages):
+    def phase_two_trim(messages, **_kwargs):
         trimmed = []
         for message in messages:
             content = []

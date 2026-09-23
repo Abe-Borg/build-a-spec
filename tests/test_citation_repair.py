@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import copy
 import json
+from types import SimpleNamespace
 from typing import Any
 
 from backend import sessions, settings
@@ -47,7 +48,7 @@ from backend.llm.history_hygiene import (
 )
 from backend.research import resend_sanitizer
 from fastapi.testclient import TestClient
-from tests.fakes import FakeClient, text_turn
+from tests.fakes import FakeClient, raw_turn, text_turn
 from tests.test_app import _parse_sse, _patch_client
 from tests.test_chat_compaction import _record_for
 
@@ -375,6 +376,54 @@ def test_the_trim_keeps_each_quote_once_and_the_history_sendable():
     assert elide_fetched_page_text(trimmed) is trimmed
 
 
+_MIRROR_A = "https://mirror-a.example/adoption"
+_MIRROR_B = "https://mirror-b.example/adoption"
+
+
+def _mirror_turn(first_index: int) -> list[dict[str, Any]]:
+    """One turn fetching the same page from two mirrors (same title, same
+    text), then citing the FIRST mirror by index."""
+    blocks: list[dict[str, Any]] = []
+    for n, url in enumerate((_MIRROR_A, _MIRROR_B)):
+        use_id = f"srvtoolu_mirror_{n}"
+        blocks += [
+            {"type": "server_tool_use", "id": use_id, "name": "web_fetch",
+             "input": {"url": url}},
+            {"type": "web_fetch_tool_result", "tool_use_id": use_id, "content": {
+                "type": "web_fetch_result", "url": url,
+                "content": _document(_A_PAGE, _A_TITLE)}},
+        ]
+    blocks.append({"type": "text", "text": "the adoption date",
+                   "citations": [_citation(_A_PAGE, _A_CITED, _A_TITLE, first_index)]})
+    return [
+        {"role": "user", "content": [{"type": "text", "text": "Read both mirrors."}]},
+        {"role": "assistant", "content": blocks},
+    ]
+
+
+def test_the_trim_files_a_quote_under_the_page_the_citation_names():
+    """Two mirrors hold the same passage under the same title; only the
+    citation's index says which one the reply cited, and the quote must be
+    kept under that page's address, not the nearest match's."""
+    trimmed = elide_fetched_page_text(_mirror_turn(0))
+    assert _page_data(trimmed, 0) == _note(_MIRROR_A, _A_CITED)
+    assert _page_data(trimmed, 1) == _note(_MIRROR_B)
+    assert _cited_indices(trimmed) == []
+
+
+def test_the_trim_reads_the_index_against_the_request_it_was_written_in():
+    """A committed turn's citations are numbered against its whole request,
+    whose earlier documents are not in the list the trim is given: the
+    offset says where the list starts. An index that lands on no page it
+    fits falls back to the nearest one."""
+    turn = _mirror_turn(3)
+    offset = elide_fetched_page_text(turn, document_offset=3)
+    assert _page_data(offset, 0) == _note(_MIRROR_A, _A_CITED)
+    no_offset = elide_fetched_page_text(turn)
+    assert _page_data(no_offset, 0) == _note(_MIRROR_A)
+    assert _page_data(no_offset, 1) == _note(_MIRROR_B, _A_CITED)
+
+
 def test_the_trim_leaves_a_citation_a_kept_document_still_answers():
     """A citation that also fits a document the trim keeps is not folded:
     it can still point at that one, and the request repair moves it there."""
@@ -486,6 +535,42 @@ def test_a_condensed_conversation_sends_citations_the_provider_accepts(monkeypat
     assert "Turn 1:" not in json.dumps(sent), "turn 1 was condensed out of the view"
     assert _provider_rule_violations(sent) == []
     assert _cited_indices(sent) == [0]
+
+
+def test_a_committed_turn_files_its_quote_under_the_page_it_cited(monkeypatch):
+    """Through the engine, in a condensed conversation: the turn's request
+    held one page ahead of it (the view keeps turn 2's; turn 1's was
+    condensed away), so its citation to the first mirror is index 1. The
+    commit must count the VIEW's pages, not the whole history's (2) and not
+    none (0); either would file the quote under the second mirror."""
+    monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", True)
+    session = sessions.get_session()
+    session.history[:] = _history()
+    session.compaction = _record_for(session.history, 2)
+
+    blocks = []
+    for n, url in enumerate((_MIRROR_A, _MIRROR_B)):
+        use_id = f"srvtoolu_mirror_{n}"
+        blocks += [
+            SimpleNamespace(type="server_tool_use", id=use_id, name="web_fetch",
+                            input={"url": url}),
+            SimpleNamespace(type="web_fetch_tool_result", tool_use_id=use_id,
+                            content={"type": "web_fetch_result", "url": url,
+                                     "content": _document(_A_PAGE, _A_TITLE)}),
+        ]
+    blocks.append(SimpleNamespace(
+        type="text", text="the adoption date",
+        citations=[_citation(_A_PAGE, _A_CITED, _A_TITLE, 1)],
+    ))
+    fake = FakeClient([raw_turn(blocks, stop_reason="end_turn")])
+    _patch_client(monkeypatch, fake)
+    resp = TestClient(create_app()).post("/api/chat", json={"message": "Read both mirrors."})
+    assert _parse_sse(resp.text)[-1]["type"] == "turn_complete"
+
+    committed = session.history[-2:]
+    assert _page_data(committed, 0) == _note(_MIRROR_A, _A_CITED)
+    assert _page_data(committed, 1) == _note(_MIRROR_B)
+    assert _cited_indices(committed) == []
 
 
 def test_the_summary_call_repairs_its_prefix_exactly_as_the_chat_request_does():

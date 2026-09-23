@@ -347,14 +347,25 @@ def _page_note(url: Any, passages: list[str], page_chars: int) -> str:
         kept.pop()
 
 
-def elide_fetched_page_text(messages: list[Any]) -> list[Any]:
+def elide_fetched_page_text(
+    messages: list[Any], *, document_offset: int = 0
+) -> list[Any]:
     """Drop fetched web-page text from saved history (copy-on-write).
 
     Every page this list holds is trimmed to a note, and every citation in
     the list that points into a trimmed page is removed, its passage folded
-    into that page's note (the nearest trimmed page before the citation, if
-    it fits more than one). A citation that also fits a page left in place
-    keeps pointing where it did.
+    into the note of the page it names. A citation that also fits a page
+    left in place keeps pointing where it did.
+
+    Which page a citation names is its ``document_index``, counted over the
+    request the citation was written in. ``document_offset`` is where the
+    first document in ``messages`` sat in that request: 0 for a whole
+    history (a project being opened), and for a turn being committed, the
+    number of documents in the view its request sent ahead of it. Two pages
+    can hold the same passage under the same title (a page fetched twice, a
+    mirror), and only the index says which one the reply cited. When the
+    index does not land on a page the citation fits, the passage goes to
+    the nearest earlier page it does fit.
 
     Returns the SAME list object when nothing needed removing; changed
     messages are rebuilt and nothing given is ever mutated. Only committed
@@ -404,7 +415,13 @@ def elide_fetched_page_text(messages: list[Any]) -> list[Any]:
                 # that was already broken. The request repair judges those.
                 if not fitting or any(p not in pages for p in fitting):
                     continue
-                target = fitting[-1]
+                index = citation.get("document_index")
+                named = None
+                if isinstance(index, int) and not isinstance(index, bool):
+                    local = index - document_offset
+                    if 0 <= local < before:
+                        named = documents[local][0]
+                target = named if named in fitting else fitting[-1]
                 data = pages[target]["content"]["content"]["source"]["data"]
                 passage = _quoted_passage(citation, data)
                 if passage and passage not in passages[target]:

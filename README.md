@@ -483,6 +483,48 @@ If it reports a refusal, run it once more with `--control` as well. That
 sends the same conversation with the page text kept, which tells a refused
 trim apart from a refused test conversation.
 
+### A long conversation is condensed, never deleted (Phase 3)
+
+With the machine payloads gone, what is left is conversation — and a long
+enough one still grows past what the model can take in at once. Now its
+oldest turns can be **condensed**: the model writes a summary of them, kept
+close to your own words (decisions and why, options ruled out and why, exact
+values, your corrections, where things stand and what was promised, and the
+decisions the project facts don't record yet), and every later message sends
+that summary in place of those turns. The last three turns always stay word
+for word. The document, research, Final QC and the project facts are never
+summarized — they arrive fresh with every message anyway.
+
+Nothing is deleted. The transcript on screen and the saved project keep every
+turn; a divider in the chat marks where the condensed part ends, and **View
+summary** shows exactly what the model now reads for those turns. When the
+model needs an exact detail from before the cut — a number, a wording, the
+reason for a decision — it looks the turn up in your saved conversation
+(`recall_conversation`: the lookup runs on your computer, like the model's
+document edits, and the words it finds go back to the model in the same
+turn). The summary rides the saved project, so reopening it does not
+condense again.
+
+**When it happens.** By default only when a message would not otherwise fit:
+past about 85% of the model's context window, the app condenses before
+sending (the status line says *Condensing earlier conversation…*). If a
+summary cannot be made, that one message leaves the oldest turns out, says
+so to the model, and they can still be looked up — a conversation never
+turns into one that fails on every message. **Routine condensing**
+(`BUILD_A_SPEC_CHAT_COMPACTION=1`) instead writes the summary in the
+background after a reply once the conversation passes 600,000 tokens
+(`BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD`), keeping the last three turns
+(`BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS`). It is off until a paid recall
+check on real transcripts confirms nothing important is lost; that check is
+described in the plan. Nothing is ever condensed in the guided tour.
+
+**What it costs.** One summary call on the chat's own model, metered as its
+own **Conversation condensing** line in Settings. It is a fork of the last
+turn's request, so it reads that turn's cache instead of paying for the
+whole conversation again, and every later message re-reads a far shorter
+conversation. **Settings → Developer tools → Session state → Condensed
+conversation** shows the record's sizes (never its text).
+
 ## Redline on your original (in progress)
 
 The redline-on-your-original program
@@ -1662,7 +1704,8 @@ All five roadmap phases are shipped. What remains is real-world hardening: cutti
 main.py                  pywebview shell: starts the backend, opens the native window
 backend/                 FastAPI + the conversation engine (Python 3.11+)
   app.py                 /api/health, /api/key (+ status/test), /api/modules,
-                         /api/session/reset, /api/chat (SSE) + /api/chat/stop,
+                         /api/session/reset, /api/chat (SSE) + /api/chat/stop
+                         + /api/chat/compaction (the condensed summary's text),
                          /api/draft/full + /api/draft/adapt,
                          /api/research/debrief + /api/qc/debrief,
                          /api/doc (+ undo/redo/edit/diff/capabilities/
@@ -1820,6 +1863,10 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     history_hygiene.py   keeps stale document outlines out of saved history
                          (at commit and when an older project is opened) and
                          measures what a history is made of, sizes only
+    compaction.py        the condensed conversation: the summary record (a
+                         view over the full history, checked against it), the
+                         summary instruction and its checks, recall_conversation
+                         search/read, and the one-at-a-time background runner
 frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + QC +
                          readiness + update + SSE dispatch
@@ -1946,7 +1993,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `ANTHROPIC_API_KEY` | — | API key; overrides keyring/file, never persisted. |
 | `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5` | Model for interview/drafting turns. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
-| `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The context gauge's window (the header's "142k / 1M" pill). Pair it with a model override whose window differs; it changes nothing about what is sent. |
+| `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The model's context window: the context gauge's denominator (the header's "142k / 1M" pill) and what the chat's backstop measures a request against — past 85% of it the oldest turns are condensed before sending. Pair it with a model override whose window differs; set lower, conversations are condensed earlier. |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `high` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`). |
 | `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
 | `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |

@@ -315,6 +315,9 @@ def test_the_instruction_names_the_cut_the_sections_and_the_ledgers():
     assert "pf-1 NFPA 13-2022 adopted" in text
     assert "Nothing is waiting on the user." in text
     assert "carry everything it records into yours" in text
+    # Each unrecorded decision names its turn, in recall_conversation's
+    # numbering, so the model can read it back (and the harvest can cite it).
+    assert "each starting with the turn it was settled in" in text
     assert text.rstrip().endswith(
         "Do not call any tools while writing this summary; respond with text only."
     )

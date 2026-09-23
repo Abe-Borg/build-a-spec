@@ -562,6 +562,40 @@ invisible to CI and expensive to the user.
       address and title are there and its body text is not. The quoted
       passage is still there, inside the reply's citation.
 
+### Chat history compaction (Phase 3)
+
+These rows spend a little: each summary is one model call. Set the knobs in
+the shell you launch the app from, and clear them when done.
+
+- [ ] **Routine condensing.** Launch with `BUILD_A_SPEC_CHAT_COMPACTION=1`,
+      `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD=10000` and
+      `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS=1`. Hold a conversation of
+      six or so turns, stating one exact value early ("use 42 gpm for the
+      riser"). Within a turn or two of passing the threshold a divider
+      appears above the last turn: *Above: turns 1–N, condensed for the
+      model · View summary*. The transcript above it is all still there.
+- [ ] **View summary** opens a sheet with the summary under its section
+      headings, and says how many turns it stands in for and the token
+      estimate before and after. Settings shows a **Conversation
+      condensing** line in the usage table; Developer tools → Session state
+      → **Condensed conversation** shows the record's sizes, never its text.
+- [ ] **Recall.** Ask "what flow did we settle on for the riser, exactly?"
+      The answer gives 42 gpm (the assistant may look the turn up first; the
+      status line shows it working).
+- [ ] **It survives a save.** Save, close and reopen the project: the
+      divider is back in the same place, and no new summary is written on
+      opening (the usage table's condensing line does not move).
+- [ ] **New session** clears the divider and the Developer tools row.
+- [ ] **The backstop.** Clear the three knobs and launch with
+      `BUILD_A_SPEC_CONTEXT_WINDOW=60000`. Keep chatting: once a message
+      would not fit, the status line reads *Condensing earlier
+      conversation…* before the reply starts, the reply still arrives, the
+      divider appears, and the sheet adds *Condensed at the moment a message
+      would not have fit*.
+- [ ] **Never in the tour.** With the routine knobs still set, take the
+      guided tour's conversation chapter and chat in a practice copy: no
+      divider appears, and the usage table gains no condensing line.
+
 ### State that must recover (v1.17.0)
 
 None of these have a DOM harness; the source-level pins in

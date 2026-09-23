@@ -1436,12 +1436,13 @@ function Dossier() {
               in the chat marks where it ends —{" "}
               <b className="text-ink">View summary</b> shows exactly what the
               model reads. When the model needs an exact detail from a condensed
-              turn it looks it up in your saved conversation (a local search, no
-              extra model call). A summary that is empty, too long, cut off,
-              declined or missing its sections is rejected and nothing changes.
-              If even condensing cannot make a message fit, that one message
-              leaves the oldest turns out, says so, and they can still be looked
-              up.
+              turn it looks it up in your saved conversation — the lookup runs
+              on your computer, like its document edits, and the words it finds
+              go back to it in the same turn. A summary that is empty, too long,
+              cut off, declined or missing its sections is rejected and nothing
+              changes. If even condensing cannot make a message fit, that one
+              message leaves the oldest turns out, says so, and they can still
+              be looked up.
             </>
           }
           sent={

@@ -115,7 +115,11 @@ backend/
                            every 1h write on it is silently underpriced;
                            HARVEST_EFFORT (Project workspace Phase 4, default
                            medium — the fact harvest extracts, it drafts
-                           nothing)
+                           nothing); CHAT_COMPACTION (+ _THRESHOLD D1 600k /
+                           _KEEP_TURNS 3; compaction Phase 3 — routine
+                           condensing, OFF until the paid recall check) and
+                           the NON-knob CHAT_CONTEXT_BACKSTOP_FRACTION (0.85,
+                           runs either way) + CHAT_COMPACTION_MAX_TOKENS
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive, gated on the
                            draft prerequisites via _draft_prerequisites —
@@ -209,7 +213,13 @@ backend/
                            binding); _doc_payload gains `harvest`
                            (harvest.harvest_status, incl. `harvestable`) and
                            its project_facts come from
-                           SessionState.facts_payload() (unresolved_ref)
+                           SessionState.facts_payload() (unresolved_ref);
+                           compaction Phase 3: the chat route passes
+                           allow_compaction = (lease.scope == "original"),
+                           _doc_payload gains `compaction`
+                           (compaction_payload: sizes + turn range, never
+                           the text) and GET /api/chat/compaction returns
+                           the text (404 when nothing is condensed)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -456,7 +466,8 @@ backend/
                            Batch 2 adds key_status (masked, never leaks) + delete_api_key
   usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
                            research/audit/qc, + harvest priced on the
-                           interview model — Project workspace Phase 4),
+                           interview model — Project workspace Phase 4, +
+                           compaction likewise — compaction Phase 3),
                            thread-safe, cost estimate from
                            settings.PRICING; not persisted (per-session meter).
                            Chunk 4.1 adds per-TTL cache-write accounting:
@@ -915,7 +926,12 @@ backend/
                            Project workspace Phase 4 adds an optional
                            last_harvest_bubble key (omitted at 0;
                            restore_harvest_marker clamps it to the replies the
-                           history holds, a boolean reads 0)
+                           history holds, a boolean reads 0); compaction
+                           Phase 3 adds an optional `compaction` key (the
+                           condensed-conversation record; on load
+                           CompactionRecord.from_dict keeps it only while it
+                           still describes the loaded history, logs INFO when
+                           it does not, and gives the session a fresh runner)
   spec_doc/project_package.py
                            the .baspec container: a small versioned ZIP
                            (manifest.json + project.json + the retained
@@ -987,6 +1003,26 @@ backend/
                            tools/chat_history_profile.py). Leaf module: the
                            server_tool_pairing precedent (project.py needs
                            it and cannot import the engine)
+  llm/compaction.py        [compaction Phase 3] the condensed conversation's
+                           leaf half: CompactionRecord (summary, keep_from,
+                           covers_turns, a digest over the role + text of
+                           every condensed message — fits() is the ONE
+                           "does this still describe the history" check,
+                           used by adoption and project load), the view
+                           (compacted_view: history[keep_from:] with the
+                           framed summary as a leading text block, COW, the
+                           same list object without a spec; truncated_view_spec
+                           = the last-resort per-request view), sizing
+                           (message_chars × a calibrated tokens-per-char),
+                           summary_instruction + extract_summary (eight
+                           required headings, closed error codes),
+                           recall_conversation (search / read condensed
+                           turns, framed + neutralized; elide_recall_results
+                           keeps copies out of committed history) and
+                           CompactionRunner (one background summary per
+                           session object; zombie-abandoned on reset / load
+                           / reference delete; backoff in committed turns).
+                           Leaf so project.py can import it
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message)
@@ -1053,7 +1089,21 @@ backend/
                            remainder so the blocks sum to `total` — and adds
                            SessionState.last_context_sizes (written beside
                            last_context_tokens under the same condition,
-                           cleared on reset/load, never persisted)
+                           cleared on reset/load, never persisted);
+                           compaction Phase 3 adds SessionState.compaction /
+                           compaction_runner / tokens_per_char (all wiped by
+                           reset), the summary call (_build_compaction_request:
+                           a fork of the chat request — one breakpoint at the
+                           last turn's committed boundary, tail unmarked),
+                           _prepare_turn_view (adopt → estimate → backstop:
+                           wait / condense now / truncated view, before round
+                           0 only), _ChatRequestInputs.view_spec +
+                           _request_view (the ONE place a request's history
+                           is cut), the commit-time trigger + calibration,
+                           adopt_ready_compaction after every finalize, the
+                           once-only "prompt is too long" retry, the
+                           recall_conversation dispatch (appended LAST in
+                           _chat_tools) and the `compaction` SSE event
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -1181,6 +1231,13 @@ frontend/src/
                            justResolvedIds, the snapshot DIFF that drives the
                            check-off animation for model and user resolves
                            alike (a first render reports nothing)
+  lib/compaction.ts        [compaction Phase 3] the condensed-conversation
+                           divider's pure rules: condensedDividerIndex (the
+                           user message that starts turn covers_turns + 1,
+                           counting only messages that reached the saved
+                           history — notes and failed turns skipped),
+                           condensedTurnsLabel, compactTokens and
+                           describeCompaction (Developer tools' one line)
   lib/harvest.ts           [Project workspace Phase 4] the fact harvest's
                            pure rules: buildHarvestCommit (ONLY ticked rows,
                            each once, only changed editable fields — never an
@@ -1347,7 +1404,12 @@ frontend/src/
                            Run → review sheet → done; opened by the facts
                            panel's Harvest facts…, Next section's "Harvest
                            first" and the Export menu's hint, stacking over
-                           the opener; never runs on its own) / HelpModal (the five help topics + the
+                           the opener; never runs on its own) /
+                           CondensedDivider + CondensedSummaryModal
+                           (compaction Phase 3: a sibling of the memoized
+                           bubbles inside a keyed Fragment, never a prop on
+                           one; the sheet fetches the text on open) /
+                           HelpModal (the five help topics + the
                            About footer, which states the license to every
                            user) / TrustDeepDiveModal (the "I'm not
                            convinced" dossier — fifteen runtime cards; a
@@ -1583,6 +1645,17 @@ tests/
                            network: nothing sent without --run, the committed
                            request shape, the unelided-page refusal, pass and
                            400 reporting
+  test_chat_compaction.py  [compaction Phase 3] turns, the view, the record's
+                           digest, the reply checks, the instruction, frame
+                           escapes (the summary's own included) in linear
+                           time, recall search/read/elision, the runner's
+                           backoff; end to end: condense + the fork's cache
+                           shape + metering, adoption between turns only, a
+                           refused / declined / stale summary, reset and
+                           reference-delete abandonment, the backstop and its
+                           last resort, the too-long retry, the tour and the
+                           route's scope flag, save/load, payload, route,
+                           diagnostics, re-compaction, calibration, min-gain
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -1591,7 +1664,7 @@ Each frame is `data: <json>\n\n`. Event types:
 
 | type | payload | meaning |
 |---|---|---|
-| `status` | `kind`, `round?`, `progress_chars?` | transient liveness hint (Batch 2): `working`/`thinking`/`writing`/`drafting`/`searching`/`fetching`. Replaces the current status strip; cleared by the next `text_delta`/`thinking_delta`. NOT persisted to history/traces/project files |
+| `status` | `kind`, `round?`, `progress_chars?` | transient liveness hint (Batch 2): `working`/`thinking`/`writing`/`drafting`/`searching`/`fetching` (+ `condensing` while the backstop writes or waits for a summary before round 0 — compaction Phase 3). Replaces the current status strip; cleared by the next `text_delta`/`thinking_delta`. NOT persisted to history/traces/project files |
 | `text_delta` | `text` | streamed assistant text chunk (all continuation rounds) |
 | `thinking_delta` | `text` | streamed adaptive-thinking summary chunk (Batch 2; only when `THINKING_DISPLAY=summarized` and the model streams it). Rendered in a collapsible block; transient, never persisted |
 | `web_search` | `query` | the model ran a server-side web search this round — emitted LIVE (Batch 2) the instant the server-tool block's input completes, not derived post-hoc |
@@ -1600,6 +1673,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips via `suggest_prompts` this round (Batch 8→9), shown above the composer; emitted live on the tool dispatch. Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (not calling the tool = clear, which is the wind-down; a failed turn keeps the prior set). Tiny payload — rides committed history verbatim (no elision, no PROJECT CONTEXT stub) |
 | `followups` | `followups` | the model raised or settled tracked items via `track_followups` this round (v1.16.0) — the full "Waiting on you" list, emitted live on the tool dispatch. ACCUMULATING, not latest-only: the store persists across turns, so silence means nothing changed rather than "clear". Turn-atomic through the store's own begin/commit/rollback |
 | `project_facts` | `project_facts` | the model recorded or superseded established project facts via `record_project_facts` this round (v1.17.0) — the full ledger snapshot, emitted live on the tool dispatch. Same accumulating, turn-atomic posture as `followups`; the store also persists into the project file and rides a project brief into the next section |
+| `compaction` | `compaction` | the view this turn sends carries a summary of the oldest turns (compaction Phase 3): `{covers_turns, created_at, tokens_before, tokens_after, trigger, summary_chars}` — never the text (`GET /api/chat/compaction` returns it). Emitted at turn start, after `_prepare_turn_view`, whenever the turn's view has a record — including one adopted or written at that moment — so the chat's divider moves at once. Not persisted; the doc payload's `compaction` re-syncs it |
 | `qc_dispositions` | `outcomes` | apply_qc_fixes committed audit dispositions with this turn (v1.11.0): `{finding_id: applied\|stale\|no_ops\|already_applied\|not_open\|unknown}`. Emitted from the frozen post-commit payload ONLY when the turn commits with staged dispositions — a rolled-back turn never emits it; the frontend refreshes QC state + readiness on it |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
@@ -12032,6 +12106,172 @@ project-format change; no version bump (Phase 7 releases the program).
   first, the trim count, the no-profile wording, the sort, the empty-block
   filter, an unlabelled backend block and the modal's use of the helper
   (seven frontend).
+
+## A long conversation is condensed, never deleted — implemented notes (compaction Phase 3)
+
+Phase 3 of `docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`, built on the
+owner's decisions of 2026-09-22 (D1: condense at 600k tokens of committed
+conversation, keep the last 3 turns word for word; D3: our own summarizer,
+not the on-demand compaction beta; D4: the decisions the ledgers are missing
+go to the harvest). Phases 1–2 took the machine payloads out of committed
+history; what is left is conversation, and a long enough one still outgrows
+the 1M window, after which every request is a "prompt is too long" 400 that
+the saved project carries forever. One new chat tool, one new SSE event, one
+new route, three env knobs, one additive `.baspec` key; no new dep, no
+version bump (the plan carries the release-note draft).
+
+- **The summary is a VIEW; `session.history` is never edited.** A
+  `CompactionRecord` (new leaf `backend/llm/compaction.py`) stands in for
+  turns `1..covers_turns`; requests send the framed summary as a leading
+  text block of the first kept turn plus every message from `keep_from` on.
+  Everything that reads history — the transcript, figure placement, the
+  harvest's `turn:N`, recall itself — keeps reading the full record.
+  `_request_view` is the ONE place a request's history is cut, and with no
+  spec it returns the same list objects, so a never-condensed conversation
+  builds a byte-identical request (pinned).
+- **The summary call is a fork of the chat request**, so it reads the cache
+  the last turn wrote: same model, system, tools, thinking and effort; ONE
+  message breakpoint, at the previous turn's committed boundary
+  (`turn_starts(view)[-1] - 1` — pinned rather than left to a tail
+  breakpoint's 20-position lookback, which a full-draft turn overruns); the
+  tail unmarked (`_with_cache_breakpoints(..., mark_tail=False)` — no later
+  request repeats the instruction); no `tool_choice` (it would invalidate
+  the messages cache), no container. `max_tokens` (64k) is not part of the
+  cached prefix, so it may differ from the chat's.
+- **Sizes are estimates calibrated by the provider, never `count_tokens`.**
+  The counting endpoint returns `invalid_request_error` for requests with
+  server tools (web search and web fetch included — every chat request),
+  and its docs point such requests at the Messages API's `usage` (checked
+  2026-09-23). So a size is serialized characters × a tokens-per-character
+  ratio learned from each committed turn's final request (clamped 1/8–1/1.5,
+  1/3.5 until measured), process-local, cleared on reset and load.
+  Routine condensing measures the committed conversation (D1's own
+  wording); the backstop measures the whole first request against 85% of
+  the window.
+- **Adoption only between turns, and the check is content, not length.** A
+  finished background summary is adopted by the worker when no turn is
+  streaming, after `finalize_model_turn`, or at the next turn's start under
+  `owned_model_turn_guard` — never mid-turn, because the view is chosen once
+  before round 0 and every continuation round extends that prefix.
+  `CompactionRecord.fits` compares a digest over the role and text of every
+  condensed message: `delete_reference_if_idle` truncates history WITHOUT a
+  generation bump, so the plan's length check would accept a summary of
+  turns that were removed and then grew back. Text-only is deliberate — the
+  machine-payload elisions never touch a text block, so they cannot make a
+  valid record look stale. The worker settles with `notify=False` and sets
+  its done event only after its adoption callback, so a backstop waiting on
+  it never wakes to a summary that is ready but not yet in the session.
+- **The backstop is not a knob and runs even with routine condensing off.**
+  Before round 0 only (never between rounds, never splitting a tool or
+  server-tool pair, never inside a pause resume): over 85% it waits up to
+  300 s for a summary already running, then writes one itself with
+  `condensing` status frames; if that fails, the one request leaves the
+  oldest turns out with a disclosed note (`truncated_view_spec`) and
+  `recall_conversation` can read all of them. It FAILS OPEN: an unexpected
+  error inside `_prepare_turn_view` keeps the record's view, unmeasured —
+  never drops a summary, which would be the one way to push a condensed
+  conversation back over the window.
+- **A "prompt is too long" 400 is retried once, and is no longer mistaken
+  for a display rejection.** The estimate can let such a request through;
+  the rejection arrives before any output, so the turn retries once with a
+  pessimistic view (0.5 tokens/char, 70% of the window, at least one more
+  turn out). `_enter_stream` used to treat ANY 400 carrying a thinking
+  `display` key as a rejected display — it would have switched the thinking
+  summary off for the whole process and resent the same request.
+- **Routine condensing is a knob, off by default**
+  (`BUILD_A_SPEC_CHAT_COMPACTION`, `_THRESHOLD`, `_KEEP_TURNS`): the plan's
+  "Before it is on by default" names a paid recall check as the gate. The
+  commit-time trigger is cheap (the view was sized at turn start), skips a
+  cut that condenses under 25% of the conversation, never runs while a
+  summary is pending, and backs off after a failure (1, 2, 4 … 16 committed
+  turns). Off in tutorial workspaces: the chat route passes
+  `allow_compaction = lease.scope == "original"`, and neither the trigger
+  nor the backstop runs without it.
+- **Every session change abandons the runner.** Reset, project load and a
+  reference delete each install a fresh `CompactionRunner`, so a call still
+  in flight settles into the abandoned object (the research/QC zombie
+  pattern), and its usage lands only through `add_usage_if_current` under
+  the session's generation — the ledger's new `compaction` category, priced
+  on the interview model. A reference delete also drops a record that
+  covers, or starts at, a turn it cut.
+- **Recall** (`recall_conversation`, appended LAST in `_chat_tools()` so it
+  is in the tool list from a session's first turn — adding a tool later
+  would rewrite the whole cache): keyword search (top 5, 700-char snippets)
+  or `turns: [first, last]` (at most 6, 60k characters) over the turns the
+  current view leaves out; tool calls named, never reproduced. A mistake is
+  an `is_error` result the model corrects. Results are framed
+  (`<recalled_conversation>`) and elided from committed history like
+  `read_reference_doc`'s (`elide_recall_results`, just inside the pairing
+  guard in `_committed_messages`); an `is_error` result stays.
+- **Three frames, all inert inside what they frame**
+  (`earlier_conversation_summary`, `recalled_conversation`, `ledgers`) plus
+  the PROJECT CONTEXT markers — the summary quotes the user and recall IS
+  the user's words. This module's marker pattern carries the `(?<!=)` that
+  Phase 5A found missing from `conversation._CONTEXT_BOUNDARY_PATTERN`
+  (quadratic on a long unfinished `=` run): 60,000 `=` take ~3 ms here and
+  87 s without it.
+- **The instruction and its checks.** Anthropic's six retention items as
+  seven required headings (exact values get their own) plus D4's
+  "Decisions the ledgers are missing", each line tagged with the turn it
+  was settled in (recall's numbering, so the model can read it back). The
+  facts and waiting-on-you blocks ride in `<ledgers>` so the summary points
+  at them by id instead of restating them; the document, research and QC
+  are never summarized. The closing "Do not call any tools while writing
+  this summary; respond with text only" is load-bearing — the fork keeps
+  the chat's tools to keep its cache. A refusal, a tool call, any stop but
+  `end_turn`, no `<summary>`, an empty or 200k+ summary, or a missing
+  heading is refused with a closed code — metered first, because it was
+  billed.
+- **D4's harvest wiring is deliberately not here.** The list is written and
+  saved, but a harvest proposal must cite a source that resolves and a
+  summary line is not one — and compaction's turn N (the Nth message the
+  user sent) and the harvest's `turn:N` (the Nth assistant reply) can
+  differ when a committed turn produced no reply text. That is the
+  harvest's decision to make; `04_HARVEST.md` deviation 23 keeps the seam.
+- **Persistence**: an optional `compaction` project key, restored by
+  `CompactionRecord.from_dict` only while `fits()` holds for the loaded
+  history (anything else loads as "not condensed", logged INFO on
+  `buildaspec.project` — `load_project` runs under the guard, so never a
+  trace event).
+- **Surfaces.** The `compaction` SSE event opens every turn whose view has
+  a record (sizes and the turn range, never the text); `_doc_payload`
+  carries the same; `GET /api/chat/compaction` returns the text for **View
+  summary**. The chat's divider is a sibling of the memoized bubbles inside
+  a keyed Fragment (a prop would re-render every bubble when the record
+  moved) and is positioned client-side from `covers_turns`, counting only
+  messages that reached the saved history. Developer tools gains a
+  "Condensed conversation" row; Settings a "Conversation condensing" line;
+  the trust dossier card 16 plus a re-scoped "no model runs that you did
+  not start" (the background summary is the one you can switch on); Help
+  two lines; the tour a `condensed` step APPENDED to the conversation
+  chapter (no existing resume index moves, so `TOUR_VERSION` stays 8),
+  carrying the new `chat.condensed` capability.
+- **Two test traps, found the hard way.** (1) Two tests patched methods
+  directly onto `session.references` — a store that is reset IN PLACE and
+  so outlives the test — and 21 later tests (every reference upload) went
+  quietly empty. Use the real store (`references.add(...)`) or
+  `monkeypatch`. (2) A revert matrix that restores with `git checkout --
+  file` throws away uncommitted work in that same file; commit first, or
+  restore the exact text the script read.
+- **Tests**: `tests/test_chat_compaction.py` (36) and
+  `frontend/tests/compaction.test.ts` (8), plus the wipe-sweep probes and
+  the tool-order pin in `test_app.py`. Thirty backend and six frontend
+  mechanisms were reverted in place; the first pass found three that no
+  test caught — the chat route's scope flag, the too-long retry (its test
+  shrank the window so the BACKSTOP handled the case instead), and the
+  summary's own frame escape — and each got a stronger test before this
+  was recorded. Every mechanism now turns at least one test red.
+- **Errata for earlier sections** (append-only, so recorded here): (1)
+  "Conversation engine invariants → Strip at commit" — recall results are
+  elided at commit too (errors kept). (2) "Context architecture" and
+  "Rolling chat cache breakpoint" — for a condensed conversation the
+  committed-history boundary is the end of its VIEW, whose first message
+  carries the summary; the one-current-state-block rule is unchanged (the
+  summary is not PROJECT CONTEXT and never enters history). (3) The
+  v1.17.0 notes' "`record_project_facts` appended LAST in `_chat_tools`" —
+  `recall_conversation` is last now. (4) Batch 2's thinking-display probe
+  no longer degrades on a "prompt is too long" 400. (5) v1.11.0's "no model
+  runs on its own" has a second, opt-in exception: routine condensing.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

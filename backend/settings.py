@@ -206,10 +206,14 @@ def _bool_env(name: str, default: bool) -> bool:
 MODEL_MAX_OUTPUT_TOKENS = 128_000
 
 # Sonnet 5's context window (VERIFIED 2026-07 against the claude-api
-# reference): the denominator for the session context meter. The default is
-# a model fact, not a tuning knob — the env override exists ONLY to pair
-# with a BUILD_A_SPEC_INTERVIEW_MODEL override whose window differs (e.g.
-# Haiku 4.5 is 200k).
+# reference): the denominator for the session context meter, and since
+# compaction Phase 3 what the chat's backstop measures a request against
+# (CHAT_CONTEXT_BACKSTOP_FRACTION below). The default is a model fact, not a
+# tuning knob — the env override exists ONLY to pair with a
+# BUILD_A_SPEC_INTERVIEW_MODEL override whose window differs (e.g. Haiku 4.5
+# is 200k). Set too high, the backstop would let a request through that the
+# provider then rejects (the turn retries once, smaller); set too low, the
+# conversation is condensed early.
 MODEL_CONTEXT_WINDOW = _int_env("BUILD_A_SPEC_CONTEXT_WINDOW", 1_000_000, minimum=1)
 
 INTERVIEW_MAX_TOKENS = _int_env("BUILD_A_SPEC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)

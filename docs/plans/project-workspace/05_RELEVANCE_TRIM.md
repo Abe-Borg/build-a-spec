@@ -217,3 +217,24 @@ it on a build that carries Part A:
    `HEAD`'s implementation on a rich fixture and on an empty session:
    identical. A one-off check, not a committed test; the existing context
    tests pin the text's content.
+
+### From the Codex review of PR #186, 2026-09-23
+
+8. **A block is measured after the boundary escape, not before.** The
+   escape that makes a forged `PROJECT CONTEXT` marker inert changes its
+   length, and the first cut measured the named blocks before it while
+   `total` measured the escaped text — so the difference landed in
+   `other`. Reproduced: fifty forged closing markers in one provision
+   inflated `other` by 125 tokens, and a marker built from 2 × 5,000
+   `=` drove it to −1,925. The escape is now `_join_and_neutralize`:
+   still ONE pass over the joined text (same pattern, same replacement,
+   byte-identical output — re-checked against master with forged-marker
+   documents), recording each match so its characters come off the
+   part(s) that supplied them and its replacement is credited to the
+   part it began in; no count can go negative. Escaping each block
+   separately was rejected: it would miss a marker spanning a separator
+   and run the escape twice over the document, whose pattern is
+   quadratic on a long unfinished `=` run (a pre-existing cost, recorded
+   in CLAUDE.md as found-not-fixed). Pinned by
+   `test_a_forged_marker_is_counted_in_the_block_that_carried_it`; both
+   halves of the accounting were reverted in place, each red.

@@ -1037,8 +1037,10 @@ backend/
                            5A makes _turn_context_text return (text, sizes)
                            — CONTEXT_SIZE_KEYS, estimated tokens per block
                            measured from the very parts the text is joined
-                           from, `other` the exact remainder so the blocks
-                           sum to `total` — and adds
+                           from, as sent (_join_and_neutralize: the ONE
+                           escape pass, each match's characters taken from
+                           the part that supplied them), `other` the exact
+                           remainder so the blocks sum to `total` — and adds
                            SessionState.last_context_sizes (written beside
                            last_context_tokens under the same condition,
                            cleared on reset/load, never persisted)
@@ -11804,7 +11806,8 @@ project-format change; no version bump (Phase 7 releases the program).
   unpacks — a future caller must too.
 - **The partition** is `CONTEXT_SIZE_KEYS`: eight named blocks — `research`,
   `facts`, `sections`, `references`, `document`, `lint`, `open_items`,
-  `qc_review` — each measured from the very string appended to `parts`;
+  `qc_review` — each measured by what its string appended to `parts`
+  supplied to the text as sent (see the escape bullet below);
   `total`, the estimate of the text AS SENT (after the frame and the
   boundary escape); and `other`, the exact remainder (the date, identity,
   standards and profile lines, the editing boundary, follow-ups, figure
@@ -11823,11 +11826,39 @@ project-format change; no version bump (Phase 7 releases the program).
   one the History makeup row uses, and identical to each cap's private
   `_estimate_tokens`, so the reading and the caps agree about what "40k"
   means. Not a tokenizer; labelled an estimate everywhere it is shown.
-- **Measuring changes nothing about the text.** Only the three inline
-  blocks changed shape (each now binds a local before it is appended);
-  verified byte-identical against HEAD's implementation on a rich fixture
-  and an empty session before landing, and every existing context test is
-  untouched.
+- **Measuring changes nothing about the text.** The three inline blocks
+  now bind a local before they are appended, and the escape is
+  `_join_and_neutralize` (same pattern, same replacement, still one pass
+  over the joined text) in place of `_neutralize_context_boundaries`;
+  verified byte-identical against master's implementation on a rich
+  fixture, an empty session and three forged-marker documents, and every
+  existing context test is untouched.
+- **A block is measured AFTER the boundary escape** (caught in review on
+  PR #186, Codex). The escape changes a forged marker's length — an
+  ordinary `=== END PROJECT CONTEXT ===` grows ten characters when made
+  inert, a marker built from long `=` runs collapses — and the first cut
+  measured blocks before it, so the change landed in `other`: fifty
+  forged markers in a provision inflated `other` by 125 tokens, and
+  2 × 5,000 `=` drove it to −1,925. `_join_and_neutralize` records each
+  match (`re.sub` with a callback), takes its characters off the part(s)
+  they came from and credits the replacement to the part it began in, so
+  every character of the text belongs to exactly one part or separator
+  and no count can go negative. It stays ONE pass on purpose: escaping
+  each block separately would miss a marker spanning a separator (none
+  can today — every block opens with a fixed header — but the defence
+  must not depend on that), and it would run the escape twice over the
+  document, which matters because of the next bullet.
+- **Found, not fixed (both pre-existing, both pathological-input only).**
+  (1) `_CONTEXT_BOUNDARY_PATTERN` is quadratic on a long run of `=`
+  that does not complete a marker (each start position inside the run
+  re-scans it): 1,000 characters ≈ 40 ms, 5,000 ≈ 1 s, 20,000 ≈ 16 s, on
+  every turn start; a leading `(?<!=)` would make it linear without
+  changing a single match (the leftmost match always begins at a run's
+  first `=`; checked on 200,000 random strings, and 20,000 `=` falls to
+  ~1 ms). (2) the `duplicate_provision` lint runs `SequenceMatcher`
+  over every pair of long sibling provisions — two ~1.5–3k-character
+  number-free siblings cost ~10 s. Realistic sections stay in
+  milliseconds; both are their own change.
 - **Where the reading lives: `SessionState.last_context_sizes`**, written in
   the guarded commit block beside `last_context_tokens` and under the
   gauge's OWN condition (`last_round_context is not None`). The Context
@@ -11861,15 +11892,17 @@ project-format change; no version bump (Phase 7 releases the program).
   line, no tool; the 100k cap and the lowest-confidence-first trim are
   untouched. The gate numbers go in the phase file's "Deviations /
   measurements" either way.
-- **Tests**: `tests/test_context_sizes.py` (9) — it pins the clock, because
+- **Tests**: `tests/test_context_sizes.py` (10) — it pins the clock, because
   the date line changes length at midnight ("9 March" → "10 March") and
   several tests compare sizes across calls — and
-  `frontend/tests/contextSizes.test.ts` (6). Twenty-five mechanisms were
+  `frontend/tests/contextSizes.test.ts` (6). Twenty-seven mechanisms were
   reverted in place, each turning its own tests red: every block's
   measurement (eight), the trim count, the remainder, the total measured
   before the frame, the hand-off to the trace, the hook's field, the commit
   write, the write moved outside the gauge's condition, the diagnostics
-  field, the reset clear and the load clear (eighteen backend); research
+  field, the reset clear, the load clear and the escape accounting's two
+  halves (the characters taken, the replacement credited) — twenty
+  backend; research
   first, the trim count, the no-profile wording, the sort, the empty-block
   filter, an unlabelled backend block and the modal's use of the helper
   (seven frontend).

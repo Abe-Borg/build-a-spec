@@ -658,17 +658,21 @@ section →) is under v1.20.0 above.
       the page-text trim on by default (not a 1.21.0 check):
       `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
       request, about two cents at most). It sends a saved conversation whose
-      fetched page text was trimmed while a reply still cites the page, and
-      must report that the provider accepted it. If it reports a refusal,
-      keep the default off; run it again with `--control` and record both
-      outputs in the compaction plan's Phase 2 section.
+      fetched page text was trimmed to a note that carries the passage the
+      reply quoted, with the reply's citation into the old text removed,
+      and must report that the provider accepted it. Its first run
+      (2026-09-23) was refused on the older shape, which kept that
+      citation. If it reports a refusal, keep the default off; run it
+      again with `--control` and record both outputs in the compaction
+      plan's Phase 2 section.
 - [ ] **With the trim switched on, a fetched page leaves the saved
       conversation.** Launch with `BUILD_A_SPEC_ELIDE_FETCHED_PAGES=1` and
       repeat the web-page check. **History makeup** no longer mentions
       fetched pages carrying their text, and the next message still gets an
       answer (the assistant may read the page again). In `project.json` the
       page's address and title are there and its body text is not. The
-      quoted passage is still there, inside the reply's citation.
+      quoted passage is still there, inside the page's note, and the reply
+      no longer carries a citation into the removed text.
 
 ### Chat history compaction (Phase 3)
 
@@ -700,6 +704,13 @@ the shell you launch the app from, and clear them when done.
       assistant to read it. Once the divider appears, remove that document
       from the panel: the divider goes with it at once (**View summary** is
       gone rather than failing).
+- [ ] **Condensing after web lookups.** With the same three knobs set,
+      ask the assistant to read a public web page and quote it; in a later
+      turn, ask it to read a second page and quote that. Keep chatting
+      until the divider moves past the first page's turn. The next message
+      still gets an answer. Before the citation repair, a condensed
+      conversation whose early turns read pages could be refused from
+      then on, because its later citations pointed at the wrong page.
 - [ ] **The backstop.** Clear the three knobs and launch with
       `BUILD_A_SPEC_CONTEXT_WINDOW=60000`. Keep chatting: once a message
       would not fit, the status line reads *Condensing earlier

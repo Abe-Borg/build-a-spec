@@ -32,12 +32,27 @@ the web: the note that replaces it names the URL, the ``url`` field the
 model may re-fetch from stays, and so do the document's title, retrieval
 time and citation setting. The document block itself is never removed —
 citation ``document_index`` counts every document in the request, so
-dropping one would re-point every later citation at the wrong page. Fetched
-PDFs are not touched here; ``research.resend_sanitizer.elide_all_pdf_sources``
-already turns each one into a short note at commit. Its callers apply it only
-while ``settings.ELIDE_FETCHED_PAGE_TEXT`` is on, which it is not by default
-until the live canary (``tools/fetch_elision_canary.py``) passes; this module
-stays a leaf and reads no settings itself.
+dropping one would re-point every later citation at the wrong page.
+
+A reply that quoted the page cited it with character spans into the ORIGINAL
+text, and the API checks a span against the document it lands on: the live
+canary's first run (2026-09-23) was refused with ``Start index 2406 is
+beyond document length 257``. So the trim also removes the citations that
+point into a page it trims, and keeps what they quoted by folding each
+passage into the page's note, where the model reads it on later turns.
+The API does not bill ``cited_text`` as input when it is passed back, which
+says it is not re-sent to the model as text; with the page gone, the note is
+the one place the passage can still be read. A citation that also fits a
+page this trim keeps is left alone, and so is one that points at a page this
+list does not hold. ``citations.repair_document_citations`` checks every
+outgoing request against what the request really holds.
+
+Fetched PDFs are not touched here; ``research.resend_sanitizer.
+elide_all_pdf_sources`` already turns each one into a short note at commit.
+The callers apply the page trim only while ``settings.ELIDE_FETCHED_PAGE_
+TEXT`` is on, which it is not by default until the live canary
+(``tools/fetch_elision_canary.py``) passes on this shape; this module stays
+a leaf and reads no settings itself.
 
 :func:`history_composition` says what a history is made of, by category,
 in sizes only — never text — for Developer tools, the support bundle and
@@ -51,7 +66,10 @@ import the engine without a cycle.
 from __future__ import annotations
 
 import json
+from bisect import bisect_left
 from typing import Any
+
+from .citations import citation_fits, request_documents
 
 # The app's estimate when it has no real count to hand (len/4). An estimate,
 # labelled as one everywhere it is shown; it is not a tokenizer.
@@ -87,15 +105,28 @@ _SERVER_RESULT_LABELS = {
 OUTLINE_CATEGORY = "document outlines in edit results"
 
 # Replaces a fetched page's text in saved history. It names the URL so the
-# model can fetch the page again; the passages a reply quoted survive in
-# that reply's citations (``cited_text``), which the API does not bill as
-# input. Like STALE_OUTLINE_NOTE it never names the context block's header.
+# model can fetch the page again; the passages a reply quoted follow it
+# (see QUOTED_PASSAGES_HEADER). Like STALE_OUTLINE_NOTE it never names the
+# context block's header.
 FETCHED_PAGE_NOTE = (
     "[Page text omitted from saved history so it is not re-sent with every "
     "later message. Fetched from: {url}. Fetch it again if its exact "
-    "wording is needed; passages quoted from it stay in the replies' "
-    "citations.]"
+    "wording is needed.]"
 )
+# Every page note starts with this, whatever follows it. A note that
+# carries quoted passages is longer than a bare one, so "no longer than its
+# replacement" can no longer tell a trimmed page from an untrimmed one; the
+# prefix does. Notes written by earlier builds (which ended by promising the
+# citations kept the quotes) start with it too.
+FETCHED_PAGE_NOTE_PREFIX = "[Page text omitted from saved history"
+# The passages the replies quoted from a trimmed page, one per line after
+# the note. They replace the citations that pointed into the page text.
+QUOTED_PASSAGES_HEADER = "Passages the replies quoted from it:"
+QUOTED_PASSAGES_LEFT_OUT = (
+    "({count} quoted passage(s) not kept here; fetch the page again for them.)"
+)
+# Per page. A note that grew past this would start to cost what the page did.
+QUOTED_PASSAGES_MAX_CHARS = 4_000
 # ``research.resend_sanitizer`` rewrites a fetched PDF into a short
 # plain-text note that starts with this. It says what it replaced (and how
 # many pages), so it is left alone rather than overwritten by the page note,
@@ -227,15 +258,16 @@ def _note_url(url: Any) -> str:
     return text[:_NOTE_URL_CHARS] if text else "an address the result did not record"
 
 
-def _elide_page_text(block: Any) -> dict[str, Any] | None:
-    """``block`` with its fetched page text replaced by the note, else None.
+def _elide_page_text(block: Any, note: str | None = None) -> dict[str, Any] | None:
+    """``block`` with its fetched page text replaced by ``note``, else None.
 
     None means there is nothing to take out: not a successful
     ``web_fetch_tool_result``, a document that is not plain text (a fetched
-    PDF, which the PDF elision handles), the PDF elision's own note, or a
-    page no longer than the note that would replace it — replacing it would
-    GROW the history, and that rule is also what makes the elision
-    idempotent (a note in place is exactly as long as its replacement).
+    PDF, which the PDF elision handles), the PDF elision's own note, a page
+    already trimmed (its text starts with ``FETCHED_PAGE_NOTE_PREFIX``), or a
+    page no longer than the bare note — replacing it would GROW the history.
+    ``note`` defaults to that bare note; the trim passes one carrying the
+    quoted passages, which :func:`_page_note` keeps shorter than the page.
     Only the text source's ``data`` changes; every other key of the block,
     the result (``url``, ``retrieved_at``) and the document (``title``,
     ``citations``) is kept as it was.
@@ -252,11 +284,16 @@ def _elide_page_text(block: Any) -> dict[str, Any] | None:
     if not isinstance(source, dict) or source.get("type") != "text":
         return None
     data = source.get("data")
-    if not isinstance(data, str) or data.startswith(PDF_ELISION_NOTE_PREFIX):
+    if (
+        not isinstance(data, str)
+        or data.startswith(PDF_ELISION_NOTE_PREFIX)
+        or data.startswith(FETCHED_PAGE_NOTE_PREFIX)
+    ):
         return None
-    note = FETCHED_PAGE_NOTE.format(url=_note_url(result.get("url")))
-    if len(note) >= len(data):
+    if len(FETCHED_PAGE_NOTE.format(url=_note_url(result.get("url")))) >= len(data):
         return None
+    if note is None:
+        note = FETCHED_PAGE_NOTE.format(url=_note_url(result.get("url")))
     return {
         **block,
         "content": {
@@ -266,8 +303,69 @@ def _elide_page_text(block: Any) -> dict[str, Any] | None:
     }
 
 
-def elide_fetched_page_text(messages: list[Any]) -> list[Any]:
+def _quoted_passage(citation: dict[str, Any], data: str) -> str:
+    """What a character-span citation quoted, on one line."""
+    cited = citation.get("cited_text")
+    if not isinstance(cited, str) or not cited.strip():
+        cited = data[citation["start_char_index"]:citation["end_char_index"]]
+    return " ".join(cited.split())
+
+
+def _page_note(url: Any, passages: list[str], page_chars: int) -> str:
+    """The note for one trimmed page: the bare note, then what was quoted.
+
+    Always shorter than the page it replaces — the trim must only ever
+    shrink the history — and the passages together stay within
+    ``QUOTED_PASSAGES_MAX_CHARS``. Passages that do not fit are counted in a
+    closing line rather than dropped without a word. When even that line
+    would not fit, the bare note stands alone; it still says to fetch the
+    page again for its exact wording.
+    """
+    base = FETCHED_PAGE_NOTE.format(url=_note_url(url))
+    if not passages:
+        return base
+    kept: list[str] = []
+    budget = QUOTED_PASSAGES_MAX_CHARS
+    for passage in passages:
+        line = f'- "{passage}"'
+        if len(line) > budget:
+            break
+        kept.append(line)
+        budget -= len(line)
+    while True:
+        left_out = len(passages) - len(kept)
+        parts = [base]
+        if kept:
+            parts += [QUOTED_PASSAGES_HEADER, *kept]
+        if left_out:
+            parts.append(QUOTED_PASSAGES_LEFT_OUT.format(count=left_out))
+        note = "\n".join(parts)
+        if len(note) < page_chars:
+            return note
+        if not kept:
+            return base
+        kept.pop()
+
+
+def elide_fetched_page_text(
+    messages: list[Any], *, document_offset: int = 0
+) -> list[Any]:
     """Drop fetched web-page text from saved history (copy-on-write).
+
+    Every page this list holds is trimmed to a note, and every citation in
+    the list that points into a trimmed page is removed, its passage folded
+    into the note of the page it names. A citation that also fits a page
+    left in place keeps pointing where it did.
+
+    Which page a citation names is its ``document_index``, counted over the
+    request the citation was written in. ``document_offset`` is where the
+    first document in ``messages`` sat in that request: 0 for a whole
+    history (a project being opened), and for a turn being committed, the
+    number of documents in the view its request sent ahead of it. Two pages
+    can hold the same passage under the same title (a page fetched twice, a
+    mirror), and only the index says which one the reply cited. When the
+    index does not land on a page the citation fits, the passage goes to
+    the nearest earlier page it does fit.
 
     Returns the SAME list object when nothing needed removing; changed
     messages are rebuilt and nothing given is ever mutated. Only committed
@@ -275,26 +373,89 @@ def elide_fetched_page_text(messages: list[Any]) -> list[Any]:
     it just fetched. Server tool results only ever sit in assistant
     messages, so only those are searched.
     """
-    result: list[Any] | None = None
-    for index, message in enumerate(messages):
+    pages: dict[tuple[int, int], dict[str, Any]] = {}
+    for message_index, message in enumerate(messages):
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         content = message.get("content")
         if not isinstance(content, list):
             continue
-        new_content: list[Any] | None = None
         for block_index, block in enumerate(content):
-            elided = _elide_page_text(block)
-            if elided is None:
+            if _elide_page_text(block) is not None:
+                pages[(message_index, block_index)] = block
+    if not pages:
+        return messages
+
+    documents = request_documents(messages)
+    positions = [position for position, _document in documents]
+    passages: dict[tuple[int, int], list[str]] = {position: [] for position in pages}
+    folded: dict[tuple[int, int], set[int]] = {}
+    for message_index, message in enumerate(messages):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block_index, block in enumerate(content):
+            if not isinstance(block, dict) or block.get("type") != "text":
                 continue
-            if new_content is None:
-                new_content = list(content)
-            new_content[block_index] = elided
-        if new_content is not None:
-            if result is None:
-                result = list(messages)
-            result[index] = {**message, "content": new_content}
-    return messages if result is None else result
+            citations = block.get("citations")
+            if not isinstance(citations, list):
+                continue
+            before = bisect_left(positions, (message_index, block_index))
+            for citation_index, citation in enumerate(citations):
+                if not isinstance(citation, dict) or citation.get("type") != "char_location":
+                    continue
+                fitting = [
+                    position
+                    for position, document in documents[:before]
+                    if citation_fits(citation, document)
+                ]
+                # Nothing here to point at: another turn's page, or a pointer
+                # that was already broken. The request repair judges those.
+                if not fitting or any(p not in pages for p in fitting):
+                    continue
+                index = citation.get("document_index")
+                named = None
+                if isinstance(index, int) and not isinstance(index, bool):
+                    local = index - document_offset
+                    if 0 <= local < before:
+                        named = documents[local][0]
+                target = named if named in fitting else fitting[-1]
+                data = pages[target]["content"]["content"]["source"]["data"]
+                passage = _quoted_passage(citation, data)
+                if passage and passage not in passages[target]:
+                    passages[target].append(passage)
+                folded.setdefault((message_index, block_index), set()).add(citation_index)
+
+    result = list(messages)
+    rebuilt: dict[int, list[Any]] = {}
+
+    def content_of(message_index: int) -> list[Any]:
+        if message_index not in rebuilt:
+            rebuilt[message_index] = list(messages[message_index]["content"])
+        return rebuilt[message_index]
+
+    for (message_index, block_index), block in pages.items():
+        result_block = block["content"]
+        note = _page_note(
+            result_block.get("url"),
+            passages[(message_index, block_index)],
+            len(result_block["content"]["source"]["data"]),
+        )
+        content_of(message_index)[block_index] = _elide_page_text(block, note)
+    for (message_index, block_index), dropped in folded.items():
+        block = messages[message_index]["content"][block_index]
+        kept = [c for i, c in enumerate(block["citations"]) if i not in dropped]
+        repaired = dict(block)
+        if kept:
+            repaired["citations"] = kept
+        else:
+            repaired.pop("citations", None)
+        content_of(message_index)[block_index] = repaired
+    for message_index, new_content in rebuilt.items():
+        result[message_index] = {**messages[message_index], "content": new_content}
+    return result
 
 
 def count_fetched_page_texts(messages: list[Any]) -> int:

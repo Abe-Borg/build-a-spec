@@ -3,17 +3,25 @@
 ``tools/fetch_elision_canary.py --run`` is one of the two paid exceptions
 CLAUDE.md allows. These tests never let it reach a provider: they pin that
 it sends nothing without ``--run``, that the one request it would send is
-the shape a real commit produces (page text replaced, citation into the
-original kept, the production chat tools), and that it reports acceptance
-and refusal plainly.
+the shape a real commit produces (page text replaced by a note carrying the
+passage the reply quoted, the citation into the original text gone, the
+production chat tools, the same repair every chat request takes), and that
+it reports acceptance and refusal plainly. Its first run (2026-09-23) was
+refused on the earlier shape, which kept that citation.
 """
 from __future__ import annotations
+
+import copy
 
 import pytest
 
 from backend import settings
 from backend.llm import conversation
-from backend.llm.history_hygiene import FETCHED_PAGE_NOTE
+from backend.llm.history_hygiene import (
+    FETCHED_PAGE_NOTE,
+    FETCHED_PAGE_NOTE_PREFIX,
+    QUOTED_PASSAGES_HEADER,
+)
 from tests.fakes import FakeClient, bad_request, text_turn
 from tools import fetch_elision_canary as canary
 
@@ -26,12 +34,13 @@ def _fetch_document(request: dict) -> dict:
     raise AssertionError("no fetched page in the canary request")
 
 
-def _citation(request: dict) -> dict:
-    for message in request["messages"]:
-        for block in message["content"]:
-            if block.get("citations"):
-                return block["citations"][0]
-    raise AssertionError("no citation in the canary request")
+def _citations(request: dict) -> list[dict]:
+    return [
+        citation
+        for message in request["messages"]
+        for block in message["content"]
+        for citation in block.get("citations") or []
+    ]
 
 
 def test_the_canary_sends_nothing_without_run(monkeypatch, capsys):
@@ -48,15 +57,17 @@ def test_the_canary_request_is_the_shape_a_commit_produces():
     request = built.request
 
     document = _fetch_document(request)
-    assert document["source"]["data"] == FETCHED_PAGE_NOTE.format(url=canary._URL)
+    assert document["source"]["data"] == (
+        f"{FETCHED_PAGE_NOTE.format(url=canary._URL)}\n{QUOTED_PASSAGES_HEADER}\n"
+        f'- "{canary._CITED}"'
+    )
     assert document["title"] == canary._TITLE
     assert document["citations"] == {"enabled": True}
-    citation = _citation(request)
-    assert citation["type"] == "char_location"
-    assert citation["cited_text"] == canary._CITED
-    # The point of the check: the citation now points past the end of the
-    # text the document still holds.
-    assert citation["start_char_index"] > built.saved_chars
+    # The point of the check: the citation the first run was refused on
+    # (its span past the end of the note) is gone, and what it quoted is in
+    # the note, where the model can still read it.
+    assert _citations(request) == []
+    assert built.cited_start > built.saved_chars
     assert built.saved_chars < built.page_chars
 
     assert request["model"] == settings.INTERVIEW_MODEL
@@ -70,6 +81,9 @@ def test_the_canary_request_is_the_shape_a_commit_produces():
     control = canary.build_request(max_tokens=512, control=True)
     assert _fetch_document(control.request)["source"]["data"] == canary._PAGE
     assert control.saved_chars == control.page_chars
+    (citation,) = _citations(control.request)
+    assert citation["cited_text"] == canary._CITED
+    assert citation["start_char_index"] == control.cited_start
 
 
 def test_the_canary_forces_the_trim_on_whatever_the_switch_says(monkeypatch):
@@ -78,15 +92,43 @@ def test_the_canary_forces_the_trim_on_whatever_the_switch_says(monkeypatch):
     switch (``settings.ELIDE_FETCHED_PAGE_TEXT``) never reaches it."""
     monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", False)
     built = canary.build_request(max_tokens=512)
-    assert _fetch_document(built.request)["source"]["data"] == FETCHED_PAGE_NOTE.format(
-        url=canary._URL
+    assert _fetch_document(built.request)["source"]["data"].startswith(
+        FETCHED_PAGE_NOTE_PREFIX
     )
 
 
 def test_the_canary_refuses_to_send_an_unelided_page_as_elided(monkeypatch):
     # If commit ever stopped trimming page text, a pass would prove nothing.
-    monkeypatch.setattr(conversation, "elide_fetched_page_text", lambda messages: messages)
+    monkeypatch.setattr(
+        conversation, "elide_fetched_page_text", lambda messages, **_kwargs: messages
+    )
     with pytest.raises(AssertionError, match="did not replace"):
+        canary.build_request(max_tokens=512)
+
+
+def test_the_canary_refuses_to_send_the_shape_its_first_run_was_refused_on(
+    monkeypatch,
+):
+    """A commit that trimmed the page but kept the citation into it is the
+    shape the provider refused on 2026-09-23. Sending it again would only
+    repeat that answer, so the canary will not call it the new shape."""
+
+    def phase_two_trim(messages, **_kwargs):
+        trimmed = []
+        for message in messages:
+            content = []
+            for block in message.get("content") or []:
+                if block.get("type") == "web_fetch_tool_result":
+                    block = copy.deepcopy(block)
+                    block["content"]["content"]["source"]["data"] = FETCHED_PAGE_NOTE.format(
+                        url=canary._URL
+                    )
+                content.append(block)
+            trimmed.append({**message, "content": content})
+        return trimmed
+
+    monkeypatch.setattr(conversation, "elide_fetched_page_text", phase_two_trim)
+    with pytest.raises(AssertionError, match="did not fold"):
         canary.build_request(max_tokens=512)
 
 

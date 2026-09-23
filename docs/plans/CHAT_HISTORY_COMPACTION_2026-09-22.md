@@ -113,41 +113,47 @@ see Phase 5.
 |---|---|---|---|---|
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
-| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`) | commit-time + load-time elision; live canary built but **never run** — the PR merged without it. Ships in 1.21.0 **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`) until the canary passes — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **in review** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189) | both halves; routine condensing off by default until the recall check, backstop always on — see Phase 3 → As built |
+| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, in review) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. Stays **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`) until the canary passes on the new shape — see Phase 2 → Canary result |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, in review) | both halves; routine condensing off by default until the recall check, backstop always on. A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
 A status moves to **complete** only after the PR merges, set by the next
 session that touches this file (the project-workspace convention).
 
-**Where it stands (2026-09-23, recorded at the 1.21.0 closeout; the Phase 3
-line updated while PR #189 is in review).** Phases 1 and 2 are on `master`,
-and both ship in 1.21.0 (the project-workspace closeout,
-`project-workspace/07_RELEASE_CLOSEOUT.md`). The owner decided D1–D4 on
+**Where it stands (2026-09-23; recorded at the 1.21.0 closeout, updated
+when PR #189 merged and the Phase 2 canary's first run came back
+refused).** Phases 1–3 are on `master`. 1.21.0 was prepared to carry
+Phases 1 and 2 (the project-workspace closeout,
+`project-workspace/07_RELEASE_CLOSEOUT.md`), but it is not tagged. The owner decided D1–D4 on
 2026-09-22 (see the Decisions table). No real measurements have been
 supplied yet, so the numbers under "What actually fills the history" are
 still the synthetic ones.
 
-- **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, which
-  has still not been run. It needs the owner's API key and one paid
-  request, and no key was available to the closeout session. So 1.21.0
-  ships the trim **switched off**: the code, the tests and the canary are
-  on `master`, and `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` (default `0`) gates
-  both the commit-time and the load-time elision. Turning it on by default
-  is a one-line change, plus the Phase 2 release note, once the canary
-  reports acceptance (see Phase 2 → Canary result).
-- **Phase 3** is built and in review in PR #189. It condenses with our own
-  summarizer at D1 (600k tokens of committed conversation, the last 3 turns
-  kept) and ships `recall_conversation` with it. **Routine condensing is off
-  by default** (`BUILD_A_SPEC_CHAT_COMPACTION`) until the paid recall check
-  under "Before it is on by default"; the backstop, which condenses only
-  when a message would not otherwise fit, runs either way. It is NOT in the
-  1.21.0 release notes — and **v1.21.0 was not yet tagged** when this was
-  written, so the order matters: tag 1.21.0 from the commit before PR #189
-  merges, or fold Phase 3's release-note draft (below) into the 1.21.0
-  entry before tagging. Merging first and tagging after ships the backstop
-  and the recall tool in a build whose notes do not mention them.
+- **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, and
+  ships **switched off**: `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` (default `0`)
+  gates both the commit-time and the load-time elision. The owner ran the
+  canary on 2026-09-23 and it was **refused**: the API checks a saved
+  citation against the document it lands on, and the trim had left the
+  reply's citation pointing past the end of its note (see Phase 2 → Canary
+  result). The rework (PR #192) folds each quoted passage into the page's
+  note and removes the citations into the trimmed text. The trim stays off
+  until the canary passes on that shape; then turning it on is a one-line
+  change plus the Phase 2 release note.
+- **Phase 3** merged in PR #189 (`971683f`) — before v1.21.0 was tagged, so
+  `master` carries it although 1.21.0's release notes do not mention it. No
+  release is planned for now (owner, 2026-09-23); whichever release next
+  ships from `master` must carry Phase 3's release-note draft (below). It
+  condenses with our own summarizer at D1 (600k tokens of committed
+  conversation, the last 3 turns kept) and ships `recall_conversation` with
+  it. **Routine condensing is off by default**
+  (`BUILD_A_SPEC_CHAT_COMPACTION`) until the paid recall check under
+  "Before it is on by default"; the backstop, which condenses only when a
+  message would not otherwise fit, runs either way. The canary's refusal
+  exposed a defect in it: a condensed view drops the pages its oldest turns
+  fetched, which shifted every later citation's `document_index`. The
+  citation repair (PR #192) fixes every outgoing request (see Phase 3 →
+  As built).
 - **D4 is yes, and half of it is in.** Phase 3's summary lists the
   decisions missing from the ledgers, each tagged with the turn it was
   settled in, and that list is saved with the summary. Feeding it to the
@@ -254,7 +260,8 @@ fetched document. The PDF elision has shipped with the equivalent shape
 for PDFs and no failure has been reported, but whether the API validates a
 historical citation against its (now replaced) document is not documented.
 One opt-in request settles it: a history holding an elided fetched page
-plus a citation into it, sent once. Follow the `tools/qc_verifier_canary.py`
+plus a citation into it, sent once. **Settled 2026-09-23: the API checks,
+and refused it** (see Canary result). Follow the `tools/qc_verifier_canary.py`
 pattern (no request without `--run`) and record the result here; CLAUDE.md
 names that canary as the sole paid exception, so adding a second one means
 updating that ground rule in the same change.
@@ -289,6 +296,19 @@ updating that ground rule in the same change.
   replace the page. `--control` sends the same conversation with the page
   text kept, as one more request, only when a refusal needs diagnosing.
   Unlike the QC canary it has hermetic tests.
+- **Reworked after the canary's first run (PR #192).** The run was
+  refused because the reply's citation still pointed into the trimmed
+  text. The trim now removes the citations into a page it trims and writes
+  each quoted passage into the page's note, deduped, in quoting order,
+  within 4,000 characters per page and with a disclosed count of what did
+  not fit, never growing the page. The passage goes to the page the
+  citation names (its index, read against the request it was written in,
+  so a commit passes how many documents its view sent ahead of the turn),
+  because a page fetched twice or a mirror can hold the same passage
+  (Codex, PR #192). A citation that also fits a document the trim keeps is
+  left alone. A trimmed page is recognized by the note's prefix, because a
+  note with quotes is longer than a bare one. The canary sends the new
+  shape and refuses to send the old one.
 - Tests: `tests/test_fetched_page_elision.py` (6) and
   `tests/test_fetch_elision_canary.py` (6). Each mechanism was reverted in
   place to prove it load-bearing: the commit wiring → 4 red, the load wiring
@@ -298,12 +318,31 @@ updating that ground rule in the same change.
 
 **Canary result** (the owner's run; paste its output here):
 
-- **Not run** as of the 1.21.0 closeout (2026-09-23). PR #183 merged
-  without it, and the closeout session had no API key to run it with. The
-  command is `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
-  request, about two cents at most). It forces the trim on for its own
-  request whatever the switch below says, so it tests the shape the switch
-  would turn on.
+- **Run 1 — refused** (the owner's run, 2026-09-23, on the shape PR #183
+  shipped: the page trimmed, the reply's citation into it kept). Output,
+  verbatim:
+
+  ```
+  Configured API key: yes (source: keyring).
+  Sending one request to claude-sonnet-5: elided page; the saved page is 257 of 2,489 characters and a reply cites characters 2406-2455 of the original.
+  Fetch elision canary: the request failed: BadRequestError (400): Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'messages.1.content.4.citations.0: Start index 2406 is beyond document length 257'}, 'request_id': 'req_011CfLMxM5J8f5pAjbUfWPvq'}
+  The provider REFUSED a saved conversation whose fetched page text was replaced while a reply still cites it. Keep the page-text trim switched off (BUILD_A_SPEC_ELIDE_FETCHED_PAGES) until this is resolved. Run again with --control to check whether the same conversation is accepted with its page text intact.
+  ```
+
+  The API checks a saved citation against the document it lands on. The
+  `--control` run was not made: the error names the cause exactly (the
+  citation's span lies past the end of the note), which settles the
+  question `--control` exists to answer.
+- **What run 1 changed** (PR #192): the trim now writes each passage a
+  reply quoted into the page's note and removes the citations into the
+  trimmed text; the canary sends that shape, and refuses to send the old
+  one. Every chat request also goes through the citation repair (Phase 3 →
+  As built), which drops a citation that no longer fits its document on the
+  way out. **Run 2 is owed**, with the same command:
+  `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one request,
+  about two cents at most). It forces the trim on for its own request
+  whatever the switch below says, so it tests the shape the switch would
+  turn on.
 - **What that decided:** 1.21.0 ships the trim **switched off**
   (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`), so no saved history
   takes the unverified shape. With the switch off, commit and project load
@@ -315,10 +354,11 @@ updating that ground rule in the same change.
   pins it and will need its expectation changed with it), add the
   Release-note draft below to the next release, and update README.md's
   Configuration row and "Fetched web pages" subsection.
-- **If it is refused:** run it again with `--control`, record both outputs
-  here, and rework the elision before the default changes. One option is
-  to also drop the citations that point into a trimmed page, keeping their
-  quoted passages in the note.
+- **If run 2 is refused:** run it again with `--control`, record both
+  outputs here, and rework the elision again before the default changes.
+  (Run 1's refusal took the option this bullet used to name: drop the
+  citations that point into a trimmed page, keeping their quoted passages
+  in the note.)
 
 **Release-note draft** (NOT in 1.21.0, which ships the trim switched
 off; it goes into the release that turns the trim on by default):
@@ -616,6 +656,26 @@ The claude-api skill's `build-eval` guide is the method.
   route's scope flag, the too-long retry, and escaping the summary inside
   its own frame), each fixed by a stronger test before this was recorded.
   Every mechanism now turns at least one test red.
+- **Citations in a condensed view (found 2026-09-23, after merge; fixed in
+  PR #192).** A citation names its document by `document_index`, which
+  counts every document in the request, and the Phase 2 canary's refusal
+  showed the provider checks it against the document it lands on. The
+  view leaves the oldest turns out — and the pages they fetched with them —
+  so every later citation landed early: on the wrong page, or past the end
+  of the list, which the provider refuses. Phase 2's own as-built note had
+  said exactly this about removing a document block; this phase missed
+  it. The fix is `backend/llm/citations.repair_document_citations`, run on
+  every chat request and on the summary call: a citation that no longer
+  fits the document it lands on is re-pointed at the earlier document it
+  fits (matched by its quoted text, or by title where it quotes nothing),
+  or dropped with its words kept.
+  It keeps no record of which request numbered what (a reply answered
+  under one view carries that view's numbers), looks only backwards (so
+  the cached prefix never moves, and the summary call's copy of the view
+  is byte for byte the chat's), and returns the same list when nothing
+  needs repair. It also covers a fetched PDF's citations once its turn is
+  saved as a note. Details and the revert matrix: CLAUDE.md → "Citations
+  must fit the request that carries them".
 
 **Release-note draft** (for whichever release carries this; see "Release
 policy" below):
@@ -664,6 +724,9 @@ Phase 2, and its entry uses Phase 1's draft. Phase 2's draft waits: the
 trim ships switched off until its canary passes, and a release note
 describing a change nobody receives would be false.
 
-Phase 3 (PR #189) is not part of 1.21.0's notes; while 1.21.0 is untagged,
-the order of that tag and PR #189's merge decides whether its build
-carries Phase 3 anyway — see "Where it stands".
+Phase 3 (PR #189) is not part of 1.21.0's notes, and it merged on
+2026-09-23 before 1.21.0 was tagged, so `master` carries it. No release is
+planned for now (owner, 2026-09-23). Whichever release next ships from
+`master` — 1.21.0 tagged at a later commit, or a later version — must carry
+Phase 3's release-note draft. The citation repair (PR #192) is part of
+Phase 3's behaviour before any release, so it needs no note of its own.

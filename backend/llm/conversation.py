@@ -134,6 +134,7 @@ from ..qc.apply import (
 from ..qc.context import qc_review_context_block
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import refusal_category, response_container_id
+from .citations import repair_document_citations, request_documents
 from .compaction import (
     MIN_CONDENSE_FRACTION,
     RECALL_CONVERSATION_TOOL,
@@ -2637,6 +2638,7 @@ def _committed_messages(
     user_text: str,
     *,
     elide_fetched_pages: bool | None = None,
+    document_offset: int = 0,
 ) -> list[dict[str, Any]]:
     """The turn's messages as history stores them: lean and current-free.
 
@@ -2650,11 +2652,15 @@ def _committed_messages(
       on, so is the text of every other fetched page (see
       :func:`history_hygiene.elide_fetched_page_text`): the URL, title and
       retrieval time stay, the model can fetch the page again, and the
-      passages this turn's reply quoted survive in its citations. The trim
+      passages this turn's reply quoted move into the page's note, while
+      the citations that pointed into the page text go (the API checks a
+      citation against the text it points into). ``document_offset`` is
+      how many documents this turn's request sent ahead of these messages,
+      so a citation's ``document_index`` finds the page it named. The trim
       is ``settings.ELIDE_FETCHED_PAGE_TEXT``, off by default until its
       live canary passes; ``elide_fetched_pages`` overrides it for one call
       (the canary passes ``True``, since it tests the shape the switch
-      would turn on). Search results and citations stay.
+      would turn on). Search results, and every other citation, stay.
     - ``create_figure`` tool inputs shed their heavy source (see
       :func:`_elide_figure_tool_inputs`) — the figure store holds it.
     - ``read_reference_doc`` tool results shed the document body (see
@@ -2699,7 +2705,7 @@ def _committed_messages(
         else elide_fetched_pages
     )
     if trim_pages:
-        committed = elide_fetched_page_text(committed)
+        committed = elide_fetched_page_text(committed, document_offset=document_offset)
     return _without_unpaired_server_tool_uses(
         elide_recall_results(
             elide_stale_outlines(
@@ -2916,7 +2922,10 @@ def _build_chat_request(
         inputs.history, inputs.new_messages, inputs.view_spec
     )
     raw = view + turn
-    messages = sanitize_messages_for_resend(raw)
+    # Citations last: the sanitizer can turn an oversized PDF into a note,
+    # and a condensed view drops the pages its oldest turns fetched; either
+    # leaves a citation pointing at a document the request no longer holds.
+    messages = repair_document_citations(sanitize_messages_for_resend(raw))
     kwargs: dict[str, Any] = {
         "model": inputs.model,
         "max_tokens": inputs.max_tokens,
@@ -4049,7 +4058,10 @@ def _build_compaction_request(inputs: _CompactionInputs) -> dict[str, Any]:
     container: a summary never resumes server-tool work.
     """
     view, _pending = compacted_view(inputs.history, inputs.view_spec)
-    messages = sanitize_messages_for_resend(list(view))
+    # The same repair the chat request applies, so the prefix stays byte for
+    # byte the one the last turn cached (the repair only looks backwards,
+    # so the new turn the chat request carries cannot change it).
+    messages = repair_document_citations(sanitize_messages_for_resend(list(view)))
     starts = turn_starts(view)
     boundary = (
         starts[-1] - 1
@@ -5163,7 +5175,17 @@ def stream_user_turn(
             if not owns_turn:
                 commit_invalidated = True
             else:
-                committed_turn = _committed_messages(new_messages, user_text)
+                # The page trim reads a citation's document_index against the
+                # request that turn sent: the view's documents come first.
+                view, _pending = compacted_view(
+                    session.history,
+                    turn_view.spec if turn_view is not None else None,
+                )
+                committed_turn = _committed_messages(
+                    new_messages,
+                    user_text,
+                    document_offset=len(request_documents(view)),
+                )
                 session.history.extend(committed_turn)
                 doc_changed = session.doc.commit_turn()
                 session.figures.commit_turn()

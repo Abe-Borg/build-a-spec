@@ -5,10 +5,13 @@ A chat ``web_fetch`` can leave tens of thousands of tokens of page text in
 the conversation, and everything committed is re-sent on every later turn.
 Within the turn the model is still reading the page, so it keeps it; once
 the turn commits, the saved form keeps the fetch (URL, title, retrieval
-time, citation setting) and a note in place of the text, and the reply
-keeps the passages it quoted in its citations. These tests pin both
-halves, the same trim applied to a project saved by an earlier build, and
-that a fetched PDF keeps the note its own elision already wrote.
+time, citation setting) and a note in place of the text. The passages the
+reply quoted move into that note, and the citations that pointed into the
+page text go: the live canary's first run (2026-09-23) showed the provider
+refuses a citation whose span lies past the end of the note ("Start index
+2406 is beyond document length 257"). These tests pin both halves, the
+same trim applied to a project saved by an earlier build, and that a
+fetched PDF keeps the note its own elision already wrote.
 
 1.21.0 ships the trim SWITCHED OFF (``settings.ELIDE_FETCHED_PAGE_TEXT``,
 env ``BUILD_A_SPEC_ELIDE_FETCHED_PAGES``): its live canary was never run,
@@ -38,6 +41,7 @@ from backend.llm.history_hygiene import (
     FETCHED_PAGE_CATEGORY,
     FETCHED_PAGE_NOTE,
     PDF_ELISION_NOTE_PREFIX,
+    QUOTED_PASSAGES_HEADER,
     count_fetched_page_texts,
     count_stale_outlines,
     elide_fetched_page_text,
@@ -95,6 +99,11 @@ def _fetch_result(data: str, *, url: str = _URL) -> dict:
             "citations": {"enabled": True},
         },
     }
+
+
+def _note_with_quote() -> str:
+    """The saved page: the note, then the one passage the reply quoted."""
+    return f'{FETCHED_PAGE_NOTE.format(url=_URL)}\n{QUOTED_PASSAGES_HEADER}\n- "{_CITED}"'
 
 
 def _citation() -> dict:
@@ -164,7 +173,7 @@ def _cited_blocks(history: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_a_saved_turn_keeps_the_fetch_and_its_citation_but_not_the_page(
+def test_a_saved_turn_keeps_the_fetch_and_its_quote_but_not_the_page(
     monkeypatch,
 ):
     client = _client()
@@ -191,13 +200,18 @@ def test_a_saved_turn_keeps_the_fetch_and_its_citation_but_not_the_page(
     assert document["source"] == {
         "type": "text",
         "media_type": "text/plain",
-        "data": FETCHED_PAGE_NOTE.format(url=_URL),
+        "data": _note_with_quote(),
     }
-    # The fetch call and the reply's quoted passage are kept exactly.
+    # The fetch call is kept exactly. The reply keeps its words; the
+    # citation into the old page text is gone, its passage now in the note.
     (use,) = _blocks(history, "server_tool_use")
     assert use["input"] == {"url": _URL}
-    (cited,) = _cited_blocks(history)
-    assert cited["citations"] == [_citation()]
+    assert _cited_blocks(history) == []
+    (quoting,) = [
+        block for block in _blocks(history, "text")
+        if block.get("text") == "spare parts stay on site for ten years"
+    ]
+    assert "citations" not in quoting
     assert _FILLER not in json.dumps(history, ensure_ascii=False)
 
     # The next turn re-sends the note, never the page, and keeps the quote.
@@ -208,8 +222,8 @@ def test_a_saved_turn_keeps_the_fetch_and_its_citation_but_not_the_page(
         follow_up.messages.last_request["messages"][:-1], ensure_ascii=False
     )
     assert _FILLER not in history_part
-    assert FETCHED_PAGE_NOTE.format(url=_URL) in history_part
-    assert _CITED in history_part
+    assert json.dumps(_note_with_quote(), ensure_ascii=False)[1:-1] in history_part
+    assert _cited_blocks(follow_up.messages.last_request["messages"][:-1]) == []
 
     # Developer tools reads the same canary Phase 1 does for outlines.
     makeup = client.get("/api/diagnostics").json()["session"]["history_composition"]
@@ -267,12 +281,16 @@ def test_projects_saved_before_the_elision_drop_page_text_when_opened(
     _chat(client, "Check the owner's equipment guide.")
     project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
 
-    # What an older build saved: the page text still inside the result.
+    # What an older build saved: the page text still inside the result, and
+    # the reply's citation into it.
     for message in project["history"]:
         for block in message["content"]:
             if block.get("type") == "web_fetch_tool_result":
                 block["content"]["content"]["source"]["data"] = _PAGE
+            if block.get("text") == "spare parts stay on site for ten years":
+                block["citations"] = [_citation()]
     assert _FILLER in json.dumps(project["history"], ensure_ascii=False)
+    assert _cited_blocks(project["history"])
     seen_before = chat_transcript(project["history"])
 
     client.post("/api/session/reset")
@@ -283,8 +301,8 @@ def test_projects_saved_before_the_elision_drop_page_text_when_opened(
 
     history = sessions.get_session().history
     (fetch,) = _blocks(history, "web_fetch_tool_result")
-    assert fetch["content"]["content"]["source"]["data"] == FETCHED_PAGE_NOTE.format(url=_URL)
-    assert _cited_blocks(history)[0]["citations"] == [_citation()]
+    assert fetch["content"]["content"]["source"]["data"] == _note_with_quote()
+    assert _cited_blocks(history) == [], "the citation into the old text is folded away"
     # Nothing the user sees changed.
     assert loaded.json()["chat"] == seen_before
     # The next save writes the trimmed form.
@@ -292,7 +310,7 @@ def test_projects_saved_before_the_elision_drop_page_text_when_opened(
         sessions.project_payload(sessions.get_session())["history"], ensure_ascii=False
     )
     assert _FILLER not in resaved
-    assert FETCHED_PAGE_NOTE.format(url=_URL) in resaved
+    assert json.dumps(_note_with_quote(), ensure_ascii=False)[1:-1] in resaved
 
 
 # ---------------------------------------------------------------------------
@@ -350,12 +368,14 @@ def test_page_text_elision_is_copy_on_write_idempotent_and_scoped():
     blocks = {b.get("tool_use_id"): b for b in trimmed[1]["content"]}
     page = blocks["s-page"]
     expected = copy.deepcopy(before[1]["content"][1])
-    expected["content"]["content"]["source"]["data"] = FETCHED_PAGE_NOTE.format(url=_URL)
+    expected["content"]["content"]["source"]["data"] = _note_with_quote()
     assert page == expected, "only the page text changes"
     for kept in ("s-short", "s-err", "s-pdf", "s-pdfnote"):
         original = next(b for b in before[1]["content"] if b.get("tool_use_id") == kept)
         assert blocks[kept] == original, kept
-    assert trimmed[1]["content"][-1] == before[1]["content"][-1], "citations untouched"
+    # The citation into the trimmed page is folded into its note; the text
+    # it decorated stays word for word.
+    assert trimmed[1]["content"][-1] == {"type": "text", "text": "Cited."}
     # Untouched messages are the same objects, not copies.
     assert trimmed[0] is history[0] and trimmed[2] is history[2]
     assert trimmed[3] is history[3]
@@ -380,11 +400,26 @@ def test_history_composition_separates_removable_page_text():
     for private in (_FILLER, _CITED, _URL, "Look these up"):
         assert private not in dumped
 
-    # The trim removes exactly that category and nothing else moves.
+    # The trim removes exactly that category, moves the quoted passage from
+    # the citation into the note, and nothing else changes.
     after = history_composition(elide_fetched_page_text(history))
-    assert FETCHED_PAGE_CATEGORY not in {c["category"] for c in after["categories"]}
+    after_by_name = {c["category"]: c for c in after["categories"]}
+    assert FETCHED_PAGE_CATEGORY not in after_by_name
+    assert "citations" not in after_by_name
     assert after["fetched_page_texts"] == 0
-    assert after["chars"] == composition["chars"] - by_name[FETCHED_PAGE_CATEGORY]["chars"]
+    quote_growth = len(json.dumps(_note_with_quote())) - len(
+        json.dumps(FETCHED_PAGE_NOTE.format(url=_URL))
+    )
+    assert (
+        after_by_name["fetched web pages"]["chars"]
+        == by_name["fetched web pages"]["chars"] + quote_growth
+    )
+    assert after["chars"] == (
+        composition["chars"]
+        - by_name[FETCHED_PAGE_CATEGORY]["chars"]
+        - by_name["citations"]["chars"]
+        + quote_growth
+    )
 
 
 def test_the_profiler_reports_fetched_page_text(monkeypatch, tmp_path):

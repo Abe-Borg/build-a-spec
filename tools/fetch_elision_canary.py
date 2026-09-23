@@ -4,18 +4,22 @@ Phase 2 of the chat-history compaction plan
 (``docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md``) drops the text of
 every page the chat fetched when a turn is saved, keeping the page's URL,
 title and retrieval time. Chat fetches carry citations, so a reply that
-quoted the page keeps ``char_location`` citations whose character offsets
-point into the ORIGINAL text — offsets the replaced document is far too short
-to contain. Whether the API validates a historical citation against its
-document is not documented, and a saved history it rejected would fail every
-later message in that project. This sends exactly that shape once and says
-what the provider did with it.
+quoted the page carries ``char_location`` citations whose character offsets
+point into the ORIGINAL text. The first run of this canary (2026-09-23)
+showed the API checks those offsets against the document the citation lands
+on: it refused the saved shape with ``Start index 2406 is beyond document
+length 257``. The trim was reworked, so a trimmed page's citations are now
+removed and the passages they quoted kept in the page's note. This sends
+that new saved shape once and says what the provider did with it. A saved
+history the provider rejected would fail every later message in that
+project, which is why the trim stays off until this passes.
 
 Built from production code, not a hand-made copy: the conversation passes
 through ``conversation._committed_messages`` (the same commit transform a
 real turn takes), the request carries ``conversation._chat_tools()`` (the
 web fetch tool with citations on) and goes through
-``sanitize_messages_for_resend`` like every chat request. The trim ships
+``sanitize_messages_for_resend`` and ``repair_document_citations`` like
+every chat request. The trim ships
 switched off (``settings.ELIDE_FETCHED_PAGE_TEXT``, since 1.21.0) until
 this canary passes, so the commit transform is called with the trim forced
 on: what is under test is the shape that switch would produce. The system
@@ -48,11 +52,12 @@ if str(_ROOT) not in sys.path:
 from backend import settings  # noqa: E402
 from backend.api_key_store import key_status  # noqa: E402
 from backend.llm.client import MissingApiKeyError, get_client  # noqa: E402
+from backend.llm.citations import repair_document_citations  # noqa: E402
 from backend.llm.conversation import (  # noqa: E402
     _chat_tools,
     _committed_messages,
 )
-from backend.llm.history_hygiene import FETCHED_PAGE_NOTE  # noqa: E402
+from backend.llm.history_hygiene import FETCHED_PAGE_NOTE_PREFIX  # noqa: E402
 from backend.research.resend_sanitizer import (  # noqa: E402
     sanitize_messages_for_resend,
 )
@@ -67,7 +72,8 @@ _CITED = "The canary value for this test page is forty-two."
 
 # Synthetic and deliberately neutral: it states nothing about any code or
 # standard. Long enough that the elision note replaces it, and the cited
-# sentence sits far past the end of the note that replaces the text.
+# sentence sits far past the end of that note, where the first run's
+# citation broke.
 _PAGE = (
     "This is a synthetic test page. Build-a-Spec's fetch elision canary "
     "places it in a saved conversation to check how the Messages API treats "
@@ -161,6 +167,15 @@ def _page_data(messages: list[dict[str, Any]]) -> str:
     raise AssertionError("The canary conversation lost its fetched page.")
 
 
+def _citation_count(messages: list[dict[str, Any]]) -> int:
+    return sum(
+        len(block.get("citations") or [])
+        for message in messages
+        for block in message.get("content") or []
+        if isinstance(block, dict)
+    )
+
+
 def build_request(*, max_tokens: int, control: bool = False) -> CanaryRequest:
     """The one request, built from the production commit transform.
 
@@ -176,17 +191,28 @@ def build_request(*, max_tokens: int, control: bool = False) -> CanaryRequest:
         ]
     else:
         committed = _committed_messages(turn, _ASK, elide_fetched_pages=True)
-        # The canary is only meaningful if the elision really ran; fail
-        # loudly rather than send an unelided page and report a pass.
-        if _page_data(committed) != FETCHED_PAGE_NOTE.format(url=_URL):
+        # The canary is only meaningful if the elision really ran, and ran
+        # the way a saved turn now does: the page replaced by its note, the
+        # quoted sentence kept in the note, the citation into the old text
+        # gone. Fail loudly rather than send any other shape as a pass.
+        saved = _page_data(committed)
+        if not saved.startswith(FETCHED_PAGE_NOTE_PREFIX) or saved == _PAGE:
             raise AssertionError(
                 "The commit transform did not replace the fetched page text."
             )
-    messages = sanitize_messages_for_resend(
-        [
-            *committed,
-            {"role": "user", "content": [{"type": "text", "text": _FOLLOW_UP}]},
-        ]
+        if _CITED not in saved or _citation_count(committed):
+            raise AssertionError(
+                "The commit transform did not fold the reply's citation into "
+                "the page note."
+            )
+    # The same two passes every chat request takes, in the same order.
+    messages = repair_document_citations(
+        sanitize_messages_for_resend(
+            [
+                *committed,
+                {"role": "user", "content": [{"type": "text", "text": _FOLLOW_UP}]},
+            ]
+        )
     )
     sent = _page_data(messages)
     request = {
@@ -258,13 +284,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     built = build_request(max_tokens=args.max_tokens, control=args.control)
-    kind = "control (page text kept)" if built.control else "elided page"
-    print(
-        f"Sending one request to {built.request['model']}: {kind}; the saved "
-        f"page is {built.saved_chars:,} of {built.page_chars:,} characters and "
-        f"a reply cites characters {built.cited_start}-{built.cited_end} of "
-        "the original."
-    )
+    if built.control:
+        detail = (
+            "control (page text kept); the reply cites characters "
+            f"{built.cited_start}-{built.cited_end} of it."
+        )
+    else:
+        detail = (
+            f"elided page; the saved page is {built.saved_chars:,} of "
+            f"{built.page_chars:,} characters, and the reply's citation into "
+            f"characters {built.cited_start}-{built.cited_end} of the original "
+            "was replaced by that passage, kept in the page's note."
+        )
+    print(f"Sending one request to {built.request['model']}: {detail}")
     try:
         client = get_client()
     except MissingApiKeyError as exc:
@@ -284,11 +316,11 @@ def main(argv: list[str] | None = None) -> int:
         if status_code == 400 and not built.control:
             print(
                 "The provider REFUSED a saved conversation whose fetched page "
-                "text was replaced while a reply still cites it. Keep the "
-                "page-text trim switched off (BUILD_A_SPEC_ELIDE_FETCHED_PAGES) "
-                "until this is resolved. Run again with --control to check "
-                "whether the same conversation is accepted with its page text "
-                "intact.",
+                "text was replaced by a note carrying the passage its reply "
+                "quoted. Keep the page-text trim switched off "
+                "(BUILD_A_SPEC_ELIDE_FETCHED_PAGES) until this is resolved. "
+                "Run again with --control to check whether the same "
+                "conversation is accepted with its page text intact.",
                 file=sys.stderr,
             )
         elif status_code != 400:
@@ -308,8 +340,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(
             "Fetch elision canary passed: the provider accepted a saved "
-            "conversation whose fetched page text was replaced by the "
-            "elision note while a reply still cites the original text "
+            "conversation whose fetched page text was replaced by a note "
+            "carrying the passage its reply quoted "
             f"(stop_reason={stop}). Record this in the plan's Phase 2 section; "
             "the page-text trim's default can then be switched on."
         )

@@ -775,6 +775,33 @@ def test_a_summary_that_lands_after_its_turn_is_announced_to_the_chat(monkeypatc
     assert "/api/chat/compaction/status" in app_module._QUIET_PATHS
 
 
+def test_a_finished_summary_waiting_to_be_adopted_is_still_on_its_way():
+    """Finished is not landed: between the worker settling the summary and
+    adopting it (a turn streaming defers that until it ends) the record has
+    not changed yet. A client told "not pending" then would stop asking
+    beside the old record — the divider a turn late all over again."""
+    session = sessions.get_session()
+    session.history[:] = _typed_history(3)
+    record = _record_for(session.history, 1)
+    runner = session.compaction_runner
+    assert runner.claim(generation=session.generation, trigger="background")
+    runner.settle(record, notify=False)  # ready — the adoption not yet run
+    client = _client()
+    assert client.get("/api/chat/compaction/status").json() == {
+        "ok": True,
+        "pending": True,
+        "compaction": None,
+    }
+    assert client.get("/api/doc").json()["compaction_pending"] is True
+
+    assert session.adopt_ready_compaction(runner) == "adopted"
+    assert client.get("/api/chat/compaction/status").json() == {
+        "ok": True,
+        "pending": False,
+        "compaction": compaction_payload(record),
+    }
+
+
 def test_a_summary_that_fails_in_the_background_stops_the_asking(monkeypatch):
     # A refusal is not "still on its way": a client that kept asking would
     # ask forever. Nothing is adopted, and nothing is pending.

@@ -113,7 +113,9 @@ backend/
                            cache-write rates per model (cache_write = 1.25×
                            input for the 5m entry, cache_write_1h = 2.0× for
                            the 1h one) — a new model must land with both or
-                           every 1h write on it is silently underpriced;
+                           every 1h write on it is silently underpriced; its
+                           cache_read is looked up, never assumed 0.1× (Opus
+                           5.5's is 0.05×; test_usage pins every row's);
                            HARVEST_EFFORT (Project workspace Phase 4, default
                            medium — the fact harvest extracts, it drafts
                            nothing); ELIDE_FETCHED_PAGE_TEXT
@@ -14087,6 +14089,85 @@ the owner's call, and the release-note draft is below.
      never reach the fifth level, so its count is unaffected (it measures
      29 per master kind either way — the "23" recorded there predates this
      change).
+
+## Opus 5.5 cache reads cost a twentieth of input — implemented notes
+
+`PRICING[MODEL_OPUS_55]["cache_read"]` was `0.40 / 1_000_000`: 0.1× of
+Opus 5.5's $4 input, the multiple every other row uses. Anthropic's pricing
+page lists Claude Opus 5.5 cache hits at **$0.20/MTok**, and its footnote 2
+says they are priced at 0.05× base input. The page was re-fetched on
+2026-09-23 before the change, and every other row and rate in the table
+checked out. The row is now `0.20 / 1_000_000`. No route, SSE event,
+dependency, env knob, schema, protocol or project-format change.
+
+- **What it overstated.** Opus 5.5 has been the Final QC default since
+  v1.20.0, so from then on every QC figure priced its cache-read line at
+  twice the real rate. That covers the session meter's `qc` and
+  `qc_batched` buckets, and through them the header ticker, the QC drawer's
+  session cost line and launch confirmation, and Settings → Usage. It also
+  covers each new report's `estimated_cost_usd` and the `cost_basis` it
+  persists. The "prompt caching saved" figure was too LOW for QC by the
+  same slice, because it is `reads × (input − cache_read)`. The provider
+  bill was never affected; only the app's estimate was. The interview,
+  research, harvest, compaction and templates run on Sonnet 5 by default,
+  whose row was right. An env override that put one of them on Opus 5.5
+  was overstated the same way.
+- **Why nothing caught it.** `test_final_qc_defaults_to_opus_5_5_priced_and_strict`
+  pinned input and output. `test_every_priced_model_configures_both_cache_write_rates`
+  pinned the two write multiples, which really are the same on every row.
+  The read multiple is the one rate that is NOT uniform, and it was the one
+  rate no test pinned. The comment above `PRICING` also said "Cache read is
+  0.1× input", which is how the row was filled in.
+- **The fix is one number plus the comment**, which now says the read rate
+  is per model and must be looked up on the pricing page. Claude Fable 5.1,
+  if it is ever added, is 0.025×. `_PUBLISHED_CACHE_READ_MULTIPLIERS` in
+  `tests/test_usage.py` names every row's multiple and is exhaustive on
+  purpose: a new model fails there until someone declares its read rate.
+- **Persisted reports are not rewritten, by construction.** A `cost_basis`
+  is the immutable claim about how its run was priced (see "Per-TTL
+  cache-write pricing"). `_persisted_cost_basis` checks a basis's shape and
+  never compares its rates with the live table, and
+  `_audit_accounting_consistent` reconciles every record against the SAVED
+  basis. So a report written at $0.40 loads, keeps $0.40, and reproduces
+  the estimate it was saved with. Only reports written from now on carry
+  $0.20. Pricing is not in the hashed input manifest, so no retained Final
+  QC result reads stale because of this and there is nothing to re-run.
+- **The profiler inherits the old rate for old reports.**
+  `tools/qc_export_cost_profile.py` prices each report from its own basis.
+  For an Opus 5.5 report written between v1.20.0 and this fix, its
+  cache-read dollars are doubled and "output as a share of estimated cost"
+  reads low. Token totals and the token-weighted cache-read share are
+  unaffected, and those are what step 2's decision rule reads. The
+  execution record's step 2 now says so. The tool itself is unchanged.
+- **The trust dossier stated the old rate too.** Its Final QC card, which
+  names Claude Opus 5.5, said every later call in a stage reads the cached
+  document "at a tenth of the price". It now says a twentieth. The README's
+  cost-meter paragraph gains one sentence on per-model read pricing, and
+  loses a claim PR #142 had already made false: it still said the table
+  priced Sonnet 5 "at the post-intro rate".
+- **Release note.** The GitHub Releases API lists v1.20.0 (2026-09-22) as
+  the latest published release on 2026-09-23, so the 1.21.0 entry is
+  unreleased and not frozen. It gains a "What a review costs" section
+  saying QC cost estimates were overstated and are now correct. The fix and
+  its note are in the same commit, so whichever commit is tagged 1.21.0,
+  the build and its note agree.
+- **Tests: 4 new.** In `tests/test_usage.py`: every row's read multiple
+  (exhaustive), and the Opus 5.5 rate through both meter buckets,
+  `cache_saved_usd` and the snapshot a new report persists. In
+  `tests/test_qc_audit_report.py`: a new run's basis and lens estimate at
+  $0.20, and a report saved at $0.40 keeping its own rate and estimate.
+  Revert matrix: the row back at 0.40 → all 4 red. A simulated load path
+  that re-priced a saved basis at the live table → 1 red, the keeps-its-rate
+  test, while the existing legacy-basis test stayed green.
+- **Errata.** These notes are append-only, so corrections to earlier
+  sections are recorded here:
+  1. "Final QC moves to Opus 5.5" says it is "priced $4/$20 (cache read
+     0.40, 5m write 5.00, 1h write 8.00 — the 0.1× / 1.25× / 2.0×
+     multipliers every other row uses)". The cache read is 0.20, which is
+     0.05×. Only the two write multiples are shared with the other rows.
+  2. Batch 2's "cache read 0.1×" summary of `settings.PRICING` described
+     the table as it stood then. Today it is true of every row except Opus
+     5.5.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

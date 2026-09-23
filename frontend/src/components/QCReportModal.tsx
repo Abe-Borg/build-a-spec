@@ -16,6 +16,7 @@ import {
   QC_GROUNDING_METHODOLOGY_NOTE,
   QC_OPS_SOURCE_LABELS,
   QC_REQUEST_METHODOLOGY_NOTE,
+  QC_WARM_LEAD_METHODOLOGY_NOTE,
   buildQcReportMetrics,
   collectQcOperationRecords,
   collectQcTraceRecords,
@@ -46,6 +47,7 @@ import {
   qcBatchCapture,
   qcReferenceCoverage,
   qcResearchCoverage,
+  qcStreamedLeadSeats,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
   safeHttpUrl,
@@ -1164,6 +1166,12 @@ export default function QCReportModal({
                 ["Evidence qualification", `Candidate citations were retrieved and checked. Accepted and rejected source checks are both retained; rejected records provide traceability but do not count as grounding. ${QC_GROUNDING_METHODOLOGY_NOTE}`],
                 ["Cross-lens consolidation", "Lens candidates describing the same actionable defect at the same element were consolidated into one candidate reviewed by one verifier panel, so a defect two lenses both noticed was not challenged twice. Grouping was confined to candidates sharing a write scope, every original claim is retained verbatim in Section 05b, and any failure of the step fell back to one panel per original candidate."],
                 ["Adversarial verification", `Candidate findings were sent to recorded reviewer seats — ${qcPanelSizePhrase(report)}. A finding survives only when every seat upholds it, is refuted when the refuting seats outnumber the upholding ones, and is disputed otherwise; a critical or high refutation additionally needs at least one validated citation. Fix eligibility separately requires every seat to complete, uphold, and approve the full operation set. Each available verdict, fix-adequacy decision, note, revised severity, search, retrieval, error, and usage counter appears with the finding.`],
+                // Only for a run that streamed a lead seat ahead of its batch:
+                // the methodology describes the run, never the defaults (the
+                // memo's `qc_streamed_lead_seats` gate, mirrored).
+                ...(qcStreamedLeadSeats(report) > 0
+                  ? [["Streamed lead seat", QC_WARM_LEAD_METHODOLOGY_NOTE]]
+                  : []),
                 ["Outcome separation and operation validation", "Candidates are separated into surviving findings, disputed candidates (a complete panel that disagreed — never auto-applied, and blocking issue readiness until a human dispositions them), substantively refuted candidates, and infrastructure-inconclusive candidates. Only a surviving finding with unanimous semantic fix approval can enter deterministic and source-preservation validation; unabridged JSON remains visible for every bucket."],
                 ["Human disposition", "Open, applied, and dismissed states are kept separate from verification. Where supported by the record schema, later disposition events include time, reason, and document identity."],
               ].map(([title, body], index) => (

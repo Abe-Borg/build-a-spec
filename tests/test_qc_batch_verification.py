@@ -137,6 +137,11 @@ def _run(client: object, *, batch: bool = True, should_stop=lambda: False,
         finished_at="2026-08-19T10:01:00-07:00",
         run_id="qc-batch-test",
         batch_verification=batch,
+        # The batch contract itself: every seat rides the batch. A streamed
+        # lead seat (cost Tier 1, Chunk 3) is pinned off here so these tests
+        # keep meaning what they say whichever way its switch ships; its own
+        # contract is tests/test_qc_batch_warm_lead.py.
+        batch_warm_lead=False,
         event_sink=(events.append if events is not None else (lambda e: None)),
         should_stop=should_stop,
     )

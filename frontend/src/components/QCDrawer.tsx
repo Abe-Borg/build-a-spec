@@ -396,6 +396,11 @@ function QcCandidateCard({
  *  go quiet until their results land together. Rather than let that read as
  *  a stall, this states the transport and reports the provider's own
  *  request counts. It renders nothing on the streaming path.
+ *
+ *  The one exception is a streamed lead seat (cost Tier 1, Chunk 3): one
+ *  seat per large cache lineage is streamed ahead of the batch, so its card
+ *  shows its own real activity while the rest wait. Its result is counted
+ *  in this line's phase-level totals like any other seat's.
  */
 function QcBatchLine({ live }: { live: QcLiveState }) {
   const batch = live.batch;

@@ -4082,6 +4082,57 @@ WARM_OUTCOME_TIMEOUT = "timeout"
 WARM_OUTCOME_STOPPED = "stopped"
 
 
+def _await_leaders(
+    leaders: list[tuple[Any, threading.Event]],
+    *,
+    wait_seconds: float,
+    should_stop: Callable[[], bool],
+    on_release: Callable[[Any, str, int], None],
+) -> None:
+    """Wait for each leader's first output, releasing each exactly once.
+
+    ``leaders`` pairs whatever the caller needs back with the event its
+    leader sets. Each pair is released through ``on_release(entry, outcome,
+    waited_ms)``: ``warm`` the moment its event is set, or — for every one
+    still waiting — ``stopped`` once ``should_stop`` answers yes, or
+    ``timeout`` once ``wait_seconds`` have passed since the call. One
+    deadline covers every leader, because they were all sent together.
+
+    The wait runs on the CALLING thread in slices of
+    ``_WARM_WAIT_SLICE_SECONDS``, so it can never starve a leader of a
+    worker, a Stop is noticed within one slice, and a leader that fires is
+    noticed at once. Shared by the staggered launch (phase 1 and the
+    consolidation grouping calls) and the batched phase's streamed lead
+    seat, so the two cannot drift into two different waits.
+    """
+    started = time.monotonic()
+    deadline = started + float(wait_seconds)
+    pending = list(leaders)
+
+    def waited_ms() -> int:
+        return max(0, int((time.monotonic() - started) * 1000))
+
+    while pending:
+        for entry in [entry for entry in pending if entry[1].is_set()]:
+            pending.remove(entry)
+            on_release(entry[0], WARM_OUTCOME_WARM, waited_ms())
+        if not pending:
+            break
+        remaining = deadline - time.monotonic()
+        if should_stop():
+            outcome = WARM_OUTCOME_STOPPED
+        elif remaining <= 0:
+            outcome = WARM_OUTCOME_TIMEOUT
+        else:
+            pending[0][1].wait(
+                timeout=min(_WARM_WAIT_SLICE_SECONDS, remaining)
+            )
+            continue
+        for entry in pending:
+            on_release(entry[0], outcome, waited_ms())
+        pending = []
+
+
 def _launch_staggered(
     items: list[Any],
     *,
@@ -4151,12 +4202,7 @@ def _launch_staggered(
     for single in singles[:room]:
         futures[submit(single, None)] = single
 
-    started = time.monotonic()
-    deadline = started + float(wait_seconds)
-    pending = list(leaders)
-
-    def release(entry: tuple[list[Any], threading.Event], outcome: str) -> None:
-        members, _released = entry
+    def release(members: list[Any], outcome: str, waited_ms: int) -> None:
         _log.info(
             "Final QC %s: %d calls share a cached prefix; the %d waiting "
             "were released (%s) after %d ms.",
@@ -4164,30 +4210,17 @@ def _launch_staggered(
             len(members),
             len(members) - 1,
             outcome,
-            max(0, int((time.monotonic() - started) * 1000)),
+            waited_ms,
         )
         for follower in members[1:]:
             futures[submit(follower, None)] = follower
 
-    while pending:
-        for entry in [entry for entry in pending if entry[1].is_set()]:
-            pending.remove(entry)
-            release(entry, WARM_OUTCOME_WARM)
-        if not pending:
-            break
-        remaining = deadline - time.monotonic()
-        if should_stop():
-            outcome = WARM_OUTCOME_STOPPED
-        elif remaining <= 0:
-            outcome = WARM_OUTCOME_TIMEOUT
-        else:
-            pending[0][1].wait(
-                timeout=min(_WARM_WAIT_SLICE_SECONDS, remaining)
-            )
-            continue
-        for entry in pending:
-            release(entry, outcome)
-        pending = []
+    _await_leaders(
+        leaders,
+        wait_seconds=wait_seconds,
+        should_stop=should_stop,
+        on_release=release,
+    )
     # Whatever the pool could not start at once goes behind the followers.
     for single in singles[room:]:
         futures[submit(single, None)] = single
@@ -5601,6 +5634,107 @@ def _sleep_interruptibly(
     return False
 
 
+# ---------------------------------------------------------------------------
+# A streamed lead seat warms the batch's cache (cost Tier 1, Chunk 3)
+# ---------------------------------------------------------------------------
+#
+# A batch submits its seats together, so how many of them read the shared
+# document prefix and how many pay to write it is up to how the provider
+# schedules the batch. When one cache lineage carries many seats, one of them
+# is streamed FIRST, at list price, and the batch goes out only after its first
+# output — the moment its entry becomes readable — so the rest of the lineage
+# can read that entry instead of each writing their own. The lead is an
+# ordinary seat with an ordinary record (cost_multiplier 1.0), which the mixed-
+# rate accounting has handled since v1.12.0; what it costs is its own batch
+# discount. Whether a batch request can read an entry a streamed request wrote
+# is not documented, which is why the switch (settings.QC_BATCH_WARM_LEAD)
+# ships off and flips only on a measured pass (the cost plan's M3).
+
+LINEAGE_WEB_TOOLED = "web-tooled"
+LINEAGE_NO_WEB = "no-web"
+_WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
+
+# The fewest seats one lineage must carry before its lead is streamed. Set by
+# the plan's Chunk 3 gate from M2 (the QC profiler on a real batched export):
+# with no M2 recorded, both sit at the gate's fallback of 20, where a lead
+# still pays while the batch already reads up to 88% of the prefix (the
+# plan's §10.3, at p = 40k and o = 5k). The web-tooled seats' continuations
+# re-read the prefix, which only makes that lineage's minimum conservative.
+_WARM_LEAD_MIN_SEATS_WEB = 20
+_WARM_LEAD_MIN_SEATS_NO_WEB = 20
+# Never fewer: below 8 seats one list-price seat is a large share of the
+# phase, and a misestimated prefix or output size outweighs the saving.
+# Enforced here as well as pinned by a test, so a lowered constant cannot
+# slip under it.
+_WARM_LEAD_SEAT_FLOOR = 8
+
+
+@dataclass(frozen=True)
+class _WarmLead:
+    """One lineage's streamed lead seat, and what it is warming."""
+
+    key: str
+    kind: str
+    lineage_size: int
+
+
+def _spec_lineage_key(spec: _CallSpec) -> str:
+    """The cache lineage a seat writes into — Chunk 2's key, from its spec.
+
+    The spec is the one object both transports send (``_qc_request_kwargs``
+    builds the batched request from it; the lead streams its fields), so the
+    key cannot drift from the requests it groups.
+    """
+    return _prefix_lineage_key(
+        tools=list(spec.tools),
+        system_prompt=spec.system_prompt,
+        shared_prefix=spec.shared_prefix,
+        model=spec.model,
+        effort=spec.effort,
+        cache_ttl=spec.cache_ttl,
+    )
+
+
+def _spec_lineage_kind(spec: _CallSpec) -> str:
+    """``web-tooled`` when the seat carries the web tools, else ``no-web``.
+
+    The same split the QC profiler reports by (``seat:batched:web-tooled``,
+    ``seat:batched:no-web``), read from the tools the seat actually sends —
+    the ``lens.web`` branch of ``_verifier_tools`` — rather than a lens list.
+    """
+    names = {str(tool.get("name") or "") for tool in spec.tools}
+    return LINEAGE_WEB_TOOLED if names & _WEB_TOOL_NAMES else LINEAGE_NO_WEB
+
+
+def _warm_lead_minimum(kind: str) -> int:
+    configured = (
+        _WARM_LEAD_MIN_SEATS_WEB
+        if kind == LINEAGE_WEB_TOOLED
+        else _WARM_LEAD_MIN_SEATS_NO_WEB
+    )
+    return max(_WARM_LEAD_SEAT_FLOOR, int(configured))
+
+
+def _pick_warm_leads(specs: dict[str, _CallSpec]) -> list[_WarmLead]:
+    """One lead per lineage that reaches its type's minimum, in specs order.
+
+    The lead is the lineage's FIRST key in ``specs`` — submission order — so
+    the choice is deterministic. A lineage below its minimum gets none, and
+    every one of its seats rides the batch exactly as before.
+    """
+    groups: dict[str, list[str]] = {}
+    for key, spec in specs.items():
+        groups.setdefault(_spec_lineage_key(spec), []).append(key)
+    leads: list[_WarmLead] = []
+    for members in groups.values():
+        kind = _spec_lineage_kind(specs[members[0]])
+        if len(members) >= _warm_lead_minimum(kind):
+            leads.append(
+                _WarmLead(key=members[0], kind=kind, lineage_size=len(members))
+            )
+    return leads
+
+
 def _run_batch_calls(
     client: Any,
     *,
@@ -5610,6 +5744,8 @@ def _run_batch_calls(
     batch_event_type: str = "verification_batch",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
+    warm_leads: bool = False,
+    warm_wait_seconds: float = 0.0,
 ) -> _BatchPhaseOutcome:
     """Run many independent QC calls through the Message Batches API.
 
@@ -5637,6 +5773,22 @@ def _run_batch_calls(
     a batch id fails the round on the spot rather than polling for a batch
     that does not exist, and the wall-clock ceiling is checked between
     rounds as well as inside the poll loop.
+
+    ``warm_leads`` (``settings.QC_BATCH_WARM_LEAD``, pinned per run) streams
+    one seat of each lineage that reaches its minimum FIRST, at list price,
+    and submits the batch only once every lead's first output has made its
+    cache entry readable — or ``warm_wait_seconds`` have passed, or a Stop
+    landed, in which case the ordinary stop path runs and no batch is sent.
+    ``warm_wait_seconds`` of 0 makes the switch inert. A lead is never
+    batched, never settled by a phase-wide failure, a Stop or a ceiling, and
+    never retried by a refused submission: its record is the ``_CallResult``
+    its own ``_run_streaming_call`` returns, folded in on this thread at
+    each poll and round boundary, and JOINED before any terminal frame and
+    before any outcome is built, because its requests were billed and must
+    reach the record. It is the one seat the settlement window does not
+    bound; it is bounded the way any streamed seat is — ``should_stop``
+    between its requests, the SDK timeout within one. Its keys come back in
+    ``_BatchPhaseOutcome.streamed_keys`` so the caller prices it at list.
     """
     states = {
         key: _BatchSeatState(spec=spec, messages=[]) for key, spec in specs.items()
@@ -5645,6 +5797,18 @@ def _run_batch_calls(
         state.messages = state.initial_messages()
     if not states:
         return _BatchPhaseOutcome({})
+    leads = (
+        _pick_warm_leads(specs) if warm_leads and warm_wait_seconds > 0 else []
+    )
+    lead_keys = frozenset(lead.key for lead in leads)
+    # Written and read on THIS thread only: a lead's own thread runs its
+    # streamed call and returns a _CallResult, and nothing else.
+    lead_futures: dict[str, Future] = {}
+    lead_pool = (
+        ThreadPoolExecutor(max_workers=len(leads), thread_name_prefix="qc-lead")
+        if leads
+        else None
+    )
 
     fields_for = seat_event_fields or {}
     policy = DEFAULT_REALTIME_RETRY_POLICY
@@ -5666,9 +5830,53 @@ def _run_batch_calls(
     def unsettled() -> list[str]:
         return [key for key, state in states.items() if state.settled is None]
 
+    def batch_pending() -> list[str]:
+        """The unsettled seats that ride the batch. A lead never does."""
+        return [key for key in unsettled() if key not in lead_keys]
+
     def settle_all(keys: list[str], error: str, failure_class: str = "") -> None:
         for key in keys:
+            if key in lead_keys:
+                # A lead's record is the _CallResult its own streamed call
+                # returns. A phase-wide failure, a Stop or a ceiling settling
+                # it here would overwrite a real, billed record.
+                continue
             states[key].settle(error, failure_class)
+
+    def fold_leads(*, wait: bool = False) -> None:
+        """Fold finished leads into their seats; with ``wait``, join them all."""
+        for key, future in list(lead_futures.items()):
+            if not wait and not future.done():
+                continue
+            try:
+                result = future.result()
+            except Exception as exc:  # noqa: BLE001 — never raises by contract
+                result = _CallResult(
+                    None,
+                    [],
+                    [],
+                    f"{type(exc).__name__}: {exc}",
+                    0,
+                    FailureClass.UNKNOWN.value,
+                )
+            states[key].settled = result
+            del lead_futures[key]
+        if wait and lead_pool is not None:
+            lead_pool.shutdown(wait=True)
+
+    def finish(
+        status: str, *, terminated_early: bool = False, **extra: Any
+    ) -> _BatchPhaseOutcome:
+        """Every terminal path: join the leads, THEN the last frame, then out.
+
+        Joined first so the terminal frame's ``settled`` counts every seat,
+        the leads included — "ended" must mean the whole phase is done.
+        """
+        fold_leads(wait=True)
+        emit(status, **extra)
+        outcome = results()
+        outcome.terminated_early = terminated_early
+        return outcome
 
     def emit(status: str, **extra: Any) -> None:
         event_sink(
@@ -5775,17 +5983,18 @@ def _run_batch_calls(
         for key in uncollected:
             states[key].uncollected_requests += 1
         settle_all(unsettled(), message, failure_class)
-        emit(
+        return finish(
             status,
+            terminated_early=True,
             round=round_index + 1,
             batch_id=batch_id,
             uncollected=len(uncollected),
         )
-        outcome = results()
-        outcome.terminated_early = True
-        return outcome
 
     def results() -> _BatchPhaseOutcome:
+        # The backstop: no outcome is ever built while a lead is still out,
+        # whichever path asked for it.
+        fold_leads(wait=True)
         return _BatchPhaseOutcome(
             results={
                 key: state.settled
@@ -5793,28 +6002,92 @@ def _run_batch_calls(
                 if state.settled is not None
             },
             unassigned_results=unassigned_results,
+            # Only a lead that actually SENT a request was streamed at list
+            # price. One stopped before its first request sent nothing, like
+            # the seats that were never batched, so it is priced with them —
+            # otherwise the report would claim a lead the run never sent
+            # (Codex, PR #213).
+            streamed_keys=frozenset(
+                key
+                for key in lead_keys
+                if states[key].settled is not None
+                and states[key].settled.api_request_count > 0
+            ),
+        )
+
+    if leads:
+        # Each lead streams on its own worker; the wait is Chunk 2's, on
+        # this thread, so it can never starve the lead it waits on. A lead
+        # that fails fast releases at once (its request ended and wrote
+        # nothing worth waiting for), and one whose task ends for any reason
+        # releases through the done-callback.
+        waiting: list[tuple[_WarmLead, threading.Event]] = []
+        for lead in leads:
+            spec = states[lead.key].spec
+            released = threading.Event()
+            future = lead_pool.submit(
+                _run_streaming_call,
+                client,
+                system_prompt=spec.system_prompt,
+                shared_prefix=spec.shared_prefix,
+                request_suffix=spec.request_suffix,
+                tools=list(spec.tools),
+                tool_name=spec.tool_name,
+                json_tag=spec.json_tag,
+                model=spec.model,
+                max_tokens=spec.max_tokens,
+                effort=spec.effort,
+                max_searches=spec.max_searches,
+                event_prefix=seat_event_prefix,
+                event_fields=fields_for.get(lead.key, {}),
+                cache_ttl=spec.cache_ttl,
+                event_sink=event_sink,
+                should_stop=should_stop,
+                first_output=released,
+            )
+            future.add_done_callback(lambda _done, event=released: event.set())
+            lead_futures[lead.key] = future
+            waiting.append((lead, released))
+
+        def release(lead: _WarmLead, outcome: str, waited_ms: int) -> None:
+            _log.info(
+                "Final QC verification: %d %s seats share a cached prefix; "
+                "one streamed first, and the wait for its first output "
+                "ended (%s) after %d ms.",
+                lead.lineage_size,
+                lead.kind,
+                outcome,
+                waited_ms,
+            )
+
+        _await_leaders(
+            waiting,
+            wait_seconds=warm_wait_seconds,
+            should_stop=should_stop,
+            on_release=release,
         )
 
     for round_index in range(max_rounds):
-        pending = unsettled()
+        fold_leads()
+        pending = batch_pending()
         if not pending:
+            # Every batched seat is settled. A lead still streaming is joined
+            # by the tail below; ``batches.create`` never sees an empty list.
             break
         if should_stop():
             settle_all(pending, "Cancelled by user.")
-            emit("cancelled", round=round_index + 1)
-            outcome = results()
-            outcome.terminated_early = True
-            return outcome
+            return finish(
+                "cancelled", terminated_early=True, round=round_index + 1
+            )
         if time.monotonic() > deadline:
             # Every round used to trust the poll loop to notice the ceiling,
             # but a round that ENDS before the ceiling and then needs another
             # (a continuation, a retry) never re-enters that loop before
             # submitting again.
             settle_all(pending, ceiling_message, FailureClass.CONNECTION.value)
-            emit("timeout", round=round_index + 1)
-            outcome = results()
-            outcome.terminated_early = True
-            return outcome
+            return finish(
+                "timeout", terminated_early=True, round=round_index + 1
+            )
 
         requests: list[dict[str, Any]] = []
         for key in pending:
@@ -5858,8 +6131,7 @@ def _run_batch_calls(
             no_round_left = round_index + 1 >= max_rounds
             if not retryable or len(exhausted) == len(pending) or no_round_left:
                 settle_all(pending, message, failure_class.value)
-                emit("failed", round=round_index + 1, error=message)
-                return results()
+                return finish("failed", round=round_index + 1, error=message)
             settle_all(exhausted, message, failure_class.value)
             retrying = [key for key in pending if states[key].settled is None]
             # Keyed on the seats' own attempt counter (read BEFORE
@@ -5898,12 +6170,12 @@ def _run_batch_calls(
             # the wrong cause.
             message = "Batched verification submission returned no batch id."
             settle_all(pending, message, FailureClass.UNKNOWN.value)
-            emit("failed", round=round_index + 1, error=message)
-            return results()
+            return finish("failed", round=round_index + 1, error=message)
         emit("submitted", round=round_index + 1, batch_id=batch_id, submitted=len(requests))
 
         last_counts: dict[str, int] | None = None
         while True:
+            fold_leads()
             if should_stop():
                 # Not just cancel-and-go: seats the provider already
                 # finished are billed, so the window collects them before
@@ -5964,14 +6236,13 @@ def _run_batch_calls(
             for key in unread:
                 states[key].uncollected_requests += 1
             settle_all(unsettled(), read.error, read.failure_class)
-            emit(
+            return finish(
                 "failed",
                 round=round_index + 1,
                 batch_id=batch_id,
                 error=read.error,
                 uncollected=len(unread),
             )
-            return results()
 
         # A submitted seat with no result line is a hole in the batch, not a
         # verdict. Recorded as a failed seat (which makes the run partial),
@@ -5987,13 +6258,14 @@ def _run_batch_calls(
                 FailureClass.UNKNOWN.value,
             )
 
-    for key in unsettled():
-        states[key].settle(
-            "Batched verification did not settle within the round ceiling.",
-            FailureClass.UNKNOWN.value,
-        )
-    emit("ended")
-    return results()
+    # settle_all, not a bare loop: a lead still streaming is unsettled but
+    # was never a batched seat, and finish() joins it for its real record.
+    settle_all(
+        unsettled(),
+        "Batched verification did not settle within the round ceiling.",
+        FailureClass.UNKNOWN.value,
+    )
+    return finish("ended")
 
 
 # What a seat's record says when the phase ended underneath it — a Stop or
@@ -6028,6 +6300,13 @@ class _BatchPhaseOutcome:
     # first. The run degrades to partial, so readiness stays blocked and
     # nothing recovered becomes actionable.
     terminated_early: bool = False
+    # Seats streamed ahead of the batch as a lineage's warm lead that sent at
+    # least one request. They were billed at list price, so the caller
+    # records them at a multiplier of 1.0 rather than the batch rate — the
+    # one thing that distinguishes them in the record. A lead stopped before
+    # its first request is not here: it sent nothing, like the seats that
+    # were never batched.
+    streamed_keys: frozenset[str] = frozenset()
 
 
 def _consume_batch_results(
@@ -6659,6 +6938,7 @@ def run_final_qc(
     verifier_effort: str = "",
     batch_verification: bool | None = None,
     warm_wait_seconds: float | None = None,
+    batch_warm_lead: bool | None = None,
     version_index: int,
     started_at: str,
     finished_at: str,
@@ -6713,6 +6993,15 @@ def run_final_qc(
             if warm_wait_seconds is None
             else warm_wait_seconds
         ),
+    )
+    # Pinned beside it, and for the same reasons: it changes how one seat per
+    # large lineage is SENT, never what any seat is asked, so it stays out of
+    # the input manifest (the cost plan's F3), and the batched phase reads
+    # this one value however the environment changes mid-run.
+    batch_warm_lead = (
+        settings.QC_BATCH_WARM_LEAD
+        if batch_warm_lead is None
+        else bool(batch_warm_lead)
     )
     # Same discipline, load-bearing for a different reason: this string leads
     # both cached shared prefixes, so re-reading the clock per call would
@@ -7124,6 +7413,10 @@ def run_final_qc(
             # streamed calls. Seats are independent by construction — that
             # is what makes the panel adversarial — so nothing here needs
             # ordering, and the provider prices the whole phase at half.
+            # The one exception is a warm lead (`batch_warm_lead`): a seat
+            # streamed ahead of the batch at list price so the rest of its
+            # lineage can read its cached copy. It is still an ordinary seat
+            # with an ordinary record, folded in below with the others.
             # `pending_tasks` is drained up front: every seat is submitted,
             # so the shared-failure drain below has nothing left to mark.
             for i, j in tasks:
@@ -7165,6 +7458,8 @@ def run_final_qc(
                 batch_event_type="verification_batch",
                 event_sink=event_sink,
                 should_stop=should_stop,
+                warm_leads=batch_warm_lead,
+                warm_wait_seconds=warm_wait_seconds,
             )
             call_results = batch_phase.results
             unassigned_batch_results = batch_phase.unassigned_results
@@ -7193,8 +7488,14 @@ def run_final_qc(
                     # Batched tokens are billed at the provider's batch rate,
                     # so the seat's own record must say so — the report
                     # reproduces its arithmetic from these, not from the run's
-                    # transport flag.
-                    cost_multiplier=settings.BATCH_COST_MULTIPLIER,
+                    # transport flag. A warm lead was streamed ahead of the
+                    # batch at list price, so its record says 1.0: the meter
+                    # files it under `qc`, the rest under `qc_batched`.
+                    cost_multiplier=(
+                        1.0
+                        if _seat_key(i, j) in batch_phase.streamed_keys
+                        else settings.BATCH_COST_MULTIPLIER
+                    ),
                 )
                 record_verifier_outcome(i, outcome)
                 if outcome.shared_request_failure and not shared_failure.is_set():

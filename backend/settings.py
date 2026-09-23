@@ -480,6 +480,24 @@ QC_CONSOLIDATION_MAX_BUCKET = _int_env("BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET
 # request byte. 0 switches staggering off: everything starts at once.
 QC_WARM_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_WARM_WAIT_SECONDS", 45, minimum=0)
 
+# A streamed lead seat for the batched verification phase (Research/QC cost
+# Tier 1, Chunk 3). When a batch would carry many verifier seats that share
+# one cached prefix, one of them is streamed first, at LIST price, and the
+# batch is submitted only after its first output — the moment its cache entry
+# becomes readable — so the rest can read that entry instead of each writing
+# their own. Same request bytes, same seats, same adjudication; the lead's own
+# record carries cost_multiplier 1.0, so the report and the meter price it at
+# list and the batched seats at the batch rate. Only a lineage of at least
+# `qc.engine._WARM_LEAD_MIN_SEATS_*` seats (never fewer than 8) gets a lead,
+# and the wait is `QC_WARM_WAIT_SECONDS` (0 makes this switch inert).
+#
+# OFF by default, deliberately: a lead pays for itself only if the batch can
+# read the entry a STREAMED request wrote, and no document states that the two
+# transports share it. The default flips only on a recorded M3 pass (the cost
+# plan's Chunk 3 "Flip"). Not in the QC input manifest: it changes how one
+# seat is sent, never what any seat is asked (the plan's F3).
+QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", False)
+
 # Per-call web allowances (runaway guards, not budgets — env-overridable).
 # The code-compliance lens gets the big search allowance to check standards'
 # actual current content; the other lenses and verifiers get the small one.

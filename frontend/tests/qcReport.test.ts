@@ -6,6 +6,7 @@ import {
   QC_GROUNDING_METHODOLOGY_NOTE,
   QC_OPS_SOURCE_LABELS,
   QC_REQUEST_METHODOLOGY_NOTE,
+  QC_WARM_LEAD_METHODOLOGY_NOTE,
   buildQcReportMetrics,
   collectQcOperationRecords,
   qcBlockingReadinessChecks,
@@ -24,6 +25,7 @@ import {
   qcReferenceCoverage,
   qcBatchCapture,
   qcResearchCoverage,
+  qcStreamedLeadSeats,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
   safeHttpUrl,
@@ -1442,6 +1444,77 @@ test("mixed and missing recorded sizes are disclosed rather than guessed", () =>
     qcPanelSizePhrase(result()),
     "a seat count this report did not record for critical and high findings, a seat count this report did not record for medium and low",
   );
+});
+
+// ---------------------------------------------------------------------------
+// The streamed lead seat — the mirror of docx_export.qc_streamed_lead_seats
+// ---------------------------------------------------------------------------
+//
+// Cost Tier 1, Chunk 3. The methodology line is rendered only for a run that
+// actually streamed a lead, and "a lead" is read off the records: the seat
+// priced at list in a run where some other seat was batch-discounted.
+
+test("a streamed lead is a list-price seat in a run with discounted seats", () => {
+  const led = result({
+    findings: [
+      finding({
+        verdicts: [
+          verdict(1, { cost_multiplier: 1 }),
+          verdict(2, { cost_multiplier: 0.5 }),
+          verdict(3, { cost_multiplier: 0.5 }),
+        ],
+      }),
+    ],
+    disputed: [
+      finding({
+        finding_id: "qc-2",
+        verification_outcome: "disputed",
+        verdicts: [verdict(1, { cost_multiplier: 1 }), verdict(2, { cost_multiplier: 0.5 })],
+      }),
+    ],
+  });
+  assert.equal(qcStreamedLeadSeats(led), 2);
+});
+
+test("a run with nothing discounted, or nothing recorded, has no lead", () => {
+  // Every seat streamed at list: no batch, so no lead.
+  const streamed = result({
+    findings: [finding({ verdicts: [verdict(1, { cost_multiplier: 1 }), verdict(2)] })],
+  });
+  assert.equal(qcStreamedLeadSeats(streamed), 0);
+  // Every seat batched: a batch with no lead.
+  const batched = result({
+    refuted: [
+      finding({
+        verification_outcome: "refuted",
+        verdicts: [verdict(1, { cost_multiplier: 0.5 }), verdict(2, { cost_multiplier: 0.5 })],
+      }),
+    ],
+  });
+  assert.equal(qcStreamedLeadSeats(batched), 0);
+  assert.equal(qcStreamedLeadSeats(result()), 0);
+});
+
+test("a malformed multiplier reads as list price, exactly as the memo reads it", () => {
+  const odd = result({
+    inconclusive: [
+      finding({
+        verification_outcome: "inconclusive",
+        verdicts: [
+          verdict(1, { cost_multiplier: Number.NaN }),
+          verdict(2, { cost_multiplier: "0.5" as unknown as number }),
+          verdict(3, { cost_multiplier: false as unknown as number }),
+          verdict(4, { cost_multiplier: 0.5 }),
+        ],
+      }),
+    ],
+  });
+  // NaN, a string and a bool are not finite numbers, so all three read as
+  // list price — never as a discount — and the one real discount makes them
+  // leads. docx_export.qc_streamed_lead_seats reads the same three the same
+  // way (tests/test_qc_batch_warm_lead.py).
+  assert.equal(qcStreamedLeadSeats(odd), 3);
+  assert.ok(QC_WARM_LEAD_METHODOLOGY_NOTE.startsWith("When a batch carries many verifier seats"));
 });
 
 // ---------------------------------------------------------------------------

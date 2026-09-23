@@ -111,12 +111,12 @@ As built, 2026-09-23 (v1.21.0):
    1.20.0. v1.20.0 was published (2026-09-22), so the rendered page covers
    1.21.0 alone. Step 9's case of the page also having to describe the
    Next-section button does not arise.
-5. **The runbook gained a compaction Phase 1 row, and redline Phase 0 got
-   none** (step 7). The compaction section had rows only for Phase 2. It
-   now has one for Phase 1, and its Phase 2 rows are rewritten for the
-   switch. Master has no redline Phase 0 rows, and the open redline Phase 1
-   PR (#187) adds them at the same place, so a copy here would only
-   conflict with it.
+5. **The runbook gained a compaction Phase 1 row; redline Phase 0's rows
+   came from PR #187** (step 7). The compaction section had rows only for
+   Phase 2. It now has one for Phase 1, and its Phase 2 rows are rewritten
+   for the switch. Master had no redline Phase 0 rows, and PR #187 was
+   adding them at the same place, so this PR wrote none. #187 then merged
+   during review (deviation 8), which brought them into the release.
 6. **The trust dossier needed no edit** (step 8). Every number it quotes
    was re-checked against the code, it has a harvest card, the brief card
    says the file is written on save, and "no model runs that you did not
@@ -124,3 +124,12 @@ As built, 2026-09-23 (v1.21.0):
 7. **Step 5's route list needed no edit.** The Architecture block already
    named every route Phases 2–4 added (each phase added its own), and the
    Configuration table gained one row: the new switch.
+8. **Redline Phase 1's backend rides this release too.** PR #187 merged
+   (`0aa2e98`) while this PR was in review, so the 1.21.0 build carries the
+   redline on your original. It is reachable only through the API
+   (`?redline=master&mode=preserved`), because its menu item arrives with
+   Phase 1's UI PR. So the release entry does not announce it, and its draft
+   waits for the release that carries the UI. The Export menu's existing
+   items name their mode explicitly, so what they download is unchanged.
+   Merging master into this branch resolved three docs conflicts, all
+   recorded in CLAUDE.md's closeout section.

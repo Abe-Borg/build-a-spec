@@ -1137,7 +1137,7 @@ export default function ArtifactPanel({
                     onClick={() =>
                       runExport(
                         "redline-master",
-                        exportDocxUrl({ redline: "master" }),
+                        exportDocxUrl({ redline: "master", mode: "normalized" }),
                         "specification - REDLINE.docx",
                       )
                     }
@@ -1161,7 +1161,11 @@ export default function ArtifactPanel({
                     onClick={() =>
                       runExport(
                         "redline-version",
-                        exportDocxUrl({ redline: "version", base: compareBase }),
+                        exportDocxUrl({
+                          redline: "version",
+                          base: compareBase,
+                          mode: "normalized",
+                        }),
                         "specification - REDLINE.docx",
                       )
                     }

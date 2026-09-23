@@ -52,7 +52,7 @@ closed without merging is reconciled back to `not started` with a note.
 | 4 | `04_HARVEST.md` | **complete** | `54d2437` + `9b8b40d` (PR #185, merged `a0f66c6`) | the fact harvest: one opt-in paid call, a review sheet, one-batch commit; a fact's source must resolve (the recording tool, the panel, the commit), older ones flagged, never rewritten; a reply source pinned to the reply it cited; 25 as-built deviations in the phase file (23 as built + 2 from the Codex review) |
 | 5 | `05_RELEVANCE_TRIM.md` | **Part A complete**; Part B not started | Part A: `ddce90c` + `df87c1a` (PR #186, merged `049f93d`) | Part A (the measurement): every turn's PROJECT CONTEXT sizes, block by block, on the `prompt_refs` trace event, in `/api/diagnostics` and in Developer tools → Context makeup; 8 as-built deviations in the phase file (7 as built + 1 from the Codex review). **Part B is waiting on Abraham's measurement** (the gate in the phase file: a real 21 30 00 sitting seeded from a researched 21 13 13) — do not build it before that measurement is recorded there. Left out of the 1.21.0 release (Phase 7) |
 | 6 | `06_CLIENT_LIBRARY.md` | not started | | optional (D5); after 3; only when a second project for one client exists. Left out of the 1.21.0 release (deferred by D5) |
-| 7 | `07_RELEASE_CLOSEOUT.md` | **in review** | `c526a38`–`7143b48`, 4 commits (PR #188) | **last.** The one release for Phases 2–6, cut as **v1.21.0**: Phases 2 (first announced here — it shipped in the 1.20.0 build), 3, 4 and 5A, plus chat-history compaction Phases 1–2 and redline Phase 0. Compaction Phase 2 ships **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`) because its live canary was never run. 5B and 6 are left out. The tag is Abraham's |
+| 7 | `07_RELEASE_CLOSEOUT.md` | **in review** | `c526a38`–`7143b48`, 4 commits (PR #188) | **last.** The one release for Phases 2–6, cut as **v1.21.0**: Phases 2 (first announced here — it shipped in the 1.20.0 build), 3, 4 and 5A, plus chat-history compaction Phases 1–2 and redline Phase 0 (and redline Phase 1's backend, API-only, which merged during review). Compaction Phase 2 ships **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`) because its live canary was never run. 5B and 6 are left out. The tag is Abraham's |
 
 ## Release policy
 
@@ -98,7 +98,8 @@ v1.20.0 is published, so the rendered release page describes 1.21.0 alone.
 It carries Phases 2, 3, 4 and 5A. Phase 2 is announced here for the first
 time, but it shipped in the 1.20.0 build. It also carries the two plans that
 follow this release policy: chat-history compaction Phases 1–2 and redline
-Phase 0. Compaction Phase 2 ships **switched off**. Its live canary was
+Phase 0. Redline Phase 1's backend (PR #187) merged during the closeout's
+review, so it rides along too, API-only and unannounced until its UI ships. Compaction Phase 2 ships **switched off**. Its live canary was
 never run, and if the provider refuses that history shape, every later
 message in an affected project fails. So the trim stays behind
 `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` until the canary passes (the

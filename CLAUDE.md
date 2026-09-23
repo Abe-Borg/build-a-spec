@@ -132,6 +132,21 @@ backend/
                            kept, deprecated); Batch 5
                            adds GET /api/doc/diff + ?redline=master|version on
                            /api/export/docx (+ baseline_index in _doc_payload);
+                           Redline on your original (Phase 1) adds
+                           ?redline=master&mode=preserved (render_preserving_
+                           redline through _render_original_redline; a bare
+                           redline=master takes it whenever available,
+                           redline=version stays normalized and 400s with
+                           mode=preserved; a refusal is a 409 whose `code` is
+                           the named reason and the export event's `refusal`)
+                           and preserved_redline_available +
+                           preserved_redline_reason {code, message} on
+                           _doc_payload — ONE derivation,
+                           _preserved_redline_availability (no_baseline /
+                           no_original / pending_revisions / revision_scan_
+                           unavailable; the scan cached per upload), shared
+                           with the route; _revision_timestamp is the w:date
+                           seam;
                            the tutorial is NOT frontend-only any more: it owns
                            /api/tutorial/status|start|scenario/start|
                            scenario/finish|restore (showcase-only — start 422s
@@ -773,7 +788,18 @@ backend/
                            Paragraph letters come from _letters →
                            model.labelled_paragraphs (a preserved block takes
                            no letter and shifts none — the panel's numbering;
-                           Redline on your original, Phase 0)
+                           Redline on your original, Phase 0). Phase 1 adds
+                           detect_moves= (OFF by default, and then the output
+                           is byte-identical — pinned over 600 diffs): per
+                           sibling list, the survivors whose order held are
+                           the LONGEST increasing subsequence of base
+                           positions (ties → the most elements kept in place,
+                           an element weighing its subtree; then the later
+                           position — heaviest_increasing_subsequence, public,
+                           a Fenwick tree); the rest carry moved="to" at the
+                           current position and a moved="from" deleted copy
+                           of their base subtree where they were;
+                           SectionDiff.moved lists the roots
   spec_doc/importer.py     [PORT: Spec Critic src/input/extractor.py mechanics]
                            Accept-All tracked-changes text (text boxes
                            included, mc:Fallback copies skipped), content-loss
@@ -869,7 +895,33 @@ backend/
                            header_source front_matter/chrome synthesizes NO
                            header (the identity already sits in carried-
                            through content). stats= fills the export event's
-                           render counts (cloned/spliced/fallback by reason/…)
+                           render counts (cloned/spliced/fallback by reason/…).
+                           Redline on your original, Phase 1: the assembler
+                           PLANS before it paints — plan() returns Records
+                           (kept/spliced/inserted/deleted/carried/dropped/
+                           leftover, + pinned for what _place put around a
+                           break, + owner for a tail) that render_accepted
+                           turns into today's clean body byte for byte, and
+                           render_preserving_redline turns into the redline:
+                           _RedlineBuilder merges the upload (U) and the clean
+                           export (C) — what both share appears once (a
+                           heaviest increasing subsequence over C's upload
+                           positions: pinned records forced in, the diff's
+                           stayers preferred, anything else a move counted as
+                           moves_added), U-only content a tracked deletion,
+                           C-only a tracked insertion. A section break is never
+                           moved or deleted (an emptied holder deletes its
+                           words, keeps its mark, and records a numbering
+                           cancel as w:pPrChange); the last paragraph mark is
+                           never flagged — its formatting is recorded instead
+                           (neutralize_last_paragraph), so the empty paragraph
+                           Word leaves there sets nothing; a moved old copy
+                           gives up its bookmarks and w14 ids. D-5 refuses a package with
+                           pending revisions; untrackable blocks refuse by
+                           name (SourceRedlineError.reason, a closed
+                           vocabulary with server-authored sentences); the
+                           D-7 self-check (revisions.py) runs on every export,
+                           then the package audit
   spec_doc/source_splice.py
                            [Redline on your original, D-2; built in Phase 0]
                            the word-level splice shared with the Phase 1
@@ -892,7 +944,58 @@ backend/
                            after the zero-width content leading its first word
                            (a leading page break stays leading; the redline
                            must share the rule). append_text is the one text
-                           writer (w:tab / w:br, xml_safe_text escapes)
+                           writer (w:tab / w:br, xml_safe_text escapes).
+                           Phase 1: _pieces also emits the DELETED content as
+                           its own "gone" piece kind, which render_clean skips
+                           (proven byte-identical to the Phase 0 output) and
+                           render_redline wraps in w:del (w:t → w:delText)
+                           beside w:ins for the new words, markers outside the
+                           wrappers — the same walk, so Accept All is the
+                           clean export by construction (pinned by 400 seeded
+                           random edits, accept and reject both)
+  spec_doc/revisions.py    [Redline on your original, D-7] the ORACLE, sharing
+                           no code with the writer: pure-lxml accept_all /
+                           reject_all (wrappers, property changes, rows and
+                           cells, flagged paragraph marks joining the next
+                           paragraph, empty tables dropped; deleted text
+                           restored outside nested text boxes) and the
+                           canonical comparison (canonical_body /
+                           first_difference → Difference{index, left, right,
+                           path}: element names and positions only, never
+                           text): runs with equal properties merged, empty
+                           runs/containers dropped, comments/PIs/xml:space and
+                           w14 ids ignored, bookmarks by name (exclusions for
+                           the moved-bookmark limit), trailing empty
+                           paragraphs tolerated only when FORMATTING-FREE
+                           (Word cannot track the last mark, but an empty
+                           paragraph still prints its number or breaks its
+                           page — anything it sets is a difference);
+                           duplicate_bookmark_names. Re-parses into
+                           plain lxml first (_plain) — python-docx's CT_P
+                           overrides .text
+  spec_doc/revision_marks.py
+                           [Redline on your original, D-6] the WRITER:
+                           RevisionMarks (author, date, ids from first_id =
+                           highest_annotation_id + 1 — bookmarks and comments
+                           share the annotation-id space), mark_paragraph (the
+                           flag is the FIRST child of w:pPr/w:rPr, which sits
+                           before w:sectPr/w:pPrChange; deleting a mark that
+                           holds a section break raises), record_paragraph_
+                           properties (w:pPrChange LAST, base properties
+                           only), record_mark_properties (w:rPrChange LAST in
+                           the mark's w:rPr, formatting only),
+                           neutralize_last_paragraph (the document's last
+                           paragraph, deleted or inserted: its untrackable
+                           mark would leave it behind with its formatting, so
+                           the formatting becomes a tracked change whose side
+                           in that resolution is empty), delete_content / insert_content (group
+                           wrappers over the wrappable children, descending
+                           into a hyperlink; w:t → w:delText outside nested
+                           text boxes), mark_table (w:trPr flag after the
+                           other row properties, rows inside sdt/customXml and
+                           nested tables included), UntrackableContent with a
+                           closed reason (simple_field, block_content_control,
+                           field_block, pending_revisions, untrackable_markup)
   spec_doc/xml_text.py     XML 1.0-safe artifact text: the handful of code points
                            XML cannot carry (C0 controls, lone surrogates)
                            render as VISIBLE \uXXXX escapes rather than being
@@ -909,7 +1012,10 @@ backend/
                            Batch 5 adds the redline body writer (build_docx(...,
                            redline=SectionDiff): w:ins/w:del/w:delText + para-mark
                            ins/del via docx.oxml; clean path untouched, byte-stable)
-                           + redline_filename
+                           + redline_filename; Redline on your original adds
+                           upload_redline_filename ("<upload name> - REDLINE
+                           .docx", scrubbed like export_filename, falling back
+                           to the section-derived name)
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
                            module_id + legacy discipline fallback (the versioned
                            document project_identity is authoritative) + audit_result +
@@ -941,7 +1047,16 @@ backend/
                            the imported DOCX (kept OUTSIDE SpecSection: they
                            describe the source package, never LLM-authorable
                            content); source_blocker_message / _remedy own
-                           the denial prose the UI renders verbatim
+                           the denial prose the UI renders verbatim.
+                           detect_pending_revisions (Redline on your original,
+                           D-5) is the package-wide tracked_changes scan
+                           WITHOUT its settings half: _revision_scan_blockers
+                           was extracted from _global_source_blockers (same
+                           order, same answers), so w:trackRevisions switched
+                           on with nothing pending reports "" — it cannot
+                           break "Reject All = your original" — while pending
+                           markup reports tracked_changes and an unreadable
+                           part unsafe_revision_scan
   spec_doc/source_package.py
                            bounded upload handling + defensive OOXML/ZIP
                            inspection (inspect_docx_package): the ONE
@@ -1408,6 +1523,24 @@ tests/
                            (author/date/unique id, w:delText not w:t, para-mark
                            ins/del), doc/diff + redline API validation, no-baseline
                            400, baseline_index project round-trip, clean-path no-marks
+  test_revisions.py        [Redline on your original, D-7] the oracle on
+                           hand-built revision XML: every wrapper, mark joins,
+                           row/cell resolution, property changes, text boxes,
+                           and the canonical comparison's tolerances and its
+                           no-text Difference
+  test_redline_original.py [Redline on your original, Phase 1] the invariant
+                           matrix — every row asserts Accept All == the
+                           formatted export AND Reject All == the upload, plus
+                           the package checks (members byte-identical, ids
+                           unique and above the package's, author/date,
+                           schema order, no sectPr mark deleted); refusals by
+                           name; the keep-in-place weights and the writer's
+                           guards directly; re-import (typed letters → the tree; every
+                           labelling kind → what the formatted export
+                           re-imports as); the corpus sweep under a scripted
+                           edit mix; and the API matrix (route, defaults, 400s,
+                           409s with codes, payload + reason, filename, the
+                           cached scan)
   frontend/tests/tour.test.ts
                            [Batch 6] passive tour-data invariants and current anchors
   test_stop.py             [Batch 7] chat stop mid-stream (truncates the live
@@ -12041,6 +12174,211 @@ project-format change; no version bump (Phase 7 releases the program).
   filter, an unlabelled backend block and the modal's use of the helper
   (seven frontend).
 
+## Redline on your original — implemented notes (Phase 1, backend PR)
+
+Phase 1 of `docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`, backend half:
+`GET /api/export/docx?redline=master&mode=preserved` returns a copy of the
+upload with every change since the import as a native Word tracked change,
+Accept All equal to the formatted export and Reject All equal to the upload,
+and the file checks both before it is handed over. The contract lives in
+`docs/DOCX_FIDELITY.md` → "Redline on your original"; the plan's "Phase 1
+(backend PR) — as built" note carries the deviations and what the UI PR
+starts from. This section is the why and the traps. No new dependency, no
+env knob, no project-format change, no SSE event, no VERSION bump. The UI
+half (the menu item, *Open redline in Word*, the capability, the copy, the new
+export's QA rows) is the next PR and was deliberately not started.
+
+- **The plan is the refactor, and it had to change nothing first** (D-1, its
+  own commit). `_Assembler.plan()` returns the records both renderers read —
+  kept, spliced, inserted, deleted, carried, dropped, and the empty
+  paragraph a displaced break holder leaves — and `render_accepted` paints
+  today's clean body from them. Proven byte-identical over 880 renders (22
+  masters × 40 edit mixes) before anything was built on it, and again after
+  `_pieces` changed. Everything the redline knows about an element it learns
+  from the same record the clean export renders, which is what "Accept All ==
+  the formatted export by construction" means in code.
+- **The splice's deleted words became a piece of their own** (D-2).
+  `_pieces` emits deleted content as `("gone", ...)`, which `render_clean`
+  skips without closing the run it is building (byte-identical to Phase 0,
+  proven against the fully-old pipeline) and `render_redline` wraps in
+  `w:del` beside `w:ins` for the new words. One walk, two renderings, so
+  deviation 8's placement of zero-width content — a leading page break stays
+  ahead of prepended words — holds in the redline without being restated.
+  Pinned by 400 seeded random edits, both resolutions.
+- **The oracle was written first and shares no code with the writer**
+  (`spec_doc/revisions.py`). An oracle that imported the writer's helpers
+  could only ever agree with it. Trap: python-docx's element classes
+  override `.text` on `w:p` (it returns the paragraph's text, and a join over
+  None children raised), so every entry point re-parses into plain lxml
+  first (`_plain`). The comparison is element for element, with exactly the
+  tolerances Word itself imposes — runs re-split, `w14` ids, comments,
+  `xml:space` — and ONE more: an empty last paragraph, because **Word cannot
+  track a document's last paragraph mark**. The writer marks the last
+  paragraph's words and leaves its mark alone, so Accept All of a deleted
+  last provision (or Reject All of an appended one) leaves an empty
+  paragraph behind. The plan did not know this; the first test that deleted
+  the last provision did.
+- **That leftover must set nothing, and the writer makes sure it does**
+  (caught in review on PR #187, Codex). The first cut tolerated ANY empty
+  last paragraph without a section break — so a leftover that kept its Word
+  numbering printed a stray letter, one that kept `w:pageBreakBefore` made a
+  blank page, and the self-check passed both. An empty paragraph is only
+  invisible when it sets nothing, so the tolerance
+  (`_is_formatting_free_empty`) now requires no paragraph property and no
+  run formatting on the mark at all, once empty containers drop; the
+  attributes on `w:p` (rsids, `w14` ids) are not formatting. The writer
+  delivers that by construction (`revision_marks.neutralize_last_paragraph`,
+  from `_RedlineBuilder.render` for the last flagged element): a DELETED
+  last paragraph's formatting moves into a `w:pPrChange` and a mark
+  `w:rPrChange` (`record_mark_properties`, LAST in `CT_ParaRPr`), so Accept
+  All keeps the now-empty current side and Reject All restores it all; an
+  APPENDED last paragraph keeps its formatting and gains changes recording
+  that there was none. Word shows each as an ordinary "Formatted" change. A
+  paragraph with no formatting gets no change, and a section break is never
+  moved into one (a leftover still holding one would be a difference the
+  check reports). `render.redline.last_mark_untracked` counts it in the
+  export event.
+- **Move detection lives in the diff, and is reconciled at body level.**
+  `diff_sections(detect_moves=True)` is the plan's per-sibling rule (the
+  LONGEST increasing subsequence of base positions, ties to the most
+  elements kept in place, then the later position), OFF by default and then
+  byte-identical (600 diffs + 600 normalized redline bodies). But the
+  redline cannot simply obey it: deviation 4 says breaks go where `_place`
+  put them in the clean export, and the diff and `_place` disagree when a
+  reorder crosses breaks. So the redline decides what stays in place with its
+  own heaviest increasing subsequence over the clean records' upload
+  positions (`_keep_in_place`, a pure function so its weights are unit
+  tested directly) — pinned (break-bearing) records weigh count² + 1, the
+  diff's stayers count, its movers 1 — which honours the diff wherever a
+  break allows and moves the fewest elements it can where one does not
+  (`redline.moves_added`; a three-provision reversal across two breaks is
+  two moves, not three). The diff's say is not decoration: moving a
+  provision with two children below its two siblings, the raw body-level
+  chain would keep the parent's three paragraphs and move the siblings; the
+  diff (longest sibling run first) moves the parent, and the redline follows
+  it.
+  `heaviest_increasing_subsequence` is the one Fenwick-tree implementation
+  both levels use. A diff trap on the way: a deleted child inside a moved-to
+  subtree was flagged `from`; it must inherit its parent's flag.
+- **A section break is never moved or deleted.** `mark_paragraph` raises if
+  asked to delete a mark holding `w:sectPr` — explicitly, never `assert`,
+  which `python -O` strips — and the builder turns that into
+  `section_break_reorder`. A deleted or moved break holder keeps its mark and
+  loses only its words (Accept All = the clean export's leftover); when it
+  was Word-numbered, the numbering cancel the clean export applies is
+  recorded as a `w:pPrChange` holding the original base properties
+  (deviation 6), so Reject All restores the number.
+- **Identity on moves.** The new copy keeps the element's bookmarks and
+  `w14` ids; the deleted old copy gives them up (`_give_up_identity`),
+  because a file must never carry one bookmark name or paragraph id twice.
+  Reject All therefore restores a moved provision's text and formatting but
+  not its bookmarks — the one documented limit, and the self-check excludes
+  exactly those names. A moved provision carrying a comment range or a
+  note reference is refused (`moved_annotation`): an annotation cannot
+  simply stay with one copy the way a bookmark can. A plainly DELETED
+  provision keeps its bookmarks inside `w:del`, so Reject All restores them.
+- **D-5 is split, on the owner's instruction.** The package-wide
+  `tracked_changes` blocker also fires on `w:trackRevisions` with nothing
+  pending, which does not break "Reject All = your original". Its story-part
+  half was extracted (`source_mapping._revision_scan_blockers`, same order
+  and answers for the byte-exact mode) and `detect_pending_revisions` runs it
+  alone. The refusal is `pending_revisions` with its own sentence — the
+  byte-exact `tracked_changes` remedy offers "Edit freely", which means
+  nothing here. `settings.xml` is never touched (Decision 4), so a master
+  whose Track Changes was on stays on.
+- **Revision ids start above the highest `w:id` in the package's `word/*.xml`
+  parts** (`highest_annotation_id`): bookmarks and comments share the
+  annotation-id space, and Batch 5's `itertools.count(1)` was only ever safe
+  on the fresh documents it was written for. For the same reason Batch 5's
+  `_mark_paragraph` (which appends) is not reused: in an EXISTING paragraph
+  the mark flag must be the first child of `w:pPr/w:rPr`, which must precede
+  `w:sectPr` and `w:pPrChange`, and a row's flag follows its other row
+  properties.
+- **Refusals are a closed vocabulary with server-authored sentences**
+  (`SourceRedlineError.reason`, `redline_refusal_message`), and every
+  sentence names what still works. The route answers a refusal as a 409
+  whose `code` is the reason; the `export` event records it as `refusal:
+  {reason, detail}`, the detail positions and element names only
+  (`Difference.to_dict` — a test asserts provision text is absent).
+- **One derivation, two callers** (the `_preserved_export_available`
+  pattern): `_preserved_redline_availability` serves the payload
+  (`preserved_redline_available`, `preserved_redline_reason {code,
+  message}`) and the route (a bare `redline=master`'s default; the 409 an
+  explicit `mode=preserved` earns). The pending-revisions scan inside it
+  reads every story part, so it is cached per upload, keyed on CONTENT (the
+  format map's SHA-256, which the availability check has just matched to the
+  bytes) rather than on the bytes object's `id()`. That choice was forced by
+  a flake: `reset_session()` resets the one session object in place, the
+  ad-hoc cache attribute outlives it, and an earlier test importing the same
+  master could leave an entry that a reused `id()` then hit — correct by
+  luck, and it broke the test's exact count under the revert runs. A
+  content key makes every hit correct by construction, and the test counts
+  relatively (no rescan for the same upload, exactly one for a different
+  one). The renderer re-scans at render time regardless: it is a public
+  function and must not trust a caller's cache.
+- **The one frontend change that could not wait.** This PR moves a bare
+  `redline=master`'s default to the redline on the original, and *Redline of
+  extracted provisions* called the bare URL — it would have silently started
+  downloading the new file, leaving two menu items that produce the same
+  thing. `ExportDocxQuery` now REQUIRES a mode on redline queries (so `tsc`
+  refuses a bare one), both existing actions send `mode: "normalized"`, and
+  `downloads.test.ts` pins them by their `runExport` keys so the UI PR's new
+  item does not disturb the pin.
+- **Measured, recorded, not asserted.** Linear: 1,200 paragraphs with forty
+  edits — redline 0.65–0.7 s, self-check 0.26–0.29 s, pending scan 0.075 s;
+  2,400 → 1.3 s / 0.56 s; 4,800 → 2.4 s / 1.16 s (about three times the
+  clean export, which renders once inside it). Corpus sweep, 17 masters ×
+  60 edit mixes (1,020 renders): no refusal, no failed self-check, and a
+  fallback rate of 230 of 525 edited provisions — every one `hyperlink`,
+  the next thing the splice should learn. Fixture sweep, 11 hand-built
+  masters × 200 mixes (2,200 renders, the two ending in a formatted
+  provision included): clean under the formatting-free tolerance, with 118
+  emptied break holders, 5 break-forced extra moves and 347 untracked last
+  marks exercised.
+- **Found, not done.** A new provision nested deeper than any provision a
+  Word-numbered master already has is cloned from kin at another depth and
+  keeps its `w:ilvl`, so the formatted export (and, by construction, the
+  redline's Accept All) shows it one level up — a Phase 0 behaviour, recorded
+  in the plan with its likely fix. The re-import test therefore checks the
+  TREE for typed-letter masters and "what the formatted export re-imports
+  as" for every labelling kind.
+- **Tests.** `tests/test_revisions.py` (37 — the oracle on hand-built
+  revision XML, the formatting-free trailing rule included);
+  `tests/test_redline_original.py` (73 — the invariant matrix, every row
+  asserting both resolutions plus the package checks; refusals; the weights
+  and the writer's guards directly; the last paragraph deleted and appended
+  in a Word-numbered and a page-break master; re-import; the corpus sweep;
+  the API matrix); two in
+  `test_source_splice.py`, five in `test_diffing.py`, two in
+  `test_diagnostics.py`, and the frontend pins in `downloads.test.ts`.
+  Every mechanism was reverted in place, each in an isolated copy of the
+  tree, to prove a test goes red without it: a flagged paragraph mark not
+  joining the next paragraph → 36; equal runs not merged → 31; the
+  trailing-empty-paragraph tolerance → 11; that tolerance widened back to any
+  empty paragraph without a break → 5; the mark flag appended instead of
+  first → 2; the writer's section-break guard → 1; no `w:pPrChange` → 5;
+  the last paragraph not neutralized → 4; its mark formatting not recorded
+  → 4; its paragraph formatting not recorded → 4; an appended last
+  paragraph left as it was → 2; the mark's `w:rPrChange` first instead of
+  last → 2; `last_mark_untracked` not counted → 4; a section break counted
+  as formatting → 1; a tag other than `w:ins`/`w:del` accepted → 1; a
+  change recorded for a paragraph (or a mark) that sets nothing → 1 each;
+  deleted text left as `w:t` → 3; a row flag ahead of the row's other
+  properties → 1; ids not above the package's own → 2; breaks not pinned →
+  1; the diff's movers weighing like its stayers → 2; the diff's moves
+  ignored → 1; a moved old copy keeping its identity → 1; the last paragraph
+  mark flagged → 1; the holder's numbering cancel untracked → 1; an emptied
+  holder's mark deleted → 4; the content-control refusal → 1; the TOC-field
+  refusal → 1; the moved-annotation refusal → 1; the self-check skipped → 2;
+  the renderer's pending-revisions refusal → 1; Track Changes switched on
+  counted as pending → 2; `detect_moves` ignored → 4; a bare
+  `redline=master` defaulting to normalized → 1;
+  `redline=version&mode=preserved` allowed → 1; the route's capture-time
+  refusal → 2; the filename not from the upload → 2; the payload keys
+  dropped → 7; the payload not consulting pending revisions → 1; the scan
+  cache → 1; the event's `refusal` → 1; the filename scrub → 1; the splice's
+  deleted words not emitted as their own piece → 30.
+
 ## The project workspace program, as shipped — implemented notes (v1.21.0 closeout)
 
 Phase 7 of `docs/plans/project-workspace/`: the one release for Phases 2–6,
@@ -12062,6 +12400,11 @@ one new env knob.
   is its first announcement and says so rather than calling it new. It also
   carries chat-history compaction Phases 1–2 and redline Phase 0, from the
   two plans that adopted this program's one-release-at-the-end policy.
+  Redline Phase 1's backend (PR #187) merged while this PR was in review,
+  so the 1.21.0 build carries that too. It is reachable only through the
+  API (`?redline=master&mode=preserved`) until Phase 1's UI PR adds the
+  menu item, so the entry does not announce it; its draft waits for the
+  release that carries the UI.
   Step 3 names only the compaction plan's drafts. The redline plan's Phase 0
   draft is collected too, which is recorded as a deviation in
   `07_RELEASE_CLOSEOUT.md`. Phase 5 Part B (waiting on the gate
@@ -12134,10 +12477,12 @@ one new env knob.
      shipped in the 1.20.0 build without a release note. The program
      README's "Release policy" recorded this at the time. 1.21.0's entry is
      the first to announce it.
-- **Deliberately not done.** No manual QA rows for redline Phase 0. Master
-  has none, and the open redline Phase 1 PR (#187) adds them at the same
-  place in the runbook, so a second copy here would only conflict with it.
-  #187 is not in this release: it was still open when the closeout was cut.
+- **Redline Phase 0's QA rows came with PR #187.** The closeout wrote none:
+  master had none, and #187 was adding them at the same place in the
+  runbook. #187 then merged during this PR's review, so the release has
+  them. The merge of master into this branch resolved three docs conflicts:
+  the two CLAUDE.md sections kept in merge order (#187's first), and the
+  redline status paragraphs in the plan and the plans index combined.
 - **Tests:** 5 new. Four are in `test_fetched_page_elision.py`: the shipped
   default read from the source, and commit, load and the profiler each
   keeping the page with the switch off. The trim's own tests there now run

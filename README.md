@@ -31,6 +31,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over (in progress — see "Redline on your original" below). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -508,8 +509,9 @@ The redline-on-your-original program
 Word file you imported with every change Build-a-Spec made shown as Word
 tracked changes — Accept All gives the updated section, Reject All gives your
 original back. Its first phase fixes the export that redline has to agree
-with, and it ships in v1.21.0. The redline itself (Phase 1) is still to
-come, so the program is still in progress.
+with, and it ships in v1.21.0. So does the redline's backend (Phase 1,
+below), but only through the API: the Export-menu item and *Open redline in
+Word* arrive with Phase 1's UI change, so the program is still in progress.
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)
 
@@ -560,6 +562,52 @@ pending tracked changes. Each export's diagnostics event (Settings →
 Developer tools) records the mode that ran and counts what the export did —
 provisions cloned, spliced, rebuilt by reason, added, preserved — never their
 text.
+
+### The redline itself (Phase 1 — backend on `master`, menu item next)
+
+The export exists and is reachable through the API; its Export-menu item,
+*Open redline in Word* and the copy that explains it arrive with the next
+(UI) change.
+
+- **`GET /api/export/docx?redline=master&mode=preserved`** returns
+  `<your upload's name> - REDLINE.docx`: your file, with every change since
+  the import as a Word tracked change by "Build-a-Spec", dated at export.
+  Headers, footers, styles, fonts, numbering definitions and every other part
+  are your upload's, byte for byte; Track Changes is not switched on in it.
+- **Accept All gives exactly *Export Word (keeps your formatting)*; Reject
+  All gives your original back.** The export proves both on every file before
+  it hands it over, and refuses with a named reason if it cannot. Two
+  exceptions, both invisible: a provision you moved keeps its bookmarks at its
+  new position, so Reject All does not restore them at the old one; and when
+  the file's LAST paragraph is deleted or added, Word keeps one empty
+  paragraph at the very end (it cannot track a document's last paragraph
+  mark). That paragraph is left plain — the export records its formatting as
+  a tracked formatting change — so it prints no number and breaks no page.
+- **Changes are word by word, inside your runs.** An edited provision shows
+  the words that went and the words that came, with the rest keeping its own
+  formatting. In a master with typed letters, a provision relettered by an
+  insert above it shows the letter change (the only way Reject All can give
+  your letters back); in a Word-numbered master Word renumbers itself.
+- **A move is a deletion where it was and an insertion where it is** (Word's
+  own "Moved" marks are the next phase). A deleted table shows every row
+  deleted. Section breaks never move and are never deleted: deleting the
+  provision that ends a section deletes its words and keeps the break.
+- **Refused by name, never wrong.** A master that already carries someone's
+  tracked changes is refused with the fix (accept or reject them in Word,
+  save, import again) — Track Changes merely switched on is fine. So are a
+  reorder that would move a section break, a moved provision carrying a
+  comment or footnote reference, and deleting part of a table of contents or
+  a content control. The redline of extracted provisions still works in every
+  case.
+- **The default changed; the menu does not rely on it.** A bare
+  `?redline=master` now returns the redline on your original whenever it is
+  available (else the redline of extracted provisions); both existing menu
+  items name `mode=normalized` explicitly, so they download what they always
+  did. `?redline=version&mode=preserved` is a 400 — the redline on your
+  original compares against the imported master only.
+- **The payload says so before the click:** `preserved_redline_available`,
+  and `preserved_redline_reason` (`{code, message}`) when it is not — the
+  same derivation the route's default and refusal read.
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -1685,7 +1733,10 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/research/debrief + /api/qc/debrief,
                          /api/doc (+ undo/redo/edit/diff/capabilities/
                          detach-source),
-                         /api/export/docx (+ ?redline=master|version),
+                         /api/export/docx (+ ?mode=preserved|source|
+                         normalized, ?redline=master|version —
+                         redline=master&mode=preserved is the redline on
+                         your original),
                          /api/import/master + /api/import/original,
                          /api/research/start|status|stream|stop,
                          /api/qc/start|status|stream|stop|apply|apply/preview|
@@ -1810,14 +1861,23 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     source_render.py     appearance-preserving export: rebuilds the body from
                          the tree, cloning formatting from the retained upload
                          (untouched provisions byte-identical, edits spliced,
-                         section breaks kept with the content above them)
+                         section breaks kept with the content above them) —
+                         and, from the same plan, the redline on your
+                         original (every change a Word tracked change, its
+                         Accept All / Reject All checked before return)
     source_splice.py     the word-level splice: an edit written into a
-                         paragraph's own runs — shared with the planned
-                         redline on your original
+                         paragraph's own runs — the clean export's words, and
+                         the redline's w:ins/w:del inside those same runs
+    revisions.py         pure-XML Accept All / Reject All + the canonical
+                         comparison: the redline's self-check and test oracle
+    revision_marks.py    the revision writer: w:ins/w:del/w:pPrChange/
+                         w:rPrChange in Word's schema order, ids above the
+                         package's own
     linting.py           deterministic lint: stale editions, placeholders, structure
                                                                   [ported from Spec Critic]
     diffing.py           deterministic version diff (uid join, word-level runs,
-                         status changes) powering the redline export + compare view
+                         status changes) powering the redline export + compare view;
+                         opt-in move detection for the redline on your original
     docx_export.py       fresh normalized .docx rendering +
                          assumptions/imported/open-items
                          schedules + QC/compliance closing + the full Final QC

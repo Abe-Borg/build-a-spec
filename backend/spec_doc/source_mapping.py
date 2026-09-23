@@ -1166,7 +1166,26 @@ def _global_source_blockers(
         ):
             blockers.append("active_content")
         blockers.extend(_settings_blockers(archive, discovery))
+    blockers.extend(_revision_scan_blockers(archive, discovery, document_xml))
 
+    # Preserve first-seen order while avoiding duplicated diagnostics.
+    return tuple(dict.fromkeys(blockers))
+
+
+def _revision_scan_blockers(
+    archive: zipfile.ZipFile,
+    discovery: "_OpcDiscovery | None",
+    document_xml: bytes,
+) -> list[str]:
+    """``tracked_changes`` when a story part carries PENDING revision markup,
+    or the reason the parts could not be scanned.
+
+    Deliberately blind to ``w:trackRevisions`` in the settings part: that
+    switch says future edits will be tracked, not that any are pending. The
+    byte-exact mode reports it anyway (``_settings_blockers``); the redline
+    on the original does not refuse it (``detect_pending_revisions``).
+    """
+    blockers: list[str] = []
     # Pending revisions can live in headers, footers, notes, styles, or
     # numbering as well as document.xml. Part names are not authoritative in
     # OPC, so use each part's effective WordprocessingML content type. If OPC
@@ -1223,9 +1242,7 @@ def _global_source_blockers(
             if any(_is_revision_element(element) for element in root.iter()):
                 blockers.append("tracked_changes")
                 break
-
-    # Preserve first-seen order while avoiding duplicated diagnostics.
-    return tuple(dict.fromkeys(blockers))
+    return blockers
 
 
 def detect_global_source_blockers(source_bytes: bytes) -> tuple[str, ...]:
@@ -1238,6 +1255,51 @@ def detect_global_source_blockers(source_bytes: bytes) -> tuple[str, ...]:
             return _global_source_blockers(archive, document_xml)
     except (KeyError, zipfile.BadZipFile, RuntimeError) as exc:
         raise ValueError("Could not inspect source mutation blockers.") from exc
+
+
+#: What :func:`detect_pending_revisions` can report.
+PENDING_REVISIONS = "tracked_changes"
+PENDING_REVISIONS_UNSCANNABLE = "unsafe_revision_scan"
+
+
+def detect_pending_revisions(source_bytes: bytes) -> str:
+    """``""`` when no story part of the package carries pending revisions.
+
+    The package-wide ``tracked_changes`` scan of
+    :func:`detect_global_source_blockers` — document, headers, footers,
+    notes, comments, styles, numbering — WITHOUT its settings half: a file
+    whose Track Changes switch (``w:trackRevisions``) is merely on, with
+    nothing pending, reports nothing here. Otherwise
+    :data:`PENDING_REVISIONS` when revision markup is present, or
+    :data:`PENDING_REVISIONS_UNSCANNABLE` when the parts could not be read
+    confidently enough to say — a question the caller must treat as a yes.
+    """
+    if not isinstance(source_bytes, bytes):
+        raise TypeError("source_bytes must be bytes")
+    try:
+        with zipfile.ZipFile(BytesIO(source_bytes), "r") as archive:
+            document_xml = archive.read("word/document.xml")
+            discovery = None
+            try:
+                discovery = _discover_opc(archive)
+            except (
+                KeyError,
+                RuntimeError,
+                NotImplementedError,
+                zipfile.BadZipFile,
+                etree.XMLSyntaxError,
+                UnicodeError,
+                ValueError,
+            ):
+                return PENDING_REVISIONS_UNSCANNABLE
+            found = _revision_scan_blockers(archive, discovery, document_xml)
+    except (KeyError, zipfile.BadZipFile, RuntimeError):
+        return PENDING_REVISIONS_UNSCANNABLE
+    if "tracked_changes" in found:
+        return PENDING_REVISIONS
+    if "unsafe_revision_scan" in found:
+        return PENDING_REVISIONS_UNSCANNABLE
+    return ""
 
 
 def build_source_body_map(
@@ -1470,7 +1532,10 @@ __all__ = [
     "build_source_body_map",
     "canonical_element_bytes",
     "canonical_element_sha256",
+    "PENDING_REVISIONS",
+    "PENDING_REVISIONS_UNSCANNABLE",
     "detect_global_source_blockers",
+    "detect_pending_revisions",
     "semantic_body_projection",
     "semantic_body_projection_sha256",
     "source_blocker_message",

@@ -105,21 +105,31 @@ export async function downloadAttachment(
   );
 }
 
-/** The specification export routes the Export menu offers. */
+/** The specification export routes the Export menu offers.
+ *
+ * A redline query names its mode — the type makes it required — because the
+ * server's default for a bare `redline=master` is the redline on the
+ * original whenever one is available, and a menu item that relied on it
+ * would silently change which file it downloads. `preserved` is the redline
+ * on the original (master only); `normalized` the redline of extracted
+ * provisions. */
 export type ExportDocxQuery =
   | { mode: "preserved" | "source" | "normalized" }
-  | { redline: "master" }
-  | { redline: "version"; base: number };
+  | { redline: "master"; mode: "preserved" | "normalized" }
+  | { redline: "version"; base: number; mode: "normalized" };
 
 /** URL for one `.docx` export of the specification. */
 export function exportDocxUrl(query: ExportDocxQuery): string {
-  if ("mode" in query) {
+  if (!("redline" in query)) {
     return `/api/export/docx?mode=${encodeURIComponent(query.mode)}`;
   }
-  if (query.redline === "master") return "/api/export/docx?redline=master";
+  const mode = encodeURIComponent(query.mode);
+  if (query.redline === "master") {
+    return `/api/export/docx?redline=master&mode=${mode}`;
+  }
   return `/api/export/docx?redline=version&base=${encodeURIComponent(
     String(query.base),
-  )}`;
+  )}&mode=${mode}`;
 }
 
 /** The exact DOCX package that was imported, unchanged. */

@@ -1,8 +1,9 @@
 # Phase 7 — Release closeout: the one release for Phases 2–6
 
-**Status:** not started. **Depends on:** every phase Abraham wants in the
-release, merged (Phases 2, 3, 4 and 5A at minimum; 5B and 6 only if built).
-This is the LAST phase, and the only one that touches a version number.
+**Status:** in review (PR pending) — cut as **v1.21.0**. **Depends on:**
+every phase Abraham wants in the release, merged (Phases 2, 3, 4 and 5A at
+minimum; 5B and 6 only if built). This is the LAST phase, and the only one
+that touches a version number.
 
 ## Goal
 
@@ -79,3 +80,47 @@ previous-version machine).
 
 (Record here what was left out of the release and why, and any step that
 had to differ.)
+
+As built, 2026-09-23 (v1.21.0):
+
+1. **Compaction Phase 2 ships switched off** (steps 1 and 3). PR #183
+   merged (`7fc6e24`) without the live canary its own plan made the merge
+   gate, and the canary was still unrun at the closeout. It needs the
+   owner's API key and one paid request, and none was available to this
+   session. The owner handed the call to this session rather than run it.
+   A history the provider refused would fail every later message in the
+   project, and the page text is gone once the project is saved. So the
+   release does not bet on it. `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` (default
+   `0`) gates both the commit-time and the load-time trim, and the canary
+   forces the trim on for its own request. The code, tests and canary all
+   stay on `master`. The compaction plan's Phase 2 → Canary result says
+   what turns it on. Its release-note draft is withheld from this entry.
+2. **Phase 5 Part B and Phase 6 are left out** (step 1). Part B waits on
+   the owner's gate measurement (a real 21 30 00 sitting seeded from a
+   researched 21 13 13), and Phase 6 is deferred by D5. Neither was
+   started, so there is nothing to finish first. Each can ship in a later
+   release of its own.
+3. **The redline plan's Phase 0 draft is used too** (step 3). Step 3 names
+   only the compaction plan's drafts. Redline Phase 0 (PR #184) also merged
+   since v1.20.0, and its plan left the release to the owner. 1.21.0 is
+   that release, so the Phase 0 draft under "Release-note drafts" in
+   `../REDLINE_ON_ORIGINAL_2026-09-22.md` is its "Word export" section.
+4. **Phase 2 is announced, not introduced** (steps 2, 3 and 9). The v1.20.0
+   tag was cut after PR #176 merged, so the Project panel shipped in the
+   1.20.0 build without a release note. The 1.21.0 item says it arrived in
+   1.20.0. v1.20.0 was published (2026-09-22), so the rendered page covers
+   1.21.0 alone. Step 9's case of the page also having to describe the
+   Next-section button does not arise.
+5. **The runbook gained a compaction Phase 1 row, and redline Phase 0 got
+   none** (step 7). The compaction section had rows only for Phase 2. It
+   now has one for Phase 1, and its Phase 2 rows are rewritten for the
+   switch. Master has no redline Phase 0 rows, and the open redline Phase 1
+   PR (#187) adds them at the same place, so a copy here would only
+   conflict with it.
+6. **The trust dossier needed no edit** (step 8). Every number it quotes
+   was re-checked against the code, it has a harvest card, the brief card
+   says the file is written on save, and "no model runs that you did not
+   start" still names the harvest as never automatic.
+7. **Step 5's route list needed no edit.** The Architecture block already
+   named every route Phases 2–4 added (each phase added its own), and the
+   Configuration table gained one row: the new switch.

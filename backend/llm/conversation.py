@@ -74,6 +74,7 @@ rollback a genuine failure gets.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import re
 import threading
@@ -133,6 +134,31 @@ from ..qc.apply import (
 from ..qc.context import qc_review_context_block
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import refusal_category, response_container_id
+from .compaction import (
+    MIN_CONDENSE_FRACTION,
+    RECALL_CONVERSATION_TOOL,
+    CompactionError,
+    CompactionRecord,
+    CompactionRunner,
+    ViewSpec,
+    calibrated_tokens_per_char,
+    compacted_view,
+    compaction_payload,
+    cut_for,
+    elide_recall_results,
+    estimate_tokens,
+    extract_summary,
+    message_chars,
+    message_text,
+    now_iso,
+    recall_result,
+    summary_instruction,
+    transcript_digest,
+    truncated_view_spec,
+    turn_starts,
+    view_spec_for,
+    with_preface,
+)
 from .history_hygiene import (
     REJECTED_BATCH_DOCUMENT_HEADER,
     elide_fetched_page_text,
@@ -181,6 +207,7 @@ from ..usage_ledger import (
     ESTIMATED_OUTPUT_TOKENS_KEY,
     USAGE_ESTIMATED_KEY,
     UsageLedger,
+    usage_to_dict,
 )
 from .client import AUTH_ERROR_MESSAGE, MissingApiKeyError, get_client
 from .prompts import (
@@ -207,9 +234,13 @@ def _chat_tools() -> list[dict[str, Any]]:
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
     ``suggest_prompts``, ``read_reference_doc``, ``apply_qc_fixes``,
-    ``track_followups`` and then ``record_project_facts`` are appended
-    LAST, in that order, so each addition leaves the existing tool bytes
-    intact as a stable cached prefix.
+    ``track_followups``, ``record_project_facts`` and then
+    ``recall_conversation`` are appended LAST, in that order, so each
+    addition leaves the existing tool bytes intact as a stable cached
+    prefix. ``recall_conversation`` is in the list from a session's first
+    turn even though nothing is condensed yet: tools render ahead of
+    everything else, so adding it only once a conversation was condensed
+    would re-write the whole cache at the worst possible moment.
 
     The two web tools come from the shared builders, which pin
     ``allowed_callers: ["direct"]`` (see
@@ -226,6 +257,7 @@ def _chat_tools() -> list[dict[str, Any]]:
         APPLY_QC_FIXES_TOOL,
         TRACK_FOLLOWUPS_TOOL,
         RECORD_PROJECT_FACTS_TOOL,
+        RECALL_CONVERSATION_TOOL,
     ]
 
 
@@ -432,6 +464,25 @@ class SessionState:
     # two always describe one turn; cleared by reset and project load; never
     # persisted.
     last_context_sizes: dict[str, int] | None = None
+    # The condensed-conversation record (compaction plan Phase 3): a summary
+    # standing in for the oldest turns. A VIEW over ``history`` — the history
+    # itself is never edited — that every request sends instead of those
+    # turns. Persisted as an optional project key, cleared by reset, dropped
+    # whenever the history it describes stops being a prefix of this one
+    # (a reference delete truncates history without a generation bump), and
+    # only ever replaced by a record covering more turns.
+    compaction: CompactionRecord | None = None
+    # The one background summary this session may have in flight. Replaced
+    # on reset/load like the research/QC runners, so a call still running
+    # settles into the abandoned object and can never adopt into the new
+    # session (it is also generation-stamped).
+    compaction_runner: CompactionRunner = field(default_factory=CompactionRunner)
+    # Tokens per serialized character, measured from the provider's own
+    # count of the last committed turn's request. Estimates the conversation
+    # size between turns without a separate counting call (the counting
+    # endpoint rejects requests carrying the web tools this chat always
+    # sends). Process-local, cleared by reset and load.
+    tokens_per_char: float | None = None
     # True while a model turn owns the document store (WI2). Manual edits are
     # rejected in this window — a mid-turn manual edit would be swept into the
     # streaming turn's commit or rollback.
@@ -612,6 +663,33 @@ class SessionState:
             self._active_turn_token = None
             self.turn_active = False
             self.generation += 1
+
+    def adopt_ready_compaction(self, runner: CompactionRunner) -> str:
+        """Adopt a finished background summary while no turn is streaming.
+
+        Called by the summary job when it finishes and again after every
+        turn settles, so whichever of the two comes last adopts it — and a
+        summary is never swapped in under a turn that is mid-flight (that
+        turn's rounds must keep extending one cached prefix). A runner this
+        session has since replaced (reset, load, a reference delete) is
+        abandoned: its summary describes a conversation that is gone.
+        """
+        with self._turn_state_lock:
+            if runner is not self.compaction_runner:
+                return "abandoned"
+            if self.turn_active:
+                return "deferred"
+            record = runner.take_ready(self.generation)
+            if record is None:
+                return "none"
+            outcome = _adopt_compaction_locked(self, record)
+        _trace_compaction(
+            phase="adopt",
+            where="idle",
+            outcome=outcome,
+            covers_turns=record.covers_turns,
+        )
+        return outcome
 
     def add_usage_if_current(
         self,
@@ -858,6 +936,19 @@ class SessionState:
                 self.last_harvest_bubble = min(
                     self.last_harvest_bubble, discarded_message_index
                 )
+                # A summary of the condensed turns keeps whatever those turns
+                # said, so one that covers the turn that read this document
+                # carries its content forward and must go with it; so must
+                # one whose first kept turn was just cut away. A summary of
+                # turns entirely before the cut is untouched and stays. Any
+                # summary still being written was read from the old history:
+                # its runner is abandoned rather than trusted to notice.
+                if (
+                    self.compaction is not None
+                    and turn_start <= self.compaction.keep_from
+                ):
+                    self.compaction = None
+                self.compaction_runner = CompactionRunner()
                 # Both are model-authored context from the discarded tail.
                 # Keeping either would leak reference-derived material into
                 # the UI/save payload, and stale figure message indices could
@@ -1669,6 +1760,12 @@ class SessionState:
         # so does the breakdown of that turn's context block.
         self.last_context_tokens = None
         self.last_context_sizes = None
+        # A summary of the discarded conversation, any call still writing
+        # one (it settles into the abandoned runner), and the size estimate
+        # calibrated on it — none of it describes the fresh session.
+        self.compaction = None
+        self.compaction_runner = CompactionRunner()
+        self.tokens_per_char = None
         self._active_turn_token = None
         self.turn_active = False
         # A stop aimed at the turn being discarded must not survive into the
@@ -2568,6 +2665,9 @@ def _committed_messages(
       full, current document instead. By far the largest thing a turn used
       to commit: a full draft of a 300-paragraph section committed ~260k
       tokens, 85% of them these stale outlines.
+    - ``recall_conversation`` results shed the recalled text (see
+      :func:`compaction.elide_recall_results`) — it is a copy of turns the
+      history already keeps in full.
     - Unpaired ``server_tool_use`` blocks and orphaned server results are
       removed (see :func:`_without_unpaired_server_tool_uses`). The stop and
       truncation paths already scrub before they append, so this is the
@@ -2601,8 +2701,10 @@ def _committed_messages(
     if trim_pages:
         committed = elide_fetched_page_text(committed)
     return _without_unpaired_server_tool_uses(
-        elide_stale_outlines(
-            _elide_reference_tool_results(_elide_figure_tool_inputs(committed))
+        elide_recall_results(
+            elide_stale_outlines(
+                _elide_reference_tool_results(_elide_figure_tool_inputs(committed))
+            )
         )
     )
 
@@ -2658,6 +2760,7 @@ def _with_cache_breakpoints(
     committed_boundary: int,
     cache_ttl: str,
     tail_cache_ttl: str,
+    mark_tail: bool = True,
 ) -> list[dict[str, Any]]:
     """Copy-on-write the request's cache breakpoints onto its messages.
 
@@ -2706,6 +2809,10 @@ def _with_cache_breakpoints(
 
     Stored history is never mutated: the annotations ride a per-request
     copy, which is what keeps ``cache_control`` out of saved projects.
+
+    ``mark_tail=False`` is for the conversation-summary fork: its tail is an
+    instruction no later request will ever repeat, so marking it would only
+    pay to write the whole conversation into a cache entry nothing reads.
     """
     if not messages:
         return messages
@@ -2713,7 +2820,7 @@ def _with_cache_breakpoints(
     # boundary resolving to the same message overwrites it with the longer
     # lifetime: a merged breakpoint is serving the boundary's cross-turn
     # role, and under-living it would throw away the read it exists for.
-    ttl_by_index = {len(messages) - 1: tail_cache_ttl}
+    ttl_by_index = {len(messages) - 1: tail_cache_ttl} if mark_tail else {}
     if 0 <= committed_boundary < len(messages):
         ttl_by_index[committed_boundary] = cache_ttl
     out = list(messages)
@@ -2758,6 +2865,28 @@ class _ChatRequestInputs:
     module: SpecModule
     model: str
     max_tokens: int
+    # How this turn's view is cut (compaction plan Phase 3): None sends the
+    # whole history. Fixed for the whole turn — chosen before round 0 — so
+    # every continuation round extends the same cached prefix.
+    view_spec: ViewSpec | None = None
+
+
+def _request_view(
+    history: list[dict[str, Any]],
+    new_messages: list[dict[str, Any]],
+    view_spec: ViewSpec | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(view, turn)``: the committed part as sent, and this turn's part.
+
+    Without a view spec this is ``(history, new_messages)`` — the same list
+    objects — so a conversation that was never condensed builds exactly the
+    request it always did. A last-resort view that left out EVERY committed
+    turn has nowhere to put its note but the new turn's first message.
+    """
+    view, pending = compacted_view(history, view_spec)
+    if pending is not None and new_messages:
+        new_messages = [with_preface(new_messages[0], pending), *new_messages[1:]]
+    return view, new_messages
 
 
 def _build_chat_request(
@@ -2778,8 +2907,15 @@ def _build_chat_request(
     ``container_id`` is a parameter rather than a closure over turn-local
     state: a closure would bind whatever the variable happened to hold
     whenever the request was later built.
+
+    A condensed conversation sends its VIEW (see :func:`_request_view`):
+    the committed-history boundary is the end of that view, which is what
+    the next turn re-sends and so what is worth caching.
     """
-    raw = inputs.history + inputs.new_messages
+    view, turn = _request_view(
+        inputs.history, inputs.new_messages, inputs.view_spec
+    )
+    raw = view + turn
     messages = sanitize_messages_for_resend(raw)
     kwargs: dict[str, Any] = {
         "model": inputs.model,
@@ -2788,7 +2924,7 @@ def _build_chat_request(
         "messages": _with_cache_breakpoints(
             messages,
             committed_boundary=_committed_history_boundary(
-                len(inputs.history), len(raw), len(messages)
+                len(view), len(raw), len(messages)
             ),
             cache_ttl=settings.CHAT_CACHE_TTL,
             tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
@@ -3204,9 +3340,14 @@ def _enter_stream(
     try:
         manager = client.messages.stream(**kwargs)
         return manager, manager.__enter__()
-    except anthropic.BadRequestError:
+    except anthropic.BadRequestError as exc:
         thinking = kwargs.get("thinking") or {}
         if _display_probe_disabled or "display" not in thinking:
+            raise
+        if _PROMPT_TOO_LONG.search(str(exc)):
+            # A request that is too long says so; it is not a rejected
+            # display key, and retrying it unchanged would fail the same way
+            # while switching the thinking summary off for the whole process.
             raise
         _display_probe_disabled = True
         _trace.note(
@@ -3625,6 +3766,41 @@ def _run_apply_qc_fixes(
     return result, [patch]
 
 
+def _run_recall_conversation(
+    session: SessionState,
+    block: dict[str, Any],
+    trace_handle: Any = None,
+    *,
+    hidden_turns: int = 0,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``recall_conversation`` tool_use block.
+
+    Reads the FULL committed history — the record the condensed view stands
+    in for — limited to the turns this turn's view leaves out
+    (``hidden_turns``). Later turns are already in the model's context word
+    for word. The caller holds the turn's guard, so the history cannot move
+    under the read. The result is dropped from committed history afterwards
+    (it is a copy of turns the history already keeps).
+    """
+    text, is_error = recall_result(
+        session.history, hidden_turns, block.get("input")
+    )
+    _trace.note(
+        trace_handle,
+        "recall_conversation "
+        + ("refused" if is_error else f"returned {len(text)} chars")
+        + f" over {hidden_turns} condensed turn(s)",
+    )
+    result: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": block.get("id"),
+        "content": text,
+    }
+    if is_error:
+        result["is_error"] = True
+    return result, []
+
+
 def _run_tool(
     session: SessionState,
     block: dict[str, Any],
@@ -3633,6 +3809,7 @@ def _run_tool(
     message_index: int = 0,
     reference_budget: TurnReferenceBudget | None = None,
     qc_apply_staging: "_QcApplyStaging | None" = None,
+    recall_hidden_turns: int = 0,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute one (serialized) tool_use block.
 
@@ -3641,6 +3818,10 @@ def _run_tool(
     turn.
     """
     name = block.get("name")
+    if name == RECALL_CONVERSATION_TOOL["name"]:
+        return _run_recall_conversation(
+            session, block, trace_handle, hidden_turns=recall_hidden_turns
+        )
     if name == "create_figure":
         return _run_create_figure(
             session, block, message_index=message_index, trace_handle=trace_handle
@@ -3713,12 +3894,703 @@ def _run_tool(
     return result, [patch]
 
 
+# ---------------------------------------------------------------------------
+# Conversation compaction (compaction plan Phase 3)
+# ---------------------------------------------------------------------------
+#
+# A summary call is a FORK of the chat request: same model, system prompt,
+# tools, thinking and effort, and the same committed view, plus one final
+# instruction. Anthropic's caching guidance is that a fork must reuse the
+# parent's exact prefix, and this one does — it reads the entry the last
+# turn wrote at its committed-history boundary, so condensing a 600k-token
+# conversation bills the conversation at the cache-read rate. Anything that
+# changes those bytes (another model, a trimmed tool list, a different
+# effort) would bill the whole conversation again as fresh input.
+
+# How often a summary written while the user waits (the backstop) refreshes
+# its "Condensing earlier conversation…" status, and how long the backstop
+# waits for a background summary already under way before writing its own.
+_COMPACTION_STATUS_INTERVAL_S = 2.0
+_BACKSTOP_WAIT_TICK_S = 1.0
+_BACKSTOP_WAIT_LIMIT_S = 300.0
+# A request the provider still rejects as too long is retried once with a
+# view sized to this share of the window, estimated at a deliberately
+# pessimistic two characters per token — the estimate that let it through
+# was, by definition, too optimistic.
+_RETRY_VIEW_FRACTION = 0.7
+_RETRY_TOKENS_PER_CHAR = 0.5
+_PROMPT_TOO_LONG = re.compile(r"prompt is too long", re.IGNORECASE)
+
+
+def _system_tools_chars(module: SpecModule) -> int:
+    """Serialized size of the system prompt and the tool list."""
+    return message_chars(_stable_system_blocks(module)) + message_chars(
+        _chat_tools()
+    )
+
+
+def _backstop_tokens() -> int:
+    return int(
+        settings.CHAT_CONTEXT_BACKSTOP_FRACTION * settings.MODEL_CONTEXT_WINDOW
+    )
+
+
+def _trace_compaction(**fields: Any) -> None:
+    """One ``chat_compaction`` app event. Never called under the guard:
+    ``app_event``'s lazy first start does file I/O."""
+    _trace.app_event("chat_compaction", **fields)
+
+
+@dataclass(frozen=True)
+class _CompactionInputs:
+    """Everything one summary call reads, captured under the guard."""
+
+    history: list[dict[str, Any]]
+    view_spec: ViewSpec | None
+    module: SpecModule
+    model: str
+    keep_from: int
+    covers_turns: int
+    kept_turns: int
+    instruction: str
+    generation: int
+    tokens_per_char: float | None
+    tokens_before: int
+    trigger: str
+
+
+def _compaction_plan_locked(
+    session: SessionState,
+    *,
+    model: str,
+    keep_turns: int,
+    tokens_before: int,
+    trigger: str,
+    view_sizes: list[int] | None = None,
+    min_fraction: float = 0.0,
+) -> _CompactionInputs | None:
+    """What a summary would condense now, or ``None``. Caller holds the guard.
+
+    Keeps the last ``keep_turns`` typed turns and condenses everything
+    before them — which, once a summary exists, means that summary plus the
+    turns since (a re-compaction replaces the old summary rather than
+    stacking a second one on top). ``min_fraction`` skips a cut that would
+    condense too little of the current view to be worth a cache rewrite.
+    """
+    history = list(session.history)
+    cut = cut_for(history, keep_turns)
+    if cut is None:
+        return None
+    keep_from, covers = cut
+    current = session.compaction
+    if current is not None and keep_from <= current.keep_from:
+        return None
+    view_spec = view_spec_for(current)
+    if min_fraction > 0:
+        view, _pending = compacted_view(history, view_spec)
+        sizes = (
+            view_sizes
+            if view_sizes is not None and len(view_sizes) == len(view)
+            else [message_chars(message) for message in view]
+        )
+        offset = current.keep_from if current is not None else 0
+        total = sum(sizes)
+        if total <= 0 or sum(sizes[: keep_from - offset]) < min_fraction * total:
+            return None
+    doc = session.doc.doc
+    try:
+        facts_block = session.facts.context_block(
+            current_section=doc.number,
+            current_discipline=effective_discipline(session),
+        )
+    except Exception:  # noqa: BLE001 - the ledgers are context, never a failure
+        facts_block = ""
+    try:
+        followups_block = session.followups.context_block(
+            message_index=assistant_bubble_count(history)
+        )
+    except Exception:  # noqa: BLE001 - the ledgers are context, never a failure
+        followups_block = ""
+    kept_turns = len(turn_starts(history)) - covers
+    return _CompactionInputs(
+        history=history,
+        view_spec=view_spec,
+        module=session.module,
+        model=model,
+        keep_from=keep_from,
+        covers_turns=covers,
+        kept_turns=kept_turns,
+        instruction=summary_instruction(
+            first_kept_text=message_text(history[keep_from]),
+            kept_turns=kept_turns,
+            re_compaction=current is not None,
+            facts_block=facts_block,
+            followups_block=followups_block,
+        ),
+        generation=session.generation,
+        tokens_per_char=session.tokens_per_char,
+        tokens_before=tokens_before,
+        trigger=trigger,
+    )
+
+
+def _build_compaction_request(inputs: _CompactionInputs) -> dict[str, Any]:
+    """The summary call: the chat request's prefix plus one instruction.
+
+    One breakpoint in the messages, and not at the tail: at the previous
+    turn's committed-history boundary — the message before the last typed
+    turn of the view — which is exactly where that turn's own request wrote
+    its entry. Pinning the position (rather than letting a tail breakpoint
+    walk back to it) matters because a full-draft turn adds more than the
+    20 positions a breakpoint looks back over. The tail is left unmarked:
+    no later request repeats this instruction, so writing the whole
+    conversation into a cache entry there would be pure cost. No
+    ``tool_choice`` (it would invalidate the messages cache), and no
+    container: a summary never resumes server-tool work.
+    """
+    view, _pending = compacted_view(inputs.history, inputs.view_spec)
+    messages = sanitize_messages_for_resend(list(view))
+    starts = turn_starts(view)
+    boundary = (
+        starts[-1] - 1
+        if starts and starts[-1] > 0 and len(messages) == len(view)
+        else -1
+    )
+    instruction = {
+        "role": "user",
+        "content": [{"type": "text", "text": inputs.instruction}],
+    }
+    return {
+        "model": inputs.model,
+        "max_tokens": settings.CHAT_COMPACTION_MAX_TOKENS,
+        "system": _stable_system_blocks(inputs.module),
+        "messages": _with_cache_breakpoints(
+            [*messages, instruction],
+            committed_boundary=boundary,
+            cache_ttl=settings.CHAT_CACHE_TTL,
+            tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
+            mark_tail=False,
+        ),
+        "tools": _chat_tools(),
+        "thinking": _thinking_param(),
+        "output_config": {"effort": settings.INTERVIEW_EFFORT},
+    }
+
+
+def _compaction_call(
+    client: Any,
+    inputs: _CompactionInputs,
+    *,
+    meter: Callable[[Any], None],
+    should_stop: Callable[[], bool] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """One summary call. Yields ``condensing`` status frames while it runs
+    and RETURNS the record (the generator's value), or raises
+    :class:`CompactionError` / an API error.
+
+    The reply's usage is metered before anything is checked: a declined,
+    cut-off or malformed summary was still billed.
+    """
+    request = _build_compaction_request(inputs)
+    manager, stream = _enter_stream(client, request)
+    stopped = False
+    last_status = time.monotonic()
+    try:
+        for _event in stream:
+            if should_stop is not None and should_stop():
+                stopped = True
+                break
+            now = time.monotonic()
+            if now - last_status >= _COMPACTION_STATUS_INTERVAL_S:
+                last_status = now
+                yield {"type": "status", "kind": "condensing"}
+        final = (
+            stream.current_message_snapshot
+            if stopped
+            else stream.get_final_message()
+        )
+    finally:
+        manager.__exit__(None, None, None)
+    meter(getattr(final, "usage", None))
+    if stopped:
+        raise CompactionError(
+            "Stopped before the summary finished.", code="stopped"
+        )
+    summary = extract_summary(
+        _content_blocks_to_dicts(getattr(final, "content", None)),
+        str(getattr(final, "stop_reason", "") or ""),
+    )
+    record = CompactionRecord(
+        summary=summary,
+        keep_from=inputs.keep_from,
+        covers_turns=inputs.covers_turns,
+        digest=transcript_digest(inputs.history, inputs.keep_from),
+        created_at=now_iso(),
+        model=inputs.model,
+        tokens_before=inputs.tokens_before,
+        tokens_after=0,
+        trigger=inputs.trigger,
+    )
+    view, _pending = compacted_view(inputs.history, view_spec_for(record))
+    tokens_after = estimate_tokens(
+        sum(message_chars(message) for message in view), inputs.tokens_per_char
+    )
+    return dataclasses.replace(record, tokens_after=tokens_after)
+
+
+def _api_error_kind(exc: BaseException) -> str:
+    """A closed token for a provider failure — never its message."""
+    if isinstance(exc, anthropic.AuthenticationError):
+        return "auth_error"
+    if isinstance(exc, anthropic.RateLimitError):
+        return "rate_limited"
+    if isinstance(exc, anthropic.APIStatusError):
+        return f"api_{exc.status_code}"
+    if isinstance(exc, anthropic.APIConnectionError):
+        return "connection"
+    return "error"
+
+
+def _summary_attempt(
+    session: SessionState,
+    inputs: _CompactionInputs,
+    client: Any,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Run one summary call, meter it and trace it; RETURN
+    ``(record or None, error, error_kind)`` — never raise.
+
+    Shared by the background job (which discards the status frames) and the
+    backstop (which forwards them to the chat), so both bill and report the
+    same way. Usage lands under the ledger's ``compaction`` category, and
+    only while the session is still the one that asked (the generation
+    guard every background runner meters through).
+    """
+    started = time.perf_counter()
+    usage_seen: list[Any] = []
+
+    def meter(usage: Any) -> None:
+        if usage is not None:
+            usage_seen.append(usage)
+        session.add_usage_if_current(inputs.generation, "compaction", usage)
+
+    record: CompactionRecord | None = None
+    error = ""
+    kind = ""
+    try:
+        record = yield from _compaction_call(
+            client, inputs, meter=meter, should_stop=should_stop
+        )
+    except CompactionError as exc:
+        error, kind = str(exc), exc.code
+    except Exception as exc:  # noqa: BLE001 - a failed summary never fails a turn
+        error, kind = f"{type(exc).__name__}: {exc}", _api_error_kind(exc)
+    _trace_compaction(
+        phase="summary",
+        trigger=inputs.trigger,
+        outcome="ready" if record is not None else "failed",
+        error_kind=kind,
+        covers_turns=inputs.covers_turns,
+        kept_turns=inputs.kept_turns,
+        tokens_before=inputs.tokens_before,
+        tokens_after=record.tokens_after if record is not None else 0,
+        summary_chars=len(record.summary) if record is not None else 0,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        usage=usage_to_dict(usage_seen[-1]) if usage_seen else {},
+    )
+    return record, error, kind
+
+
+def _drain(generator: Iterator[Any]) -> Any:
+    """Run a generator to its end, discarding what it yields; return its value."""
+    while True:
+        try:
+            next(generator)
+        except StopIteration as stop:
+            return stop.value
+
+
+def _start_background_compaction(
+    session: SessionState, inputs: _CompactionInputs, client: Any
+) -> bool:
+    """Write the summary on a daemon thread while the user reads the reply.
+
+    Adopted by whichever comes last: the job itself when no turn is
+    streaming, or the end/start of a turn (never the middle of one).
+    """
+    typed = len(turn_starts(inputs.history))
+
+    def job() -> CompactionRecord:
+        record, error, kind = _drain(_summary_attempt(session, inputs, client))
+        if record is None:
+            raise CompactionError(error or "The summary call failed.", code=kind)
+        return record
+
+    return session.compaction_runner.start(
+        generation=inputs.generation,
+        trigger=inputs.trigger,
+        typed_turns=typed,
+        job=job,
+        on_done=session.adopt_ready_compaction,
+    )
+
+
+def _adopt_compaction_locked(
+    session: SessionState, record: CompactionRecord | None
+) -> str:
+    """Install ``record`` if it still describes this history. Caller holds
+    the guard.
+
+    ``stale`` when it does not: the history it summarized is no longer a
+    prefix of this one (a reference delete truncated it), or a record
+    covering as much is already in place.
+    """
+    if record is None:
+        return "none"
+    current = session.compaction
+    if current is not None and record.keep_from <= current.keep_from:
+        return "stale"
+    if not record.fits(session.history):
+        return "stale"
+    session.compaction = record
+    return "adopted"
+
+
+def _maybe_start_background_compaction_locked(
+    session: SessionState,
+    *,
+    client: Any,
+    model: str,
+    turn_view: "_TurnView | None",
+    committed: list[dict[str, Any]],
+) -> None:
+    """After a commit: start a summary if the conversation crossed D1.
+
+    Caller holds the guard (inside the commit block). Cheap by design — the
+    view was measured at turn start, so this adds only the committed turn's
+    own size. Never raises: a missed trigger costs nothing, it simply
+    retries after the next turn.
+    """
+    try:
+        runner = session.compaction_runner
+        if not runner.eligible(len(turn_starts(session.history))):
+            return
+        record_spec = view_spec_for(session.compaction)
+        if (
+            turn_view is not None
+            and turn_view.measured
+            and turn_view.spec == record_spec
+        ):
+            sizes = list(turn_view.sizes) + [
+                message_chars(message) for message in committed
+            ]
+        else:
+            view, _pending = compacted_view(session.history, record_spec)
+            sizes = [message_chars(message) for message in view]
+        tokens = estimate_tokens(sum(sizes), session.tokens_per_char)
+        if tokens < settings.CHAT_COMPACTION_THRESHOLD:
+            return
+        plan = _compaction_plan_locked(
+            session,
+            model=model,
+            keep_turns=settings.CHAT_COMPACTION_KEEP_TURNS,
+            tokens_before=tokens,
+            trigger="background",
+            view_sizes=sizes,
+            min_fraction=MIN_CONDENSE_FRACTION,
+        )
+        if plan is not None:
+            _start_background_compaction(session, plan, client)
+    except Exception:  # noqa: BLE001 - a trigger must never break a commit
+        return
+
+
+def _calibrate_locked(
+    session: SessionState,
+    tokens: int,
+    turn_view: "_TurnView | None",
+    new_messages: list[dict[str, Any]],
+) -> None:
+    """Learn tokens-per-character from the provider's count of the final
+    request (plus its retained reply) — the size of what was actually sent."""
+    try:
+        if turn_view is None or not turn_view.measured or not new_messages:
+            return
+        sent = new_messages
+        reply = 0
+        final = new_messages[-1]
+        if final.get("role") == "assistant":
+            sent = new_messages[:-1]
+            reply = message_chars(
+                {
+                    "role": "assistant",
+                    "content": [
+                        block
+                        for block in (final.get("content") or [])
+                        if block.get("type") not in _TRANSIENT_BLOCK_TYPES
+                    ],
+                }
+            )
+        chars = (
+            turn_view.fixed_chars
+            + sum(turn_view.sizes)
+            + sum(message_chars(message) for message in sent)
+            + reply
+        )
+        ratio = calibrated_tokens_per_char(tokens, chars)
+        if ratio:
+            session.tokens_per_char = ratio
+    except Exception:  # noqa: BLE001 - calibration is best-effort
+        return
+
+
+@dataclass(frozen=True)
+class _TurnView:
+    """How this turn's committed history is sent, and what that weighed."""
+
+    spec: ViewSpec | None
+    # Serialized size of each message of the view, measured once per turn —
+    # what the commit-time trigger and the calibration build on.
+    sizes: list[int]
+    fixed_chars: int
+    record: CompactionRecord | None
+    # False only on the fail-open path, where nothing was sized: the
+    # calibration then learns nothing and the trigger measures afresh.
+    measured: bool = True
+
+
+def _view_sizes(history: list[dict[str, Any]], spec: ViewSpec | None) -> list[int]:
+    view, _pending = compacted_view(history, spec)
+    return [message_chars(message) for message in view]
+
+
+def _fallback_view_spec(
+    history: list[dict[str, Any]],
+    record: CompactionRecord | None,
+    *,
+    extra_chars: int,
+    tokens_per_char: float | None,
+    limit: int,
+    hide_more_than: int = 0,
+) -> ViewSpec | None:
+    """The last resort: leave the oldest turns out of ONE request.
+
+    The fewest turns that bring the estimate under ``limit``, always more
+    than ``hide_more_than``; failing that, as many as can go. ``None`` when
+    there is nothing left to leave out. The turns are not deleted — the
+    note in the view points the model at ``recall_conversation`` — and the
+    session is untouched, so the next turn tries to condense again.
+    """
+    starts = turn_starts(history)
+    base = record.keep_from if record is not None else 0
+    sizes = [message_chars(message) for message in history]
+    suffix = [0] * (len(history) + 1)
+    for index in range(len(history) - 1, -1, -1):
+        suffix[index] = suffix[index + 1] + sizes[index]
+    best: ViewSpec | None = None
+    for keep_from in [start for start in starts if start > base] + [len(history)]:
+        spec = truncated_view_spec(history, keep_from, record)
+        if spec.hidden_turns <= hide_more_than:
+            continue
+        best = spec
+        chars = len(spec.preface) + suffix[keep_from] + extra_chars
+        if estimate_tokens(chars, tokens_per_char) < limit:
+            return spec
+    return best
+
+
+def _prepare_turn_view(
+    session: SessionState,
+    *,
+    turn_token: object,
+    generation: int,
+    client: Any,
+    model: str,
+    allow: bool,
+    extra_chars: int,
+) -> Iterator[dict[str, Any]]:
+    """Choose this turn's view before round 0; RETURN a :class:`_TurnView`.
+
+    1. Adopt a finished background summary, if one is waiting.
+    2. Estimate the first request. Under the backstop (~85% of the window),
+       send it as is — the common case, and the only work done is sizing.
+    3. Over it: wait for a background summary already under way, then write
+       one now, with a ``condensing`` status so the wait is visible.
+    4. If that fails too, leave the oldest turns out of this one request
+       with a note pointing at ``recall_conversation`` — never a request
+       that is too long, which a saved project would carry forever.
+
+    Only ever at the start of a typed turn: never between rounds, never
+    splitting a tool or server-tool pair, never inside a pause resume.
+    ``allow`` is False in tutorial workspaces, which are short and
+    disposable; nothing here runs there.
+    """
+
+    def snapshot(adopt: bool) -> tuple[str, CompactionRecord | None, list[dict[str, Any]], float | None, SpecModule]:
+        with session.owned_model_turn_guard(turn_token, generation) as owns:
+            if not owns:
+                raise _SessionInvalidated(
+                    "The session was reset while this turn was starting; "
+                    "the turn was discarded."
+                )
+            outcome = "none"
+            if adopt:
+                outcome = _adopt_compaction_locked(
+                    session, session.compaction_runner.take_ready(generation)
+                )
+            return (
+                outcome,
+                session.compaction,
+                list(session.history),
+                session.tokens_per_char,
+                session.module,
+            )
+
+    def trace_adoption(outcome: str, record: CompactionRecord | None) -> None:
+        if outcome != "none":
+            _trace_compaction(
+                phase="adopt",
+                where="turn_start",
+                outcome=outcome,
+                covers_turns=record.covers_turns if record is not None else 0,
+            )
+
+    outcome, record, history, tokens_per_char, module = snapshot(allow)
+    trace_adoption(outcome, record)
+    fixed = _system_tools_chars(module)
+    spec = view_spec_for(record)
+    turn_view = _TurnView(spec, _view_sizes(history, spec), fixed, record)
+    if not allow:
+        return turn_view
+    limit = _backstop_tokens()
+
+    def fits(view: _TurnView, tpc: float | None) -> bool:
+        chars = sum(view.sizes) + view.fixed_chars + extra_chars
+        return estimate_tokens(chars, tpc) < limit
+
+    if fits(turn_view, tokens_per_char):
+        return turn_view
+
+    # Over the backstop: condense before this request is sent.
+    yield {"type": "status", "kind": "condensing"}
+    runner = session.compaction_runner
+    if runner.status == "running" and runner.generation == generation:
+        waited = 0.0
+        while not runner.wait(_BACKSTOP_WAIT_TICK_S):
+            waited += _BACKSTOP_WAIT_TICK_S
+            if session.stop_requested.is_set() or waited >= _BACKSTOP_WAIT_LIMIT_S:
+                break
+            yield {"type": "status", "kind": "condensing"}
+        outcome, record, history, tokens_per_char, module = snapshot(True)
+        trace_adoption(outcome, record)
+        spec = view_spec_for(record)
+        turn_view = _TurnView(spec, _view_sizes(history, spec), fixed, record)
+        if fits(turn_view, tokens_per_char):
+            return turn_view
+    if session.stop_requested.is_set():
+        # The round loop's own stop check ends the turn; nothing to send.
+        return turn_view
+
+    with session.owned_model_turn_guard(turn_token, generation) as owns:
+        if not owns:
+            raise _SessionInvalidated(
+                "The session was reset while this turn was starting; "
+                "the turn was discarded."
+            )
+        typed = len(turn_starts(session.history))
+        plan = (
+            _compaction_plan_locked(
+                session,
+                model=model,
+                keep_turns=max(
+                    1, min(settings.CHAT_COMPACTION_KEEP_TURNS, typed - 1)
+                ),
+                tokens_before=estimate_tokens(
+                    sum(turn_view.sizes), tokens_per_char
+                ),
+                trigger="backstop",
+            )
+            if typed >= 2
+            else None
+        )
+        claimed = plan is not None and runner.claim(
+            generation=generation, trigger="backstop"
+        )
+    if claimed and plan is not None:
+        new_record, error, kind = yield from _summary_attempt(
+            session, plan, client, should_stop=session.stop_requested.is_set
+        )
+        runner.settle(
+            new_record,
+            error=error,
+            error_kind=kind,
+            typed_turns=len(turn_starts(plan.history)),
+        )
+        outcome, record, history, tokens_per_char, module = snapshot(True)
+        trace_adoption(outcome, record)
+        spec = view_spec_for(record)
+        turn_view = _TurnView(spec, _view_sizes(history, spec), fixed, record)
+        if fits(turn_view, tokens_per_char):
+            return turn_view
+
+    fallback = _fallback_view_spec(
+        history,
+        record,
+        extra_chars=fixed + extra_chars,
+        tokens_per_char=tokens_per_char,
+        limit=limit,
+        hide_more_than=turn_view.spec.hidden_turns if turn_view.spec else 0,
+    )
+    if fallback is None:
+        return turn_view
+    _trace_compaction(
+        phase="fallback",
+        trigger="backstop",
+        outcome="truncated",
+        hidden_turns=fallback.hidden_turns,
+        covers_turns=record.covers_turns if record is not None else 0,
+    )
+    return _TurnView(fallback, _view_sizes(history, fallback), fixed, record)
+
+
+def _retry_view_for_too_long(
+    exc: Exception,
+    inputs: _ChatRequestInputs,
+    turn_view: _TurnView,
+    record: CompactionRecord | None,
+) -> _TurnView | None:
+    """A smaller view for a request the provider rejected as too long.
+
+    The estimate is what let that request through, so the retry sizes the
+    view pessimistically and well under the window. ``None`` when the error
+    is anything else, or when there is nothing more to leave out.
+    """
+    if not _PROMPT_TOO_LONG.search(str(exc)):
+        return None
+    current_hidden = turn_view.spec.hidden_turns if turn_view.spec else 0
+    fixed = turn_view.fixed_chars or _system_tools_chars(inputs.module)
+    spec = _fallback_view_spec(
+        inputs.history,
+        record,
+        extra_chars=fixed
+        + sum(message_chars(message) for message in inputs.new_messages),
+        tokens_per_char=_RETRY_TOKENS_PER_CHAR,
+        limit=int(_RETRY_VIEW_FRACTION * settings.MODEL_CONTEXT_WINDOW),
+        hide_more_than=current_hidden,
+    )
+    if spec is None:
+        return None
+    return _TurnView(spec, _view_sizes(inputs.history, spec), fixed, record)
+
+
 def stream_user_turn(
     session: SessionState,
     user_text: str,
     *,
     model: str | None = None,
     max_tokens: int | None = None,
+    allow_compaction: bool = True,
 ) -> Iterator[dict[str, Any]]:
     """Run one user turn against the model, yielding UI event dicts.
 
@@ -3846,6 +4718,7 @@ def stream_user_turn(
             module=session.module,
             model=model or settings.INTERVIEW_MODEL,
             max_tokens=max_tokens or settings.INTERVIEW_MAX_TOKENS,
+            view_spec=turn_view.spec if turn_view is not None else None,
         )
 
     def close_for_between_round_stop() -> None:
@@ -3880,6 +4753,9 @@ def stream_user_turn(
         )
 
     stop_reason: str | None = None
+    # How this turn sends the committed history (compaction plan Phase 3):
+    # chosen before round 0 by ``_prepare_turn_view``. None until then.
+    turn_view: _TurnView | None = None
     # The provider continuation container for THIS turn, if the model's
     # server-tool work ever runs in one. Turn-local by construction: a new
     # ``stream_user_turn`` starts a new conversation and a fresh "", so the
@@ -3917,6 +4793,38 @@ def stream_user_turn(
     reference_budget = TurnReferenceBudget()
     try:
         client = get_client()
+        # The view is chosen ONCE, before round 0, and every round of the
+        # turn sends it: adopting a finished summary or leaving turns out
+        # mid-turn would change the prefix the continuation rounds extend.
+        try:
+            turn_view = yield from _prepare_turn_view(
+                session,
+                turn_token=turn_token,
+                generation=generation,
+                client=client,
+                model=model or settings.INTERVIEW_MODEL,
+                allow=allow_compaction,
+                extra_chars=message_chars(new_messages[0]),
+            )
+        except _SessionInvalidated:
+            raise
+        except Exception:  # noqa: BLE001 - fail open, never fail the turn
+            # Choosing a view is an optimization and a safeguard, never a
+            # reason to fail the user's turn. Anything unexpected here and
+            # the turn sends the view the session already has (its summary,
+            # if any — dropping that would be the one way to push a
+            # condensed conversation back over the window), unmeasured.
+            record = session.compaction
+            turn_view = _TurnView(
+                view_spec_for(record), [], 0, record, measured=False
+            )
+        if turn_view is not None and turn_view.record is not None:
+            # Tiny (never the summary text): enough for the chat to draw its
+            # divider at the cut, including one adopted just now.
+            yield {
+                "type": "compaction",
+                "compaction": compaction_payload(turn_view.record),
+            }
         resumed_from_pause = False
         for _round in range(MAX_TOOL_ROUNDS):
             check_session()
@@ -3973,9 +4881,48 @@ def stream_user_turn(
                 close_for_between_round_stop()
                 break
             round_started = time.perf_counter()
-            manager, stream = _enter_stream(
-                client, request, trace_handle
-            )
+            try:
+                manager, stream = _enter_stream(
+                    client, request, trace_handle
+                )
+            except anthropic.BadRequestError as exc:
+                # The estimate let through a request the provider counts as
+                # too long (a conversation of dense, token-heavy content).
+                # Rejected before any output, so nothing was billed: retry
+                # ONCE with the oldest turns left out — a failure here would
+                # otherwise be the same failure on every later turn too.
+                retry_view = (
+                    _retry_view_for_too_long(
+                        exc, inputs, turn_view, turn_view.record
+                    )
+                    if allow_compaction and turn_view is not None
+                    else None
+                )
+                if retry_view is None:
+                    raise
+                turn_view = retry_view
+                _trace_compaction(
+                    phase="fallback",
+                    trigger="prompt_too_long",
+                    outcome="truncated",
+                    hidden_turns=retry_view.spec.hidden_turns
+                    if retry_view.spec
+                    else 0,
+                )
+                with session.owned_model_turn_guard(
+                    turn_token,
+                    generation,
+                ) as owns_turn:
+                    if not owns_turn:
+                        raise _SessionInvalidated(
+                            "The session was reset while this turn was "
+                            "streaming; the turn was discarded."
+                        ) from exc
+                    inputs = capture_request_inputs()
+                request = _build_chat_request(inputs, container_id)
+                manager, stream = _enter_stream(
+                    client, request, trace_handle
+                )
             stopped_mid_stream = False
             try:
                 for ui_event in _stream_events(stream):
@@ -4157,6 +5104,12 @@ def stream_user_turn(
                         message_index=message_index,
                         reference_budget=reference_budget,
                         qc_apply_staging=staged_qc_apply,
+                        recall_hidden_turns=(
+                            turn_view.spec.hidden_turns
+                            if turn_view is not None
+                            and turn_view.spec is not None
+                            else 0
+                        ),
                     )
                 tool_results.append(result)
                 for event in ui_events:
@@ -4210,9 +5163,8 @@ def stream_user_turn(
             if not owns_turn:
                 commit_invalidated = True
             else:
-                session.history.extend(
-                    _committed_messages(new_messages, user_text)
-                )
+                committed_turn = _committed_messages(new_messages, user_text)
+                session.history.extend(committed_turn)
                 doc_changed = session.doc.commit_turn()
                 session.figures.commit_turn()
                 session.followups.commit_turn()
@@ -4300,6 +5252,22 @@ def stream_user_turn(
                     # the model (a stop during the first request's build)
                     # sent no context, and must not replace a real reading.
                     session.last_context_sizes = dict(context_sizes)
+                    # The same count calibrates how conversation size is
+                    # estimated between turns (compaction plan Phase 3).
+                    _calibrate_locked(
+                        session, last_round_context, turn_view, new_messages
+                    )
+                if allow_compaction and settings.CHAT_COMPACTION:
+                    # Past D1, start the summary now, while the user reads
+                    # this reply; it is adopted between turns, never during
+                    # one. A no-op well below the threshold.
+                    _maybe_start_background_compaction_locked(
+                        session,
+                        client=client,
+                        model=model or settings.INTERVIEW_MODEL,
+                        turn_view=turn_view,
+                        committed=committed_turn,
+                    )
                 committed = True
                 if doc_changed:
                     # Freeze the completion payload before releasing turn
@@ -4355,6 +5323,9 @@ def stream_user_turn(
                 turn_token,
                 committed=False,
             )
+            # A summary that finished while this turn was streaming waited
+            # for it; the turn is settled now, so it can be adopted.
+            session.adopt_ready_compaction(session.compaction_runner)
         if not committed:
             _trace.turn_end(
                 trace_handle,
@@ -4389,6 +5360,10 @@ def stream_user_turn(
             turn_token,
             committed=True,
         )
+        # Between turns now: a summary that finished while this one was
+        # streaming — or the one this commit just started, if it was quick
+        # — is adopted here rather than waiting for the next turn to start.
+        session.adopt_ready_compaction(session.compaction_runner)
     with session.session_state_guard():
         if session.generation != generation:
             return

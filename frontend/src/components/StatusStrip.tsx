@@ -14,6 +14,7 @@ const LABELS: Record<string, string> = {
   drafting: "Writing to the document…",
   writing: "Writing…",
   drawing: "Creating a figure…",
+  condensing: "Condensing earlier conversation…",
 };
 
 export default function StatusStrip({ status }: { status: StreamStatus }) {

@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
-import type { ChatMessage, Figure } from "../types";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChatMessage, CompactionInfo, Figure } from "../types";
 import { starterPrompts } from "../lib/tour";
 import { hasCompletedOnboarding } from "../lib/onboardingStorage";
+import { condensedDividerIndex } from "../lib/compaction";
+import { CondensedDivider, CondensedSummaryModal } from "./CondensedDivider";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SuggestedPrompts from "./SuggestedPrompts";
@@ -41,6 +43,10 @@ interface Props {
    *  remounts on a new session — consuming it here would mean starting a
    *  session silently retired a notice the user may not have acted on. */
   tutorialUpdated?: boolean;
+  /** Where the model's view of this conversation was condensed (compaction
+   *  plan Phase 3), or null. Draws a divider; the transcript itself is never
+   *  condensed. */
+  compaction?: CompactionInfo | null;
 }
 
 export default function Chat({
@@ -57,6 +63,7 @@ export default function Chat({
   figuresById,
   onDeleteFigure,
   tutorialUpdated = false,
+  compaction = null,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -105,6 +112,18 @@ export default function Chat({
   };
 
   const toured = hasCompletedOnboarding();
+
+  // The divider sits before the first turn still sent word for word. It is
+  // a sibling of the bubbles, never a prop on one: MessageBubble is memoized
+  // on its three pass-through props (chatPerf.test.ts).
+  const dividerAt = useMemo(
+    () =>
+      compaction ? condensedDividerIndex(messages, compaction.covers_turns) : -1,
+    [messages, compaction],
+  );
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const openSummary = useCallback(() => setSummaryOpen(true), []);
+  const closeSummary = useCallback(() => setSummaryOpen(false), []);
 
   return (
     <section
@@ -184,17 +203,24 @@ export default function Chat({
             className="mx-auto flex max-w-3xl flex-col gap-5"
             data-capability="figure.create"
           >
-            {messages.map((m) => (
-              <MessageBubble
-                key={m.id}
-                msg={m}
-                figuresById={figuresById}
-                onDeleteFigure={onDeleteFigure}
-              />
+            {messages.map((m, index) => (
+              <Fragment key={m.id}>
+                {index === dividerAt && compaction ? (
+                  <CondensedDivider compaction={compaction} onView={openSummary} />
+                ) : null}
+                <MessageBubble
+                  msg={m}
+                  figuresById={figuresById}
+                  onDeleteFigure={onDeleteFigure}
+                />
+              </Fragment>
             ))}
           </div>
         )}
       </div>
+      {summaryOpen && compaction ? (
+        <CondensedSummaryModal compaction={compaction} onClose={closeSummary} />
+      ) : null}
       <SuggestedPrompts
         prompts={suggestions}
         busy={busy}

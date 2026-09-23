@@ -124,6 +124,7 @@ from .llm.client import (
     get_client,
     reset_client_cache,
 )
+from .llm.compaction import compaction_payload
 from .llm.conversation import (
     SessionState,
     effective_discipline,
@@ -311,6 +312,9 @@ _QUIET_PATHS = frozenset(
         "/api/research/status",
         "/api/readiness",
         "/api/usage",
+        # Asked every few seconds while a background summary is on its way
+        # (compaction plan Phase 3) — never while nothing is pending.
+        "/api/chat/compaction/status",
     }
 )
 
@@ -1677,6 +1681,13 @@ def _preserved_chrome(session) -> tuple[str, ...]:
     return tuple(getattr(format_map, "header_footer_text", ()) or ())
 
 
+def _compaction_pending(session: Any) -> bool:
+    """Whether a background summary is running, or finished and waiting to
+    be adopted — i.e. the chat's divider may still move without a turn."""
+    runner = getattr(session, "compaction_runner", None)
+    return bool(runner is not None and runner.busy())
+
+
 def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
     """Build the full document payload.
 
@@ -1766,6 +1777,25 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # Next-section dialog and the Export menu repeat. Never a trigger:
         # nothing reads this to run anything.
         "harvest": harvest_status(session),
+        # The condensed-conversation record (compaction plan Phase 3): how
+        # many turns the summary stands in for, when, and the sizes before
+        # and after — what the chat draws its divider from. Never the
+        # summary text, which can be long; GET /api/chat/compaction returns
+        # it when the user asks to read it.
+        #
+        # ``compaction_pending`` says a background summary is still on its
+        # way: it usually lands after the turn's stream has closed, adopted
+        # with no stream left to announce it, so the chat asks the cheap
+        # status route (GET /api/chat/compaction/status) until it settles.
+        # The two fields agree when read under the guard — adoption settles
+        # the runner and swaps the record in one critical section — and
+        # every route the chat re-syncs from holds it (GET /api/doc, the
+        # status route, the session bundle, undo/redo/edit). The unguarded
+        # builders cannot race it: a project load installs a fresh runner,
+        # and an import bumps the generation, so a summary still running
+        # then is dropped at adoption rather than swapped in.
+        "compaction_pending": _compaction_pending(session),
+        "compaction": compaction_payload(getattr(session, "compaction", None)),
         # Import honesty/recovery metadata. Native .baspec packages carry the
         # source as a separate binary member; legacy JSON remains source-less.
         "import_report": session.import_report,
@@ -4198,7 +4228,13 @@ def create_app(
         def event_stream() -> Iterator[str]:
             try:
                 with sessions.active_write(lease.workspace_id):
-                    for event in stream_user_turn(session, body.message):
+                    # Tutorial workspaces are short and disposable: nothing
+                    # there is ever condensed (compaction plan Phase 3).
+                    for event in stream_user_turn(
+                        session,
+                        body.message,
+                        allow_compaction=lease.scope == "original",
+                    ):
                         if lease.scope == "original":
                             yield _sse(event)
                         else:
@@ -4219,6 +4255,60 @@ def create_app(
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    @app.get("/api/chat/compaction")
+    def chat_compaction() -> JSONResponse:
+        """The condensed-conversation summary, for "View summary" in the chat.
+
+        The document payload carries only the record's sizes and turn range;
+        the text travels here, when the user asks for it. 404 when the
+        conversation has not been condensed.
+        """
+        session = sessions.get_session()
+        with session.session_state_guard():
+            record = session.compaction
+        if record is None:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "This conversation has not been condensed.",
+                },
+                status_code=404,
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "compaction": {
+                    **(compaction_payload(record) or {}),
+                    "summary": record.summary,
+                },
+            }
+        )
+
+    @app.get("/api/chat/compaction/status")
+    def chat_compaction_status() -> JSONResponse:
+        """Whether a background summary is still on its way, and the record.
+
+        A routine summary is written on a daemon thread while the user reads
+        the reply, and usually finishes after that turn's stream has closed:
+        it is adopted into the session with no stream left to announce it.
+        The chat asks this — two small fields, never the summary text —
+        while the document payload says one is pending, so the divider moves
+        when the summary lands rather than a turn later. Both are read under
+        the guard: adoption settles the runner and swaps the record in one
+        critical section, so the pair is never half-updated.
+        """
+        session = sessions.get_session()
+        with session.session_state_guard():
+            pending = _compaction_pending(session)
+            record = session.compaction
+        return JSONResponse(
+            {
+                "ok": True,
+                "pending": pending,
+                "compaction": compaction_payload(record),
+            }
         )
 
     @app.post("/api/chat/stop")
@@ -5977,6 +6067,10 @@ def create_app(
                         )
                     suggested = list(session.suggested_prompts)
                     figures_snapshot = session.figures.snapshot()
+                    # A delete that cuts history can drop the summary of
+                    # the turns it cut; the chat's divider (and its "View
+                    # summary") must go with it, not wait for the next turn.
+                    compaction = compaction_payload(session.compaction)
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
         _trace_capture.app_event("reference", action="delete", rid=rid, ok=True)
@@ -5986,6 +6080,7 @@ def create_app(
                 "reference_docs": snapshot,
                 "suggested_prompts": suggested,
                 "figures": figures_snapshot,
+                "compaction": compaction,
             }
         )
 

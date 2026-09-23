@@ -12,9 +12,10 @@ entry. 1.21.0's, written while only the backend had merged, leaves the
 redline out, since on its own the export is reachable only through the API.
 Which release announces it, with the Phase 1 draft under "Release-note
 drafts", is the owner's pick — and v1.21.0 was not yet tagged when PR #190
-was written, so a v1.21.0 tag cut after PR #190 merges ships the menu item
-too, and that entry (not frozen until tagged) would need the draft. The new
-export's real-Word QA rows in `docs/RELEASE_WINDOWS.md` are still to run.
+was written, so a v1.21.0 tag cut from `master` after PR #190 merges ships
+the menu item too, and that entry (not frozen until tagged) would need the
+draft. The new export's real-Word QA rows in `docs/RELEASE_WINDOWS.md` are
+still to run.
 **Phase 2 is next and not started**; start from the two Phase 1 as-built
 notes.
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
@@ -798,13 +799,16 @@ call.** 1.21.0's entry was written by the project-workspace closeout
 v1.21.0 was still untagged when this PR was written. Tagged before this PR
 merges, 1.21.0 ships none of this UI, and the Phase 1 draft under
 "Release-note drafts" waits for the next release; nothing else changes.
-Tagged after, 1.21.0 ships the menu item, so before that tag the 1.21.0
-entry (not frozen until tagged) takes the Phase 1 draft, and the statements
-that the 1.21.0 build reaches the redline only through the API are corrected
-in the same change: `project-workspace/07_RELEASE_CLOSEOUT.md` deviation 8,
-the project-workspace README's phase-7 row and release-policy paragraph, the
+Tagged from `master` after it merges, 1.21.0 ships the menu item, so before
+that tag the 1.21.0 entry (not frozen until tagged) takes the Phase 1 draft,
+and the statements that the 1.21.0 build reaches the redline only through
+the API are corrected in the same change:
+`project-workspace/07_RELEASE_CLOSEOUT.md` deviation 8, the
+project-workspace README's phase-7 row and release-policy paragraph, the
 backend as-built note above, and the closeout's `CLAUDE.md` section (by
-erratum — it is append-only).
+erratum — it is append-only). The tag need not be `master`'s head: PR #189
+(compaction Phase 3) merged first and raises the same question for its own
+work, and tagging the closeout merge, `a273ab7`, keeps both out of 1.21.0.
 
 Code: `frontend/src/types.ts` (`preserved_redline_available`,
 `preserved_redline_reason` and `PreservedRedlineReason` on the payload; the

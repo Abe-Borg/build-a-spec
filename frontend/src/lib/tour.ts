@@ -216,6 +216,16 @@ export const TOUR: readonly TourChunk[] = [
           "Asked to verify a current code, product, or jurisdiction fact, the assistant can search and fetch during the normal turn. This is separate from the systematic four-dimension Research workflow.",
         optionalReason: "A live check uses the user's API key and web tools.",
       },
+      {
+        id: "condensed",
+        capabilities: ["chat.condensed"],
+        mode: "explanatory",
+        anchor: "chat-pane",
+        placement: "right",
+        title: "A long conversation is condensed, never deleted",
+        body:
+          "Every message resends the conversation so far. When a conversation grows too long to resend in full, its oldest turns are condensed into a summary the model reads instead. A divider then marks where the condensed part ends, and View summary shows exactly what the model is sent for those turns. The model can still look up the exact words of an earlier turn when it needs a detail, and nothing is deleted: this transcript and the saved project keep every turn.",
+      },
     ],
   },
   {

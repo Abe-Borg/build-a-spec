@@ -1398,6 +1398,35 @@ def _current_trace_meta_facts(recorder: Any) -> dict[str, Any]:
     }
 
 
+def _compaction_facts(session: Any) -> dict[str, Any]:
+    """The condensed-conversation state, telemetry-safe.
+
+    Counts, sizes, timestamps and closed tokens (``trigger``, ``status``,
+    ``error_kind``) — never the summary text, which is conversation content.
+    Field reads only (the caller holds the session guard); the runner's own
+    lock is a leaf that nothing waits on under it.
+    """
+    from . import settings
+
+    record = getattr(session, "compaction", None)
+    runner = getattr(session, "compaction_runner", None)
+    return {
+        "enabled": settings.CHAT_COMPACTION,
+        "threshold_tokens": settings.CHAT_COMPACTION_THRESHOLD,
+        "keep_turns": settings.CHAT_COMPACTION_KEEP_TURNS,
+        "active": record is not None,
+        "covers_turns": record.covers_turns if record is not None else 0,
+        "keep_from": record.keep_from if record is not None else None,
+        "created_at": record.created_at if record is not None else "",
+        "trigger": record.trigger if record is not None else "",
+        "tokens_before": record.tokens_before if record is not None else 0,
+        "tokens_after": record.tokens_after if record is not None else 0,
+        "summary_chars": len(record.summary) if record is not None else 0,
+        "tokens_per_char": getattr(session, "tokens_per_char", None),
+        "runner": runner.snapshot() if runner is not None else None,
+    }
+
+
 def snapshot() -> dict[str, Any]:
     """The full environment + session snapshot (scrubbed on the way out).
 
@@ -1529,6 +1558,10 @@ def snapshot() -> dict[str, Any]:
                 if session.last_context_sizes is not None
                 else None
             ),
+            # The condensed-conversation record and its runner (compaction
+            # plan Phase 3). Sizes, counts and closed tokens only — never
+            # the summary text.
+            "compaction": _compaction_facts(session),
             "unsaved": sessions.has_unsaved_progress(session),
             "import_report_present": session.import_report is not None,
             "import": _import_report_facts(session.import_report),

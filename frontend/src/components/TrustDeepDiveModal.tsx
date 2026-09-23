@@ -945,11 +945,16 @@ function Dossier() {
               (critical/high refutations additionally need at least one
               validated citation to count). Survivors
               take the median of the original and the upheld revised severities.
-              This stage is submitted as one <em>batch</em> of independent
-              requests, which the API prices at half. Nothing about the review
-              changes; batched requests are not streamed, so the panel board
-              reports how many seats have returned instead of showing each
-              seat’s activity as it happens.
+              This stage is submitted as <em>batches</em> of independent
+              requests — one per round, with another round only when a seat
+              pauses or has to retry — which the API prices at half. Nothing
+              about the review changes; batched requests are not streamed, so
+              the panel board reports how many seats have returned instead of
+              showing each seat’s activity as it happens. An optional setting,
+              off by default, sends one seat of a large group first, streamed
+              at full price, so the rest of the batch can read its cached copy
+              of your document; that seat shows its activity like any streamed
+              one, and the report prices it at full price.
               Refuted findings are kept and shown in the report rather than
               quietly deleted. The verifiers also judge the proposed fix as
               untrusted input, and must reject one that is partial, ambiguous,

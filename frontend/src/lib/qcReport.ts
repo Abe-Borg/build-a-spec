@@ -89,6 +89,10 @@ export type QcReportVerdict = Omit<QcVerdict, "ops_adequate" | "ops_note"> & {
   attempted_sources?: QcRetrievedSourceRecord[];
   usage_totals?: Record<string, number>;
   estimated_cost_usd?: number;
+  /** The rate this seat was billed at: 1 at list price, the batch
+   *  multiplier when it rode a Message Batches request. Absent on records
+   *  written before batched verification, which is exactly what 1 means. */
+  cost_multiplier?: number;
   api_request_count?: number;
   model_response_count?: number;
 };
@@ -1725,6 +1729,49 @@ export function qcPanelSizePhrase(
     recordedPanelSizes(result, false),
   );
   return `${critical} for critical and high findings, ${standard} for medium and low`;
+}
+
+/** The streamed lead seat (cost Tier 1, Chunk 3), in the memo's own words.
+ *  Verbatim in both projections — `docx_export.QC_WARM_LEAD_METHODOLOGY_NOTE`
+ *  is the same sentence, pinned equal by a test — and rendered only for a run
+ *  that actually sent one (`qcStreamedLeadSeats`). */
+export const QC_WARM_LEAD_METHODOLOGY_NOTE =
+  "When a batch carries many verifier seats that share one cached copy of the document, one of those seats is sent first, streamed at full price, so the rest of the batch can read its cached copy instead of each storing its own. It is an ordinary seat with an ordinary verdict; its record is priced at list, and the batched seats' at the batch rate.";
+
+/**
+ * How many verifier seats this run streamed ahead of its batch.
+ *
+ * Read from the records, never a setting: a streamed lead is the one seat in
+ * a batched run billed at list price — `cost_multiplier` 1 in a run where
+ * some other seat's is below it. A streamed run (every seat at list), a
+ * batched run with no lead (every seat discounted) and a record written
+ * before the multiplier existed all answer 0. Mirrors
+ * `docx_export.qc_streamed_lead_seats`.
+ */
+export function qcStreamedLeadSeats(
+  rawResult: QcResultView | QcReportResult,
+): number {
+  const result = resultFields(rawResult);
+  const multipliers: number[] = [];
+  const collections: unknown[] = [
+    result.findings,
+    result.refuted,
+    result.disputed,
+    result.inconclusive,
+  ];
+  for (const collection of collections) {
+    if (!Array.isArray(collection)) continue;
+    for (const candidate of collection as QcReportFinding[]) {
+      if (!candidate || typeof candidate !== "object") continue;
+      if (!Array.isArray(candidate.verdicts)) continue;
+      for (const verdict of candidate.verdicts) {
+        if (!verdict || typeof verdict !== "object") continue;
+        multipliers.push(finiteNumber(verdict.cost_multiplier) ?? 1);
+      }
+    }
+  }
+  if (!multipliers.some((multiplier) => multiplier < 1)) return 0;
+  return multipliers.filter((multiplier) => multiplier === 1).length;
 }
 
 export function qcConsolidationSummary(

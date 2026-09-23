@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import itertools
+import math
 import re
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -1347,6 +1348,18 @@ QC_GROUNDING_METHODOLOGY_NOTE = (
     "the run and matched the citation. It is retrieval confirmation, not "
     "truth verification: it does not assert that the source supports the "
     "claim, only that the reviewer really read the page it cites."
+)
+
+# The streamed lead seat (Research/QC cost Tier 1, Chunk 3). Rendered only
+# for a run that actually sent one — a methodology describing a mechanism the
+# run never used describes a review that did not happen (Codex, PR #159).
+# Stated in both projections verbatim, and pinned equal by a test.
+QC_WARM_LEAD_METHODOLOGY_NOTE = (
+    "When a batch carries many verifier seats that share one cached copy of "
+    "the document, one of those seats is sent first, streamed at full price, "
+    "so the rest of the batch can read its cached copy instead of each "
+    "storing its own. It is an ordinary seat with an ordinary verdict; its "
+    "record is priced at list, and the batched seats' at the batch rate."
 )
 
 
@@ -3128,6 +3141,40 @@ def qc_panel_size_phrase(qc_result: dict) -> str:
     return f"{critical} for critical and high findings, {standard} for medium and low"
 
 
+def qc_streamed_lead_seats(qc_result: dict) -> int:
+    """How many verifier seats this run streamed ahead of its batch.
+
+    Read from the records, never from a setting: a streamed lead is the one
+    seat in a batched run billed at list price, so it is a seat whose
+    ``cost_multiplier`` is 1.0 in a run where some other seat's is below it.
+    A streamed run (every seat at list) and a batched run with no lead
+    (every seat discounted) both answer 0 — as does a record written before
+    ``cost_multiplier`` existed, which reads as list price throughout.
+    Mirrored by ``qcReport.qcStreamedLeadSeats``.
+    """
+    multipliers: list[float] = []
+    for key in ("findings", "refuted", "disputed", "inconclusive"):
+        for candidate in _qc_list(qc_result.get(key)):
+            if not isinstance(candidate, dict):
+                continue
+            for verdict in _qc_list(candidate.get("verdicts")):
+                if not isinstance(verdict, dict):
+                    continue
+                value = verdict.get("cost_multiplier", 1.0)
+                # Anything that is not a finite number reads as list price,
+                # exactly as the frontend mirror's finiteNumber(...) ?? 1.
+                multipliers.append(
+                    float(value)
+                    if isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                    else 1.0
+                )
+    if not any(multiplier < 1.0 for multiplier in multipliers):
+        return 0
+    return sum(1 for multiplier in multipliers if multiplier == 1.0)
+
+
 def _qc_render_methodology(document, qc_result: dict) -> None:
     _qc_heading(document, "Methodology and Interpretation", 1)
     document.add_paragraph(
@@ -3185,6 +3232,13 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
                 "seat completes, upholds the finding, and approves the complete "
                 "operation payload. The report preserves completed, failed, and "
                 "cancelled reviewer records.",
+            ),
+            # Only for a run that used it: the report describes the review
+            # that happened, not the settings the app ships with.
+            *(
+                [("Streamed lead seat", QC_WARM_LEAD_METHODOLOGY_NOTE)]
+                if qc_streamed_lead_seats(qc_result)
+                else []
             ),
             (
                 "Operation validation and disposition",

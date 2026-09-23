@@ -1,5 +1,6 @@
 import type {
   BriefRefreshResult,
+  CompactionInfo,
   CompactionSummary,
   DiagnosticsActivity,
   DiagnosticsLog,
@@ -1348,6 +1349,7 @@ export async function deleteReference(
   reference_docs: ReferenceDocMeta[];
   suggested_prompts: string[];
   figures: Figure[];
+  compaction: CompactionInfo | null;
 }> {
   const resp = await fetch(`/api/reference/${encodeURIComponent(rid)}`, {
     method: "DELETE",
@@ -1365,6 +1367,9 @@ export async function deleteReference(
     reference_docs: data.reference_docs,
     suggested_prompts: data.suggested_prompts ?? [],
     figures: data.figures ?? [],
+    // A delete that cut history may have dropped the summary of the turns
+    // it cut — the caller replaces its record with this one.
+    compaction: data.compaction ?? null,
   };
 }
 

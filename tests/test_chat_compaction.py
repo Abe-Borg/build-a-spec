@@ -36,6 +36,7 @@ from backend.llm.compaction import (
     CompactionRecord,
     CompactionRunner,
     compacted_view,
+    compaction_payload,
     cut_for,
     elide_recall_results,
     extract_summary,
@@ -680,12 +681,16 @@ def test_a_reference_delete_drops_a_summary_of_the_turn_that_read_it():
     assert session.references.add(filename="a.txt", text="body", block_count=1).rid == "ref-1"
     runner = session.compaction_runner
 
-    status, _ = session.delete_reference_if_idle("ref-1")
+    resp = _client().delete("/api/reference/ref-1")
 
-    assert status == "deleted"
+    assert resp.status_code == 200
     assert len(session.history) == 4  # truncated at turn 2
     assert session.compaction is None
     assert session.compaction_runner is not runner
+    # The chat's divider goes with the record at once: the response says so,
+    # rather than leaving "View summary" pointing at a 404 until a refresh.
+    assert "compaction" in resp.json()
+    assert resp.json()["compaction"] is None
 
 
 def test_a_summary_of_turns_before_a_reference_delete_survives_it():
@@ -700,11 +705,15 @@ def test_a_summary_of_turns_before_a_reference_delete_survives_it():
     session.history[14]["content"] = [{"type": "tool_result", "tool_use_id": "rd", "content": "body"}]
     assert session.references.add(filename="a.txt", text="body", block_count=1).rid == "ref-1"
 
-    session.delete_reference_if_idle("ref-1")
+    resp = _client().delete("/api/reference/ref-1")
 
+    assert resp.status_code == 200
     assert len(session.history) == 12
     assert session.compaction == record
     assert record.fits(session.history)
+    # A record the delete kept is reported too — the client replaces its copy
+    # with this one, so a surviving divider must not be cleared by accident.
+    assert resp.json()["compaction"] == compaction_payload(record)
 
 
 def test_a_stale_ready_summary_is_never_adopted():

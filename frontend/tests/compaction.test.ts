@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { getCompactionSummary } from "../src/lib/api.ts";
+import { deleteReference, getCompactionSummary } from "../src/lib/api.ts";
 import {
   compactTokens,
   condensedDividerIndex,
@@ -189,6 +189,42 @@ test("the summary is fetched on demand, and a refusal says why", async (t) => {
   await assert.rejects(getCompactionSummary(), /has not been condensed/);
 });
 
+test("a reference delete hands back the record it left, or none", async (t) => {
+  // A delete that cuts history can drop the summary of the turns it cut; the
+  // response says what is left so the divider does not outlive its record.
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const kept = {
+    covers_turns: 2,
+    created_at: "2026-09-23T00:00:00Z",
+    tokens_before: 600_000,
+    tokens_after: 90_000,
+    trigger: "background",
+    summary_chars: 4_000,
+  };
+  const respond = (compaction: unknown) => async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        reference_docs: [],
+        suggested_prompts: [],
+        figures: [],
+        ...(compaction === undefined ? {} : { compaction }),
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+
+  globalThis.fetch = respond(kept);
+  assert.deepEqual((await deleteReference("ref-1")).compaction, kept);
+  globalThis.fetch = respond(null);
+  assert.equal((await deleteReference("ref-1")).compaction, null);
+  // An older server that never sent the key reads as nothing condensed.
+  globalThis.fetch = respond(undefined);
+  assert.equal((await deleteReference("ref-1")).compaction, null);
+});
+
 test("App carries the record through every payload path", () => {
   const app = read("App.tsx");
   // The turn's own event, the doc refresh, the payload apply, the session
@@ -211,6 +247,13 @@ test("App carries the record through every payload path", () => {
     app.indexOf("const startBlankSession = "),
   );
   assert.match(clear, /setCompaction\(null\)/);
+  // A reference delete can drop the record (it truncates history at the turn
+  // that first read the document): the handler applies what the server kept.
+  const remove = app.slice(
+    app.indexOf("const onRemoveReference = useCallback("),
+    app.indexOf("const onRemoveReference = useCallback(") + 900,
+  );
+  assert.match(remove, /setCompaction\(result\.compaction\)/);
   assert.match(app, /compaction=\{compaction\}/);
 });
 

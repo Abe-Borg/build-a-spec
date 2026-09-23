@@ -1237,6 +1237,9 @@ export default function App() {
       setReferenceDocs(result.reference_docs);
       setSuggestions(result.suggested_prompts);
       setFigures(result.figures);
+      // The delete may have dropped the summary of the turns it cut: the
+      // divider goes at once rather than pointing "View summary" at nothing.
+      setCompaction(result.compaction);
     } catch (e) {
       setImportNotice({
         tone: "error",

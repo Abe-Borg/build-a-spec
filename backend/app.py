@@ -6019,6 +6019,10 @@ def create_app(
                         )
                     suggested = list(session.suggested_prompts)
                     figures_snapshot = session.figures.snapshot()
+                    # A delete that cuts history can drop the summary of
+                    # the turns it cut; the chat's divider (and its "View
+                    # summary") must go with it, not wait for the next turn.
+                    compaction = compaction_payload(session.compaction)
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
         _trace_capture.app_event("reference", action="delete", rid=rid, ok=True)
@@ -6028,6 +6032,7 @@ def create_app(
                 "reference_docs": snapshot,
                 "suggested_prompts": suggested,
                 "figures": figures_snapshot,
+                "compaction": compaction,
             }
         )
 

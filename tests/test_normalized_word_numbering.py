@@ -1,7 +1,7 @@
 """Acceptance tests for genuine numbering in normalized/fresh DOCX exports.
 
 Chunk 6 deliberately changes only the clean semantic renderer.  A normalized
-document must use one deterministic four-level ``w:abstractNum`` shared by
+document must use one deterministic five-level ``w:abstractNum`` shared by
 article-local ``w:num`` instances, while source-preserving export remains an
 exact clone/patch path and semantic redline keeps its independently verified
 literal-label representation for now.
@@ -50,6 +50,7 @@ _ARTICLE_ONE = (
     ("Article one alpha child one", 1),
     ("Article one child-one grandchild one", 2),
     ("Article one fourth-level one", 3),
+    ("Article one fifth-level one", 4),
     ("Article one fourth-level two", 3),
     ("Article one child-one grandchild two", 2),
     ("Article one alpha child two", 1),
@@ -101,6 +102,10 @@ def _numbered_section() -> SpecSection:
                             _paragraph(
                                 "pt1.a1.p1.p1.p1.p1",
                                 "Article one fourth-level one",
+                                _paragraph(
+                                    "pt1.a1.p1.p1.p1.p1.p1",
+                                    "Article one fifth-level one",
+                                ),
                             ),
                             _paragraph(
                                 "pt1.a1.p1.p1.p1.p2",
@@ -234,7 +239,7 @@ def _shared_abstract(payload: bytes, used_num_ids: set[str]):
     return numbering_root, abstracts[0]
 
 
-def test_normalized_export_has_one_shared_four_level_definition():
+def test_normalized_export_has_one_shared_five_level_definition():
     payload = build_docx(_numbered_section())
     refs = _provision_refs(payload)
     numbering_root, abstract = _shared_abstract(
@@ -268,6 +273,7 @@ def test_normalized_export_has_one_shared_four_level_definition():
         1: ("decimal", "%2."),
         2: ("lowerLetter", "%3."),
         3: ("decimal", "%4)"),
+        4: ("lowerLetter", "%5)"),
     }
     levels = {
         int(level.get(_W_ILVL)): level
@@ -374,7 +380,7 @@ def test_child_levels_use_interoperable_default_restart_behavior():
     level_zero = abstract.xpath("./w:lvl[@w:ilvl='0']", namespaces=_NS)
     assert len(level_zero) == 1
     assert level_zero[0].find("w:lvlRestart", namespaces=_NS) is None
-    for depth in (1, 2, 3):
+    for depth in (1, 2, 3, 4):
         matches = abstract.xpath(
             "./w:lvl[@w:ilvl=$ilvl]",
             namespaces=_NS,
@@ -383,7 +389,7 @@ def test_child_levels_use_interoperable_default_restart_behavior():
         assert len(matches) == 1
         assert matches[0].find("w:lvlRestart", namespaces=_NS) is None
 
-    for depth in range(4):
+    for depth in range(5):
         level = abstract.xpath(
             "./w:lvl[@w:ilvl=$ilvl]",
             namespaces=_NS,

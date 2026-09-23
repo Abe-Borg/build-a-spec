@@ -1,7 +1,8 @@
 import type { DocParagraph, SourceOperationCapability } from "../types";
 
-/** The semantic model and exporter support four paragraph levels. */
-export const MAX_PARAGRAPH_LEVELS = 4;
+/** The semantic model and exporters support SectionFormat's five paragraph
+ * levels (A. / 1. / a. / 1) / a)) — backend `model.MAX_PARAGRAPH_DEPTH`. */
+export const MAX_PARAGRAPH_LEVELS = 5;
 
 export interface EditSubmissionLock {
   current: boolean;

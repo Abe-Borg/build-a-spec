@@ -174,6 +174,22 @@ a Word field: its paragraphs are locked `field` blocks, never parsed as
 articles. Text-box content is read into the projection (a cover page is
 routinely built from text boxes) though the paragraph stays an `image` block.
 
+**Provisions nest SectionFormat's five levels.** Under an article a provision
+nests `A.` / `1.` / `a.` / `1)` / `a)` — the PR1..PR5 styles. Each is read
+from a typed label (stripped from the text and regenerated positionally on
+export: the importer's `_LEVEL_RES` and the model's `_paragraph_label` are
+the same five forms), from Word numbering placed relative to the article's
+own list, or from the PR*n* style name alone. Content nested deeper than
+the fifth level is kept, clamped to the fifth, and named in the import notes
+(`nesting deeper than 5 levels — clamped to level 5`, with the provision's
+ref and id). Until the fifth level existed, a Word-numbered `a)` was clamped
+into the fourth level as a sibling of its `1)`, and a typed `a)` was not
+read as a label at all: it became a top-level provision with the letter left
+in its text, and the provisions after it were relettered — which the
+formatted export of an UNTOUCHED import then wrote into the file. The
+normalized export numbers the fifth level with a fifth Word list level
+(`lowerLetter`, `%5)`), a single-token `lvlText` like the other four.
+
 **Two limits remain, and are disclosed rather than worked around.**
 The formatting of *new* words is inherited from a neighbour: a word typed
 over others takes the formatting of the first character it replaced, and an

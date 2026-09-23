@@ -70,9 +70,10 @@ contracts.
 The paper is now a practical outline editor as well as a model-authored
 artifact. Once a native project has content on the page — from the interview,
 a full-section draft, a template, or a master import — add articles, top-level
-provisions, and subparagraphs directly through the four SectionFormat
-provision levels. New user-authored provisions are confirmed, and article
-deletion warns before removing its full provision subtree.
+provisions, and subparagraphs directly through the five SectionFormat
+provision levels (`A.` / `1.` / `a.` / `1)` / `a)`). New user-authored
+provisions are confirmed, and article deletion warns before removing its
+full provision subtree.
 
 - **Reorder by grip or keyboard.** Articles move only within their PART;
   provisions move only among siblings under their current article or parent.
@@ -88,6 +89,47 @@ deletion warns before removing its full provision subtree.
   **Edit freely** (v1.9.0) is the deliberate way past that boundary — it drops
   the byte-exact export promise for one document and restores the ordinary
   editor; see below.
+
+## Current Status — SectionFormat's fifth paragraph level
+
+PR #199, with no release entry yet: which release carries it is the
+owner's call, and the release-note draft is in CLAUDE.md ("The fifth
+paragraph level").
+
+**A master that nests five levels deep now imports whole.** CSI SectionFormat
+nests a provision five levels under its article, `A.` / `1.` / `a.` / `1)` /
+`a)`, and a MasterSpec-derived office master carries the fifth on its `PR5`
+paragraph style. Build-a-Spec stopped at four.
+
+- **A Word-numbered master warned "nesting deeper than 4 levels — clamped to
+  level 4"** on every `a)` line. Each one became a sibling of the `1)` it
+  belonged to, numbered `2)`, `3)`, … in the panel and in everything the
+  assistant read.
+- **A typed-label master was worse, and silent.** A typed `a)` was not read
+  as a label, so the line became a top-level provision with "a)" left in its
+  text. Every provision after it was relettered (B. read as E.), the next
+  `2)` was hung under the wrong parent, and *Export Word (keeps your
+  formatting)* of the untouched import wrote those new letters into the
+  file.
+
+Now:
+
+- **The fifth level is part of the document.** The panel labels it `a)`,
+  `b)`, …, the inline editor offers a subparagraph under a `1)`, and the
+  assistant drafts to it. A sixth level is refused.
+- **The importer reads it three ways:** a typed `a)` label, Word numbering on
+  the paragraph or on its style, and the `PR5` style name alone.
+- **Both Word exports carry it.** *Export Word (keeps your formatting)* keeps a
+  fifth-level provision exactly as it came in, and a new one under a `1)`
+  takes the master's own fifth list level. The Build-a-Spec styled export
+  numbers it with a fifth Word list level, and its redline writes the `a)`.
+- **Deeper than five is still kept.** It is clamped to the fifth level, and
+  the import notes say where (`nesting deeper than 5 levels — clamped to level
+  5`, with the provision's number and id).
+- **A master imported before this change keeps the tree it was imported as.**
+  Import it again to get the fifth level.
+- **A project or template with fifth-level content cannot be opened by an
+  older build.** The older build reports it as malformed rather than guess.
 
 ## Current Status — non-spec uploads: honest framing + reference documents
 
@@ -1880,7 +1922,7 @@ Shipped in v0.3.0 (Phase 3) and still current:
 What worked before (Phase 2) and still does:
 
 - Claude-desktop-style UI: streaming chat pane on the left, the **live specification document** on the right, warm dark theme.
-- The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, positional display labels `1.1` / `A.` / `1.` / `a.` / `1)`, stable element ids). Those semantic labels are not themselves Word numbering definitions; clean normalized export renders them with genuine Word automatic numbering. Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
+- The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, positional display labels `1.1` / `A.` / `1.` / `a.` / `1)` / `a)`, stable element ids). Those semantic labels are not themselves Word numbering definitions; clean normalized export renders them with genuine Word automatic numbering. Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
 - Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export.
 - Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
 - Version stepper: one snapshot per turn that changed the document; undo/redo from the panel header.

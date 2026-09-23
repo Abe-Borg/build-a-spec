@@ -1642,7 +1642,7 @@ function Dossier() {
             "The lint report, and the standards editions in effect.",
             "Version history, undo, and redo.",
             "The diff engine behind both Compare and the redline export.",
-            "Display numbering (1.1 / A. / 1. / a.), which is derived from position rather than stored.",
+            "Display numbering (1.1 / A. / 1. / a. / 1) / a)), which is derived from position rather than stored.",
             "The readiness checklist.",
             "The QC fix dry-run, conflict detection, and the apply batch.",
             "DOCX import, package inspection, source-preservation analysis, and the audit of a patched export.",

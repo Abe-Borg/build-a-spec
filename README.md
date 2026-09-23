@@ -473,8 +473,10 @@ When the assistant reads a web page during a chat, the page's text (up to
 about 50,000 tokens a page) is saved into the conversation, so every later
 message re-sends every page the session has ever read. With this phase
 switched on, a saved turn keeps the page's address, its title and when it
-was read, plus the passages the reply quoted (they stay in the reply's
-citations), and drops the rest of the text. The assistant can open the page
+was read, plus the passages the reply quoted (written into a short note
+where the page text was), and drops the rest of the text. The reply's
+citations into the dropped text go too: the API checks every citation
+against the text it points into. The assistant can open the page
 again whenever it needs the exact wording, and during the turn nothing
 changes: it reads the whole page while it works. Fetched PDFs are already
 trimmed this way and keep their own note. A project saved by an earlier
@@ -483,12 +485,15 @@ at the next save). Nothing you see in the chat changes.
 
 **v1.21.0 ships it switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`,
 default `0`), so saved conversations keep fetched page text exactly as they
-did before. The trim relies on the API accepting a saved reply whose
-citations point into a page whose text has been replaced. Anthropic does
-not document that, and a refusal would make every later message in the
-project fail. The one-request live check that decides it has not been run
-yet. It costs about two cents at most, and without `--run` it sends
-nothing:
+did before. A one-request live check decides whether it can be on by
+default, because a history the API refused would make every later message
+in the project fail. Its first run (2026-09-23) was refused: the earlier
+version of the trim kept the reply's citations pointing into the page, and
+the API checks a citation against the text it points into ("Start index
+2406 is beyond document length 257"). The trim was reworked to move the
+quoted passages into the note and remove those citations, and the check now
+has to pass on that shape. It costs about two cents at most, and without
+`--run` it sends nothing:
 
 ```
 .venv\Scripts\python tools\fetch_elision_canary.py --run
@@ -524,6 +529,14 @@ reason for a decision — it looks the turn up in your saved conversation
 document edits, and the words it finds go back to the model in the same
 turn). The summary rides the saved project, so reopening it does not
 condense again.
+
+**Citations stay valid.** A reply's citations number the web pages in the
+whole conversation, and the API checks each one against the page it lands
+on. Leaving the oldest turns out also leaves out the pages they read, which
+would shift every later citation onto the wrong page. So before any message
+is sent, each citation is checked against the pages that message actually
+carries: one that no longer fits is pointed back at its page, or removed if
+its page was condensed away. The reply's words stay either way.
 
 **When it happens.** By default only when a message would not otherwise fit:
 past about 85% of the model's context window, the app condenses before
@@ -1949,6 +1962,10 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          summary instruction and its checks, recall_conversation
                          search/read (a long turn read page by page), and the
                          one-at-a-time background runner
+    citations.py         every citation a chat request sends points at a
+                         document that request holds: re-pointed or dropped
+                         when a condensed view, a saved PDF note or a trimmed
+                         page moved it
 frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + QC +
                          readiness + update + SSE dispatch
@@ -2089,7 +2106,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_SDK_MAX_RETRIES` | `2` | The Anthropic SDK's own request retries (429 / 5xx / connection errors, honoring `retry-after`) — the SDK's default, made explicit. Research and Final QC add their own 3-attempt policy on top, so one fan-out call is bounded by 3 × (1 + this) requests; the SDK's share is the one that behaves under rate limiting, so leave it unless real run telemetry says otherwise. Floor 0. |
 | `BUILD_A_SPEC_API_TIMEOUT_SECONDS` | `600` | Per-request read/write timeout for every model call (a streaming reply counts between chunks). The connect timeout stays the SDK's 5 s regardless. Floor 30. |
 | `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |
-| `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `0` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn then keeps each page's address, title and the passages the reply quoted, and an older project is trimmed the same way when opened. **Off by default** until its live check (`tools\fetch_elision_canary.py --run`) reports that the API accepts that history shape. Anthropic does not document it, and a refusal would fail every later message in the affected project. `1` turns it on. |
+| `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `0` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn then keeps each page's address and title, with the passages the reply quoted written into a note where the text was, and an older project is trimmed the same way when opened. **Off by default** until its live check (`tools\fetch_elision_canary.py --run`) passes. The check's first run was refused on an earlier version of the trim that kept citations into the dropped text; the trim now removes those citations, and a refused history would fail every later message in the affected project. `1` turns it on. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |

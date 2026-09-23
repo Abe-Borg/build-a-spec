@@ -886,6 +886,54 @@ Word run should check first.
   with its new copy), and the refusal of a moved provision carrying a comment
   or footnote reference.
 
+## Research and Final QC cost (in progress)
+
+Requirements research and Final QC are the two expensive things the app
+does, and this program cuts what they cost **without changing anything that
+affects quality**: no model, effort level, prompt, search or fetch budget,
+verifier panel, adjudication rule or output changes. Only how and when the
+same requests reach the provider changes — calls that share a cached prefix
+stop writing it several times over, a paused call reads its own cache, and a
+retry resumes instead of starting over — and every change is measured on
+real saved files before it is trusted. The plan is
+[`docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md`](docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md);
+where it stands is
+[`docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`](docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md),
+and nowhere else. It is being built one chunk at a time, and nothing a user
+sees has changed yet.
+
+### Measure what research costs (Chunk 1)
+
+A developer tool, not part of the app. It reads saved projects and project
+briefs and reports, for every research round in them, what each research
+area used and what it cost at list prices — uncached input, cache reads,
+cache writes, output, web searches and fetches — plus the share of the input
+side billed at the full input price. That share is the number the program's
+later chunks exist to lower, and this is how a before-and-after is measured.
+
+```
+.\.venv\Scripts\python tools\research_cost_profile.py "C:\specs\*.baspec" "C:\specs\Project.basproject" --out research-measurement.md
+```
+
+- **Safe to paste.** It prints counts, tokens, rates and ratios, plus
+  research-area ids, round dates and section numbers. It never prints
+  requirement text, source URLs, client or project names, error messages or
+  filenames; each file is named by a hash of its bytes (the console line
+  beside it names the file, on your own machine only). It is read-only and
+  never loads the API client.
+- **Each round is counted once.** A project brief and the sections seeded
+  from it share rounds, so you can hand it all of them: a round is matched by
+  its id, or — for one saved before rounds had ids — by its section, date and
+  number, the way the app matches it when a brief merges research. A project
+  saved before research rounds were recorded is read as one round, labelled
+  "legacy, cumulative".
+- **Priced at today's research model.** The model that ran a round is not
+  saved, so every round is priced at the configured research model's current
+  list rates (`--model` prices them at another model's). Research records its
+  usage per area per round, not per request, so continuations and retries are
+  in the totals but cannot be counted. A research area that failed was still
+  billed, and is included.
+
 ## Shipped in v1.20.0 (Next section in one click)
 
 **The project brief was a file relay.** Everything a section pays for could

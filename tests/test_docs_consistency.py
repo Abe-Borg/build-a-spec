@@ -98,7 +98,8 @@ def test_the_docs_use_the_venv_name_the_setup_creates() -> None:
 # the venv-name test reads, the live plans (the compaction plan, the
 # project workspace, and the research/QC cost program's plan and progress
 # file) and the execution record whose commands are still to be run, the
-# four profilers' usage docstrings and the PyInstaller spec's build steps. The deep-dive remediation plans are
+# usage docstrings of the four profilers and the fetch-elision canary, and the
+# PyInstaller spec's build steps. The deep-dive remediation plans are
 # finished and keep their commands as written (the Batch 8 decision), and
 # CLAUDE.md is append-only history: only its Commands section is read, so a
 # note can still quote the broken form it records.
@@ -117,6 +118,7 @@ _WINDOWS_COMMAND_DOCS = (
     "tools/fetch_elision_canary.py",
     "tools/lint_block_profile.py",
     "tools/qc_export_cost_profile.py",
+    "tools/research_cost_profile.py",
     "packaging/windows/build-a-spec.spec",
 )
 

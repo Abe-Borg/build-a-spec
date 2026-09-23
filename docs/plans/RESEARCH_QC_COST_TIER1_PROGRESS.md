@@ -13,7 +13,7 @@ and then follows the [Session procedure](#session-procedure) step by step.
 
 | Chunk | Title | Status | PR | Merge commit | Notes |
 |---|---|---|---|---|---|
-| plan | The plan and this file | **complete** | PR #205 | | set by its own PR, like every row |
+| plan | The plan and this file | **complete** | PR #205 | `3d600d9` | set by its own PR, like every row |
 | 1 | Research cost profiler | not started | | | |
 | 2 | Staggered launch for calls that share a cached prefix | not started | | | |
 | 3 | Warm the batched verifier cache with a streamed lead seat | not started | | | M2 decides build or skip; ships switched off; the default flips on an M3 pass |

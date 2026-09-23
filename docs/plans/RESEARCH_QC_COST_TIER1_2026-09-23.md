@@ -385,7 +385,55 @@ saved projects that have research (**M1**, §8). It is free and local.
 
 #### As built
 
-*(Filled in by the session that builds this chunk.)*
+Built on 2026-09-23 from `master` at `3d600d9`. `tools/research_cost_profile.py`
+and `tests/test_research_cost_profile.py` are new; README, CLAUDE.md and
+`tests/test_docs_consistency.py` are edited as the spec lists. No gate, no
+switch, no measurement taken (M1 is the owner's, after the merge).
+
+Deviations and additions, each recorded because the spec text is not
+rewritten:
+
+1. **The legacy round key is the engine's hash of the tuple, not the bare
+   tuple** (design point 3). When a brief merges research,
+   `merge_research_profiles` replays a round saved without a `round_id`
+   under `legacy_round_key(round)` — a SHA-256 of
+   `("legacy-round", section, research_date, round_index)` — as its NEW
+   `round_id`, and renumbers it. Keyed by the bare tuple, the section's copy
+   and the brief's copy never meet, and the round is counted twice. The
+   script copies `legacy_round_key` byte for byte (never imports it: the
+   engine loads the API client) and keys a legacy round by the hash, so a
+   carried round meets its original. Pinned by
+   `test_a_legacy_round_a_brief_carried_under_its_hash_counts_once`, which
+   builds the case with the real merge, and by
+   `test_the_legacy_round_key_is_the_engines`.
+2. **An "All rounds, by research area" table** beside the per-round tables
+   and the overall roll-up (design point 5). Chunk 4's M3 pass compares the
+   uncached share "on comparable dimensions", and this is the row it reads.
+3. **An "Artifacts" section** listing, per file hash, how many rounds it
+   held and how many were already counted from an earlier file, so a reader
+   can see the deduplication happen. The same bytes named twice (a glob plus
+   a path) are read once.
+4. **Privacy by shape, not by field choice** (design point 7). Area ids,
+   section numbers, dates and round ids are the fields the spec allows, but
+   a saved file is untrusted: each prints only when it matches its shape
+   (`^[a-z][a-z0-9_]*$`, digits/spaces/dots/hyphens, ISO date, hex) and
+   otherwise as a hash or a fixed word. Status prints as completed or
+   failed only; error messages and area titles never print.
+5. **`--model` refuses a model with no row in `settings.PRICING`** (exit 2,
+   listing the priced models) rather than guessing rates. When the
+   CONFIGURED research model has no row, the script falls back to Sonnet 5,
+   as the app's own meter does, and the rate line says so.
+6. **A brief that leads with a BOM or blank line is still read as a brief.**
+7. **Five tests beyond the spec's seven**: a failed area billed and
+   included; the legacy-hash case; the two copied constants pinned to the
+   app's (`legacy_round_key`, the brief kind, the latter also reading a
+   BOM-led brief); and the unpriced-model fallback. Every mechanism was
+   reverted in place and turned its own test red (CLAUDE.md, "Research cost
+   is measurable", has the matrix).
+
+No existing test changed except `tests/test_docs_consistency.py`, which the
+spec lists: the script joins `_WINDOWS_COMMAND_DOCS`, and the comment above
+it now says "four profilers and the fetch-elision canary".
 
 ---
 

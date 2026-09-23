@@ -1688,6 +1688,15 @@ frontend/src/
                            tooltip that works on a DISABLED control — a
                            native title never fires on a disabled button)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
+tools/research_cost_profile.py
+                           [Research/QC cost Tier 1, Chunk 1] read-only: saved
+                           .baspec / legacy .json / .basproject in, per-round
+                           per-area usage + list-price cost + the uncached
+                           share of the input side out (counts, ids, dates
+                           and section numbers only; files named by a hash).
+                           Rounds deduped by round_id, else by the engine's
+                           own legacy_round_key hash (copied, never imported:
+                           the research engine loads the API client)
 tests/
   conftest.py              hermetic env + fresh session per test
   fakes.py                 scripted fake streaming client (text + tool_use turns)
@@ -2046,6 +2055,16 @@ tests/
                            and still sound once folded; and one lint pass per
                            committed version across payload, readiness, turn
                            context and the lint event
+  test_research_cost_profile.py
+                           [Research/QC cost Tier 1, Chunk 1] the research
+                           cost profiler over files the app really writes
+                           (the production save and brief-export paths): per
+                           area per round, a failed area still billed, a
+                           round a brief shares counted once (a legacy round
+                           carried under its hash too), the legacy cumulative
+                           round, golden pricing against the table and the
+                           ledger, no text/names/paths in the report, and
+                           the client never loaded (a subprocess)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -14878,6 +14897,113 @@ and the list of what real Word must check first are in the plan's "Phase 2
   3. The Layout entries for `settings.py`, `source_render.py`,
      `revisions.py`, `revision_marks.py` and the redline and judge tests are
      maintained current and were updated in place.
+
+## Research cost is measurable — implemented notes (Research/QC cost Tier 1, Chunk 1)
+
+Chunk 1 of `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` (where the
+program stands is `docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`, and only
+there). `tools/research_cost_profile.py` is the sibling of
+`tools/qc_export_cost_profile.py`: a read-only developer tool that reports
+what saved research rounds cost. It is the before-and-after instrument for
+the program's Chunks 4 and 5, and measurement M1 is its first run. No route,
+SSE event, dependency, env knob, project-format change, version bump or
+release note: the tool is not part of the app.
+
+- **Why a tool was needed.** `DimensionStatus` has persisted usage per
+  research area per round since Batch 2 (uncached input, cache read, cache
+  write, output, searches, fetches), and nothing read it back as a cost
+  report. Research rounds append (see "Research rounds"), so a saved
+  project's `rounds[]` is a per-round ledger waiting to be summed.
+- **The headline is the UNCACHED share**, `input / (input + cache read +
+  cache write)`, over every round read — deliberately not the QC profiler's
+  read share. It is the number Chunk 4 exists to move (a continuation that
+  reads its own cache turns full-price input into cache reads), so a
+  before-and-after compares one figure. Per area per round the report also
+  gives every token class, the estimated cost and output's share of it; per
+  round, a total; and — beyond the spec — an **all rounds, by research
+  area** table, because Chunk 4's M3 pass compares "comparable dimensions",
+  plus an **Artifacts** list saying how many rounds each file held and how
+  many were already counted.
+- **It never imports `backend.research.engine`**, which loads the API
+  client (verified: the engine pulls `backend.llm.client` and `anthropic`;
+  `backend.settings` and `project_package.parse_project_file` do not). The
+  few lines it needs are COPIED — `_round_id_from_raw`, the round-index read
+  and `legacy_round_key` — and `project_brief.PROJECT_BRIEF_KIND` is a
+  literal, each pinned equal to the app's by a test, so a drift fails the
+  suite instead of silently mis-keying rounds.
+- **Rounds are deduplicated the way the app identifies them, which is a
+  deliberate refinement of the spec's key.** The spec said key a round with
+  no `round_id` by `(section, research_date, round_index)`. But when a brief
+  merges research, `merge_research_profiles` replays a legacy round under
+  `legacy_round_key(...)` — a hash of exactly that tuple — as its new
+  `round_id`, and RENUMBERS it. A bare tuple would count that round twice
+  (the brief's copy has a different index and an id); hashing the section's
+  copy the engine's way makes the two meet.
+  `test_a_legacy_round_a_brief_carried_under_its_hash_counts_once` builds
+  that case with the real merge.
+- **A profile with no `rounds` is one "legacy, cumulative" round**, built
+  the way `RequirementsProfile.from_dict` synthesizes it (round 1, the
+  profile's date, no section). So its key is the same one a newer build's
+  re-save of that file carries, and the two count once (pinned).
+- **Pricing mirrors `usage_ledger.estimate_usage_cost` term for term.**
+  Research writes only 5-minute entries, so every cache write takes
+  `cache_write`; web search is $10 per 1,000; web fetch carries no fee. The
+  arithmetic test checks the table term by term AND the ledger's own
+  function. Rounds are priced at `settings.RESEARCH_MODEL`'s current list
+  rates (the model that ran a round is not saved); `--model` prices at
+  another and refuses an unpriced one with exit 2; an unpriced configured
+  research model falls back to Sonnet 5 exactly as `usage_ledger._rates`
+  does, and the report says so.
+- **Privacy is structural, not a convention.** Every value printed is a
+  count, a token total, a rate, a ratio, or matches a shape: a research-area
+  id (`^[a-z][a-z0-9_]*$`), a section number (digits, spaces, dots,
+  hyphens), an ISO date, a hex round id. Anything else a hand-edited file
+  puts in those places prints as `unrecognized-<hash>`, "not a section
+  number", "undated" or "id not recognized". Status prints as completed or
+  failed, never as saved; error messages and titles never print. Files are
+  named by a SHA-256 prefix of their bytes; the stderr console line names
+  them locally. The privacy test puts the probes in the filename, the
+  requirement text, a source URL, the client name, AND a hostile file's ids,
+  section, date, status and error.
+- **Tests read files the app really writes.** The `.baspec` comes from
+  `sessions.project_package` after a research round driven over
+  `/api/research/start` with `SequencedFakeClient` and known usage per area;
+  the brief comes from `GET /api/project/brief`; the legacy `.json` from
+  `sessions.project_payload`. Hand-built brief envelopes are used only where
+  no production path produces the case on demand (a merged legacy round, a
+  hostile file). A reply that never calls the output tool fails an area on
+  its first billed response and is not retried, which is how the failed-area
+  fixture pins exactly one response's usage on the row.
+- **Tests: `tests/test_research_cost_profile.py` (12)** — the spec's seven
+  by name, plus a failed area billed and included, the legacy-hash case, the
+  two copied constants (the brief-kind test also reads a brief re-saved with
+  a BOM), and the unpriced-model fallback; and `tests/test_docs_consistency.py`
+  now scans the script's usage docstring. Revert matrix, each mechanism
+  disabled in place and restored from its exact text:
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | legacy rounds keyed by the bare tuple, not the engine's hash | 2 |
+  | no deduplication across files | 1 |
+  | the same bytes named twice read twice | 1 |
+  | no legacy cumulative round | 1 |
+  | area id / section / date / round id printed as saved (each) | 1 |
+  | web search fee dropped | 2 |
+  | cache writes at the 1-hour rate | 2 |
+  | `--model` accepting an unpriced model | 1 |
+  | no fallback for an unpriced research model | 1 |
+  | a BOM-led brief not read as a brief | 1 |
+  | nothing readable exiting 0 | 1 |
+  | the brief kind not recognized | 8 |
+  | the research engine imported | 1 |
+
+- **Errata** (these notes are append-only):
+  1. "Windows commands run as written in PowerShell" says the pin reads "the
+     four profilers" (three profilers and the fetch canary, then). It now
+     also reads `tools/research_cost_profile.py`, and its comment in
+     `tests/test_docs_consistency.py` says four profilers and the canary.
+  2. The Layout gains its first `tools/` entry. The other profilers are
+     still described only in their implemented-notes sections.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

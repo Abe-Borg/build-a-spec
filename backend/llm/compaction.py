@@ -50,9 +50,12 @@ LEDGERS_FRAME_TAG = "ledgers"
 # Anthropic's six retention items for client-side compaction (the
 # claude-api skill, ``shared/model-migration.md``), adapted to spec work —
 # exact values get a section of their own, because a paraphrased edition or
-# flow rate is the detail a spec cannot afford to lose; the last is owner
-# decision D4 — the decisions the project facts ledger is missing, which the
-# fact harvest can later offer as suggestions.
+# flow rate is the detail a spec cannot afford to lose; the last (owner
+# decision D4) lists the decisions the project facts ledger is missing, so
+# the model keeps seeing them once their turns are condensed. D4 also meant
+# the fact harvest to offer them as suggestions; the owner dropped that
+# hookup for now on 2026-09-23, so the harvest does not read the list (the
+# user sees it under View summary).
 SUMMARY_HEADINGS = (
     "Problems and how they were handled",
     "Options raised and set aside",

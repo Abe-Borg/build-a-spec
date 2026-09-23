@@ -13659,6 +13659,56 @@ and bumps no version; one knob's default moves.
      until the paid recall check". It is maintained current, so it was
      corrected in place.
 
+## The compaction plan's last two pieces are dropped — notes
+
+Two owner decisions on 2026-09-23, made after the real history
+measurement: drop D4's harvest hookup "for now", and don't do Phase 5
+("don't worry about the draft"; recorded as D6). Nothing the app does
+changes; the docs and one code comment record the decisions. With
+Phases 1–3 merged, `docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md` has
+no implementation work left. What is still owed is not code: Phase 2's and
+Phase 3's release-note drafts for the next release, the release checklist's
+compaction rows before it, and — optional and paid — the recall check D5
+waived.
+
+- **The list stays; only its second use is dropped.** Every summary still
+  carries "Decisions the ledgers are missing" (`SUMMARY_HEADINGS`, which
+  `extract_summary` requires), one line per decision with the turn it was
+  settled in. The model reads it with every later message, and the user
+  sees it under **View summary**. The heading was deliberately kept: it is
+  what keeps a decision the project facts never recorded in front of the
+  model once its turn is condensed. What is dropped is the fact harvest
+  reading the list, which was never wired.
+- **Why little is lost.** The harvest reads the full saved conversation
+  (`session.history`), never the summary. The one gap is a very long chat
+  that was never harvested: a harvest reads at most
+  `HARVEST_MAX_TRANSCRIPT_CHARS` (400,000) characters it has not read
+  before and skips the oldest past that, and the measured project would
+  have about that much typed text around turn 130, where it would be
+  condensed. Harvesting now and then avoids it.
+- **Reviving D4** starts from `04_HARVEST.md` deviation 23's seam (now
+  carrying a dated follow-up), after settling what a summary line cites: a
+  summary's turn N is the Nth message the user sent, while the harvest's
+  `turn:N` is the Nth assistant reply, and the two differ when a committed
+  turn produced no reply text.
+- **Phase 5 stays as it is today**: a full-draft turn re-reads every edit
+  outline it was returned within that turn (~$1.30 per full draft of the
+  measured section's size), and Phase 1 still removes them from saved
+  history at commit.
+- **Errata.** These notes are append-only, so corrections to earlier
+  sections are recorded here:
+  1. "A long conversation is condensed, never deleted (compaction Phase 3)"
+     says D4's decisions "go to the harvest" and that deviation 23 "keeps
+     the seam". Nothing connects them, by the owner's decision; the seam
+     is documented only in case D4 is revived.
+  2. "Nothing settled is left in the transcript (Project workspace
+     Phase 4)" says the summary's list "is to become one more candidate
+     source" for the harvest "when it lands". The summary landed (PR #189);
+     the hookup was then dropped for now.
+  3. "Stale outlines stay out of saved history (compaction Phase 1)" lists
+     trimming outlines within a turn as Phase 5, as if still to come. It
+     was dropped (D6).
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

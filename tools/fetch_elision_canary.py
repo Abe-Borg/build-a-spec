@@ -12,20 +12,21 @@ length 257``. The trim was reworked, so a trimmed page's citations are now
 removed and the passages they quoted kept in the page's note. This sends
 that new saved shape once and says what the provider did with it. A saved
 history the provider rejected would fail every later message in that
-project, which is why the trim stays off until this passes.
+project, which is why the trim stayed off until this passed. It passed on
+2026-09-23, and the trim has been on by default since.
 
 Built from production code, not a hand-made copy: the conversation passes
 through ``conversation._committed_messages`` (the same commit transform a
 real turn takes), the request carries ``conversation._chat_tools()`` (the
 web fetch tool with citations on) and goes through
 ``sanitize_messages_for_resend`` and ``repair_document_citations`` like
-every chat request. The trim ships
-switched off (``settings.ELIDE_FETCHED_PAGE_TEXT``, since 1.21.0) until
-this canary passes, so the commit transform is called with the trim forced
-on: what is under test is the shape that switch would produce. The system
-prompt is a single short line, adaptive thinking runs at ``low`` effort and
-the output ceiling is small, because the question is whether the history is
-accepted, not what the model writes.
+every chat request. The commit transform is called with the trim forced on
+(``elide_fetched_pages=True``), so what is under test is always the shape
+the switch produces, whatever ``settings.ELIDE_FETCHED_PAGE_TEXT`` says in
+the environment the canary runs in. The system prompt is a single short
+line, adaptive thinking runs at ``low`` effort and the output ceiling is
+small, because the question is whether the history is accepted, not what
+the model writes.
 
 Opt-in and bounded, like ``tools/qc_verifier_canary.py``: without ``--run``
 nothing is sent. With ``--run`` it makes ONE request on the interview model.
@@ -317,8 +318,8 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "The provider REFUSED a saved conversation whose fetched page "
                 "text was replaced by a note carrying the passage its reply "
-                "quoted. Keep the page-text trim switched off "
-                "(BUILD_A_SPEC_ELIDE_FETCHED_PAGES) until this is resolved. "
+                "quoted. Switch the page-text trim off "
+                "(BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0) until this is resolved. "
                 "Run again with --control to check whether the same "
                 "conversation is accepted with its page text intact.",
                 file=sys.stderr,
@@ -342,8 +343,8 @@ def main(argv: list[str] | None = None) -> int:
             "Fetch elision canary passed: the provider accepted a saved "
             "conversation whose fetched page text was replaced by a note "
             "carrying the passage its reply quoted "
-            f"(stop_reason={stop}). Record this in the plan's Phase 2 section; "
-            "the page-text trim's default can then be switched on."
+            f"(stop_reason={stop}). Record the result in the compaction "
+            "plan's Phase 2 section (Canary result)."
         )
     return 0
 

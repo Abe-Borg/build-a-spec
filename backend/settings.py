@@ -309,15 +309,17 @@ AUTO_DEBRIEF = _bool_env("BUILD_A_SPEC_AUTO_DEBRIEF", True)
 
 # Whether saved chat history drops the text of the web pages the chat fetched
 # (chat-history compaction Phase 2): a committed turn keeps each fetch's URL,
-# title and retrieval time and replaces the page text with a short note, and
-# a project saved earlier is trimmed the same way when it is opened. OFF by
-# default until ``tools/fetch_elision_canary.py --run`` reports that the
-# provider accepts a saved reply whose citations point into a page whose
-# text was replaced. Anthropic does not document that, and a refusal would
-# fail every later message in the affected project. The canary forces the
-# trim on for its own request, whatever this says. Flip the default only
-# with a recorded pass (the compaction plan's Phase 2 → Canary result).
-ELIDE_FETCHED_PAGE_TEXT = _bool_env("BUILD_A_SPEC_ELIDE_FETCHED_PAGES", False)
+# title and retrieval time, replaces the page text with a short note carrying
+# the passages the reply quoted, and drops the reply's citations into the
+# removed text; a project saved earlier is trimmed the same way when it is
+# opened. ON by default since ``tools/fetch_elision_canary.py --run`` passed
+# on 2026-09-23 (the compaction plan's Phase 2 → Canary result): the provider
+# accepts that saved shape. Its first run was refused on an older shape that
+# kept the citations, and a refused history fails every later message in the
+# affected project, so ``0`` keeps page text exactly as it was saved before
+# Phase 2. The canary forces the trim on for its own request, whatever this
+# says.
+ELIDE_FETCHED_PAGE_TEXT = _bool_env("BUILD_A_SPEC_ELIDE_FETCHED_PAGES", True)
 
 # --- Research (Phase 4) -----------------------------------------------------
 

@@ -13,13 +13,16 @@ refuses a citation whose span lies past the end of the note ("Start index
 same trim applied to a project saved by an earlier build, and that a
 fetched PDF keeps the note its own elision already wrote.
 
-1.21.0 ships the trim SWITCHED OFF (``settings.ELIDE_FETCHED_PAGE_TEXT``,
-env ``BUILD_A_SPEC_ELIDE_FETCHED_PAGES``): its live canary was never run,
-and a saved history the provider refused would fail every later message in
-that project. So the trim's own tests run with the switch on (the autouse
-fixture below), and the last section pins the shipped state: the default is
-off, and with it off commit, project load and the profiler all keep the page
-text exactly as they did before this phase.
+The trim is behind a switch (``settings.ELIDE_FETCHED_PAGE_TEXT``, env
+``BUILD_A_SPEC_ELIDE_FETCHED_PAGES``). The 1.21.0 closeout set it off,
+because its live canary had never been run and a saved history the provider
+refused would fail every later message in that project. The canary's second
+run passed on 2026-09-23, on the shape this module pins, and the default has
+been on since. The trim's own tests still set the switch on themselves (the
+autouse fixture below), so an operator's environment cannot turn them off.
+The last section pins the default, and pins that with the switch off,
+commit, project load and the profiler all keep the page text exactly as
+they did before this phase.
 """
 from __future__ import annotations
 
@@ -71,8 +74,8 @@ _CITED_END = _CITED_START + len(_CITED)
 @pytest.fixture(autouse=True)
 def _page_text_trim_on(monkeypatch):
     """The trim's behaviour is what most of this module pins, so it runs
-    with the switch on. The shipped default is off; the tests at the end
-    turn it back off explicitly."""
+    with the switch on whatever the environment says. The shipped default is
+    on too; the tests at the end turn it off explicitly."""
     monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", True)
 
 
@@ -448,7 +451,7 @@ def test_the_profiler_reports_fetched_page_text(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The shipped state: switched off until the live canary passes
+# The switch: on by default since the live canary passed; off keeps page text
 # ---------------------------------------------------------------------------
 
 
@@ -463,14 +466,14 @@ def _older_project_with_page_text(client: TestClient, monkeypatch) -> dict:
     return project
 
 
-def test_the_page_text_trim_ships_switched_off():
-    """1.21.0 ships the trim OFF: its live canary
-    (``tools/fetch_elision_canary.py --run``) was never run, and a history
-    the provider refused would fail every later message in that project.
-    Read from the source, not the loaded value, so a developer's own
-    environment cannot make this pass or fail. Change this expectation only
-    together with a recorded canary pass (the compaction plan's Phase 2 →
-    Canary result)."""
+def test_the_page_text_trim_ships_switched_on():
+    """The trim is ON by default since its live canary
+    (``tools/fetch_elision_canary.py --run``) passed on 2026-09-23 (the
+    compaction plan's Phase 2 → Canary result, run 2). The 1.21.0 closeout
+    shipped it off until then, because a history the provider refused would
+    fail every later message in that project. Read from the source, not the
+    loaded value, so a developer's own environment cannot make this pass or
+    fail. Turn it back off only together with a recorded refusal."""
     source = (Path(settings.__file__)).read_text(encoding="utf-8")
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Assign) and any(
@@ -481,7 +484,7 @@ def test_the_page_text_trim_ships_switched_off():
             assert isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_bool_env"
             name, default = (arg.value for arg in call.args)
             assert name == "BUILD_A_SPEC_ELIDE_FETCHED_PAGES"
-            assert default is False, "the trim may only default on after a recorded canary pass"
+            assert default is True, "the canary passed (run 2, 2026-09-23); the trim defaults on"
             return
     raise AssertionError("settings.ELIDE_FETCHED_PAGE_TEXT is gone")
 

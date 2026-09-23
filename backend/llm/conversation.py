@@ -2657,10 +2657,11 @@ def _committed_messages(
       citation against the text it points into). ``document_offset`` is
       how many documents this turn's request sent ahead of these messages,
       so a citation's ``document_index`` finds the page it named. The trim
-      is ``settings.ELIDE_FETCHED_PAGE_TEXT``, off by default until its
-      live canary passes; ``elide_fetched_pages`` overrides it for one call
-      (the canary passes ``True``, since it tests the shape the switch
-      would turn on). Search results, and every other citation, stay.
+      is ``settings.ELIDE_FETCHED_PAGE_TEXT``, on by default since its live
+      canary passed on 2026-09-23; ``elide_fetched_pages`` overrides it for
+      one call (the canary passes ``True``, so the shape it tests never
+      depends on the switch). Search results, and every other citation,
+      stay.
     - ``create_figure`` tool inputs shed their heavy source (see
       :func:`_elide_figure_tool_inputs`) — the figure store holds it.
     - ``read_reference_doc`` tool results shed the document body (see

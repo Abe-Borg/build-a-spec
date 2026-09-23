@@ -15,10 +15,11 @@ file is the working reference for AI-assisted development sessions.
   single low-token request. `tools/qc_verifier_canary.py --run` checks that
   the provider accepts the strict QC verifier schema; it never runs a full
   Final QC. `tools/fetch_elision_canary.py --run` checks that the provider
-  accepts a saved chat history whose fetched page text was elided while a
-  reply still cites it (compaction plan Phase 2). Its optional `--control`
-  run is one more request, made only on demand. Without `--run`, neither
-  canary sends anything.
+  accepts a saved chat history whose fetched page text was trimmed to a
+  note carrying the passage a reply quoted (compaction plan Phase 2; it
+  passed on 2026-09-23, and the trim has been on by default since). Its
+  optional `--control` run is one more request, made only on demand.
+  Without `--run`, neither canary sends anything.
 - Reused Spec Critic code is **copied in and adapted**, never imported across
   repos. When porting a file, keep its design and docstring posture, update
   identity strings (BuildASpec / BUILD_A_SPEC_*), and note the provenance in
@@ -116,11 +117,11 @@ backend/
                            HARVEST_EFFORT (Project workspace Phase 4, default
                            medium — the fact harvest extracts, it drafts
                            nothing); ELIDE_FETCHED_PAGE_TEXT
-                           (BUILD_A_SPEC_ELIDE_FETCHED_PAGES, default OFF —
-                           the compaction Phase 2 page-text trim ships
-                           switched off in 1.21.0 until its live canary
-                           passes; commit and project load read it at call
-                           time); CHAT_COMPACTION (+ _THRESHOLD D1 600k /
+                           (BUILD_A_SPEC_ELIDE_FETCHED_PAGES, default ON —
+                           the compaction Phase 2 page-text trim, on since
+                           its live canary passed on 2026-09-23; the 1.21.0
+                           closeout had set it off; commit and project load
+                           read it at call time); CHAT_COMPACTION (+ _THRESHOLD D1 600k /
                            _KEEP_TURNS 3; compaction Phase 3 — routine
                            condensing, OFF until the paid recall check) and
                            the NON-knob CHAT_CONTEXT_BACKSTOP_FRACTION (0.85,
@@ -1152,13 +1153,16 @@ backend/
                            go — the canary's first run was refused on
                            those; a trimmed page is recognized by
                            FETCHED_PAGE_NOTE_PREFIX; a fetched PDF keeps
-                           its own note) out of
+                           its own note; opening a project passes
+                           document_offset=None, so a passage more than one
+                           page holds leaves those pages alone) out of
                            COMMITTED history — COW, same list object when
                            nothing changed, applied by _committed_messages
                            and by project load (the page-text half only
                            while settings.ELIDE_FETCHED_PAGE_TEXT is on —
-                           off by default since 1.21.0; the module reads no
-                           settings, its callers do); history_composition = sizes
+                           the default since its canary passed on
+                           2026-09-23; the module reads no settings, its
+                           callers do); history_composition = sizes
                            by category plus the stale_outlines /
                            fetched_page_texts canaries, never text
                            (Developer tools, the support bundle,
@@ -1859,9 +1863,11 @@ tests/
                            request untouched, a PDF note, the trim's quote
                            folding (dedupe, budget, never growing a page, a
                            kept document, the page the citation names over
-                           a mirror, the commit's document offset), and end
-                           to end through the chat and the summary call
-                           (byte-identical prefix)
+                           a mirror, the commit's document offset, an
+                           opened project's unknown numbering leaving a
+                           mirrored passage's pages alone), and end to end
+                           through the chat, project load, the profiler and
+                           the summary call (byte-identical prefix)
   test_fetch_elision_canary.py
                            [compaction Phase 2] the live canary without a
                            network: nothing sent without --run, the committed
@@ -13455,6 +13461,118 @@ deviations. This section is the why and the traps.
   letters only. All three changed here: a plain link is spliced, a new
   sub-provision takes its own level wherever the master's numbering defines
   it, and the re-import test checks the tree for Word-numbered masters too.
+
+## The page-text trim is on by default — implemented notes
+
+The owner ran the fetch-elision canary a second time on 2026-09-23, and it
+passed. It ran on the shape PR #192 ships: the passage the reply quoted sits
+in the page's note, and no citation points into the trimmed text. Its output
+is recorded verbatim in the compaction plan's Phase 2 → Canary result, and
+it ends "Fetch elision canary passed … (stop_reason=end_turn)". So
+compaction Phase 2's page-text trim is now on by default. This change adds
+no route, SSE event, dependency or env knob, changes no project format, and
+bumps no version.
+
+- **What changed.** `settings.ELIDE_FETCHED_PAGE_TEXT`
+  (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`) now defaults to `True`, so commit and
+  project load trim fetched page text by default. Setting the variable to
+  `0` (or `false`, `no`, `off`) keeps page text exactly as saved history
+  held it before Phase 2. The trim, the citation repair and the canary are
+  unchanged from PR #192.
+- **The pin flipped with the default.**
+  `test_the_page_text_trim_ships_switched_off` is now
+  `test_the_page_text_trim_ships_switched_on`. It still reads the default
+  from the source, so no developer's environment can make it pass or fail.
+  It was reverted in place (default back to `False`) and went red. The
+  trim's own tests keep the autouse fixture that turns the switch on, so an
+  operator's `=0` cannot quietly switch their assertions off. The three
+  off-path tests still turn it off explicitly, and they now cover the
+  opt-out.
+- **The full suite ran with the new default before any test changed**, to
+  catch any test that quietly relied on the trim being off. Only the pin
+  failed (2,359 passed). The tests most likely to go vacuous were the
+  citation repair's end-to-end cases, since they need saved citations into
+  pages. They set the history directly and check the outgoing request, so
+  the commit-time trim never touches what they test.
+- **The canary's messages no longer assume the trim is off.** The pass
+  message used to say "the page-text trim's default can then be switched
+  on", which is stale now. It now says to record the result in the plan.
+  The refusal message now says to switch the trim off (`=0`) instead of
+  keeping it off. Its tests pin only "Fetch elision canary passed",
+  "REFUSED" and "--control", and all three are still there.
+- **Checklist rows.** In the release checklist, "With the default, a fetched
+  page leaves the saved conversation" now covers the default, and a new row
+  covers `=0`. "Condensing after web lookups" checks the citation repair on
+  a condensed view. With the trim on, a saved reply keeps no citation into
+  a fetched page, so that row now runs with the trim off.
+- **Opening a project no longer guesses which page a quote came from**
+  (Codex, PR #194). With the default on, opening a project saved with the
+  trim off trims every page it holds, and the load path read each
+  citation's `document_index` against the whole saved history
+  (`document_offset=0`). A reply written after the conversation was
+  condensed was numbered against the condensed view, and nothing saved
+  says which replies those were. So when a passage appears on two pages
+  (a page read twice, or a mirror), the quote could be filed under the
+  wrong page's address and its citation removed, and the next save made
+  that permanent. This was reproduced on the unfixed code: turn 2's quote
+  went under mirror A and mirror B's note held no quote at all.
+  `elide_fetched_page_text` now takes `document_offset=None`, meaning the
+  numbering is unknown, and load and the offline profiler both pass it:
+  - a passage exactly one page holds still folds into that page, since no
+    index is needed to say where it came from;
+  - a passage more than one page holds leaves every one of those pages'
+    text in place, and every citation into them;
+  - the request repair keeps what is sent valid either way.
+
+  The commit path is unchanged, because its offset is exact. The load log
+  now counts the pages actually trimmed, not every page it looked at.
+  Tests: 4 new in `test_citation_repair.py` (both unit cases, opening a
+  condensed project end to end with the next request checked, and the
+  profiler). Each mechanism was reverted in place:
+
+  | Reverted in place | Tests red |
+  |---|---|
+  | load reading indexes as whole-history numbers | 1 |
+  | nothing held back when numbering is unknown | 3 |
+  | the log counting every page it looked at | 1 |
+  | the same-list return when nothing is left to trim | 1 |
+  | the profiler reading indexes as whole-history numbers | 1 |
+  | a citation into a held page not skipped | 2 |
+- **The release note is owed, not written.** Phase 2's draft stays in the
+  compaction plan, and the plan's Release policy says whichever release
+  next ships from `master` must carry it beside Phase 3's. 1.21.0's entry
+  was written while the trim was off, and v1.21.0 is not tagged. Adding the
+  draft to that entry now would describe something a 1.21.0 tagged at the
+  closeout commit (`a273ab7`) would not contain, which is the frozen-entry
+  mistake in reverse. The owner said no release is planned (2026-09-23), so
+  this change does not decide which commit gets tagged.
+- **Docs.** In README:
+  - the Phase 2 subsection now says the trim is on and how to turn it off;
+  - the configuration row now shows `1`;
+  - the check's paragraph now describes the shape it sends (it had still
+    said a reply "still cites" the trimmed page);
+  - the compaction intro no longer calls Phase 3 "next".
+
+  CLAUDE.md's ground rule and two layout entries were corrected in place,
+  since they describe the current state. The compaction plan, the plans
+  index, and the project-workspace README and closeout record were updated
+  too; the last two got a dated follow-up line.
+- **Errata.** These notes are append-only, so corrections to earlier
+  sections are recorded here:
+  1. "The project workspace program, as shipped (v1.21.0 closeout)" says
+     compaction Phase 2 ships switched off, and lists five edits that turn
+     it on. This change makes those edits. A 1.21.0 tagged at the closeout
+     commit still ships the trim off; a 1.21.0 cut from `master` now
+     carries it on.
+  2. "Fetched page text stays out of saved history (compaction Phase 2)"
+     says its `fetched_page_texts` count is zero for anything this build
+     committed or loaded. That stopped being true by default at the 1.21.0
+     closeout. It is true by default again, with one exception: an opened
+     project keeps a page whose quoted passage another of its pages also
+     holds (the bullet above).
+  3. "Citations must fit the request that carries them" says "The trim
+     stays OFF" and that "only a recorded pass flips the default". The pass
+     is now recorded, and this change flips the default.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

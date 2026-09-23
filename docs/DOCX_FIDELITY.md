@@ -239,7 +239,151 @@ state do not apply. The byte-exact machinery below is still reachable at
 `?mode=source` for a project that never released the claim, and its own
 suites still pin it.
 
-## Five distinct user-visible contracts
+## Redline on your original (tracked changes in the file you imported)
+
+`GET /api/export/docx?redline=master&mode=preserved` returns a copy of the
+upload with every change Build-a-Spec made since the import as a native Word
+tracked change. It is the appearance-preserving export's redline, and makes
+two promises about it:
+
+* **Accept All gives exactly what the appearance-preserving export produces**
+  — the file `?mode=preserved` returns for the same document;
+* **Reject All gives back the upload's body**, with one exception: a moved
+  provision's bookmarks stay with its new position (below).
+
+"Exactly" means element for element, up to how Word splits text into runs
+(Word re-splits runs on every save anyway), with `w14:paraId`/`w14:textId`
+treated as identity rather than content. Every package part except
+`word/document.xml` is the upload's, byte for byte — `word/settings.xml`
+included: Track Changes is not switched on in the file (Decision 4), and a
+file whose Track Changes was already on keeps it on. The retained upload is
+never modified; this is a new file.
+
+**The file checks its own promise before anyone sees it.** The export renders
+the redline and the clean export from one plan, then runs pure-XML Accept All
+and Reject All transforms over the redline's body (`spec_doc/revisions.py`,
+which shares no code with the writer) and compares them canonically against
+the clean body and the upload's body: adjacent runs with identical properties
+merged, empty runs and containers dropped, XML comments and processing
+instructions ignored, bookmarks compared by name, and an empty last paragraph
+tolerated (Word cannot track a document's last paragraph mark, so a tracked
+change there leaves one behind). No bookmark name may appear twice in the
+redline, and every other package member must be byte-identical. If any check
+fails the route returns a 409 naming it, and the `export` diagnostics event
+records the check and the first mismatching element — its position and
+element names only, never text.
+
+**Each element is decided against the upload, through the format map.** The
+plan the clean export renders (`_Assembler.plan()` — kept, spliced, inserted,
+deleted, carried, dropped, and the empty paragraph a displaced section-break
+holder leaves) is the same plan the redline renders:
+
+| Plan record | Clean export | Redline |
+|---|---|---|
+| kept, carried | clone | clone, untracked |
+| spliced | the new words in the original runs | `w:del`/`w:ins` inside the original runs |
+| fallback (the splice cannot map the paragraph) | the text in one run with the first run's properties | everything the paragraph held deleted, one run of the new text inserted |
+| inserted | new paragraph | its runs inserted, its paragraph mark inserted |
+| deleted, dropped | nothing | its runs deleted (`w:t` → `w:delText`, `w:instrText` → `w:delInstrText`), its paragraph mark deleted |
+| a table inserted or deleted | the table / nothing | every row flagged (`w:trPr/w:ins` or `w:del`), every cell's content marked |
+
+The word-level changes are the splice's own edit script
+(`source_splice.render_redline` beside `render_clean`, over the same pieces),
+so a relettered provision is a one-token letter change with its tab kept, and
+zero-width content (a page break, a bookmark) lands exactly where the clean
+export puts it — including words prepended after a leading page break.
+
+**Typed letters are tracked; Word numbering is not.** In a typed-letter master
+a provision relettered by an insert above it carries a tracked letter change
+(`A.` → `B.`), which is the only way Reject All can give the letters back; it
+is noisy near the top of a long article, and honest. In a Word-numbered master
+there is no letter text to mark and Word renumbers itself under both Accept
+and Reject. This is a deliberate departure from the normalized redline, whose
+labels stay positional literals.
+
+**Moves are a deleted copy where it was and an inserted copy where it is.**
+The diff sees a reorder (`diff_sections(..., detect_moves=True)`: within each
+sibling list, the survivors whose relative order held are the LONGEST
+increasing subsequence of their base positions, ties going first to the one
+that keeps the most elements in place — an element weighs its whole subtree —
+and then to the later position; a moved article carries its children, and in
+a swap the heavier subtree stays put). The redline then keeps in place the
+largest body-level chain of content both views share, preferring what the
+diff did not report moved; everything else is a move. The inserted copy is
+cloned from the element's own origin and keeps its bookmarks and `w14` ids;
+the deleted old copy gives them up, because a file must never carry one
+bookmark name twice — which is the Reject-All exception above: Reject All
+restores a moved provision's text and formatting at its old position, but not
+its bookmarks (Word recreates `_GoBack` itself, and a TOC update restores
+`_Toc` anchors). The self-check excludes exactly those names. Word's own
+"Moved" marks are Phase 2.
+
+**No tracked change ever deletes a paragraph mark that holds a section break**
+(Accept All would merge two Word sections). A deleted or moved provision that
+holds the break in its own `w:pPr` keeps its mark: only its runs are deleted,
+so Accept All leaves the same empty break-holding paragraph the clean export
+leaves, and Reject All restores the text. When that provision was
+Word-numbered, the numbering cancel the clean export applies (`w:numId 0`) is
+recorded as a `w:pPrChange`. Breaks are placed by the clean export's own rule
+(`_Assembler._place`), and the redline follows it: every record placed around
+a break is held in place, and when keeping them all in place forces an extra
+move, the redline moves the fewest elements it can (the export event counts
+them as `moves_added`). A reorder that would need a break itself to move is
+refused (`section_break_reorder`) — Word cannot track a moved section break.
+
+**What is never touched:** front matter, headers and footers, `END OF SECTION`
+and everything after it, the section identity when it lives on the cover page
+or in a header or footer (the `stale_document_identifier` lint reports a
+renamed section there instead). A section identity on a header line in the
+body is redlined like any other line. Status changes (assumed → confirmed) are
+not content and are not marked, and no Build-a-Spec schedule or QC closing is
+added: the file is your document.
+
+**Revision metadata.** Author `Build-a-Spec`; date the export time in UTC
+(`2026-09-22T14:30:00Z`); revision ids start above the highest `w:id` already
+in the package's `word/*.xml` parts, since bookmarks and comments share that
+annotation-id space. Word's schema order is kept: the paragraph-mark flag is
+the first child of `w:pPr/w:rPr`, `w:rPr` precedes `w:sectPr` and
+`w:pPrChange`, `w:pPrChange` is the last child of `w:pPr` and holds the base
+properties only, and a row's flag follows its other `w:trPr` properties. The
+file is named `<your upload's name> - REDLINE.docx`, so replacing the master
+with the reviewed file is a rename.
+
+**Refusals, each named** (the 409's `code`, and the `export` event's
+`refusal.reason`):
+
+| Code | Why |
+|---|---|
+| `no_baseline` | No imported master in the document's history (the payload says so; the route's no-master 400 answers first). |
+| `no_original` | The upload and the format map built from it are not both kept, or no longer describe each other (a project imported before 1.14.0 has no map; importing the file again gives it one). |
+| `pending_revisions` | The package already carries another author's tracked changes, so Reject All would reject those too. Accept or reject them in Word, save, and import the file again. Track Changes merely switched ON (`w:trackRevisions`) with nothing pending is not refused. |
+| `revision_scan_unavailable` | The revision-bearing parts could not be scanned confidently enough to say there are none. |
+| `section_break_reorder` | The change would need a section break to move. |
+| `moved_annotation` | A moved provision carries a comment range or reference, or a footnote or endnote reference, and Word cannot show one annotation in two places. |
+| `simple_field` | A `w:fldSimple` would need tracking (Word cannot track one). |
+| `block_content_control` | A body-level content control would be inserted, deleted or moved. |
+| `field_block` | Part of a table of contents (a field spanning paragraphs) would be deleted or moved. |
+| `pending_revisions_in_body`, `untrackable_markup` | Revision markup, or other markup that cannot be wrapped in a tracked change, met while marking content. |
+| `unaccounted_content` | A body element of the upload could not be placed — refused rather than risk losing it. |
+| `accept_check_failed`, `reject_check_failed`, `duplicate_bookmarks`, `package_check_failed` | The self-check. |
+
+Every refusal names the redline of extracted provisions as still working
+(`?redline=master&mode=normalized`), except `no_baseline`, which names redline
+vs version.
+
+**Cost.** Linear in the document: on a 1,200-paragraph master with forty
+edits the whole redline took about 0.7 s, of which the self-check was about
+0.3 s (2,400 paragraphs: 1.3 s / 0.6 s; 4,800: 2.4 s / 1.2 s) — about three
+times the clean export, which renders once inside it. The pending-revisions
+scan (about 0.1 s) is cached per upload for the payload.
+
+**Limits.** A provision nested deeper than any provision a Word-numbered
+master already has is cloned from kin at another depth and keeps that kin's
+`w:ilvl` — a limit of the appearance-preserving export, which the redline's
+Accept All reproduces by construction. The redline is master-only in this
+phase: a redline on the original against an arbitrary version is a 400.
+
+## Distinct user-visible contracts
 
 | Contract | API selection | Package basis | Guarantee |
 |---|---|---|---|
@@ -248,7 +392,8 @@ suites still pin it.
 | Source-preserving patched DOCX | `GET /api/export/docx?mode=source` after a proven-safe body change | Clone of the imported package | Only approved `word/document.xml` text slices or numbered-island paragraph spans change. Unchanged member payloads, local records, inter-record gaps, archive comment, and trailing bytes remain exact. Central-directory records change only for the replacement metadata and required local-header offsets. The proposed output is independently audited before return. |
 | Appearance-preserving DOCX | `GET /api/export/docx?mode=preserved`, and the default for an imported document that has released the byte-exact claim (i.e. every import) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical. Untouched provisions are byte-identical elements; edited ones keep their paragraph properties and their own runs (unchanged words keep their formatting); preserved blocks are verbatim; section breaks survive every edit. See the section above. |
 | Normalized DOCX | `GET /api/export/docx?mode=normalized` | Current SectionFormat tree | Generates a new DOCX with Build-a-Spec styles, schedules, and genuine Word automatic numbering. It does not preserve source-package formatting or opaque parts. Fresh projects default to this mode. |
-| Normalized redline | `GET /api/export/docx?redline=master` or `GET /api/export/docx?redline=version&base=N` | Semantic baseline/version and current SectionFormat tree | Generates a new DOCX containing Word `w:ins`/`w:del` markup. It is a semantic provision redline, not a source-package redline. It never adds tracked changes to the retained source. |
+| Redline on your original | `GET /api/export/docx?redline=master&mode=preserved`, and the default for a bare `redline=master` whenever it is available (`preserved_redline_available`) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical (Track Changes is not switched on). Every change since the import is a native Word tracked change by "Build-a-Spec", dated at export. Accept All gives exactly the appearance-preserving export; Reject All gives the upload's body back (a moved provision's bookmarks excepted). Both are checked before the file is returned, and a failure is a 409 naming the check. It never adds tracked changes to the retained source. See the section above. |
+| Normalized redline | `GET /api/export/docx?redline=master&mode=normalized` (and a bare `redline=master` when the redline on the original is unavailable), or `GET /api/export/docx?redline=version&base=N` | Semantic baseline/version and current SectionFormat tree | Generates a new DOCX containing Word `w:ins`/`w:del` markup. It is a semantic provision redline, not a source-package redline. It never adds tracked changes to the retained source. |
 
 Redline display labels remain positional literal text so a move or a preceding
 deletion does not create misleading tracked-numbering noise; they are numbered
@@ -386,6 +531,8 @@ apply responses include these source-specific fields:
 {
   "source_available": true,
   "preserved_export_available": true,
+  "preserved_redline_available": true,
+  "preserved_redline_reason": null,
   "preservation_ready": true,
   "source_preservation": {
     "status": "ready",
@@ -414,6 +561,13 @@ apply responses include these source-specific fields:
   }
 }
 ```
+
+`preserved_redline_available` says whether the redline on the original can be
+exported; when it cannot, `preserved_redline_reason` is `{code, message}` —
+the closed code (`no_baseline`, `no_original`, `pending_revisions`,
+`revision_scan_unavailable`) and the sentence to show, server-authored. It is
+the same derivation the export route's default and refusal read, so the menu
+can never offer a redline the route refuses.
 
 Fresh projects return `null` for `source_preservation` and
 `source_capabilities`. A resumed legacy import has no source capability lock:
@@ -536,8 +690,10 @@ allowed when body operations are blocked.
 | `GET /api/export/docx` | A detached imported project (every import) defaults to `mode=preserved` when its formatting map is present; a project still holding the byte-exact claim defaults to `mode=source`; fresh projects default to normalized. It never silently falls back from source mode. |
 | `GET /api/export/docx?mode=source` | Exact no-op or audited source patch. A blocked request returns 409. It cannot be combined with `redline`. |
 | `GET /api/export/docx?mode=normalized` | Explicit normalized reconstruction. |
-| `GET /api/export/docx?redline=master` | Normalized redline against the imported semantic baseline. Requires an imported baseline. |
-| `GET /api/export/docx?redline=version&base=N` | Normalized redline against a retained semantic version. |
+| `GET /api/export/docx?redline=master` | The redline on the original when it is available (`preserved_redline_available`), else the normalized redline against the imported semantic baseline. Requires an imported baseline (400 without one). The frontend never relies on this default: every redline it requests names its mode. |
+| `GET /api/export/docx?redline=master&mode=preserved` | The redline on the original. 409 with a named `code` when it is unavailable (`no_original`, `pending_revisions`, `revision_scan_unavailable`) or refused by the render or its self-check (see "Redline on your original"). The filename is `<upload name> - REDLINE.docx`. |
+| `GET /api/export/docx?redline=master&mode=normalized` | Normalized redline against the imported semantic baseline. |
+| `GET /api/export/docx?redline=version&base=N` | Normalized redline against a retained semantic version (a bare request, or `mode=normalized`). `mode=preserved` with `redline=version` is a 400: the redline on the original is master-only. |
 | `GET /api/project/save` | Native `.baspec` package. An imported project includes exact source bytes and a typed source map. |
 | `POST /api/project/load` | Legacy format-1 JSON compatibility endpoint. The loaded project is source-less. |
 | `POST /api/project/load-file` | Loads native `.baspec` or current legacy JSON after complete side-effect-free validation, then replaces session state atomically. |

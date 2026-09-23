@@ -1,9 +1,12 @@
 # Redline on your original — tracked changes in the Word file you imported
 
 **Status:** Phase 0 built 2026-09-22 in PR #184 — not yet released; the
-owner picks the release (its note is under "Release-note drafts"). All six
-decisions ratified 2026-09-22 (see "Decisions"). **Phase 1 is next and not
-started** — start from "Phase 0 — as built" under "Phases".
+owner picks the release (its note is under "Release-note drafts"). All seven
+decisions ratified 2026-09-22 (see "Decisions"). **Phase 1's backend PR is
+built** (the export, the self-check, the refusals, the route and the payload
+flag — see "Phase 1 (backend PR) — as built"); **its UI PR is next and not
+started**: the menu item, *Open redline in Word*, the capability and the
+copy. Start from that as-built note.
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
 the Batch 5 diff engine and redline writer (`diffing.py`, `docx_export.py`),
 and the retained upload + formatting map every import already keeps.
@@ -546,12 +549,12 @@ Deviations from the text above:
    its Accept All view must equal this leftover, so a Word-numbered holder
    needs a `w:pPrChange` recording the numbering cancel, and the old copy
    gives up its bookmarks and ids (D-6 already says so).
-7. **Open question for the owner:** a provision added right after the last
-   paragraph of a section lands after the break, at the top of the next
-   section, because the break stays with the content above it. Word's Enter
-   at the end of that paragraph would keep the new text in the section.
-   Documented in DOCX_FIDELITY as current behaviour; change it only if the
-   owner prefers Word's.
+7. **Settled 2026-09-22 (Decision 7): keep today's placement.** A provision
+   added right after the last paragraph of a section lands after the break,
+   at the top of the next section, because the break stays with the content
+   above it. Word's Enter at the end of that paragraph would keep the new
+   text in the section; the owner chose the current rule, which DOCX_FIDELITY
+   already documents.
 8. **Words prepended to a paragraph go after the zero-width content in
    front of its first word** (caught in review on PR #184). D-2 does not
    say where an insertion lands beside a page break or a bookmark, and the
@@ -622,6 +625,142 @@ Found, not done (outside Phase 0):
 - The release note.
 
 **Size:** large. Probably two PRs: backend, then UI.
+
+#### Phase 1 (backend PR) — as built
+
+**Built 2026-09-22/23 on `claude/determined-hypatia-vp5myu` (the PR that
+carries this note); not yet released.** No VERSION bump, no
+`release_notes.py` entry. The contract is in `docs/DOCX_FIDELITY.md` →
+"Redline on your original"; the why and the traps are in `CLAUDE.md` →
+"Redline on your original — implemented notes (Phase 1, backend PR)".
+
+Code: `spec_doc/revisions.py` (new — the D-7 oracle), `spec_doc/revision_marks.py`
+(new — the revision writer), `spec_doc/source_render.py` (D-1's records;
+`_RedlineBuilder`; `render_preserving_redline`), `spec_doc/source_splice.py`
+(`_pieces` emits deleted content as its own piece; `render_redline`),
+`spec_doc/diffing.py` (`detect_moves=`), `spec_doc/source_mapping.py`
+(`detect_pending_revisions`), `spec_doc/docx_export.py`
+(`upload_redline_filename`), `app.py` (route, defaults, payload, one
+derivation), and — the one frontend change that could not wait —
+`frontend/src/lib/api.ts` + `ArtifactPanel.tsx` (every redline URL names its
+mode). Tests: `tests/test_revisions.py`, `tests/test_redline_original.py`, and
+additions to `test_source_splice.py`, `test_diffing.py`, `test_diagnostics.py`
+and `frontend/tests/downloads.test.ts`.
+
+Deviations from the text above:
+
+1. **Moves are reconciled with `_place` at body level.** The diff's
+   per-sibling LIS is built as planned (an opt-in, byte-identical off — 600
+   diffs and 600 normalized redline bodies compared). But deviation 4 asked
+   the redline to place breaks by `_place` or prove the LIS agrees, and it
+   does not always agree: reversing three provisions across two breaks makes
+   the diff keep the last one, which cannot sit between the two breaks
+   `_place` placed. So the redline decides what is shared (kept in place)
+   with its own heaviest increasing subsequence over the clean records'
+   upload positions (`source_render._keep_in_place`, pure and unit-tested):
+   every record `_place` pinned around a break is forced in (weight count² +
+   1), then the diff's stayers (count), then its movers (1). Wherever a break
+   allows, that honours the diff; where one does not, it moves the fewest
+   elements it can, and the export event counts the extras
+   (`redline.moves_added` — two moves, not three, in the reversal). The
+   diff's say changes real output: moving a provision with two children below
+   its two siblings, a raw body-level chain would keep the parent's three
+   paragraphs and move the siblings, while the diff (longest sibling run
+   first) moves the parent — and the redline shows the parent moved.
+2. **The refusal vocabulary is wider than D-3 and D-5 name.** Beyond pending
+   revisions (plus `revision_scan_unavailable`, a scan that could not say)
+   and the blocks Word cannot track (`block_content_control`, `field_block`,
+   `simple_field`, `untrackable_markup`, `pending_revisions_in_body`), the
+   plan had no word for three cases: a reorder that would need a section
+   break to move (`section_break_reorder`); a moved provision carrying a
+   comment range or reference or a note reference (`moved_annotation` — Word
+   cannot show one annotation in two places, and unlike a bookmark it cannot
+   simply stay with the new copy); and an upload element no record accounts
+   for (`unaccounted_content` — refused rather than risk losing it). The
+   payload adds two availability codes, `no_baseline` and `no_original`.
+   Every reason has a server-authored sentence, and every sentence names
+   what still works.
+3. **D-5 uses the package-wide scan, split in two** (the owner's correction
+   to the plan). The `tracked_changes` check of
+   `detect_global_source_blockers` also fires when Track Changes is merely
+   switched on (`w:trackRevisions` in `settings.xml`) with nothing pending,
+   which does not break "Reject All = your original". The story-part scan was
+   extracted (`_revision_scan_blockers`, same order and answers for the
+   byte-exact mode) and `detect_pending_revisions` runs it without the
+   settings half. The refusal has its own reason and remedy — the byte-exact
+   mode's `tracked_changes` remedy offers "Edit freely", which means nothing
+   here — naming the fix and saying the redline of extracted provisions still
+   works.
+4. **Word cannot track a document's last paragraph mark.** A tracked
+   insertion or deletion of the body's last paragraph marks its words and
+   leaves its mark alone, and the canonical comparison tolerates the empty
+   last paragraph that leaves. The plan did not mention it; it came up the
+   first time a test deleted the last provision.
+5. **Deleted content keeps its bookmarks inside `w:del`; only a MOVED old
+   copy gives them up** (with its `w14` ids), because the new copy carries
+   them. The self-check excludes exactly the names a moved copy carries, and
+   no other.
+6. **`settings.xml` is never touched** (Decision 4), so a master whose Track
+   Changes was already on exports with it still on.
+7. **A new provision nested deeper than any provision a Word-numbered master
+   already has** keeps its template's `w:ilvl` in the formatted export, so
+   Word shows it one level up (found here, a Phase 0 behaviour — see "Found,
+   not done" below). The redline's Accept All reproduces it by construction,
+   which is the promise; the re-import test therefore checks the tree for
+   typed-letter masters and "the same as the formatted export" for every
+   labelling kind.
+
+Measured (recorded, not asserted):
+
+- **Cost, linear.** A 1,200-paragraph master with forty edits: the whole
+  redline 0.65–0.7 s, the self-check 0.26–0.29 s, the clean export inside it
+  about 0.2 s, the pending-revisions scan 0.075 s. 2,400 paragraphs: 1.3 s /
+  0.56 s. 4,800: 2.4 s / 1.16 s.
+- **Corpus sweep** (17 corpus masters × 60 scripted edit mixes of up to 14
+  edits, 1,020 renders): no refusal and no failed self-check. The fallback
+  rate is the number to widen from: 230 of 525 edited provisions (44%) took
+  the fallback, **every one for `hyperlink`** — Word-saved masters put
+  hyperlinks in provisions, and the splice does not descend into
+  `w:hyperlink` yet (the writer already does).
+- **Fixture sweep** (the nine hand-built masters of the suites × 200 edit
+  mixes, 1,800 renders): no refusal and no failed self-check; 118 emptied
+  break holders and 5 extra moves forced by breaks among them.
+
+What the UI PR starts from:
+
+- Every doc payload carries `preserved_redline_available` and, when false,
+  `preserved_redline_reason` `{code, message}` — the message is
+  server-authored; render it verbatim (the `sourceCapabilities.ts` rule).
+  Add both to the frontend `DocPayload` type; nothing reads them yet.
+- `exportDocxUrl({redline: "master", mode: "preserved"})` already builds the
+  URL (pinned in `downloads.test.ts`). The new item goes right under *Export
+  Word (keeps your formatting)* with its own `runExport` key — the two
+  existing redline actions are pinned by theirs (`redline-master`,
+  `redline-version`) to `mode: "normalized"`.
+- A refusal is a 409 whose body carries `error` (the sentence
+  `downloadAttachment` already surfaces) and `code` (the reason).
+- *Open redline in Word*: `main.py`'s `open_in_word(mode)` fetches
+  `/api/export/docx?mode=…`; it needs the redline variant. The filename comes
+  from `Content-Disposition` — `<your upload's name> - REDLINE.docx`.
+- The capability `export.redline-original` (the three-place edit) on the
+  existing `export` tour step; no `TOUR_VERSION` bump.
+- The copy: `SOURCE_OUTPUT_GUIDANCE`, Help, and the trust dossier's export
+  card; and the new export's `RELEASE_WINDOWS.md` rows (real Word: no repair
+  prompt, the reviewing pane shows Build-a-Spec, Accept All looks like the
+  formatted export, Reject All like the original, and the overwrite-the-
+  master workflow end to end). The Phase 0 rows are in.
+
+Found, not done (outside this PR):
+
+- **A new nested provision in a Word-numbered master takes its kin's
+  `w:ilvl`** when the master has no provision at that depth (deviation 7
+  above). Fix in the formatted export: when an auto-numbered template sits at
+  another depth, offset the clone's `w:ilvl` by the depth difference (the
+  importer reads `ilvl` as a relative level), if the numbering definition
+  defines that level.
+- **Hyperlinks send edited provisions to the fallback** (44% of the corpus
+  sweep's edited provisions). The splice's eligibility widens from here.
+- Phase 0's "Found, not done" list stands unchanged.
 
 ### Phase 2 — Native moves and real-Word proof
 
@@ -713,8 +852,9 @@ Found, not done (outside Phase 0):
 
 ## Decisions (ratified as recommended, 2026-09-22 — binding)
 
-Abraham answered all six on 2026-09-22, each as recommended. They are
-binding on every phase; changing one is a new decision, recorded here.
+Abraham answered all seven on 2026-09-22, each as recommended (the seventh
+was Phase 0's open question, deviation 7). They are binding on every phase;
+changing one is a new decision, recorded here.
 
 | # | Decision | Ratified |
 |---|---|---|
@@ -724,6 +864,7 @@ binding on every phase; changing one is a new decision, recorded here.
 | 4 | Track Changes switched on inside the exported file | **Off.** With it on, edits made in Word while reviewing would also be tracked, and it would have to be switched off again before the file becomes the master. Every Build-a-Spec change is a tracked change either way. |
 | 5 | Author shown on each change | **"Build-a-Spec".** Matches today's redline and makes Word's "Reject all changes by Build-a-Spec" meaningful. The alternative was the user's name, set once in Settings. |
 | 6 | Phase 0 may change the shipped *Export Word (keeps your formatting)* output | **Yes.** It is strictly better output, and it is what makes Accept All trustworthy. |
+| 7 | Where a provision added right after a section's last paragraph lands (Phase 0 deviation 7) — ratified 2026-09-22 | **Keep today's placement:** after the break, at the top of the next section, because a break stays with the content above it. The alternative was Word's own Enter behaviour, which keeps the new text in the section. |
 
 ## Risks
 
@@ -754,5 +895,8 @@ binding on every phase; changing one is a new decision, recorded here.
   imported with every change Build-a-Spec made shown as Word tracked
   changes; your fonts, headers, footers and numbering are untouched. In
   Word, Accept All gives you the updated section and Reject All gives you
-  your original back, so you can review it, save it, and use it to replace
-  your master."
+  your original back — the app checks both before it hands you the file —
+  so you can review it, save it, and use it to replace your master. If your
+  master already carries someone's tracked changes, accept or reject them in
+  Word and import it again first; the redline of extracted provisions still
+  works either way."

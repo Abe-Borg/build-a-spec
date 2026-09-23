@@ -980,7 +980,7 @@ function Dossier() {
               This is still the most expensive action in the app. Your document
               is sent once per stage rather than once per call: the API caches
               it and every later call in that stage reads the cached copy at a
-              tenth of the price.
+              twentieth of the price.
             </>
           }
           bounds={

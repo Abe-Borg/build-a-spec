@@ -256,6 +256,29 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 ),
             ),
             ReleaseSection(
+                title="What a review costs",
+                items=(
+                    ReleaseItem(
+                        title="Final QC cost estimates are no longer too high",
+                        body=(
+                            "Since 1.20.0 moved Final QC to Claude Opus 5.5, "
+                            "the app counted the text each reviewer re-reads "
+                            "from Anthropic's cache at twice the price "
+                            "Anthropic charges for it. Every Final QC cost it "
+                            "showed was too high — the header's running "
+                            "total, the cost under the Final QC button, "
+                            "Settings → Usage, and each new Final QC report "
+                            "— and the amount it said caching saved was too "
+                            "low. Both are correct now. Only the app's "
+                            "estimate was wrong; your bill from Anthropic "
+                            "was not affected. A Final QC report saved "
+                            "before this update keeps the figure it was "
+                            "saved with."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
                 title="Troubleshooting",
                 items=(
                     ReleaseItem(

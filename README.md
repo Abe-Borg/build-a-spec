@@ -1757,9 +1757,11 @@ meter) and still current:
 - **Cost & usage meter.** A live `≈ $0.42 this session` ticker in the
   header opens a by-category usage table (tokens in/out, cache read/write,
   web searches, estimated dollars) with a "prompt caching saved ≈ $X"
-  line. Estimates come from a verified list-pricing table (Sonnet 5 at the
-  post-intro rate so the meter never under-reports); the trace files stay
-  the exact record. Per-session — reset and project load zero it out.
+  line. Estimates come from a list-pricing table checked against
+  Anthropic's published rates (most recently on 2026-09-23); the trace
+  files stay the exact record. Per-session — reset and project load zero
+  it out. Cache **reads are priced per model**: a tenth of the input price
+  on most models, a twentieth on Claude Opus 5.5, the Final QC model.
   Cache **writes are priced per TTL class**: a five-minute entry costs
   1.25× input to create, a one-hour entry 2×. The provider reports the
   one-hour count inside the cache-creation total, so the meter charges the

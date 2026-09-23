@@ -642,9 +642,11 @@ built too: its backend is in v1.21.0, and its Export-menu item and *Open
 redline in Word* are on `master`, with no release entry yet — which release
 announces the redline is the owner's pick. So are fixes for the two losses
 Phase 1 recorded in the formatted export (links, and the level of a new
-sub-provision — below). Phase 2 lands as two pull requests: first real
+sub-provision — below). Phase 2 landed as two pull requests: first real
 Microsoft Word as the redline's judge (PR #197, below), then Word's own "Moved"
-marks, so the program is still in progress.
+marks (below) — built before anyone had run that judge on Windows, a gate the
+owner waived, so a switch turns them off. The program is still in progress
+(Phase 3 is optional).
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)
 
@@ -735,10 +737,11 @@ given a numbering level of their own — never their text.
   formatting. In a master with typed letters, a provision relettered by an
   insert above it shows the letter change (the only way Reject All can give
   your letters back); in a Word-numbered master Word renumbers itself.
-- **A move is a deletion where it was and an insertion where it is** (Word's
-  own "Moved" marks are the next phase). A deleted table shows every row
-  deleted. Section breaks never move and are never deleted: deleting the
-  provision that ends a section deletes its words and keeps the break.
+- **A provision moved unchanged shows as Word's own "Moved" marks** (Phase 2,
+  below); any other move is a deletion where it was and an insertion where it
+  is. A deleted table shows every row deleted. Section breaks never move and
+  are never deleted: deleting the provision that ends a section deletes its
+  words and keeps the break.
 - **Refused by name, never wrong.** A master that already carries someone's
   tracked changes is refused with the fix (accept or reject them in Word,
   save, import again) — Track Changes merely switched on is fine. So are a
@@ -841,9 +844,54 @@ real Word can check it too.
   producer gains a `TrackedMove` recipe: Word moves two paragraphs (one with
   a bookmark) with Track Changes on, under a placeholder author, and the
   judge checks the app's resolver agrees with how Word resolves them. That
-  sample is what Word's own "Moved" marks will be built against. The recipe
-  sets a placeholder Word user name and restores yours when it finishes, and
-  refuses to keep a file that names you anywhere.
+  sample was meant to come before Word's own "Moved" marks were built; they
+  were built without it (below), so it is now the check that confirms them
+  when the owner produces it. The recipe sets a placeholder Word user name
+  and restores yours when it finishes, and refuses to keep a file that names
+  you anywhere.
+
+### Word's own "Moved" marks (Phase 2, second half)
+
+On `master` with no release entry yet; the plan carries the release-note
+draft. **Built without real Word's verdict:** the plan made this wait for the
+owner's Windows run of the judge above and Word's own tracked-move sample, and
+the owner waived that on 2026-09-23. So it ships behind a switch
+(`BUILD_A_SPEC_REDLINE_NATIVE_MOVES`, on by default; `0` gives back the
+deletion-plus-insertion rendering, byte for byte), and the plan lists what a
+Word run should check first.
+
+- **A provision you moved without changing it shows as moved.** Where it was,
+  its words and its paragraph mark are marked moved away (`w:moveFrom`); where
+  it is, moved here (`w:moveTo`); the two carry one name, which is how Word
+  pairs the two halves of one move (real Word has yet to confirm how it shows
+  them — the plan lists that first among the checks). A
+  provision and its sub-provisions moved together, or a run of siblings
+  moved together, is one move. Moved-away text stays ordinary text, as in
+  Word's own files.
+- **Word's own shape.** Each move's range opens inside its first paragraph,
+  right after the paragraph's properties, and closes between paragraphs right
+  after its last one, so every moved paragraph mark sits inside the range —
+  what Word writes and ECMA-376 requires (§17.13.5.21–.28). Every range and
+  wrapper takes an id from the one counter the export already numbers its
+  changes from, above everything in your file.
+- **Only pure moves.** A move that also changed — in a master with typed
+  letters, a provision relettered by its move counts — stays a deletion plus
+  an insertion, and so does a moved provision holding a section break, the
+  document's last paragraph (Word cannot track its mark), a table or other
+  preserved block, and a provision holding anything but plain text, tabs,
+  breaks, bookmarks and links (a field, a picture, a text box, a content
+  control). The export event counts each (`moves_native`, and
+  `moves_fallback` by reason).
+- **Never a new refusal.** The export's self-check proves Accept All and
+  Reject All as before, and adds a structural check of the moves themselves:
+  every name pairs one moved-from range with one moved-to range, every range
+  is closed, ranges do not overlap, and moved content sits only inside its
+  range. If the native version fails any check it is rendered again without
+  Moved marks (counted as `self_check`) before anything is refused. On the
+  corpus and the suite's own masters that has never happened.
+- **Unchanged:** the one Reject-All limit (a moved provision's bookmarks stay
+  with its new copy), and the refusal of a moved provision carrying a comment
+  or footnote reference.
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -2347,6 +2395,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_LENS` | `8` | web_search allowance for the other lenses + verifiers. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE` | `8` | web_fetch allowance for the code-compliance lens. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_LENS` | `4` | web_fetch allowance for the other lenses + verifiers. |
+| `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` | `1` | In the redline on your original, show a provision you moved without changing it as Word's own "Moved" marks (`w:moveFrom` where it was and `w:moveTo` where it is) instead of a deletion there and an insertion here. On by default since redline Phase 2 PR B, which was built without real Word's verdict on it (the owner waived that gate on 2026-09-23). `0` gives back the Phase 1 rendering, byte for byte — the switch to reach for if Word ever shows a native move wrongly. Either way the export checks that Accept All gives the formatted export and Reject All your original before handing the file over, and a native rendering that fails that check is rendered again without Moved marks. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_NATIVE_MOVES = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0`. |
 | `BUILD_A_SPEC_PORT` | `8756` | Fixed loopback backend port used only in Vite development. Packaged/browser production pre-binds an exclusive OS-assigned ephemeral loopback port per launch. |
 | `BUILD_A_SPEC_DEV` | off | Point the window at the Vite dev server. |
 | `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). Traces may contain document text; treat them as sensitive project data. `0` disables. |

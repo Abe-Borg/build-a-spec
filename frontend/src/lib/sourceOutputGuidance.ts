@@ -41,7 +41,7 @@ export const SOURCE_OUTPUT_GUIDANCE: readonly SourceOutputGuidance[] = [
     id: "redline-original",
     label: "Redline on your original",
     description:
-      "A copy of the Word file you imported with every change since the import shown as a Word tracked change by Build-a-Spec; every part of the file outside the document body is your upload's, byte for byte. In Word, Accept All gives exactly what Export Word (keeps your formatting) produces and Reject All gives your original back. The app checks both before it hands the file over, and refuses with the reason rather than deliver one that fails. One limit: a provision you moved keeps its bookmarks at its new position, so Reject All does not restore them where it was. A master that already carries tracked changes is refused, with the fix named: accept or reject them in Word, save, and import the file again.",
+      "A copy of the Word file you imported with every change since the import shown as a Word tracked change by Build-a-Spec; every part of the file outside the document body is your upload's, byte for byte. In Word, Accept All gives exactly what Export Word (keeps your formatting) produces and Reject All gives your original back. The app checks both before it hands the file over, and refuses with the reason rather than deliver one that fails. A provision you moved without changing it shows as Word's own Moved marks; one that also changed shows as a deletion and an insertion. One limit: a provision you moved keeps its bookmarks at its new position, so Reject All does not restore them where it was. A master that already carries tracked changes is refused, with the fix named: accept or reject them in Word, save, and import the file again.",
   },
   {
     id: "normalized-redline",

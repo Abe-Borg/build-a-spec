@@ -1272,6 +1272,20 @@ function Dossier() {
                 reject them in Word, save, and import the file again.
               </p>
               <p className="mt-2">
+                A provision you moved without changing it is shown with{" "}
+                <b className="text-ink">Word’s own Moved marks</b>, and the
+                same check confirms every move is well formed: each move’s
+                name pairs one moved-from range with one moved-to range, every
+                range is closed, and moved text sits only inside its range. A
+                move that also changed — in a typed-letter master, a new letter
+                counts — stays a deletion plus an insertion. If the Moved-mark
+                version fails any check, the export shows those moves as a
+                deletion plus an insertion instead of refusing. Real Word has
+                not yet checked the Moved marks themselves (the owner chose to
+                ship them first); setting{" "}
+                <code>BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0</code> turns them off.
+              </p>
+              <p className="mt-2">
                 Two exceptions, both disclosed. A provision you moved keeps its
                 bookmarks at its new position, so Reject All restores its text
                 and formatting where it was, but not its bookmarks. And because

@@ -5118,6 +5118,8 @@ def create_app(
                 author=settings.APP_NAME,
                 date=_revision_timestamp(),
                 stats=stats,
+                # Read per request, never bound at import (Phase 2 PR B).
+                native_moves=settings.REDLINE_NATIVE_MOVES,
             )
         except SourceRedlineError as exc:
             if refusal is not None:

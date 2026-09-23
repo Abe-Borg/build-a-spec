@@ -678,6 +678,20 @@ CHAT_CONTEXT_BACKSTOP_FRACTION = 0.85
 # a cache read. A summary is capped far below this; the headroom is thinking.
 CHAT_COMPACTION_MAX_TOKENS = 64_000
 
+# --- Redline on your original (redline plan Phase 2) --------------------------
+
+# Whether the redline on your original shows a provision moved unchanged as
+# Word's own "Moved" marks (w:moveFrom where it was, w:moveTo where it is,
+# paired by name) instead of a tracked deletion plus a tracked insertion. ON by
+# default since Phase 2 PR B, which the owner had built without real Word's
+# verdict on it (2026-09-23 — the gate that plan set was waived, not passed).
+# ``0`` gives the Phase 1 rendering back, byte for byte, which is the switch to
+# reach for if Word ever shows a native move wrongly. Read by the export route
+# at call time. Either way the export checks its own promise (Accept All is
+# the formatted export, Reject All the upload) before it hands anything over,
+# and a native render that fails that check is rendered again without them.
+REDLINE_NATIVE_MOVES = _bool_env("BUILD_A_SPEC_REDLINE_NATIVE_MOVES", True)
+
 # --- Server -----------------------------------------------------------------
 
 HOST = "127.0.0.1"

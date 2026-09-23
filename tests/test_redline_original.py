@@ -41,9 +41,11 @@ from backend.spec_doc.revisions import (
     accept_all,
     first_difference,
     has_revisions,
+    move_range_problem,
     reject_all,
 )
 from backend.spec_doc.source_render import (
+    MOVE_FALLBACK_REASONS,
     SourceRedlineError,
     render_preserving_docx,
     render_preserving_redline,
@@ -106,19 +108,53 @@ def _highest_id(source: bytes) -> int:
     return highest
 
 
+#: Everything the writer stamps with an id, the author and the date: the
+#: revisions, and (Phase 2, PR B) the named range starts of a native move.
+_STAMPED = frozenset(
+    qn(f"w:{name}")
+    for name in (
+        "ins",
+        "del",
+        "pPrChange",
+        "rPrChange",
+        "moveFrom",
+        "moveTo",
+        "moveFromRangeStart",
+        "moveToRangeStart",
+    )
+)
+_MOVE_MARKUP = frozenset(
+    qn(f"w:{name}")
+    for name in (
+        "moveFrom",
+        "moveTo",
+        "moveFromRangeStart",
+        "moveFromRangeEnd",
+        "moveToRangeStart",
+        "moveToRangeEnd",
+    )
+)
+
+
 def _revisions(body) -> list:
     return [
         element
         for element in body.iter()
-        if isinstance(element.tag, str)
-        and element.tag
-        in (qn("w:ins"), qn("w:del"), qn("w:pPrChange"), qn("w:rPrChange"))
+        if isinstance(element.tag, str) and element.tag in _STAMPED
+    ]
+
+
+def _move_markup(body) -> list:
+    return [
+        element
+        for element in body.iter()
+        if isinstance(element.tag, str) and element.tag in _MOVE_MARKUP
     ]
 
 
 def _assert_schema_order(body) -> None:
     """What Word is strict about (D-6)."""
-    flags = (qn("w:ins"), qn("w:del"))
+    flags = (qn("w:ins"), qn("w:del"), qn("w:moveFrom"), qn("w:moveTo"))
     for properties in body.iter(qn("w:pPr")):
         tags = [c.tag for c in properties if isinstance(c.tag, str)]
         if qn("w:rPr") in tags:
@@ -163,11 +199,13 @@ def _wrapped_custom_xml(body) -> list:
 
 
 def _inserted_bookmarks(body) -> set[str]:
-    """Bookmarks that sit in content a ``w:ins`` wraps — on a moved copy."""
+    """Bookmarks that sit in content a ``w:ins`` or ``w:moveTo`` wraps — on
+    a moved copy."""
     names = set()
     for start in body.iter(qn("w:bookmarkStart")):
         if any(
-            a.tag == qn("w:ins") and a.getparent().tag != qn("w:rPr")
+            a.tag in (qn("w:ins"), qn("w:moveTo"))
+            and a.getparent().tag != qn("w:rPr")
             for a in start.iterancestors()
         ):
             names.add(start.get(qn("w:name")))
@@ -181,6 +219,7 @@ def _verify(
     *,
     moved_bookmarks=frozenset(),
     allow_moved_bookmarks: bool = False,
+    native_moves: bool = False,
 ):
     """Render the redline and assert the whole promise. Returns the redline
     bytes and the export stats.
@@ -188,7 +227,10 @@ def _verify(
     ``moved_bookmarks`` names the bookmarks a test expects to travel with a
     moved copy (the one Reject-All limit, D-6); ``allow_moved_bookmarks``
     instead admits whichever bookmarks the redline itself carries on an
-    inserted copy — for sweeps whose edits are not written by hand."""
+    inserted copy — for sweeps whose edits are not written by hand.
+    ``native_moves`` renders Word's own "Moved" marks (Phase 2, PR B) and
+    then also holds them to the structural move check; off, the redline
+    must carry no move markup at all."""
     stats: dict = {}
     redline = render_preserving_redline(
         source_bytes=source,
@@ -198,6 +240,7 @@ def _verify(
         author=AUTHOR,
         date=DATE,
         stats=stats,
+        native_moves=native_moves,
     )
     clean = render_preserving_docx(
         source_bytes=source, format_map=imported.format_map, current=section
@@ -240,13 +283,33 @@ def _verify(
     # ([MS-OI29500] §2.1.188(a)) — which neither resolution above can see.
     assert _wrapped_custom_xml(r_body) == []
 
-    # No tracked change ever deletes a mark holding a section break.
+    # No tracked change ever deletes (or moves away) a mark holding a
+    # section break.
     for paragraph in r_body.iter(qn("w:p")):
         properties = paragraph.find(qn("w:pPr"))
         if properties is None or properties.find(qn("w:sectPr")) is None:
             continue
         mark = properties.find(qn("w:rPr"))
-        assert mark is None or mark.find(qn("w:del")) is None
+        assert mark is None or (
+            mark.find(qn("w:del")) is None and mark.find(qn("w:moveFrom")) is None
+        )
+
+    # Native moves (Phase 2, PR B): well-formed ranges, every move counted
+    # once — shown natively or falling back for a named reason — and the
+    # self-check fallback never needed. Off, no move markup at all.
+    tracked = stats["redline"]
+    assert tracked["native_moves"] is native_moves
+    if native_moves:
+        assert move_range_problem(r_body) is None
+        assert set(tracked["moves_fallback"]) <= MOVE_FALLBACK_REASONS
+        assert tracked["moves_native"] + sum(tracked["moves_fallback"].values()) == (
+            tracked["moved"]
+        ), tracked
+        assert "self_check" not in tracked["moves_fallback"], tracked
+        assert "unpaired" not in tracked["moves_fallback"], tracked
+    else:
+        assert _move_markup(r_body) == []
+        assert tracked["moves_native"] == 0 and tracked["moves_fallback"] == {}
     return redline, stats
 
 
@@ -558,6 +621,14 @@ def test_the_writer_never_deletes_a_mark_that_holds_a_section_break():
     marks = RevisionMarks(author=AUTHOR, date=DATE, first_id=10)
     with pytest.raises(AssertionError):
         mark_paragraph(paragraph, "w:del", marks)
+    # Nor moved away (Phase 2, PR B): Accept All removes a moved-away
+    # paragraph's mark just the same. Moved here is allowed; anything that
+    # is not a paragraph-mark revision is refused outright.
+    with pytest.raises(AssertionError):
+        mark_paragraph(paragraph, "w:moveFrom", marks)
+    mark_paragraph(paragraph, "w:moveTo", marks)
+    with pytest.raises(ValueError):
+        mark_paragraph(paragraph, "w:pPrChange", marks)
 
 
 def test_neutralizing_the_last_paragraph_leaves_a_section_break_where_it_is():
@@ -1214,8 +1285,9 @@ _CUSTOM_XML_ROWS = {
 }
 
 
+@pytest.mark.parametrize("native", [False, True], ids=["phase-1", "native-moves"])
 @pytest.mark.parametrize("row", sorted(_CUSTOM_XML_ROWS))
-def test_inline_custom_xml_is_tracked_from_inside_never_wrapped(tmp_path, row):
+def test_inline_custom_xml_is_tracked_from_inside_never_wrapped(tmp_path, row, native):
     """[MS-OI29500] §2.1.188(a): "Word will fail to load a file if ins, del,
     moveTo, or moveFrom contains inline customXml." The schema allows it,
     and the self-check's resolvers read it fine, so nothing else would
@@ -1224,13 +1296,21 @@ def test_inline_custom_xml_is_tracked_from_inside_never_wrapped(tmp_path, row):
     edited (the fallback — the splice cannot map custom XML), moved (both
     copies), in a deleted table's cell, and as an emptied break holder.
     Every row keeps the whole promise (``_verify``), and no ``w:customXml``
-    has a ``w:ins``/``w:del``/``w:moveFrom``/``w:moveTo`` ancestor."""
+    has a ``w:ins``/``w:del``/``w:moveFrom``/``w:moveTo`` ancestor — with
+    Word's own "Moved" marks on too (the app's default), where a paragraph
+    holding custom XML never travels as a native move: it keeps this
+    rendering (``moves_fallback["markup"]``)."""
     options, edits, tracked_inside, (stat, minimum) = _CUSTOM_XML_ROWS[row]
     source = _custom_xml_master(**options)
     imported = _parse(tmp_path, source)
     section = _edit(imported.section, *edits(imported.section))
-    redline, stats = _verify(source, imported, section)
+    redline, stats = _verify(source, imported, section, native_moves=native)
     assert stats["redline"][stat] >= minimum, stats["redline"]
+    if native:
+        assert stats["redline"]["moves_native"] == 0
+        assert stats["redline"]["moves_fallback"] == (
+            {"markup": 1} if row == "moved" else {}
+        )
     body = _body(redline)
     elements = list(body.iter(qn("w:customXml")))
     assert elements, "the custom XML elements are part of the redline"
@@ -1984,6 +2064,422 @@ def test_a_moved_provision_with_a_comment_is_refused_by_name(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Native moves (Phase 2, PR B): Word's own "Moved" marks
+# ---------------------------------------------------------------------------
+
+
+def _numbered_article(document, provisions, *, num_id: str = "60") -> None:
+    """``provisions``: ``(text, level)`` pairs under one Word-numbered
+    article (level 2 = "A.", 3 = "1.", …)."""
+    from tests.test_importer import _numbered
+
+    _numbered(document, "SUMMARY", 1, num_id)
+    for text, level in provisions:
+        _numbered(document, text, level, num_id)
+
+
+def _numbered_family_master(*, link: bool = False, bookmark: bool = False) -> bytes:
+    """A Word-numbered master: a provision with two sub-provisions, then
+    three more provisions. ``link`` puts a hyperlink in the fourth provision;
+    ``bookmark`` wraps the third in a bookmark."""
+    from tests.docx_fidelity_helpers import _append_hyperlink
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    _define_numbering(document, 60, _DEEP_LEVELS)
+    _numbered(document, "SUMMARY", 1, "60")
+    _numbered(document, "Section includes:", 2, "60")
+    _numbered(document, "Spring isolators.", 3, "60")
+    _numbered(document, "Seismic restraints.", 3, "60")
+    related = _numbered(document, "Related requirements.", 2, "60")
+    if bookmark:
+        first = related._p.find(qn("w:r"))
+        start = etree.Element(qn("w:bookmarkStart"))
+        start.set(qn("w:id"), "44")
+        start.set(qn("w:name"), "_Ref44")
+        first.addprevious(start)
+        etree.SubElement(related._p, qn("w:bookmarkEnd")).set(qn("w:id"), "44")
+    quality = _numbered(document, "Quality assurance per ", 2, "60")
+    if link:
+        _append_hyperlink(quality, "the client standard", "https://example.com/std")
+        quality.add_run(" for mechanical equipment.")
+    _numbered(document, "Warranty.", 2, "60")
+    _numbered(document, "Delivery.", 2, "60")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def _provisions(section):
+    return section.parts[0].articles[0].paragraphs
+
+
+def _move(section, target, position):
+    return _edit(section, {"action": "move", "target_id": target.uid, "position": position})
+
+
+def _moved_texts(body, side: str) -> list[str]:
+    """The text of every paragraph whose mark is flagged ``w:<side>``."""
+    out = []
+    for paragraph in body.iter(qn("w:p")):
+        if paragraph.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn(f'w:{side}')}") is None:
+            continue
+        out.append("".join(t.text or "" for t in paragraph.iter(qn("w:t"))))
+    return out
+
+
+def _move_names(body, side: str) -> list[str]:
+    return [
+        start.get(qn("w:name"))
+        for start in body.iter(qn(f"w:{side}RangeStart"))
+    ]
+
+
+def test_a_pure_move_is_shown_as_words_moved(tmp_path):
+    """The headline shape: a provision moved unchanged, in a master Word
+    numbers itself. Where it was, its mark and its run are ``w:moveFrom``;
+    where it is, ``w:moveTo``; the two ranges share one name. The text
+    moved away stays ``w:t`` (a move is not a deletion), and no
+    ``w:ins``/``w:del`` is written at all."""
+    source = _numbered_master()
+    imported = _parse(tmp_path, source)
+    provisions = _provisions(imported.section)
+    section = _move(imported.section, provisions[2], 0)
+    redline, stats = _verify(source, imported, section, native_moves=True)
+    body = _body(redline)
+    assert stats["redline"]["moves_native"] == 1
+    assert stats["redline"]["moves_fallback"] == {}
+    assert _moved_texts(body, "moveTo") == ["Provide isolators as scheduled."]
+    assert _moved_texts(body, "moveFrom") == ["Provide isolators as scheduled."]
+    assert body.find(f".//{qn('w:delText')}") is None
+    assert not [e for e in body.iter(qn("w:ins"), qn("w:del"))]
+    (name,) = _move_names(body, "moveFrom")
+    assert _move_names(body, "moveTo") == [name]
+    for side in ("moveFrom", "moveTo"):
+        (paragraph,) = [
+            p for p in body.iter(qn("w:p"))
+            if p.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn(f'w:{side}')}") is not None
+        ]
+        tags = [etree.QName(c).localname for c in paragraph]
+        # Word's own shape (the RP015 sample): the range opens first after
+        # the paragraph's properties and closes BETWEEN paragraphs, right
+        # after it — so it holds every word and the mark, the paragraph's
+        # end, that it moves.
+        assert tags == ["pPr", f"{side}RangeStart", side], tags
+        start = paragraph.find(qn(f"w:{side}RangeStart"))
+        end = paragraph.getnext()
+        assert end.tag == qn(f"w:{side}RangeEnd")
+        assert end.get(qn("w:id")) == start.get(qn("w:id"))
+        assert dict(end.attrib) == {qn("w:id"): start.get(qn("w:id"))}
+        assert start.get(qn("w:author")) == AUTHOR and start.get(qn("w:date")) == DATE
+
+
+def test_a_move_with_children_is_one_named_move(tmp_path):
+    """A provision and its two sub-provisions moved below their siblings:
+    one name, its moved-from range opened in the parent's paragraph and
+    closed in the last child's."""
+    source = _numbered_family_master()
+    imported = _parse(tmp_path, source)
+    parent = _provisions(imported.section)[0]
+    section = _move(imported.section, parent, 2)
+    redline, stats = _verify(source, imported, section, native_moves=True)
+    body = _body(redline)
+    assert stats["redline"]["moves_native"] == 3
+    family = ["Section includes:", "Spring isolators.", "Seismic restraints."]
+    assert _moved_texts(body, "moveFrom") == family
+    assert _moved_texts(body, "moveTo") == family
+    assert len(_move_names(body, "moveFrom")) == 1
+    assert _move_names(body, "moveTo") == _move_names(body, "moveFrom")
+
+
+def test_a_block_of_moved_siblings_is_one_named_move(tmp_path):
+    """The last two provisions moved to the top, one after the other: they
+    move as a block, so Word shows one move, not two."""
+    source = _numbered_family_master()
+    imported = _parse(tmp_path, source)
+    provisions = _provisions(imported.section)
+    section = _move(imported.section, provisions[-2], 0)
+    section = _move(section, _provisions(section)[-1], 1)
+    redline, stats = _verify(source, imported, section, native_moves=True)
+    body = _body(redline)
+    assert _moved_texts(body, "moveTo") == ["Warranty.", "Delivery."]
+    assert _moved_texts(body, "moveFrom") == ["Warranty.", "Delivery."]
+    assert len(_move_names(body, "moveFrom")) == 1
+    assert stats["redline"]["moves_native"] == 2
+
+
+def test_separate_moves_carry_separate_names(tmp_path):
+    """Two provisions moved to places apart from each other: two moves,
+    each name pairing one range with one."""
+    source = _numbered_family_master()
+    imported = _parse(tmp_path, source)
+    provisions = _provisions(imported.section)
+    section = _move(imported.section, provisions[-1], 0)  # Delivery to the top
+    section = _move(section, _provisions(section)[2], 4)  # Related below Quality
+    redline, stats = _verify(source, imported, section, native_moves=True)
+    body = _body(redline)
+    names = _move_names(body, "moveFrom")
+    assert len(names) == len(set(names)) == stats["redline"]["moves_native"] == 2
+    assert sorted(_move_names(body, "moveTo")) == sorted(names)
+
+
+def _numbered_two_break_master() -> bytes:
+    """Three Word-numbered provisions with an empty section-break paragraph
+    between each."""
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    _define_numbering(document, 60, _DEEP_LEVELS)
+    _numbered(document, "SUMMARY", 1, "60")
+    _numbered(document, "First provision.", 2, "60")
+    _hold_break(document.add_paragraph(), document)
+    _numbered(document, "Second provision.", 2, "60")
+    _hold_break(document.add_paragraph(), document)
+    _numbered(document, "Third provision.", 2, "60")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def test_a_move_a_section_break_forced_is_native_too(tmp_path):
+    """Reversing three provisions across two breaks: the breaks stay where
+    the clean export put them, which forces a move the diff did not report
+    (``moves_added``). Unchanged, it is shown as a native move all the
+    same."""
+    source = _numbered_two_break_master()
+    imported = _parse(tmp_path, source)
+    first, second, third = (p.uid for p in _provisions(imported.section))
+    section = _edit(
+        imported.section,
+        {"action": "move", "target_id": third, "position": 0},
+        {"action": "move", "target_id": first, "position": 2},
+    )
+    redline, stats = _verify(source, imported, section, native_moves=True)
+    tracked = stats["redline"]
+    assert tracked["moves_added"] >= 1
+    assert tracked["moves_native"] == tracked["moved"] == 2
+    breaks = [
+        p for p in _body(redline).iter(qn("w:p"))
+        if p.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is not None
+    ]
+    assert len(breaks) == 2 and all(
+        p.find(f"{qn('w:pPr')}/{qn('w:rPr')}") is None for p in breaks
+    )
+
+
+def test_a_move_in_a_style_numbered_master(tmp_path):
+    """The office-master shape: the numbering rides the PR1 style."""
+    source = _style_numbered_master()
+    imported = _parse(tmp_path, source)
+    provisions = _provisions(imported.section)
+    section = _move(imported.section, provisions[1], 0)
+    redline, stats = _verify(source, imported, section, native_moves=True)
+    assert stats["redline"]["moves_native"] == 1
+    assert _moved_texts(_body(redline), "moveTo") == ["Related requirements."]
+
+
+def test_a_moved_provision_holding_a_link_keeps_the_link_whole(tmp_path):
+    """The move wrappers go inside a hyperlink, never around one — the
+    ``w:ins``/``w:del`` rule — and the link is written once each side."""
+    source = _numbered_family_master(link=True)
+    imported = _parse(tmp_path, source)
+    provisions = _provisions(imported.section)
+    quality = next(p for p in provisions if p.text.startswith("Quality"))
+    section = _move(imported.section, quality, 0)
+    redline, stats = _verify(source, imported, section, native_moves=True)
+    body = _body(redline)
+    assert stats["redline"]["moves_native"] == 1
+    links = list(body.iter(qn("w:hyperlink")))
+    assert len(links) == 2
+    wrappers = {etree.QName(c).localname for link in links for c in link}
+    assert wrappers == {"moveFrom", "moveTo"}
+    for link in links:
+        assert not any(
+            a.tag in (qn("w:moveFrom"), qn("w:moveTo")) for a in link.iterancestors()
+        )
+
+
+def test_a_native_move_keeps_its_bookmarks_on_the_new_copy(tmp_path):
+    """D-6 is unchanged: the moved-to copy keeps the bookmark, the moved-from
+    copy gives it up, and no name appears twice."""
+    source = _numbered_family_master(bookmark=True)
+    imported = _parse(tmp_path, source)
+    related = _provisions(imported.section)[1]
+    section = _move(imported.section, related, 0)
+    redline, stats = _verify(
+        source, imported, section, native_moves=True, moved_bookmarks={"_Ref44"}
+    )
+    body = _body(redline)
+    assert stats["redline"]["moves_native"] == 1
+    (start,) = list(body.iter(qn("w:bookmarkStart")))
+    assert any(a.tag == qn("w:moveTo") for a in start.iterancestors())
+
+
+def test_with_the_switch_off_a_move_is_a_deletion_and_an_insertion(tmp_path):
+    """The Phase 1 rendering, untouched: no move markup anywhere."""
+    source = _numbered_master()
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[2], 0)
+    off, stats = _verify(source, imported, section)
+    body = _body(off)
+    assert _move_markup(body) == []
+    assert _tracked(off, "w:del") == ["Provide isolators as scheduled."]
+    assert _tracked(off, "w:ins") == ["Provide isolators as scheduled."]
+    assert stats["redline"]["native_moves"] is False
+
+
+def _numbered_field_master() -> bytes:
+    """A Word-numbered master whose second provision holds a PAGE field."""
+    from tests.docx_fidelity_helpers import _append_page_field
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    _define_numbering(document, 60, _DEEP_LEVELS)
+    _numbered(document, "SUMMARY", 1, "60")
+    _numbered(document, "Section includes vibration isolation.", 2, "60")
+    _append_page_field(_numbered(document, "See page ", 2, "60"))
+    _numbered(document, "Related requirements.", 2, "60")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def _fallback_case(name: str):
+    """Each fallback reason, on the master that earns it: ``(source,
+    section-builder)``."""
+    if name == "edited":
+        # Typed letters: the moved provision is relettered B. -> A.
+        return _nested_master(), lambda s: _move(s, _provisions(s)[1], 0)
+    if name == "section_break":
+        # The moved provision holds the section break in its own w:pPr.
+        return _numbered_holder_master(), lambda s: _move(s, _provisions(s)[1], 0)
+    if name == "last_paragraph":
+        # The body's last paragraph moves (no END OF SECTION follows it).
+        return _formatted_to_the_end_master("numbered"), lambda s: _move(
+            s, _provisions(s)[1], 0
+        )
+    if name == "locked":
+        # A schedule table moved below the provisions.
+        return _schedule_first_master(), lambda s: _edit(
+            s,
+            {
+                "action": "move",
+                "target_id": next(p for p in _provisions(s) if p.locked == "table").uid,
+                "position": len(_provisions(s)) - 1,
+            },
+        )
+    if name == "markup":
+        # The moved provision holds a Word field.
+        return _numbered_field_master(), lambda s: _move(s, _provisions(s)[1], 0)
+    raise AssertionError(name)
+
+
+@pytest.mark.parametrize(
+    "reason", ["edited", "section_break", "last_paragraph", "locked", "markup"]
+)
+def test_every_fallback_reason_keeps_the_phase_1_rendering(tmp_path, reason):
+    """A move that is not pure, or not safe to show natively, stays a
+    deletion plus an insertion, named by its reason — and the promise holds
+    either way."""
+    source, build = _fallback_case(reason)
+    imported = _parse(tmp_path, source)
+    section = build(imported.section)
+    redline, stats = _verify(source, imported, section, native_moves=True)
+    tracked = stats["redline"]
+    assert tracked["moves_fallback"] == {reason: 1}, tracked
+    assert tracked["moves_native"] == 0
+    assert _move_markup(_body(redline)) == []
+    # ...and exactly the file the switch-off rendering gives.
+    off, _ = _verify(source, imported, section)
+    assert off == redline
+
+
+def test_a_native_render_that_fails_its_check_is_rendered_again_without(
+    tmp_path, monkeypatch
+):
+    """Native moves never turn an export that works into a refusal: when the
+    native rendering fails a check, the export renders again without Moved
+    marks and counts the moves that lost them (``self_check``)."""
+    from backend.spec_doc import revisions
+
+    source = _numbered_master()
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[2], 0)
+    off, _ = _verify(source, imported, section)
+    monkeypatch.setattr(revisions, "move_range_problem", lambda _body: "unpaired_name")
+    stats: dict = {}
+    redline = render_preserving_redline(
+        source_bytes=source,
+        format_map=imported.format_map,
+        baseline=imported.section,
+        current=section,
+        author=AUTHOR,
+        date=DATE,
+        stats=stats,
+        native_moves=True,
+    )
+    assert redline == off
+    tracked = stats["redline"]
+    assert tracked["native_moves"] is False
+    assert tracked["moves_native"] == 0
+    assert tracked["moves_fallback"] == {"self_check": 1}
+
+
+def test_a_refusal_the_phase_1_rendering_earns_is_not_retried(tmp_path):
+    """A refusal that has nothing to do with moves (a moved comment) is the
+    same with the switch on as off — and nothing is rendered twice for it."""
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    from tests.test_importer import _define_numbering, _numbered
+
+    _define_numbering(document, 60, _DEEP_LEVELS)
+    _numbered(document, "SUMMARY", 1, "60")
+    _numbered(document, "Section includes vibration isolation.", 2, "60")
+    annotated = _numbered(document, "Related requirements.", 2, "60")
+    etree.SubElement(annotated._p, qn("w:commentRangeStart")).set(qn("w:id"), "3")
+    annotated._p.append(annotated._p.find(qn("w:r")))
+    etree.SubElement(annotated._p, qn("w:commentRangeEnd")).set(qn("w:id"), "3")
+    document.add_paragraph("END OF SECTION")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[1], 0)
+    for native in (False, True):
+        with pytest.raises(SourceRedlineError) as caught:
+            render_preserving_redline(
+                source_bytes=source,
+                format_map=imported.format_map,
+                baseline=imported.section,
+                current=section,
+                author=AUTHOR,
+                date=DATE,
+                native_moves=native,
+            )
+        assert caught.value.reason == "moved_annotation"
+
+
+def test_move_ids_start_above_the_package_and_names_are_unique(tmp_path):
+    """Every id a native move takes — its wrappers, its flags, its range
+    starts — comes from the one counter above everything already in the
+    package; every name is new."""
+    source = _numbered_family_master(bookmark=True)
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[1], 0)
+    section = _move(section, _provisions(section)[-1], 0)
+    redline, _ = _verify(
+        source, imported, section, native_moves=True, moved_bookmarks={"_Ref44"}
+    )
+    body = _body(redline)
+    starts = list(body.iter(qn("w:moveFromRangeStart"), qn("w:moveToRangeStart")))
+    assert starts and all(int(s.get(qn("w:id"))) > _highest_id(source) for s in starts)
+    names = _move_names(body, "moveFrom")
+    assert len(names) == len(set(names))
+
+
+# ---------------------------------------------------------------------------
 # Sweeps: re-import, and every corpus master under a mix of edits
 # ---------------------------------------------------------------------------
 
@@ -2212,19 +2708,26 @@ _REIMPORT_MASTERS = {
 }
 
 
+@pytest.mark.parametrize("native", [False, True], ids=["phase-1-moves", "native-moves"])
 @pytest.mark.parametrize("master", sorted(_REIMPORT_MASTERS))
 @pytest.mark.parametrize("seed", range(10))
-def test_reimporting_the_redline_reproduces_the_current_tree(tmp_path, master, seed):
+def test_reimporting_the_redline_reproduces_the_current_tree(
+    tmp_path, master, seed, native
+):
     """The Batch 5 invariant, now on your original: the app's own Accept-All
     reader, given the redline, reads back the tree it was exported from —
     for typed letters, and for Word numbering on the paragraph itself or on
     its style. A sub-provision deeper than any the master has takes its own
     numbering level (``_Assembler._nesting_level``); it used to keep its
-    kin's, and came back as its parent's sibling."""
+    kin's, and came back as its parent's sibling. With Word's own "Moved"
+    marks too (Phase 2, PR B): the reader resolves a ``w:moveTo`` like an
+    insertion and a ``w:moveFrom`` like a deletion."""
     source = _REIMPORT_MASTERS[master]()
     imported = _parse(tmp_path, source)
     section = _edit_mix(imported.section, seed, 1 + seed % 6)
-    redline, _ = _verify(source, imported, section, allow_moved_bookmarks=True)
+    redline, _ = _verify(
+        source, imported, section, allow_moved_bookmarks=True, native_moves=native
+    )
     (tmp_path / "redline.docx").write_bytes(redline)
     reread = parse_master_docx(tmp_path / "redline.docx").section
     assert _shape(reread) == _shape(section)
@@ -2344,7 +2847,8 @@ def test_reimporting_the_redline_matches_reimporting_the_formatted_export(tmp_pa
             ), (name, seed)
 
 
-def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path):
+@pytest.mark.parametrize("native", [False, True], ids=["phase-1-moves", "native-moves"])
+def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path, native):
     """Word-saved, LibreOffice-saved and hand-made masters alike: every one,
     run through a scripted mix of edits, keeps both halves of the promise —
     or is refused by name for a structural reason. Never by a failed
@@ -2353,10 +2857,16 @@ def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path):
     The fallback count is the evidence D-2's eligibility is widened from;
     every fallback carries a reason from the closed vocabulary. The corpus
     masters hold plain hyperlinks in their provisions — every fallback of
-    Phase 1's sweep was one — and those are now spliced, never rewritten."""
+    Phase 1's sweep was one — and those are now spliced, never rewritten.
+
+    With Word's own "Moved" marks on (Phase 2, PR B), ``_verify`` also holds
+    every move to the structural check and asserts that the self-check
+    fallback — the native render refused and rendered again without its
+    marks — never fires."""
     from tests.docx_corpus import build_case, corpus_cases
 
     fallbacks: collections.Counter = collections.Counter()
+    moves: collections.Counter = collections.Counter()
     spliced = 0
     produced = 0
     for case in corpus_cases():
@@ -2366,7 +2876,11 @@ def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path):
             section = corpus_sweep_edits(case.case_id, imported.section, seed)
             try:
                 _redline, stats = _verify(
-                    source, imported, section, allow_moved_bookmarks=True
+                    source,
+                    imported,
+                    section,
+                    allow_moved_bookmarks=True,
+                    native_moves=native,
                 )
             except SourceRedlineError as exc:
                 assert exc.reason in STRUCTURAL_REFUSALS, (
@@ -2379,9 +2893,13 @@ def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path):
             produced += 1
             spliced += stats["spliced"]
             fallbacks.update(stats.get("fallback", {}))
+            moves["moved"] += stats["redline"]["moved"]
+            moves["native"] += stats["redline"]["moves_native"]
     assert produced and spliced
     assert set(fallbacks) <= set(FALLBACK_REASONS)
     assert "hyperlink" not in fallbacks
+    assert moves["moved"]  # the mixes do move things
+    assert bool(moves["native"]) is native
 
 
 # ---------------------------------------------------------------------------
@@ -2460,6 +2978,72 @@ def test_the_route_hands_over_the_redline_on_the_original(client):
     assert Document(io.BytesIO(redline)).sections[0].header.paragraphs[0].text == (
         HEADER_TEXT
     )
+
+
+def test_the_route_shows_a_pure_move_natively_and_reads_the_switch_per_request(
+    client, monkeypatch
+):
+    """Phase 2 (PR B): the route passes ``settings.REDLINE_NATIVE_MOVES``,
+    read per request — on, a provision moved unchanged is Word's own
+    "Moved" marks; off, the Phase 1 deletion plus insertion, and nothing
+    else about the file changes."""
+    from backend import settings
+
+    _import(client, _numbered_master())
+    doc = client.get("/api/doc").json()["doc"]
+    moved = doc["parts"][0]["articles"][0]["paragraphs"][2]["id"]
+    assert (
+        client.post(
+            "/api/doc/edit",
+            json={"ops": [{"action": "move", "target_id": moved, "position": 0}]},
+        ).status_code
+        == 200
+    )
+    monkeypatch.setattr(settings, "REDLINE_NATIVE_MOVES", True)
+    native = _export(client, redline="master", mode="preserved")
+    assert native.status_code == 200, native.text
+    body = _body(native.content)
+    assert _move_names(body, "moveFrom") == _move_names(body, "moveTo") != []
+    monkeypatch.setattr(settings, "REDLINE_NATIVE_MOVES", False)
+    phase_1 = _export(client, redline="master", mode="preserved")
+    assert phase_1.status_code == 200
+    assert _move_markup(_body(phase_1.content)) == []
+    assert _tracked(phase_1.content, "w:del") == ["Provide isolators as scheduled."]
+
+
+def test_native_moves_ship_switched_on():
+    """Read from the source, not the loaded value, so a developer's own
+    environment cannot make this pass or fail. On since PR B, which the
+    owner had built without real Word's verdict on it (2026-09-23): the
+    gate was waived, not passed, which is why the switch exists."""
+    import ast
+    from pathlib import Path
+
+    from backend import settings
+
+    source = Path(settings.__file__).read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "REDLINE_NATIVE_MOVES"
+            for target in node.targets
+        ):
+            call = node.value
+            assert isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_bool_env"
+            name, default = (arg.value for arg in call.args)
+            assert name == "BUILD_A_SPEC_REDLINE_NATIVE_MOVES"
+            assert default is True
+            return
+    raise AssertionError("settings.REDLINE_NATIVE_MOVES is gone")
+
+
+def test_the_renderer_defaults_to_the_phase_1_rendering():
+    """``spec_doc`` reads no settings: the renderer's own default is off, so
+    every caller that does not ask — every existing test — gets the Phase 1
+    output, and only the route (and the judge) pass the switch."""
+    import inspect
+
+    parameter = inspect.signature(render_preserving_redline).parameters["native_moves"]
+    assert parameter.default is False
 
 
 def test_a_redline_names_its_mode_or_takes_the_default_for_its_kind(client):

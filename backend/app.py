@@ -170,7 +170,7 @@ from .qc.op_conflicts import (
 )
 from .qc.preflight import module_section_compatibility
 from .spec_modules import AVAILABLE_MODULES, DEFAULT_MODULE
-from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
+from .spec_doc import SpecEditError, diff_sections, open_questions
 from .spec_doc.docx_export import (
     build_docx,
     build_qc_memo,
@@ -1719,9 +1719,8 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         **workspace_fields,
         "doc": session.doc.snapshot(),
         "open_questions": open_questions(session.doc.doc),
-        "lint": lint_document(
+        "lint": session.document_lint(
             session.doc.doc,
-            session.module,
             unstructured_import=session.import_is_unstructured(),
             preserved_chrome=_preserved_chrome(session),
         ),
@@ -2077,9 +2076,8 @@ def _readiness_payload(
             imported += 1
         elif p.status == "assumed":
             assumed += 1
-    lint_items = lint_document(
+    lint_items = session.document_lint(
         doc,
-        session.module,
         unstructured_import=session.import_is_unstructured(),
         preserved_chrome=_preserved_chrome(session),
     )

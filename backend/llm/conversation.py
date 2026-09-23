@@ -79,7 +79,7 @@ import json
 import re
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator
@@ -136,6 +136,7 @@ from ..research import ResearchRunner, research_context_block
 from ..research.grounding import refusal_category, response_container_id
 from .citations import repair_document_citations, request_documents
 from .compaction import (
+    CONTEXT_BOUNDARY_PATTERN,
     MIN_CONDENSE_FRACTION,
     RECALL_CONVERSATION_TOOL,
     CompactionError,
@@ -360,6 +361,14 @@ class SessionState:
         repr=False,
         compare=False,
     )
+    # Memoized ``document_lint`` reports for the committed version the store
+    # is serving (see that method). Derived state like the memos above:
+    # never serialized, cleared on reset and load.
+    _lint_cache: tuple[Any, ...] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     # The background sweep that fills ``_capability_cache`` for a state the
     # memo does not cover yet, and the single state queued behind it (newest
     # request wins — see ``start_capability_warm``). Derived, process-local,
@@ -574,6 +583,57 @@ class SessionState:
         ):
             return False
         return 0 <= baseline_index < len(self.doc.versions)
+
+    def document_lint(
+        self,
+        section: SpecSection,
+        *,
+        unstructured_import: bool = False,
+        preserved_chrome: Iterable[str] = (),
+    ) -> list[dict[str, Any]]:
+        """``lint_document(section, self.module, ...)``, remembered for the
+        committed version ``section`` is.
+
+        Four callers read the same report for the same version — the
+        document payload, the readiness checklist, every chat turn's PROJECT
+        CONTEXT, and a doc-changing turn's ``lint`` event — so each version
+        is linted once and every later reader is handed a copy. Every edit
+        still pays once: a new version is a new key.
+
+        Only the store's live tree at a committed version is remembered — a
+        tree a turn is still editing (``DocumentStore.provisional``), or any
+        other tree, is linted fresh. Every change of document installs a new
+        tree object, so the key is that object and the module, compared by
+        identity (neither is changed in place once published), plus the two
+        lint inputs by value: each caller keeps passing exactly what it
+        always did, including the tree it read everything else from.
+        """
+        store = self.doc
+        module = self.module
+        inputs = (bool(unstructured_import), tuple(preserved_chrome))
+        remember = section is store.doc and not store.provisional
+        reports: dict[tuple[bool, tuple[str, ...]], list[dict[str, Any]]] = {}
+        cached = self._lint_cache
+        if (
+            remember
+            and cached is not None
+            and cached[0] is section
+            and cached[1] is module
+        ):
+            reports = cached[2]
+            if inputs in reports:
+                return [dict(issue) for issue in reports[inputs]]
+        issues = lint_document(
+            section,
+            module,
+            unstructured_import=inputs[0],
+            preserved_chrome=inputs[1],
+        )
+        if remember:
+            # A new mapping rather than an update: a reader holding the old
+            # one never sees it change.
+            self._lint_cache = (section, module, {**reports, inputs: issues})
+        return [dict(issue) for issue in issues]
 
     def claim_model_turn(self) -> tuple[object, int] | None:
         """Atomically claim the single streaming-turn slot.
@@ -1717,6 +1777,9 @@ class SessionState:
         self.source_patch_context = None
         self._capability_cache = None
         self._pending_capability_cache = None
+        # Lint of the discarded document (its key could not match the reset
+        # store's fresh tree anyway — this just lets it go).
+        self._lint_cache = None
         # A warm still sweeping the old session settles into the abandoned
         # object (the zombie-runner pattern); its publish guard already
         # refuses to write a memo whose source artifacts have been cleared.
@@ -2092,9 +2155,13 @@ def _source_editing_boundary_block(session: SessionState) -> str | None:
 # these markers are this channel's frame, and QC renders the same document
 # through ``outline()`` inside XML tags instead. Escaping there would change
 # QC request bytes for a concern QC does not have.
-_CONTEXT_BOUNDARY_PATTERN = re.compile(
-    r"={2,}\s*(?:END\s+)?PROJECT\s+CONTEXT\b[^\n=]*={2,}", re.IGNORECASE
-)
+#
+# The pattern is compaction's object, not a copy of it: this engine kept its
+# own until it was found quadratic on a long unfinished run of ``=`` (every
+# turn start rescanned such a run from each position inside it — 20,000 cost
+# ~16 s). See ``compaction.CONTEXT_BOUNDARY_PATTERN`` for why its ``(?<!=)``
+# changes no match.
+_CONTEXT_BOUNDARY_PATTERN = CONTEXT_BOUNDARY_PATTERN
 
 
 def _escaped_marker(match: re.Match[str]) -> str:
@@ -2358,9 +2425,8 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
     )
     parts.append(document_block)
     measured["document"] = len(parts) - 1
-    lint_items = lint_document(
+    lint_items = session.document_lint(
         doc,
-        session.module,
         unstructured_import=unstructured,
         # The model is told too: it is the one that can offer to renumber
         # the section, and a stale footer is exactly the kind of thing a
@@ -5304,9 +5370,8 @@ def stream_user_turn(
                         },
                         {
                             "type": "lint",
-                            "items": lint_document(
+                            "items": session.document_lint(
                                 session.doc.doc,
-                                session.module,
                                 unstructured_import=(
                                     session.import_is_unstructured()
                                 ),

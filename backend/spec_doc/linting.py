@@ -45,7 +45,9 @@ Rules (stable ids consumers can branch on):
 """
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from functools import lru_cache
 from typing import Any, Iterable, Mapping
 
@@ -381,6 +383,135 @@ def _numeric_tokens(text: str) -> tuple[str, ...]:
     return tuple(sorted(token for token in text.split() if any(c.isdigit() for c in token)))
 
 
+def _matches_needed(total: int) -> int:
+    """The fewest matched characters at which ``difflib`` reaches the bar.
+
+    ``SequenceMatcher.ratio()`` is ``2.0 * matches / total``, ``total`` being
+    the two lengths summed, and that expression only grows with ``matches``.
+    So a match count below this number IS a ratio below
+    :data:`_DUPLICATE_RATIO`, decided by the same float comparison the rule
+    makes (``ratio() >= _DUPLICATE_RATIO``). Every bound in
+    :class:`_RatioBounds` compares a count against it, in integers.
+    """
+    if total <= 0:
+        return 0  # difflib calls two empty texts identical (ratio 1.0)
+    need = math.ceil(_DUPLICATE_RATIO * total / 2.0)
+    while need > 0 and 2.0 * (need - 1) / total >= _DUPLICATE_RATIO:
+        need -= 1
+    while 2.0 * need / total < _DUPLICATE_RATIO:
+        need += 1
+    return need
+
+
+def _position_masks(text: str) -> dict[str, int]:
+    """Each character of ``text`` mapped to the bit set of its positions."""
+    masks: dict[str, int] = {}
+    for position, char in enumerate(text):
+        masks[char] = masks.get(char, 0) | (1 << position)
+    return masks
+
+
+#: How often :func:`_lcs_upper_bound` asks whether the rows still to come can
+#: lift the count to what is needed. Asking costs a popcount; every sixteenth
+#: row keeps the exit prompt at a sixteenth of that cost.
+_LCS_EXIT_CHECK_ROWS = 16
+
+
+def _lcs_upper_bound(
+    short: str, long_masks: Mapping[str, int], long_len: int, need: int
+) -> int:
+    """An upper bound on the longest common subsequence of two texts.
+
+    ``long_masks`` is :func:`_position_masks` of the longer text. Row by row
+    over ``short``, this is the bit-parallel LCS recurrence (Allison and
+    Dix; Hyyrö): each zero bit of ``vector`` is one more character of the
+    common subsequence, so a row costs a few whole-number operations rather
+    than a pass over the longer text.
+
+    The answer is EXACT unless it is already below ``need``. After ``row``
+    rows the subsequence can grow by at most one character per row left, so
+    once what the rows so far found plus the rows left falls short of
+    ``need``, the rest cannot matter: that sum is returned — still an upper
+    bound, just not the exact length. Unrelated paragraphs fall short early,
+    which is where most of the saving is.
+    """
+    full = (1 << long_len) - 1
+    vector = full
+    lookup = long_masks.get
+    rows = len(short)
+    for row, char in enumerate(short, 1):
+        hits = vector & lookup(char, 0)
+        vector = ((vector + hits) | (vector - hits)) & full
+        if not row % _LCS_EXIT_CHECK_ROWS:
+            reachable = long_len - vector.bit_count() + (rows - row)
+            if reachable < need:
+                return reachable
+    return long_len - vector.bit_count()
+
+
+class _RatioBounds:
+    """Exact upper bounds on ``SequenceMatcher(None, a, b, autojunk=False)
+    .ratio()`` for the provisions of one sibling group.
+
+    ``ratio()`` counts the characters in its matching blocks. Those blocks
+    are common substrings taken in order in both texts, so that count can
+    never exceed (1) the shorter text's length — ``real_quick_ratio()``;
+    (2) the characters the two texts share, counted as multisets —
+    ``quick_ratio()``; or (3) the longest common subsequence of the two.
+
+    :meth:`may_reach` answers False only when one of those counts is below
+    :func:`_matches_needed` — a PROOF that ``ratio()`` would be below the
+    bar, so skipping it there cannot change a finding. True proves nothing,
+    and the caller computes the ratio exactly as it always has.
+
+    The first two are ``difflib``'s own quick bounds, computed from
+    per-provision profiles rather than by building a ``SequenceMatcher`` per
+    pair (building one indexes the second text, which costs more than the
+    bound it would answer). On prose they rarely settle anything: two
+    paragraphs of English share their character mix, so ``quick_ratio()``
+    reads 0.9–0.97 for unrelated text. The LCS bound is order-aware and
+    reads about 0.45 for the same pairs, which is what keeps number-free
+    siblings — a memo imported as one long article — from costing a
+    character-level ``ratio()`` for every pair.
+    """
+
+    def __init__(self, texts: list[str]) -> None:
+        self._texts = texts
+        self._counts: dict[int, Counter[str]] = {}
+        self._masks: dict[int, dict[str, int]] = {}
+
+    def _count(self, index: int) -> Counter[str]:
+        counts = self._counts.get(index)
+        if counts is None:
+            counts = self._counts[index] = Counter(self._texts[index])
+        return counts
+
+    def _mask(self, index: int) -> dict[str, int]:
+        masks = self._masks.get(index)
+        if masks is None:
+            masks = self._masks[index] = _position_masks(self._texts[index])
+        return masks
+
+    def may_reach(self, first: int, second: int) -> bool:
+        """False only when ``ratio()`` is proven below the bar."""
+        if len(self._texts[first]) > len(self._texts[second]):
+            first, second = second, first
+        short, long = self._texts[first], self._texts[second]
+        need = _matches_needed(len(short) + len(long))
+        # (1) real_quick_ratio(): at most every character of the shorter text.
+        if len(short) < need:
+            return False
+        # (2) quick_ratio(): at most the characters both texts contain.
+        short_counts, long_counts = self._count(first), self._count(second)
+        shared = sum(
+            min(count, long_counts[char]) for char, count in short_counts.items()
+        )
+        if shared < need:
+            return False
+        # (3) At most the longest common subsequence.
+        return _lcs_upper_bound(short, self._mask(second), len(long), need) >= need
+
+
 def _duplicate_siblings(
     siblings: list[Any],
 ) -> Iterable[tuple[Any, Any, bool]]:
@@ -393,11 +524,19 @@ def _duplicate_siblings(
 
     Each paragraph is reported against its FIRST match only, so three
     identical siblings produce two findings rather than three.
+
+    Every pair still faces the same test — ``ratio() >= _DUPLICATE_RATIO``
+    on the normalized texts — but a pair :class:`_RatioBounds` proves cannot
+    reach the bar never pays for the ratio. That comparison is quadratic in
+    the texts' length, and it used to run for every pair of long provisions
+    without numbers: forty such paragraphs took over twenty seconds, on
+    every payload and before every chat turn.
     """
     from difflib import SequenceMatcher
 
     normalized = [_normalized_provision(p.text) for p in siblings]
     numerics = [_numeric_tokens(text) for text in normalized]
+    bounds = _RatioBounds(normalized)
     matched: set[int] = set()
     for later in range(1, len(siblings)):
         if len(normalized[later]) < _DUPLICATE_MIN_CHARS:
@@ -412,6 +551,8 @@ def _duplicate_siblings(
                 yield siblings[earlier], siblings[later], True
                 break
             if numerics[earlier] != numerics[later]:
+                continue
+            if not bounds.may_reach(earlier, later):
                 continue
             ratio = SequenceMatcher(
                 None, normalized[earlier], normalized[later], autojunk=False

@@ -114,7 +114,7 @@ see Phase 5.
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
 | 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`) | commit-time + load-time elision; live canary built. PR #183 merged before the canary was run, so its result is still **pending** — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **in review** | `ab7e402`, `2e98b3a`, `9fa6aaf` (PR #189) | both halves; routine condensing off by default until the recall check, backstop always on — see Phase 3 → As built |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **in review** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189) | both halves; routine condensing off by default until the recall check, backstop always on — see Phase 3 → As built |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
@@ -564,10 +564,25 @@ The claude-api skill's `build-eval` guide is the method.
   found-not-fixed in project-workspace Phase 5A). This module's copy
   carries the `(?<!=)` that makes it linear without changing a match,
   because it frames whole summaries and recalled turns.
-- Tests: `tests/test_chat_compaction.py` (36) and
-  `frontend/tests/compaction.test.ts` (8), plus the wipe-sweep probes and
-  the tool-order pin. Thirty backend mechanisms and six frontend ones were
-  reverted in place; the matrix first found three blind spots (the chat
+- **Review fixes (PR #189, Codex).** Three findings, all real. Removing a
+  reference now answers the record its truncation left, and the chat
+  applies it, so the divider cannot outlive its summary. A condensed turn
+  longer than one read (60,000 characters) pages: `recall_conversation`
+  takes `offset`, a partly shown turn names the exact call that reads on,
+  pages end on a word, and a search match in a long turn says which offset
+  to read from. And a summary that lands after its turn's stream has
+  closed now reaches the chat: the doc payload says one is pending
+  (running, or finished and not yet adopted), `GET
+  /api/chat/compaction/status` answers `{pending, compaction}`, and the
+  chat asks it while pending and no turn is streaming, applying only a
+  settled answer. Twenty-six more mechanisms were reverted in place; two
+  first stayed green (an offset rule refused by a different rule, and a
+  "pending" that ignored a finished-but-unadopted summary) and got
+  stronger tests.
+- Tests: `tests/test_chat_compaction.py` (44; 35 before the review fixes,
+  first recorded here as 36) and `frontend/tests/compaction.test.ts`
+  (15), plus the wipe-sweep probes and the tool-order pin. Thirty backend
+  mechanisms and six frontend ones were reverted in place; the matrix first found three blind spots (the chat
   route's scope flag, the too-long retry, and escaping the summary inside
   its own frame), each fixed by a stronger test before this was recorded.
   Every mechanism now turns at least one test red.

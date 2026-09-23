@@ -233,8 +233,14 @@ backend/
                            allow_compaction = (lease.scope == "original"),
                            _doc_payload gains `compaction`
                            (compaction_payload: sizes + turn range, never
-                           the text) and GET /api/chat/compaction returns
-                           the text (404 when nothing is condensed)
+                           the text) + `compaction_pending` (a background
+                           summary still on its way), GET
+                           /api/chat/compaction returns the text (404 when
+                           nothing is condensed), GET
+                           /api/chat/compaction/status answers {pending,
+                           compaction} for the chat's poll (a quiet path,
+                           read under the guard), and the reference DELETE
+                           answers the record its truncation left
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -1132,7 +1138,9 @@ backend/
                            summary_instruction + extract_summary (eight
                            required headings, closed error codes),
                            recall_conversation (search / read condensed
-                           turns, framed + neutralized; elide_recall_results
+                           turns, framed + neutralized; a turn past one
+                           read's 60k characters pages by `offset`, each
+                           page ending on a word; elide_recall_results
                            keeps copies out of committed history) and
                            CompactionRunner (one background summary per
                            session object; zombie-abandoned on reset / load
@@ -1351,8 +1359,11 @@ frontend/src/
                            user message that starts turn covers_turns + 1,
                            counting only messages that reached the saved
                            history — notes and failed turns skipped),
-                           condensedTurnsLabel, compactTokens and
+                           condensedTurnsLabel, compactTokens,
                            describeCompaction (Developer tools' one line)
+                           and followCompactionStatus (asks the status route
+                           until a background summary settles, applying only
+                           a settled answer; the timer is injectable)
   lib/harvest.ts           [Project workspace Phase 4] the fact harvest's
                            pure rules: buildHarvestCommit (ONLY ticked rows,
                            each once, only changed editable fields — never an
@@ -1806,7 +1817,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips via `suggest_prompts` this round (Batch 8→9), shown above the composer; emitted live on the tool dispatch. Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (not calling the tool = clear, which is the wind-down; a failed turn keeps the prior set). Tiny payload — rides committed history verbatim (no elision, no PROJECT CONTEXT stub) |
 | `followups` | `followups` | the model raised or settled tracked items via `track_followups` this round (v1.16.0) — the full "Waiting on you" list, emitted live on the tool dispatch. ACCUMULATING, not latest-only: the store persists across turns, so silence means nothing changed rather than "clear". Turn-atomic through the store's own begin/commit/rollback |
 | `project_facts` | `project_facts` | the model recorded or superseded established project facts via `record_project_facts` this round (v1.17.0) — the full ledger snapshot, emitted live on the tool dispatch. Same accumulating, turn-atomic posture as `followups`; the store also persists into the project file and rides a project brief into the next section |
-| `compaction` | `compaction` | the view this turn sends carries a summary of the oldest turns (compaction Phase 3): `{covers_turns, created_at, tokens_before, tokens_after, trigger, summary_chars}` — never the text (`GET /api/chat/compaction` returns it). Emitted at turn start, after `_prepare_turn_view`, whenever the turn's view has a record — including one adopted or written at that moment — so the chat's divider moves at once. Not persisted; the doc payload's `compaction` re-syncs it |
+| `compaction` | `compaction` | the view this turn sends carries a summary of the oldest turns (compaction Phase 3): `{covers_turns, created_at, tokens_before, tokens_after, trigger, summary_chars}` — never the text (`GET /api/chat/compaction` returns it). Emitted at turn start, after `_prepare_turn_view`, whenever the turn's view has a record — including one adopted or written at that moment — so the chat's divider moves at once. Not persisted; the doc payload's `compaction` re-syncs it, and a summary adopted after a turn's stream has closed reaches the chat through the payload's `compaction_pending` + `GET /api/chat/compaction/status` |
 | `qc_dispositions` | `outcomes` | apply_qc_fixes committed audit dispositions with this turn (v1.11.0): `{finding_id: applied\|stale\|no_ops\|already_applied\|not_open\|unknown}`. Emitted from the frozen post-commit payload ONLY when the turn commits with staged dispositions — a rolled-back turn never emits it; the frontend refreshes QC state + readiness on it |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
@@ -12584,6 +12595,39 @@ version bump (the plan carries the release-note draft).
   two lines; the tour a `condensed` step APPENDED to the conversation
   chapter (no existing resume index moves, so `TOUR_VERSION` stays 8),
   carrying the new `chat.condensed` capability.
+- **Three review findings (PR #189, Codex), all fixed.** (1) *A reference
+  delete left a ghost divider*: the delete could drop the record (it
+  truncates history at the turn that first read the document), but its
+  response carried no record and `onRemoveReference` kept the client's, so
+  **View summary** hit a 404 until an unrelated refresh. The DELETE answers
+  `compaction`, captured under the delete's own guard — a kept record too,
+  so a surviving divider is never cleared by accident — and the handler
+  applies it. (2) *A single turn over 60k characters was unreadable past
+  its first page*: the note said "read fewer turns" when `[n]` already was
+  one. `recall_conversation` gains `offset`; a partly shown turn names its
+  character range and the exact call that reads on, pages end at the last
+  whitespace within `RECALL_PAGE_BOUNDARY_LOOKBACK` (200) characters of the
+  limit so a number is never split between two, and a search match in a
+  long turn prints the offset its passage starts at. Each offset mistake is
+  refused by its OWN rule — the first test passed with the one-turn rule
+  removed, because its range began on a short turn and the past-the-end
+  rule refused it instead. (3) *A summary that landed after its turn told
+  no one*: it is written while the user reads the reply and usually
+  finishes after the stream closed — adopted on the server, invisible until
+  the next turn. `compaction_pending` (`runner.busy()`: running OR finished
+  and not yet adopted — narrowing it to "running" passed every flow-driven
+  test, since a finished summary is adopted within microseconds, so a test
+  holds the runner "ready") rides the payload; `GET
+  /api/chat/compaction/status` answers `{pending, compaction}` under the
+  guard, since adoption settles the runner and swaps the record in one
+  critical section; and the chat asks it while pending and no turn streams
+  (`followCompactionStatus`, 3 s growing to a 20 s cap), applying ONLY a
+  settled answer, so a stale "still pending" reply can never put an older
+  record back. A failed summary settles too, so nothing asks forever. The
+  unguarded payload builders cannot race adoption: a load installs a fresh
+  runner, and an import bumps the generation, so a summary still running
+  then is dropped rather than adopted. Twenty-six more mechanisms reverted
+  in place (3 + 9 + 14), each turning a test red.
 - **Two test traps, found the hard way.** (1) Two tests patched methods
   directly onto `session.references` — a store that is reset IN PLACE and
   so outlives the test — and 21 later tests (every reference upload) went
@@ -12591,8 +12635,9 @@ version bump (the plan carries the release-note draft).
   `monkeypatch`. (2) A revert matrix that restores with `git checkout --
   file` throws away uncommitted work in that same file; commit first, or
   restore the exact text the script read.
-- **Tests**: `tests/test_chat_compaction.py` (36) and
-  `frontend/tests/compaction.test.ts` (8), plus the wipe-sweep probes and
+- **Tests**: `tests/test_chat_compaction.py` (44 — 35 before the review
+  fixes, first recorded here as 36) and `frontend/tests/compaction.test.ts`
+  (15), plus the wipe-sweep probes and
   the tool-order pin in `test_app.py`. Thirty backend and six frontend
   mechanisms were reverted in place; the first pass found three that no
   test caught — the chat route's scope flag, the too-long retry (its test

@@ -1752,7 +1752,9 @@ main.py                  pywebview shell: starts the backend, opens the native w
 backend/                 FastAPI + the conversation engine (Python 3.11+)
   app.py                 /api/health, /api/key (+ status/test), /api/modules,
                          /api/session/reset, /api/chat (SSE) + /api/chat/stop
-                         + /api/chat/compaction (the condensed summary's text),
+                         + /api/chat/compaction (the condensed summary's text;
+                         + /status, what the chat asks while a background
+                         summary is on its way),
                          /api/draft/full + /api/draft/adapt,
                          /api/research/debrief + /api/qc/debrief,
                          /api/doc (+ undo/redo/edit/diff/capabilities/
@@ -1925,7 +1927,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     compaction.py        the condensed conversation: the summary record (a
                          view over the full history, checked against it), the
                          summary instruction and its checks, recall_conversation
-                         search/read, and the one-at-a-time background runner
+                         search/read (a long turn read page by page), and the
+                         one-at-a-time background runner
 frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + QC +
                          readiness + update + SSE dispatch

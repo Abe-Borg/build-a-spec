@@ -591,9 +591,10 @@ the shell you launch the app from, and clear them when done.
       `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD=10000` and
       `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS=1`. Hold a conversation of
       six or so turns, stating one exact value early ("use 42 gpm for the
-      riser"). Within a turn or two of passing the threshold a divider
-      appears above the last turn: *Above: turns 1–N, condensed for the
-      model · View summary*. The transcript above it is all still there.
+      riser"). Soon after the reply that passes the threshold — without
+      sending another message — a divider appears above the last turn:
+      *Above: turns 1–N, condensed for the model · View summary*. The
+      transcript above it is all still there.
 - [ ] **View summary** opens a sheet with the summary under its section
       headings, and says how many turns it stands in for and the token
       estimate before and after. Settings shows a **Conversation
@@ -606,6 +607,11 @@ the shell you launch the app from, and clear them when done.
       divider is back in the same place, and no new summary is written on
       opening (the usage table's condensing line does not move).
 - [ ] **New session** clears the divider and the Developer tools row.
+- [ ] **Removing a document the condensed turns read.** Early in the
+      conversation, attach a small reference document and ask the
+      assistant to read it. Once the divider appears, remove that document
+      from the panel: the divider goes with it at once (**View summary** is
+      gone rather than failing).
 - [ ] **The backstop.** Clear the three knobs and launch with
       `BUILD_A_SPEC_CONTEXT_WINDOW=60000`. Keep chatting: once a message
       would not fit, the status line reads *Condensing earlier

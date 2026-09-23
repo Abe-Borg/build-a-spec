@@ -11717,18 +11717,25 @@ export's QA rows) is the next PR and was deliberately not started.
   `test_source_splice.py`, five in `test_diffing.py`, two in
   `test_diagnostics.py`, and the frontend pins in `downloads.test.ts`.
   Every mechanism was reverted in place, each in an isolated copy of the
-  tree, to prove a test goes red without it (20 of 32 re-run so far; the
-  rest follow): a flagged paragraph mark not joining the next paragraph →
-  36; equal runs not merged → 31; the trailing-empty-paragraph tolerance →
-  2; the mark flag appended instead of first → 2; the writer's section-break
-  guard → 1; no `w:pPrChange` → 1; deleted text left as `w:t` → 3; a row
-  flag ahead of the row's other properties → 1; ids not above the package's
-  own → 2; breaks not pinned → 1; the diff's movers weighing like its
-  stayers → 2; the diff's moves ignored → 1; a moved old copy keeping its
-  identity → 1; the last paragraph mark flagged → 1; the holder's numbering
-  cancel untracked → 1; an emptied holder's mark deleted → 4; the
-  content-control refusal → 1; the TOC-field refusal → 1; the
-  moved-annotation refusal → 1; the self-check skipped → 2.
+  tree, to prove a test goes red without it: a flagged paragraph mark not
+  joining the next paragraph → 36; equal runs not merged → 31; the
+  trailing-empty-paragraph tolerance → 2; the mark flag appended instead of
+  first → 2; the writer's section-break guard → 1; no `w:pPrChange` → 1;
+  deleted text left as `w:t` → 3; a row flag ahead of the row's other
+  properties → 1; ids not above the package's own → 2; breaks not pinned →
+  1; the diff's movers weighing like its stayers → 2; the diff's moves
+  ignored → 1; a moved old copy keeping its identity → 1; the last paragraph
+  mark flagged → 1; the holder's numbering cancel untracked → 1; an emptied
+  holder's mark deleted → 4; the content-control refusal → 1; the TOC-field
+  refusal → 1; the moved-annotation refusal → 1; the self-check skipped → 2;
+  the renderer's pending-revisions refusal → 1; Track Changes switched on
+  counted as pending → 2; `detect_moves` ignored → 4; a bare
+  `redline=master` defaulting to normalized → 1;
+  `redline=version&mode=preserved` allowed → 1; the route's capture-time
+  refusal → 2; the filename not from the upload → 2; the payload keys
+  dropped → 7; the payload not consulting pending revisions → 1; the scan
+  cache → 1; the event's `refusal` → 1; the filename scrub → 1; the splice's
+  deleted words not emitted as their own piece → 30.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

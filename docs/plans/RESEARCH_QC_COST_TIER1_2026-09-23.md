@@ -634,8 +634,8 @@ rewritten:
    lineage of its own that still starts alongside it, so it keeps proving
    what its name says under the shipped default. The lens ids are the only
    change.
-9. **Tests beyond the spec's list:** a one-worker pool sends the leader
-   first; `warm_wait_seconds=None` reads the setting; the relay counts the
+9. **Tests beyond the spec's list:** a one-worker pool keeps the lineage
+   together (see 12); `warm_wait_seconds=None` reads the setting; the relay counts the
    first frame after `message_start`, not `message_start` itself (the fakes
    never emit one, so only a direct test can pin it); a call stopped before
    its first request still releases; the done-callback; one eligible
@@ -651,6 +651,22 @@ rewritten:
     phase 1 all four lenses used to start together and write, and calls whose
     tools differ can never share a copy. It now says what happens, and stage
     1 says one lens goes a few seconds first.
+
+12. **Review finding (Codex, PR #210): a single-call lineage never waits in
+    the queue ahead of released followers.** The spec's order — leaders,
+    then every single-call lineage, then the wait — let a small pool
+    (`QC_MAX_WORKERS=1`) queue `code_compliance` behind the leader and ahead
+    of its followers, so the sole worker ran the long web-tooled lens in
+    between, long enough for the leader's 5-minute entry to expire and a
+    follower to pay a second write: worse than the declared order the
+    stagger replaced. `_launch_staggered` now takes the pool's `capacity`
+    and submits a single-call lineage ahead of the wait only while a worker
+    is free for it; the rest go after the followers. With the default 8
+    workers nothing changes (`code_compliance` still starts at once and
+    never waits). `test_a_one_worker_pool_sends_the_leader_first` became
+    `test_a_one_worker_pool_keeps_the_lineage_together`, and
+    `test_a_single_call_goes_ahead_of_the_wait_only_while_a_worker_is_free`
+    pins the rule directly.
 
 Every mechanism was reverted in place and turned its own test red; the
 matrix is in CLAUDE.md ("Final QC's calls that share a cache start

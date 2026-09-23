@@ -412,18 +412,62 @@ def test_the_setting_reaches_the_run(monkeypatch) -> None:
     assert observed["all_arrived"] is True
 
 
-def test_a_one_worker_pool_sends_the_leader_first(monkeypatch) -> None:
-    """Leaders go ahead of single-call lineages, so a pool of one never parks
-    a leader behind a minutes-long call while its followers wait on it."""
+def test_a_one_worker_pool_keeps_the_lineage_together(monkeypatch) -> None:
+    """A pool of one runs the leader, its followers, then everything else.
+
+    The leader goes first, so it is never parked behind a minutes-long call
+    while its followers wait on it. And ``code_compliance``, which the pool
+    cannot start at once, is queued BEHIND the released followers: queued
+    ahead of them, the sole worker would run it between the leader and its
+    followers, long enough for the leader's 5-minute entry to expire and a
+    follower to pay for a second write (Codex, PR #210).
+    """
     monkeypatch.setattr(settings, "QC_MAX_WORKERS", 1)
     client = _WatchedClient(_scripts())
     result = _run(client, warm=45)
 
     arrivals = client.arrivals
     assert arrivals[0] == _LEADER
-    assert set(arrivals[1 : 1 + len(_SOLO)]) == _SOLO
-    assert set(arrivals[1 + len(_SOLO) :]) == _FOLLOWERS
+    assert set(arrivals[1 : 1 + len(_FOLLOWERS)]) == _FOLLOWERS
+    assert set(arrivals[1 + len(_FOLLOWERS) :]) == _SOLO
     assert all(status.status == "completed" for status in result.lens_statuses)
+
+
+def test_a_single_call_goes_ahead_of_the_wait_only_while_a_worker_is_free(
+    caplog,
+) -> None:
+    """``capacity`` decides where a single-call lineage is queued.
+
+    With a worker free for it, it starts at once and never waits on anyone.
+    Without one it would sit in the pool's queue ahead of the followers, so
+    it goes behind them instead.
+    """
+    from concurrent.futures import Future
+
+    def order(capacity: int) -> list[str]:
+        submitted: list[str] = []
+
+        def submit(item, _first_output):
+            submitted.append(item)
+            done: Future = Future()
+            done.set_result(item)
+            return done
+
+        engine._launch_staggered(
+            ["lead", "solo", "follow-1", "follow-2"],
+            key_of=lambda item: "solo" if item == "solo" else "shared",
+            submit=submit,
+            wait_seconds=3600,
+            should_stop=lambda: True,
+            label="test",
+            capacity=capacity,
+        )
+        return submitted
+
+    with caplog.at_level(logging.INFO, logger="buildaspec.qc"):
+        assert order(1) == ["lead", "follow-1", "follow-2", "solo"]
+        assert order(2) == ["lead", "solo", "follow-1", "follow-2"]
+        assert order(8) == ["lead", "solo", "follow-1", "follow-2"]
 
 
 def test_the_relay_releases_on_the_first_output_not_on_message_start() -> None:
@@ -746,6 +790,7 @@ def test_the_launcher_releases_a_leader_whose_task_ends_without_output(
             wait_seconds=3600,
             should_stop=lambda: True,
             label="test",
+            capacity=8,
         )
     assert submitted == [("a", True), ("solo", False), ("b", False), ("c", False)]
     assert sorted(futures.values()) == ["a", "b", "c", "solo"]

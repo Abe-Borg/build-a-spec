@@ -447,8 +447,10 @@ backend/
                            and read twice, by _prefix_lineage_key (SHA-256 of
                            tools + system + shared prefix + model/effort/TTL)
                            and by the request; _launch_staggered sends each
-                           lineage's leader, then every single-call lineage,
-                           waits on the calling thread (bounded by
+                           lineage's leader, then every single-call lineage
+                           the pool can start at once (its `capacity`; the
+                           rest go after the followers, never queued ahead of
+                           them), waits on the calling thread (bounded by
                            settings.QC_WARM_WAIT_SECONDS, stop-aware) for the
                            leader's first_output — set by _relay_stream_
                            activity on the first non-message_start frame, when
@@ -2143,8 +2145,9 @@ tests/
                            output and code_compliance never held, a
                            fast-failing leader releasing them before its
                            backoff, a Stop cancelling them unsent, the bound,
-                           zero wait = all at once, a one-worker pool sending
-                           the leader first, the lineage key, consolidation
+                           zero wait = all at once, a one-worker pool keeping
+                           the lineage together (a single never queued ahead
+                           of the followers), the lineage key, consolidation
                            buckets staggering (one bucket never waiting), the
                            same request multiset either way, a retained
                            result current with the switch in either position,
@@ -15457,10 +15460,20 @@ carries the deviations; this section is the why and the traps.
   key, so a later lens change stays correct on its own. `_qc_request_kwargs`
   stamps its breakpoint on a COPY of the tools, which is what lets the key
   read them unstamped (pinned).
-- **`_launch_staggered`: leaders, then single-call lineages, then the
-  wait, then followers.** Leaders go first so a pool of one never parks a
-  leader behind a minutes-long `code_compliance` while its followers wait on
-  it (pinned with `QC_MAX_WORKERS=1`). The wait runs on the CALLING thread,
+- **`_launch_staggered`: leaders, then the single-call lineages a worker
+  is free for, then the wait, then followers, then any single left over.**
+  Leaders go first so a pool of one never parks a leader behind a
+  minutes-long `code_compliance` while its followers wait on it. And a
+  single-call lineage goes ahead of the wait only while the pool (its
+  `capacity`) can START it at once (caught in review on PR #210, Codex): one
+  that would only queue sits in the pool's FIFO queue AHEAD of the released
+  followers, so a sole worker would run the long web-tooled lens between the
+  leader and its followers, long enough for the leader's 5-minute entry to
+  expire and a follower to pay a second write — more than the pre-stagger
+  declared order, which kept the four together. With the default 8 workers
+  `code_compliance` still starts at once and never waits; with one worker
+  the order is leader, followers, `code_compliance` (both pinned). The wait
+  runs on the CALLING thread,
   never in the pool, so it cannot starve the leader it waits on. It is
   bounded by `settings.QC_WARM_WAIT_SECONDS` and stop-aware (it re-checks
   every `_WARM_WAIT_SLICE_SECONDS`, 1 s, but returns the instant its leader
@@ -15513,13 +15526,13 @@ carries the deviations; this section is the why and the traps.
   QC profiler's "Phase 1" line should say 3 of the 4 web-toolless lenses
   read the shared prefix and 1 wrote one (the expected baseline is about 0
   and 4). That is Abraham's M2 run, and the progress file records it.
-- **Tests: `tests/test_qc_warm_launch.py` (16)** — every wait an event or a
+- **Tests: `tests/test_qc_warm_launch.py` (17)** — every wait an event or a
   stepped clock, never a real sleep: followers sent only after the leader's
   first output with `code_compliance` never held and `lens_statuses` in
   declared order; a leader failing before streaming releases them before its
   backoff; a Stop mid-wait sends no follower request; the bound (a stepped
   clock that outruns it on the first check); zero wait; the setting reaching
-  the run; a one-worker pool; the relay's `message_start` rule; a call
+  the run; a one-worker pool keeping the lineage together; the capacity rule; the relay's `message_start` rule; a call
   stopped before its first request; the lineage key; consolidation buckets
   staggering and one bucket never waiting; the request multiset; F3; the
   default read from the source; and the done-callback.
@@ -15536,6 +15549,7 @@ carries the deviations; this section is the why and the traps.
   | no release on `_run_streaming_call`'s return paths | 1 |
   | no done-callback on the leader's future | 1 |
   | single-call lineages submitted before leaders | 3 |
+  | every single-call lineage ahead of the wait, whatever the pool's capacity (the PR #210 review fix) | 2 |
   | the wait ignores a Stop | 1 |
   | the wait has no bound | 1 |
   | zero wait still waits | 1 |

@@ -987,7 +987,10 @@ be read once the call that stores it has started answering, and the four
 used to start at the same instant, so each one paid to store its own copy.
 Now one of them starts first, and the other three wait for it to begin
 answering and then read its copy. The fifth reviewer, code compliance,
-carries web search and fetch, so its cached copy is its own; it never waits.
+carries web search and fetch, so its cached copy is its own; it never waits
+(with `BUILD_A_SPEC_QC_MAX_WORKERS` set so low that no worker is free for
+it, it runs after the other four instead of between them, so their shared
+copy is not left to expire while it works).
 The cross-lens grouping step does the same when it has two or more groups
 to check.
 

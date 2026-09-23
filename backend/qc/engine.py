@@ -4090,6 +4090,7 @@ def _launch_staggered(
     wait_seconds: float,
     should_stop: Callable[[], bool],
     label: str,
+    capacity: int,
 ) -> dict[Future, Any]:
     """Submit ``items``, leaders first; return ``{future: item}``.
 
@@ -4097,14 +4098,22 @@ def _launch_staggered(
     leader — its first item in input order, so the choice is deterministic —
     submitted with a fresh ``threading.Event`` for ``submit`` to hand to
     :func:`_run_streaming_call` as ``first_output``. Then every single-call
-    lineage is submitted (``code_compliance``, whose web tools make it a
-    lineage of its own), then the leaders are waited on, and each lineage's
-    followers are submitted the moment its leader releases them.
+    lineage the pool can START at once is submitted (``code_compliance``,
+    whose web tools make it a lineage of its own), then the leaders are
+    waited on, each lineage's followers are submitted the moment its leader
+    releases them, and any single-call lineage left over goes last.
 
-    Leaders go before single-call lineages so a small pool
-    (``QC_MAX_WORKERS=1``) never parks a leader behind a minutes-long call
-    while its followers wait. The wait itself runs on the calling thread,
-    never in the pool, so it cannot starve the leader it waits on.
+    ``capacity`` is the pool's worker count, and it decides where a
+    single-call lineage goes: a call the pool cannot start at once waits in
+    the pool's FIFO queue, and one waiting ahead of released followers would
+    make them sit out a minutes-long call while their leader's 5-minute
+    entry expires — costing a second write instead of saving the first
+    (Codex, PR #210). So a single-call lineage goes ahead of the wait only
+    while a worker is free for it, and never in the queue ahead of a
+    follower. Leaders go first of all, so a pool of one runs the leader, its
+    followers, then everything else, the way the declared order used to
+    keep them together. The wait runs on the calling thread, never in the
+    pool, so it cannot starve the leader it waits on.
 
     The wait is bounded (``wait_seconds``) and stop-aware. On a Stop the
     followers are submitted anyway: each one checks ``should_stop`` before
@@ -4137,9 +4146,10 @@ def _launch_staggered(
         futures[future] = members[0]
         future.add_done_callback(lambda _done, event=released: event.set())
         leaders.append((members, released))
-    for members in groups.values():
-        if len(members) == 1:
-            futures[submit(members[0], None)] = members[0]
+    singles = [members[0] for members in groups.values() if len(members) == 1]
+    room = max(0, int(capacity) - len(leaders))
+    for single in singles[:room]:
+        futures[submit(single, None)] = single
 
     started = time.monotonic()
     deadline = started + float(wait_seconds)
@@ -4178,6 +4188,9 @@ def _launch_staggered(
         for entry in pending:
             release(entry, outcome)
         pending = []
+    # Whatever the pool could not start at once goes behind the followers.
+    for single in singles[room:]:
+        futures[submit(single, None)] = single
     return futures
 
 
@@ -4897,9 +4910,8 @@ def _consolidate_candidates(
         )
         for bucket in eligible
     }
-    with ThreadPoolExecutor(
-        max_workers=min(_qc_max_workers(), len(eligible))
-    ) as pool:
+    bucket_workers = min(_qc_max_workers(), len(eligible))
+    with ThreadPoolExecutor(max_workers=bucket_workers) as pool:
 
         def submit_bucket(
             bucket: _CandidateBucket, first_output: threading.Event | None
@@ -4927,6 +4939,7 @@ def _consolidate_candidates(
             wait_seconds=warm_wait_seconds,
             should_stop=should_stop,
             label="consolidation",
+            capacity=bucket_workers,
         )
         for future in as_completed(futures):
             bucket = futures[future]
@@ -6788,9 +6801,8 @@ def run_final_qc(
         for lens in QC_LENSES
     }
     outcomes: dict[str, _LensOutcome] = {}
-    with ThreadPoolExecutor(
-        max_workers=min(_qc_max_workers(), len(QC_LENSES))
-    ) as pool:
+    lens_workers = min(_qc_max_workers(), len(QC_LENSES))
+    with ThreadPoolExecutor(max_workers=lens_workers) as pool:
 
         def submit_lens(
             lens: QCLens, first_output: threading.Event | None
@@ -6817,6 +6829,7 @@ def run_final_qc(
             wait_seconds=warm_wait_seconds,
             should_stop=should_stop,
             label="lenses",
+            capacity=lens_workers,
         )
         for future in as_completed(futures):
             lens = futures[future]

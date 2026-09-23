@@ -465,11 +465,14 @@ def truncated_view_spec(
         parts.append(summary_frame(record))
         first_omitted = record.covers_turns + 1
     if hidden >= first_omitted:
+        one = hidden == first_omitted
         parts.append(
-            f"[Turns {_turn_range(first_omitted, hidden)} of this conversation "
-            "are left out of this request so it fits within the model's "
-            "context window. Nothing was deleted: call recall_conversation to "
-            "read any of them before relying on what they said.]"
+            f"[{'Turn' if one else 'Turns'} {_turn_range(first_omitted, hidden)} "
+            f"of this conversation {'is' if one else 'are'} left out of this "
+            "request so it fits within the model's context window. Nothing was "
+            "deleted: call recall_conversation to read "
+            f"{'it' if one else 'any of them'} before relying on what "
+            f"{'it' if one else 'they'} said.]"
         )
     return ViewSpec(
         keep_from=keep_from,

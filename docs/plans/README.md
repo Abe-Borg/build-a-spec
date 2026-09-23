@@ -24,41 +24,43 @@ section, not here.
 opened 2026-09-22. Keep the chat history the model re-reads every turn
 bounded without losing what only the conversation holds: stop saving data
 stored elsewhere (Phase 1, stale edit outlines — complete, PR #182; Phase 2,
-fetched page text — in review, PR #183, its live canary still to run), then
+fetched page text — merged in PR #183, but its live canary was never run, so
+1.21.0 ships it switched off until the canary passes), then
 condense the conversation rarely between turns with the full transcript kept
 and recallable (Phase 3 — next; decisions D1–D4 made 2026-09-22). The file is the
 plan, the owner decisions (D1–D4) and the implementation record; its
 "promote before prune" phase is handed to the project workspace's harvest.
-Ships with the project workspace's release (same release policy).
+Phases 1–2 ship in the project workspace's release, 1.21.0 (same release
+policy).
 
-**[Deep-dive remediation](deep-dive-remediation/README.md)** — the other live
-program. Six phases, 24 chunks; **Phase 1 is complete** (direct server-tool
-callers; continuation containers in research, QC and chat; server-tool
-pairing plus legacy history repair) and **Phase 2 is nearly done** — 2.2 (QC
-settling semantics, pulled forward), 2.1 (real-shaped server-tool activity
-events) and 2.3 (research follower reconnect) have landed; only 2.4 remains,
-plus Phases 3–6. Its README carries the handoff prompt, the
-frozen decisions, the finding-coverage matrix, the dependency edges and the
-phase gates; start there, not here.
+**[Deep-dive remediation](deep-dive-remediation/README.md)** — **complete**.
+Six phases, 24 chunks (1.1–6.5), all landed: direct server-tool callers,
+continuation containers, server-tool pairing and legacy history repair, live
+stream resilience, named research coverage, per-TTL cache pricing, the v4
+Final QC panel outcomes, consolidation and sign-off consistency, and the
+locking and snapshot rules. The one item still outstanding is the owner-run
+live and manual QA in Chunk 6.5, which spends real money. Its README carries
+the handoff prompt, the frozen decisions, the finding-coverage matrix, the
+dependency edges and the phase gates; start there, not here.
 
 **[Redline on your original](REDLINE_ON_ORIGINAL_2026-09-22.md)**: opened
 2026-09-22; all seven decisions ratified the same day (the seventh settled
 Phase 0's open question: a provision added after a section's last paragraph
-keeps landing at the top of the next section). **Phase 0 (PR #184) and
-Phase 1 (backend PR #187, then the UI PR — the menu item, *Open redline in
-Word*, the capability, the copy) are built; none of it is released** — the
-owner picks the release, and the real-Word QA rows are still to run. Phase 2
-(native Word "Moved" marks, real Word as the judge) is next and not started;
-a fresh session starts from the plan's two Phase 1 as-built notes. The
-program adds a
-tracked-changes copy of the Word file you imported:
-every non-body part stays byte-identical, Reject All gives back the upload,
-and Accept All gives *Export Word (keeps your formatting)*. The export checks
-both halves itself and refuses when either check fails. Phase 0 fixed the four
-bugs found in today's formatted export along the way — relettered provisions
-lost their tab and bold, a section break was dropped or duplicated, and a
-"(Not used.)" line went stale — plus five more of the same export's defects it
-turned up.
+keeps landing at the top of the next section). **Phase 0 (PR #184) ships in
+1.21.0** (the project-workspace closeout). **Phase 1 is built:** its backend
+(PR #187) is in 1.21.0, and its UI (PR #190 — the menu item, *Open redline
+in Word*, the capability, the copy) is on `master`. No release entry
+announces the redline yet; the owner picks the release, and the real-Word QA
+rows are still to run. Phase 2 (native Word "Moved" marks, real Word as the
+judge) is next and not started; a fresh session starts from the plan's two
+Phase 1 as-built notes. The program adds a tracked-changes copy of the Word
+file you imported: every non-body part stays byte-identical, Reject All
+gives back the upload, and Accept All gives *Export Word (keeps your
+formatting)*. The export checks both halves itself and refuses when either
+check fails. Phase 0 fixed the four bugs found in today's formatted export
+along the way — relettered provisions lost their tab and bold, a section
+break was dropped or duplicated, and a "(Not used.)" line went stale — plus
+five more of the same export's defects it turned up.
 
 ## Retired
 

@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.20.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.21.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -31,7 +31,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
-| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. Export → *Redline on your original (tracked changes)* (not yet in a release — see "Redline on your original" below). |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. Export → *Redline on your original (tracked changes)* (no release entry announces it yet — see "Redline on your original" below). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -134,13 +134,23 @@ sheet, a previous project's section, or meeting notes.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
 
-## Project workspace (in progress)
+## Shipped in v1.21.0 (Project workspace — every section of a project stays in step)
 
 The project-workspace program (`docs/plans/project-workspace/`) makes a
 project a first-class thing: one project folder, sections that hang off it,
-switching between them in one click. Its phases land as ordinary pull
-requests and ship together in one release at the end; until then this
-section says what `master` already does beyond v1.20.0.
+switching between them in one click. Its phases shipped together in
+v1.21.0:
+
+- the project folder and the Project panel (Phase 2) — already in the
+  1.20.0 build, but announced for the first time in 1.21.0;
+- a project brief that keeps itself current, and pulling what other
+  sections learned (Phase 3);
+- the fact harvest (Phase 4);
+- a per-turn measurement of what each message carries (Phase 5, part A).
+
+Two parts are not built. Phase 5 part B, which would render the research
+relevance-first, waits on that measurement. Phase 6, a client library, is
+deferred until a second project for one client exists.
 
 ### The project has a home (Phase 2)
 
@@ -190,9 +200,9 @@ How the folder is found, and why nothing records it:
   never knows a folder. The tutorial's practice copy shows the panel without
   a folder, which is what a section looks like before it is saved beside its
   brief.
-- This phase **reads** the brief in the folder and never writes it; the
-  panel's "brief last updated" date is how a stale one shows. Keeping the
-  brief current on every save is Phase 3, below.
+- The panel **reads** the brief in the folder, and its "brief last updated"
+  date is how a stale one shows. The brief is written when a section in the
+  folder is saved, and by *Update project brief* (the next subsection).
 
 Routes: `GET /api/project/sections` (the panel's listing — the section's
 project link joined with the brief in the folder, the newest export winning
@@ -430,8 +440,9 @@ after which every message fails and the saved project keeps the problem.
 The plan is [`docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`](docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md):
 first stop saving data that is already stored elsewhere, then condense the
 conversation rarely between turns, with the original transcript always
-kept and recallable. It ships with the next release, like the project
-workspace.
+kept and recallable. Phases 1 and 2 ship in v1.21.0, with Phase 2
+switched off until its live check passes (below). Condensing the
+conversation (Phase 3) is next, so the program is still in progress.
 
 ### Stale outlines stay out of the conversation (Phase 1)
 
@@ -456,44 +467,53 @@ hash:
 .venv\Scripts\python tools\chat_history_profile.py "C:\specs\*.baspec" --out history-measurement.md
 ```
 
-### Fetched web pages stay out of the conversation (Phase 2)
+### Fetched web pages stay out of the conversation (Phase 2 — ships switched off)
 
 When the assistant reads a web page during a chat, the page's text (up to
-about 50,000 tokens a page) used to be saved into the conversation, so every
-later message re-sent every page the session had ever read. Now a saved turn
-keeps the page's address, its title and when it was read, plus the passages
-the reply quoted (they stay in the reply's citations), and drops the rest of
-the text. The assistant can open the page again whenever it needs the exact
-wording, and during the turn nothing changes: it reads the whole page while
-it works. Fetched PDFs were already trimmed this way and keep their own
-note. A project saved by an earlier version is trimmed the same way when it
-is opened (the file itself changes at the next save), and **History makeup**
-and the offline profiler both count fetched pages that still carry their
-text. Nothing you see in the chat changes.
+about 50,000 tokens a page) is saved into the conversation, so every later
+message re-sends every page the session has ever read. With this phase
+switched on, a saved turn keeps the page's address, its title and when it
+was read, plus the passages the reply quoted (they stay in the reply's
+citations), and drops the rest of the text. The assistant can open the page
+again whenever it needs the exact wording, and during the turn nothing
+changes: it reads the whole page while it works. Fetched PDFs are already
+trimmed this way and keep their own note. A project saved by an earlier
+version is trimmed the same way when it is opened (the file itself changes
+at the next save). Nothing you see in the chat changes.
 
-The trim relies on the API accepting a saved reply whose citations point
-into a page whose text has been replaced, which Anthropic does not document.
-A one-request live check ships with it. It costs about two cents at most,
-and without `--run` it sends nothing:
+**v1.21.0 ships it switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`,
+default `0`), so saved conversations keep fetched page text exactly as they
+did before. The trim relies on the API accepting a saved reply whose
+citations point into a page whose text has been replaced. Anthropic does
+not document that, and a refusal would make every later message in the
+project fail. The one-request live check that decides it has not been run
+yet. It costs about two cents at most, and without `--run` it sends
+nothing:
 
 ```
 .venv\Scripts\python tools\fetch_elision_canary.py --run
 ```
 
-If it reports a refusal, run it once more with `--control` as well. That
-sends the same conversation with the page text kept, which tells a refused
-trim apart from a refused test conversation.
+The check turns the trim on for its own request, whatever the switch says.
+If it reports that the provider accepted the conversation, the default can
+be switched on. If it reports a refusal, run it once more with `--control`.
+That sends the same conversation with the page text kept, which tells a
+refused trim apart from a refused test conversation. To use the trim before
+then, set the variable to `1`. Either way, **History makeup** and the
+offline profiler count the fetched pages that still carry their text.
 
-## Redline on your original (built, not yet released)
+## Redline on your original (in progress)
 
 The redline-on-your-original program
 (`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`) exports a copy of the Word
 file you imported with every change Build-a-Spec made shown as Word tracked
 changes — Accept All gives the updated section, Reject All gives your
 original back. Its first phase fixes the export that redline has to agree
-with; its second is the redline itself, now in the Export menu. Both are
-built; which release carries them is not decided yet. Until then this
-section says what `master` already does beyond v1.20.0.
+with, and it ships in v1.21.0. The redline itself (Phase 1, below) is
+built too: its backend is in v1.21.0, and its Export-menu item and *Open
+redline in Word* are on `master`, with no release entry yet — which release
+announces the redline is the owner's pick. Word's own "Moved" marks come
+next, so the program is still in progress.
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)
 
@@ -2036,6 +2056,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_SDK_MAX_RETRIES` | `2` | The Anthropic SDK's own request retries (429 / 5xx / connection errors, honoring `retry-after`) — the SDK's default, made explicit. Research and Final QC add their own 3-attempt policy on top, so one fan-out call is bounded by 3 × (1 + this) requests; the SDK's share is the one that behaves under rate limiting, so leave it unless real run telemetry says otherwise. Floor 0. |
 | `BUILD_A_SPEC_API_TIMEOUT_SECONDS` | `600` | Per-request read/write timeout for every model call (a streaming reply counts between chunks). The connect timeout stays the SDK's 5 s regardless. Floor 30. |
 | `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |
+| `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `0` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn then keeps each page's address, title and the passages the reply quoted, and an older project is trimmed the same way when opened. **Off by default** until its live check (`tools\fetch_elision_canary.py --run`) reports that the API accepts that history shape. Anthropic does not document it, and a refusal would fail every later message in the affected project. `1` turns it on. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
@@ -2115,7 +2136,8 @@ The second paid check, also opt-in and also a single low-token request,
 confirms the provider accepts a saved chat history whose fetched page text
 was trimmed while a reply still cites it (see "Fetched web pages stay out of
 the conversation" above; `--control` sends the untrimmed conversation when a
-refusal needs diagnosing):
+refusal needs diagnosing). Until it passes, that trim ships switched off
+(`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
 
 ```
 .venv\Scripts\python tools\fetch_elision_canary.py --run

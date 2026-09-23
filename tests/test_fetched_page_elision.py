@@ -9,18 +9,29 @@ time, citation setting) and a note in place of the text, and the reply
 keeps the passages it quoted in its citations. These tests pin both
 halves, the same trim applied to a project saved by an earlier build, and
 that a fetched PDF keeps the note its own elision already wrote.
+
+1.21.0 ships the trim SWITCHED OFF (``settings.ELIDE_FETCHED_PAGE_TEXT``,
+env ``BUILD_A_SPEC_ELIDE_FETCHED_PAGES``): its live canary was never run,
+and a saved history the provider refused would fail every later message in
+that project. So the trim's own tests run with the switch on (the autouse
+fixture below), and the last section pins the shipped state: the default is
+off, and with it off commit, project load and the profiler all keep the page
+text exactly as they did before this phase.
 """
 from __future__ import annotations
 
+import ast
 import base64
 import copy
 import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
-from backend import sessions
+from backend import sessions, settings
 from backend.app import create_app
 from backend.llm.conversation import _committed_messages
 from backend.llm.history_hygiene import (
@@ -28,6 +39,7 @@ from backend.llm.history_hygiene import (
     FETCHED_PAGE_NOTE,
     PDF_ELISION_NOTE_PREFIX,
     count_fetched_page_texts,
+    count_stale_outlines,
     elide_fetched_page_text,
     history_composition,
 )
@@ -50,6 +62,14 @@ _PAGE = (
 )
 _CITED_START = _PAGE.index(_CITED)
 _CITED_END = _CITED_START + len(_CITED)
+
+
+@pytest.fixture(autouse=True)
+def _page_text_trim_on(monkeypatch):
+    """The trim's behaviour is what most of this module pins, so it runs
+    with the switch on. The shipped default is off; the tests at the end
+    turn it back off explicitly."""
+    monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", True)
 
 
 def _client() -> TestClient:
@@ -390,3 +410,105 @@ def test_the_profiler_reports_fetched_page_text(monkeypatch, tmp_path):
     assert FETCHED_PAGE_CATEGORY not in report.split("By category, as this build sends it:")[1]
     for private in ("client-name", _FILLER, _CITED, _URL):
         assert private not in report
+
+
+# ---------------------------------------------------------------------------
+# The shipped state: switched off until the live canary passes
+# ---------------------------------------------------------------------------
+
+
+def _older_project_with_page_text(client: TestClient, monkeypatch) -> dict:
+    _patch_client(monkeypatch, _fetch_turn())
+    _chat(client, "Check the owner's equipment guide.")
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
+    for message in project["history"]:
+        for block in message["content"]:
+            if block.get("type") == "web_fetch_tool_result":
+                block["content"]["content"]["source"]["data"] = _PAGE
+    return project
+
+
+def test_the_page_text_trim_ships_switched_off():
+    """1.21.0 ships the trim OFF: its live canary
+    (``tools/fetch_elision_canary.py --run``) was never run, and a history
+    the provider refused would fail every later message in that project.
+    Read from the source, not the loaded value, so a developer's own
+    environment cannot make this pass or fail. Change this expectation only
+    together with a recorded canary pass (the compaction plan's Phase 2 →
+    Canary result)."""
+    source = (Path(settings.__file__)).read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "ELIDE_FETCHED_PAGE_TEXT"
+            for target in node.targets
+        ):
+            call = node.value
+            assert isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_bool_env"
+            name, default = (arg.value for arg in call.args)
+            assert name == "BUILD_A_SPEC_ELIDE_FETCHED_PAGES"
+            assert default is False, "the trim may only default on after a recorded canary pass"
+            return
+    raise AssertionError("settings.ELIDE_FETCHED_PAGE_TEXT is gone")
+
+
+def test_with_the_trim_off_a_saved_turn_keeps_the_page(monkeypatch):
+    monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", False)
+    client = _client()
+    _patch_client(monkeypatch, _fetch_turn())
+    _chat(client, "Check the owner's equipment guide.")
+
+    history = sessions.get_session().history
+    (fetch,) = _blocks(history, "web_fetch_tool_result")
+    assert fetch["content"]["content"]["source"]["data"] == _PAGE
+    (cited,) = _cited_blocks(history)
+    assert cited["citations"] == [_citation()]
+    # Only the page-text trim is off: the edit's outline still leaves.
+    assert count_stale_outlines(history) == 0
+
+    # The next turn re-sends the page, exactly as before this phase.
+    follow_up = FakeClient([text_turn(["Sure."])])
+    _patch_client(monkeypatch, follow_up)
+    _chat(client, "What's next?")
+    history_part = json.dumps(
+        follow_up.messages.last_request["messages"][:-1], ensure_ascii=False
+    )
+    assert _FILLER in history_part
+    assert FETCHED_PAGE_NOTE.format(url=_URL) not in history_part
+
+    # Developer tools counts the page the history keeps.
+    makeup = client.get("/api/diagnostics").json()["session"]["history_composition"]
+    assert makeup["fetched_page_texts"] == 1
+
+
+def test_with_the_trim_off_an_opened_project_keeps_its_pages(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", False)
+    client = _client()
+    project = _older_project_with_page_text(client, monkeypatch)
+
+    client.post("/api/session/reset")
+    with caplog.at_level(logging.INFO, logger="buildaspec.project"):
+        loaded = client.post("/api/project/load", json=project)
+    assert loaded.status_code == 200, loaded.text
+    assert "fetched web page" not in caplog.text
+
+    history = sessions.get_session().history
+    (fetch,) = _blocks(history, "web_fetch_tool_result")
+    assert fetch["content"]["content"]["source"]["data"] == _PAGE
+
+
+def test_with_the_trim_off_the_profiler_reports_the_pages_as_kept(monkeypatch, tmp_path):
+    from tools import chat_history_profile
+
+    monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", False)
+    client = _client()
+    project = _older_project_with_page_text(client, monkeypatch)
+    path = tmp_path / "project.json"
+    path.write_text(json.dumps(project), encoding="utf-8")
+    out = tmp_path / "measurement.md"
+
+    assert chat_history_profile.main([str(path), "--out", str(out)]) == 0
+    report = out.read_text(encoding="utf-8")
+    assert "Fetched web pages still carrying their text: 1" in report
+    assert "kept: the page-text trim is switched off" in report
+    # "Now" is what this build sends, and with the trim off that is the page.
+    assert FETCHED_PAGE_CATEGORY in report.split("By category, as this build sends it:")[1]

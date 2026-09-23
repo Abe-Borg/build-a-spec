@@ -1,14 +1,22 @@
 # Redline on your original — tracked changes in the Word file you imported
 
-**Status:** Phase 0 built 2026-09-22 in PR #184; **Phase 1 built in two
-PRs** — the backend (PR #187: the export, the self-check, the refusals, the
-route and the payload flag) and the UI (the menu item, *Open redline in
-Word*, the capability, the copy and the QA rows — see "Phase 1 (UI PR) — as
-built"). None of it is released; the owner picks the release (the notes are
-under "Release-note drafts"), and the new export's real-Word QA rows in
-`docs/RELEASE_WINDOWS.md` are still to run. All seven decisions ratified
-2026-09-22 (see "Decisions"). **Phase 2 is next and not started**; start
-from the two Phase 1 as-built notes.
+**Status:** Phase 0 built 2026-09-22 in PR #184 — announced in 1.21.0's
+release entry (the project-workspace closeout; its draft is under
+"Release-note drafts"). All seven decisions ratified 2026-09-22 (see
+"Decisions"). **Phase 1 is built, in two PRs:** the backend (PR #187,
+merged `0aa2e98`: the export, the self-check, the refusals, the route and
+the payload flag — see "Phase 1 (backend PR) — as built") and the UI
+(PR #190: the menu item, *Open redline in Word*, the capability, the copy
+and the QA rows — see "Phase 1 (UI PR) — as built"). Neither has a release
+entry. 1.21.0's, written while only the backend had merged, leaves the
+redline out, since on its own the export is reachable only through the API.
+Which release announces it, with the Phase 1 draft under "Release-note
+drafts", is the owner's pick — and v1.21.0 was not yet tagged when PR #190
+was written, so a v1.21.0 tag cut after PR #190 merges ships the menu item
+too, and that entry (not frozen until tagged) would need the draft. The new
+export's real-Word QA rows in `docs/RELEASE_WINDOWS.md` are still to run.
+**Phase 2 is next and not started**; start from the two Phase 1 as-built
+notes.
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
 the Batch 5 diff engine and redline writer (`diffing.py`, `docx_export.py`),
 and the retained upload + formatting map every import already keeps.
@@ -494,8 +502,9 @@ release note.
 
 #### Phase 0 — as built
 
-**Built in PR #184 (2026-09-22); not yet released.** No VERSION bump, no
-`release_notes.py` entry. The contract is in `docs/DOCX_FIDELITY.md` →
+**Built in PR #184 (2026-09-22); ships in 1.21.0**, whose
+`release_notes.py` entry uses the Phase 0 draft below. PR #184 itself
+bumped no VERSION and added no entry. The contract is in `docs/DOCX_FIDELITY.md` →
 "Appearance-preserving export"; the why and the traps are in `CLAUDE.md` →
 "The formatted export stops losing things". Code: `spec_doc/source_splice.py`
 (new — the D-2 splice), `spec_doc/source_render.py` (rewritten: `_Walker`
@@ -630,9 +639,11 @@ Found, not done (outside Phase 0):
 
 #### Phase 1 (backend PR) — as built
 
-**Built 2026-09-22/23 on `claude/determined-hypatia-vp5myu` (the PR that
-carries this note); not yet released.** No VERSION bump, no
-`release_notes.py` entry. The contract is in `docs/DOCX_FIDELITY.md` →
+**Built 2026-09-22/23 in PR #187 (merged `0aa2e98`).** The 1.21.0 build
+carries it, but only through the API: the Export menu does not offer it until
+the UI PR lands, so 1.21.0's release notes do not mention it, and the Phase 1
+draft under "Release-note drafts" waits for the release that carries the UI.
+PR #187 itself bumped no VERSION and added no `release_notes.py` entry. The contract is in `docs/DOCX_FIDELITY.md` →
 "Redline on your original"; the why and the traps are in `CLAUDE.md` →
 "Redline on your original — implemented notes (Phase 1, backend PR)".
 
@@ -774,12 +785,26 @@ Found, not done (outside this PR):
 
 #### Phase 1 (UI PR) — as built
 
-**Built 2026-09-23 on `claude/redline-original-ui-27gjmi` (the PR that
-carries this note); not yet released.** No VERSION bump, no
-`release_notes.py` entry, no backend route or payload change — the UI reads
-what the backend PR already serves. The why and the traps are in `CLAUDE.md`
-→ "Redline on your original — implemented notes (Phase 1, UI PR)"; the
-contract gained an "In the app" paragraph in `docs/DOCX_FIDELITY.md`.
+**Built 2026-09-23 in PR #190.** It bumped no VERSION, added no
+`release_notes.py` entry and changed no backend route or payload — the UI
+reads what the backend PR already serves. The why and the traps are in
+`CLAUDE.md` → "Redline on your original — implemented notes (Phase 1, UI
+PR)"; the contract gained an "In the app" paragraph in
+`docs/DOCX_FIDELITY.md`.
+
+**Which release carries it depends on when v1.21.0 is tagged — the owner's
+call.** 1.21.0's entry was written by the project-workspace closeout
+(PR #188) while only the backend had merged, and it leaves the redline out;
+v1.21.0 was still untagged when this PR was written. Tagged before this PR
+merges, 1.21.0 ships none of this UI, and the Phase 1 draft under
+"Release-note drafts" waits for the next release; nothing else changes.
+Tagged after, 1.21.0 ships the menu item, so before that tag the 1.21.0
+entry (not frozen until tagged) takes the Phase 1 draft, and the statements
+that the 1.21.0 build reaches the redline only through the API are corrected
+in the same change: `project-workspace/07_RELEASE_CLOSEOUT.md` deviation 8,
+the project-workspace README's phase-7 row and release-policy paragraph, the
+backend as-built note above, and the closeout's `CLAUDE.md` section (by
+erratum — it is append-only).
 
 Code: `frontend/src/types.ts` (`preserved_redline_available`,
 `preserved_redline_reason` and `PreservedRedlineReason` on the payload; the

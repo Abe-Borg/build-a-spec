@@ -109,6 +109,17 @@ name a section your memo does not have.
   exist — you set them, or you ask the assistant to turn the content into a
   spec section — the normal spec presentation comes back. Nothing is
   suppressed permanently, and a genuine master is unaffected.
+- **A long import no longer holds the app up.** The check for duplicated
+  provisions compares sibling paragraphs, and a memo imported as one long
+  article is dozens of long paragraphs with no numbers in them — the one
+  shape that check could never skip. Forty of them used to cost over twenty
+  seconds on every refresh of the document panel and before every chat
+  reply. The check now rules out, without the expensive comparison, every
+  pair it can prove could not be a duplicate, and flags exactly what it
+  flagged before; forty such paragraphs take about a tenth of a second, and
+  each version of the document is checked once however many times it is
+  read. A long unbroken row of `=` signs in an imported file no longer slows
+  the start of a chat reply either.
 
 **Attach reference documents instead of importing them.** There is now a third
 way to hand the app a file: **Attach reference** in the document panel,

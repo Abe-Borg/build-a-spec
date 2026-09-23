@@ -11,7 +11,9 @@ against the editions actually in effect.
 
 Issues are **advisory, never blocking** — they surface in the panel's
 issues drawer and are recomputed on every document mutation (pure Python,
-fast at document scale).
+fast at document scale; the session remembers each committed version's
+report — ``SessionState.document_lint`` — so its many readers share one
+pass).
 
 Rules (stable ids consumers can branch on):
 
@@ -34,7 +36,9 @@ Rules (stable ids consumers can branch on):
   duplicated requirement reaching the document by any route — QC fixes
   applied one at a time, a model restatement, a hand edit. Numeric tokens
   must match before similarity is even consulted, so two provisions
-  differing only in a dimension or an article number are never flagged.
+  differing only in a dimension or an article number are never flagged, and
+  exact upper bounds on the similarity settle every pair that provably
+  cannot reach the bar before the character-level comparison is paid for.
 - ``missing_section_header`` — articles drafted while the section
   number/title is still unset (info-level).
 - ``stale_document_identifier`` — a preserved header or footer still carries

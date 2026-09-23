@@ -24,36 +24,40 @@ section, not here.
 opened 2026-09-22. Keep the chat history the model re-reads every turn
 bounded without losing what only the conversation holds: stop saving data
 stored elsewhere (Phase 1, stale edit outlines — complete, PR #182; Phase 2,
-fetched page text — complete, PR #183, its paid live canary still owed by the
-owner before the release), then condense the conversation rarely between
-turns with the full transcript kept and recallable (Phase 3 — in review, PR
-#189; decisions D1–D4 made 2026-09-22; routine condensing stays off by default
-until a paid recall check). The plan's implementation record is the only
-authority on where each phase stands; this line is a summary of it. The file
-is the plan, the owner decisions (D1–D4) and the implementation record; its
+fetched page text — merged in PR #183, but its live canary was never run, so
+1.21.0 ships it switched off until the canary passes), then
+condense the conversation rarely between turns with the full transcript kept
+and recallable (Phase 3 — in review, PR #189; decisions D1–D4 made
+2026-09-22; routine condensing stays off by default until a paid recall
+check, and Phase 3 ships in a release after 1.21.0). The plan's
+implementation record is the only authority on where each phase stands; this
+line is a summary of it. The file is the plan, the owner decisions (D1–D4)
+and the implementation record; its
 "promote before prune" phase is handed to the project workspace's harvest.
-Ships with the project workspace's release (same release policy).
+Phases 1–2 ship in the project workspace's release, 1.21.0 (same release
+policy).
 
-**[Deep-dive remediation](deep-dive-remediation/README.md)** — the other live
-program. Six phases, 24 chunks; **Phase 1 is complete** (direct server-tool
-callers; continuation containers in research, QC and chat; server-tool
-pairing plus legacy history repair) and **Phase 2 is nearly done** — 2.2 (QC
-settling semantics, pulled forward), 2.1 (real-shaped server-tool activity
-events) and 2.3 (research follower reconnect) have landed; only 2.4 remains,
-plus Phases 3–6. Its README carries the handoff prompt, the
-frozen decisions, the finding-coverage matrix, the dependency edges and the
-phase gates; start there, not here.
+**[Deep-dive remediation](deep-dive-remediation/README.md)** — **complete**.
+Six phases, 24 chunks (1.1–6.5), all landed: direct server-tool callers,
+continuation containers, server-tool pairing and legacy history repair, live
+stream resilience, named research coverage, per-TTL cache pricing, the v4
+Final QC panel outcomes, consolidation and sign-off consistency, and the
+locking and snapshot rules. The one item still outstanding is the owner-run
+live and manual QA in Chunk 6.5, which spends real money. Its README carries
+the handoff prompt, the frozen decisions, the finding-coverage matrix, the
+dependency edges and the phase gates; start there, not here.
 
 **[Redline on your original](REDLINE_ON_ORIGINAL_2026-09-22.md)**: opened
 2026-09-22; all seven decisions ratified the same day (the seventh settled
 Phase 0's open question: a provision added after a section's last paragraph
-keeps landing at the top of the next section). **Phase 0 is built (PR #184)
-and Phase 1's backend PR is built; neither is released** — the owner picks
-the release. Phase 1's UI PR (the menu item, *Open redline in Word*, the
-capability, the copy) is next and not started; a fresh session starts from
-the plan's "Phase 1 (backend PR) — as built" note. The program adds a
-tracked-changes copy of the Word file you imported:
-every non-body part stays byte-identical, Reject All gives back the upload,
+keeps landing at the top of the next section). **Phase 0 (PR #184) ships in
+1.21.0** (the project-workspace closeout), and so does **Phase 1's backend**
+(PR #187), which is reachable only through the API until the UI ships.
+Phase 1's UI PR (the menu item, *Open redline in Word*, the capability, the
+copy) is next and not started; a fresh session starts from the plan's
+"Phase 1 (backend PR) — as built" note. The program adds a tracked-changes
+copy of the Word file you imported: every non-body part stays
+byte-identical, Reject All gives back the upload,
 and Accept All gives *Export Word (keeps your formatting)*. The export checks
 both halves itself and refuses when either check fails. Phase 0 fixed the four
 bugs found in today's formatted export along the way — relettered provisions

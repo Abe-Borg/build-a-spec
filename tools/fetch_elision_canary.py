@@ -15,9 +15,12 @@ Built from production code, not a hand-made copy: the conversation passes
 through ``conversation._committed_messages`` (the same commit transform a
 real turn takes), the request carries ``conversation._chat_tools()`` (the
 web fetch tool with citations on) and goes through
-``sanitize_messages_for_resend`` like every chat request. The system prompt
-is a single short line, adaptive thinking runs at ``low`` effort and the
-output ceiling is small, because the question is whether the history is
+``sanitize_messages_for_resend`` like every chat request. The trim ships
+switched off (``settings.ELIDE_FETCHED_PAGE_TEXT``, since 1.21.0) until
+this canary passes, so the commit transform is called with the trim forced
+on: what is under test is the shape that switch would produce. The system
+prompt is a single short line, adaptive thinking runs at ``low`` effort and
+the output ceiling is small, because the question is whether the history is
 accepted, not what the model writes.
 
 Opt-in and bounded, like ``tools/qc_verifier_canary.py``: without ``--run``
@@ -162,6 +165,8 @@ def build_request(*, max_tokens: int, control: bool = False) -> CanaryRequest:
     """The one request, built from the production commit transform.
 
     Pure: no key, no client, no network. ``control`` keeps the page text.
+    The page-text trim is forced on whatever the setting says, because the
+    canary exists to decide whether that setting can be turned on.
     """
     turn, start, end = _conversation()
     if control:
@@ -170,7 +175,7 @@ def build_request(*, max_tokens: int, control: bool = False) -> CanaryRequest:
             turn[1],
         ]
     else:
-        committed = _committed_messages(turn, _ASK)
+        committed = _committed_messages(turn, _ASK, elide_fetched_pages=True)
         # The canary is only meaningful if the elision really ran; fail
         # loudly rather than send an unelided page and report a pass.
         if _page_data(committed) != FETCHED_PAGE_NOTE.format(url=_URL):
@@ -279,10 +284,11 @@ def main(argv: list[str] | None = None) -> int:
         if status_code == 400 and not built.control:
             print(
                 "The provider REFUSED a saved conversation whose fetched page "
-                "text was replaced while a reply still cites it. Do not ship "
-                "the page-text elision until this is resolved. Run again with "
-                "--control to check whether the same conversation is accepted "
-                "with its page text intact.",
+                "text was replaced while a reply still cites it. Keep the "
+                "page-text trim switched off (BUILD_A_SPEC_ELIDE_FETCHED_PAGES) "
+                "until this is resolved. Run again with --control to check "
+                "whether the same conversation is accepted with its page text "
+                "intact.",
                 file=sys.stderr,
             )
         elif status_code != 400:
@@ -304,7 +310,8 @@ def main(argv: list[str] | None = None) -> int:
             "Fetch elision canary passed: the provider accepted a saved "
             "conversation whose fetched page text was replaced by the "
             "elision note while a reply still cites the original text "
-            f"(stop_reason={stop}). Record this in the plan's Phase 2 section."
+            f"(stop_reason={stop}). Record this in the plan's Phase 2 section; "
+            "the page-text trim's default can then be switched on."
         )
     return 0
 

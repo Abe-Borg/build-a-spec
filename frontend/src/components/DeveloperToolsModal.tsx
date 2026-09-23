@@ -67,9 +67,11 @@ function eventFields(event: Record<string, unknown>): string {
 
 /** The saved conversation by category, largest first: what the model
  *  re-reads on every turn. Sizes only (the backend never sends text), and
- *  tokens are the app's len/4 estimate. A nonzero stale-outline or
- *  fetched-page count means something committed without the matching
- *  saved-history trim. */
+ *  tokens are the app's len/4 estimate. A nonzero stale-outline count
+ *  means something committed without the outline trim. Fetched pages keep
+ *  their text unless the page-text trim is switched on
+ *  (BUILD_A_SPEC_ELIDE_FETCHED_PAGES, off by default until its live canary
+ *  passes), so that count is only a canary while the trim is on. */
 function historyMakeup(h: HistoryComposition): string {
   const top = h.categories
     .slice(0, 4)
@@ -77,7 +79,7 @@ function historyMakeup(h: HistoryComposition): string {
     .join(" · ");
   const stale = h.stale_outlines ? ` · ${h.stale_outlines} stale outlines` : "";
   const pages = h.fetched_page_texts
-    ? ` · ${h.fetched_page_texts} fetched pages still carrying text`
+    ? ` · ${h.fetched_page_texts} fetched pages carrying their text`
     : "";
   return `~${h.estimated_tokens.toLocaleString()} tokens (est.) in ${h.messages} messages${top ? ` · ${top}` : ""}${stale}${pages}`;
 }

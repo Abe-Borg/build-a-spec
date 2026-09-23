@@ -34,7 +34,10 @@ time and citation setting. The document block itself is never removed —
 citation ``document_index`` counts every document in the request, so
 dropping one would re-point every later citation at the wrong page. Fetched
 PDFs are not touched here; ``research.resend_sanitizer.elide_all_pdf_sources``
-already turns each one into a short note at commit.
+already turns each one into a short note at commit. Its callers apply it only
+while ``settings.ELIDE_FETCHED_PAGE_TEXT`` is on, which it is not by default
+until the live canary (``tools/fetch_elision_canary.py``) passes; this module
+stays a leaf and reads no settings itself.
 
 :func:`history_composition` says what a history is made of, by category,
 in sizes only — never text — for Developer tools, the support bundle and
@@ -336,8 +339,10 @@ def history_composition(messages: list[Any]) -> dict[str, Any]:
     document outline — zero for anything committed by this build, which is
     what makes it a useful canary; ``tools/chat_history_profile.py`` uses it
     to show what the elision removes from files saved by earlier ones.
-    ``fetched_page_texts`` is the same canary for fetched web pages that
-    still carry their text.
+    ``fetched_page_texts`` counts fetched web pages that still carry their
+    text: the same canary while the page-text trim is switched on, and
+    simply the number of pages the history keeps while it is off (the
+    default until its live canary passes).
     """
     tool_names: dict[str, str] = {}
     for message in messages:

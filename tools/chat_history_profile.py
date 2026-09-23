@@ -5,11 +5,12 @@ This is the measurement half of the chat-history compaction plan
 (``docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md``). The plan's numbers
 came from a synthetic section; this script replaces them with real ones.
 For each project file it reports the saved conversation by category —
-the history every chat turn re-sends — and how much of it this build's two
-saved-history trims remove: stale document outlines (Phase 1) and the text
-of fetched web pages (Phase 2). Both run at commit and again when an older
-file is opened. It also shows how much web research the history still
-keeps once they have run.
+the history every chat turn re-sends — and how much of it this build's
+saved-history trims remove: stale document outlines (Phase 1) and, while
+``BUILD_A_SPEC_ELIDE_FETCHED_PAGES`` is on, the text of fetched web pages
+(Phase 2 — off by default until its live canary passes). Each runs at
+commit and again when an older file is opened. It also shows how much web
+research the history still keeps once they have run.
 
 READ-ONLY. It never imports the client factory, never builds a session,
 never makes a model request, and never prints conversation text, tool
@@ -43,6 +44,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from backend import settings  # noqa: E402
 from backend.llm.history_hygiene import (  # noqa: E402
     CHARS_PER_TOKEN,
     FETCHED_PAGE_CATEGORY,
@@ -53,9 +55,10 @@ from backend.llm.history_hygiene import (  # noqa: E402
 )
 from backend.spec_doc.project_package import parse_project_file  # noqa: E402
 
-# Web research the history still keeps once both trims have run: search
+# Web research the history still keeps once the trims have run: search
 # results (encrypted, so they can only ever leave inside a condensed span —
-# Phase 3) and what is left of each fetched page (its URL, title and note).
+# Phase 3) and what is left of each fetched page (its URL, title and note
+# while the page-text trim is on; the whole page while it is off).
 _WEB_CATEGORIES = ("fetched web pages", "web search results")
 
 
@@ -103,10 +106,12 @@ def _profile(path: Path) -> HistoryProfile:
         return profile
     profile.turns = _user_turns(history)
     profile.saved = history_composition(history)
-    # The same two trims, in the same order, that opening the file applies.
-    profile.trimmed = history_composition(
-        elide_fetched_page_text(elide_stale_outlines(history))
-    )
+    # The same trims, in the same order, that opening the file applies; the
+    # page-text trim only while its switch is on, exactly as in the app.
+    trimmed = elide_stale_outlines(history)
+    if settings.ELIDE_FETCHED_PAGE_TEXT:
+        trimmed = elide_fetched_page_text(trimmed)
+    profile.trimmed = history_composition(trimmed)
     return profile
 
 
@@ -176,11 +181,17 @@ def _markdown(profiles: list[HistoryProfile]) -> str:
             f"(~{_category_chars(profile.saved, OUTLINE_CATEGORY) // CHARS_PER_TOKEN:,} "
             "tokens) — removed when the file is opened."
         )
+        page_fate = (
+            "removed when the file is opened"
+            if settings.ELIDE_FETCHED_PAGE_TEXT
+            else "kept: the page-text trim is switched off "
+            "(BUILD_A_SPEC_ELIDE_FETCHED_PAGES)"
+        )
         lines.append(
             "- Fetched web pages still carrying their text: "
             f"{profile.saved.get('fetched_page_texts', 0)} "
             f"(~{_category_chars(profile.saved, FETCHED_PAGE_CATEGORY) // CHARS_PER_TOKEN:,} "
-            "tokens) — removed when the file is opened."
+            f"tokens) — {page_fate}."
         )
         lines.append("- By category, as this build sends it:")
         total = profile.trimmed.get("chars", 0)
@@ -202,14 +213,15 @@ def _markdown(profiles: list[HistoryProfile]) -> str:
         lines.append(
             f"Largest history: ~{largest.saved.get('estimated_tokens', 0):,} "
             f"estimated tokens as saved, ~{largest.trimmed.get('estimated_tokens', 0):,} "
-            f"after the outline and page-text trims ({_share(largest.removed_chars, largest.saved.get('chars', 0))} "
+            f"after the trims this build applies ({_share(largest.removed_chars, largest.saved.get('chars', 0))} "
             "removed)."
         )
         lines.append("")
         lines.append(
-            "- **Web research kept** is what the trims cannot touch: search "
+            "- **Web research kept** is what the trims leave: search "
             "results, whose encrypted content the API needs intact, plus what "
-            "is left of each fetched page (its URL, title and a short note). "
+            "is left of each fetched page (its URL, title and a short note "
+            "while the page-text trim is on; the whole page while it is off). "
             "Only Phase 3's condensing can remove search results."
         )
         lines.append(

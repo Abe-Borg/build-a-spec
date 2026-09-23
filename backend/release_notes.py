@@ -89,6 +89,190 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.21.0",
+        date="2026-09-23",
+        headline="Every section of a project stays in step",
+        summary=(
+            "1.20.0 made the next section one click away. This release "
+            "makes the project itself hold the work. A project's sections "
+            "live in one folder, and the project brief beside them updates "
+            "itself every time you save. A section can pull in what its "
+            "siblings learned since it last looked. Facts the conversation "
+            "settled but nobody wrote down can be found in one reviewed "
+            "pass. Long drafting sessions re-send far less with every "
+            "message, and Export Word (keeps your formatting) keeps more "
+            "of your master's formatting."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Projects",
+                items=(
+                    ReleaseItem(
+                        title="Your project has a home",
+                        body=(
+                            "This arrived in 1.20.0 without a mention. Keep "
+                            "a project's brief and its section files in one "
+                            "folder, and the desktop app finds them. The "
+                            "Project panel, above Project facts, lists every "
+                            "section the project has drafted and marks the "
+                            "one you are in. It opens any other section in "
+                            "one click, offering to save first. Nothing "
+                            "about the folder is written into any file, so "
+                            "you can move or share the folder whole."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The project brief keeps itself current",
+                        body=(
+                            "Saving a section beside its project brief now "
+                            "adds what the section established to the brief "
+                            "— research rounds, attached documents and "
+                            "project facts — without removing anything "
+                            "another section recorded. A save that adds "
+                            "nothing leaves the file untouched. If the brief "
+                            "cannot be updated, the save still goes through "
+                            "and says why. Update project brief in the "
+                            "Project panel does the same on demand. "
+                            "Exporting a brief onto the project's existing "
+                            "one now merges into it instead of replacing "
+                            "it. Another project's brief, or a file that is "
+                            "not a brief, is replaced only after you say yes."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Pull what your other sections learned",
+                        body=(
+                            "When another section of the project has added "
+                            "work this one lacks, the Project panel says so "
+                            "and offers Pull project changes. Its project "
+                            "facts come in (new ones, and edits or "
+                            "retirements of ones you already hold), along "
+                            "with its research rounds and reference "
+                            "documents. Nothing is removed. A different "
+                            "city, client or project type is shown to you, "
+                            "never applied. A pull that changes what Final "
+                            "QC reviewed makes a retained Final QC report "
+                            "read as out of date, just as editing those "
+                            "inputs does."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Sections that disagree on an edition are told so",
+                        body=(
+                            "When two sections record different editions of "
+                            "the same standard, the brief records the "
+                            "disagreement as a project fact to resolve "
+                            "before issue, whichever section saved last. A "
+                            "project fact edited in one section is also "
+                            "recognised as the same fact in another, and "
+                            "the later edit wins."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Project facts",
+                items=(
+                    ReleaseItem(
+                        title="Harvest the facts the chat settled",
+                        body=(
+                            "Harvest facts… in the Project facts panel "
+                            "reads the conversation since the last harvest, "
+                            "the draft's provisions and your Final QC "
+                            "dismissal reasons. It then proposes the project "
+                            "facts nobody recorded, each with its source and "
+                            "the line it rests on. You tick, edit or reject "
+                            "every proposal before anything is saved. It is "
+                            "one paid model call, runs only when you press "
+                            "Run, and shows in Settings → Usage as "
+                            "“Fact harvest”. Next section and the "
+                            "Export menu tell you how many replies are "
+                            "unharvested and offer to harvest first. They "
+                            "never run it themselves."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A fact's source has to exist",
+                        body=(
+                            "This changes what the assistant is allowed to "
+                            "record. Recording a project fact — by the "
+                            "assistant, in the panel, or from a harvest "
+                            "— now checks that the research finding, "
+                            "attached document, Final QC finding or reply it "
+                            "cites is really there. The assistant is told "
+                            "when a source does not exist, and it corrects "
+                            "the fact. A fact recorded before this check, "
+                            "carried in from another section, or whose "
+                            "source has since been removed is marked "
+                            "“source not found” and otherwise left "
+                            "exactly as it was."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Chat",
+                items=(
+                    ReleaseItem(
+                        title="Long sessions stay lighter",
+                        body=(
+                            "Every edit used to save a full copy of the "
+                            "section's outline into the conversation, and "
+                            "every later message re-sent all of those "
+                            "copies. They are no longer kept. The assistant "
+                            "still sees the whole, current document on "
+                            "every message. Long drafting sessions now cost "
+                            "less per message, stay further from the "
+                            "model's context limit, and save smaller "
+                            "project files. Projects saved by earlier "
+                            "versions are trimmed the same way when you "
+                            "open them."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Word export",
+                items=(
+                    ReleaseItem(
+                        title="Export Word (keeps your formatting) keeps more of it",
+                        body=(
+                            "Provisions that get relettered when you add or "
+                            "remove one above them keep their tab and any "
+                            "bold or italic. So do the unchanged words of a "
+                            "provision you edit. Word section breaks survive "
+                            "your edits: deleting or moving the provision "
+                            "below one no longer removes or moves the break, "
+                            "and adding a provision no longer duplicates "
+                            "one. A “(Not used.)” line disappears "
+                            "once its PART has an article. Article numbers "
+                            "keep your master's format (1.01 stays 1.01), "
+                            "and a new article looks like your other "
+                            "article headings. The blank lines, page breaks "
+                            "and pictures around what you change stay where "
+                            "they were."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Troubleshooting",
+                items=(
+                    ReleaseItem(
+                        title="See what each message carries",
+                        body=(
+                            "Settings → Developer tools now shows how "
+                            "much of each message's project context each "
+                            "part takes — the research profile, the "
+                            "project facts, the document. If a section feels "
+                            "expensive, you can see why instead of guessing."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.20.0",
         date="2026-09-22",
         headline="The next section is one click away",

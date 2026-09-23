@@ -400,6 +400,17 @@ backend/
                            NOT-yet-updated app reads) + markdown_notes (the
                            release page). No I/O, no app imports. A version
                            with no entry fails the suite AND the workflow
+  ui_preferences.py        the panel tray's layout on disk (ui_preferences.json
+                           in app_config_dir — browser storage cannot keep it:
+                           pywebview's private mode + an ephemeral port per
+                           launch). UiPreferences {panels_folded,
+                           hidden_panels}; lenient read (missing / corrupt /
+                           oversized / BOM / wrong types → defaults; ids
+                           pattern-checked, deduped, bounded 32), atomic write
+                           through project_brief.write_brief_atomically. The ids
+                           are opaque here — lib/panelTray.ts owns them.
+                           Routes: GET / PUT /api/ui/preferences (plain def,
+                           not session state, strict body → 422)
   compliance/checker.py    [PORT: Spec Critic src/compliance/compliance_checker.py]
                            controlling = grounded spec_requirements only;
                            coverage matrix (represented/missing/contradicted/
@@ -1529,7 +1540,13 @@ frontend/src/
                            gate kind + requestOpenSection/doOpenSection,
                            applyLoadedProject (the ONE apply for Open and the
                            panel's Open), and the nativeOpenTokens WeakMap +
-                           bindNativeProjectHome after a native open's load
+                           bindNativeProjectHome after a native open's load;
+                           the panel tray's layout (panelTray: read once at
+                           launch from GET /api/ui/preferences, null until then;
+                           saved through a promise chain in click order; locked
+                           open while the tour runs or a protected workspace is
+                           active) — here, not in ArtifactPanel, which remounts
+                           on every new session
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
@@ -1583,7 +1600,18 @@ frontend/src/
                            orthogonal to phase, so "Continue" restores the popup
                            untouched and abort/start clear it
   lib/onboardingStorage.ts [Batch 6] "tour completed" flag — the codebase's first
-                           localStorage use; try/caught, cosmetic only
+                           localStorage use; try/caught, cosmetic only. In the
+                           packaged app it lasts one launch: pywebview runs the
+                           WebView in private mode (webview.start's default) on
+                           an ephemeral port, so localStorage starts empty every
+                           time (why the panel tray's layout is server-side)
+  lib/panelTray.ts         the panel tray's vocabulary + pure rules: PANEL_IDS
+                           (stacking order) + PANEL_LABELS, {folded, hidden}
+                           kept SEPARATE (a fold never rewrites the per-panel
+                           choice), panelTrayFromApi (unknown ids dropped, only
+                           a real boolean folds), effectivePanelTray (ready /
+                           locked: the tour shows every panel), foldedAttention
+                           (the folded bar's counts, minus panels left out)
   lib/figures.ts           [Batch 8] figure render + security helpers: DOMPurify
                            SVG sanitize, lazy mermaid.render (securityLevel strict,
                            htmlLabels off), sandbox-iframe srcdoc with a strict CSP
@@ -1823,7 +1851,13 @@ frontend/src/
                            convinced" dossier — sixteen runtime cards; a
                            contract, every number real) / Tip (a hover
                            tooltip that works on a DISABLED control — a
-                           native title never fires on a disabled button)
+                           native title never fires on a disabled button) /
+                           PanelTray (every panel under the paper behind one
+                           Panels bar: Hide / Show folds them all, Choose…
+                           leaves some out, the open tray capped at half the
+                           panel with its own scroll; panels: Record<PanelId,
+                           ReactNode>, so tsc refuses a tray missing one; a
+                           hidden panel is display:none, never unmounted)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tools/research_cost_profile.py
                            [Research/QC cost Tier 1, Chunk 1] read-only: saved
@@ -2270,6 +2304,20 @@ tests/
                            same request multiset either way, a retained
                            result current with the switch in either position,
                            and the default read from the source
+  test_ui_preferences.py   the panel tray's remembered layout: defaults with no
+                           file (a read creates none), a save read back by a
+                           NEW app, not session state (reset + mid-turn), the
+                           strict body's 422s leaving the file untouched, a
+                           failed write's 500 with the old file whole and no
+                           temp left, the lenient reader's matrix, the bounds,
+                           and the launch token in front of both routes
+  frontend/tests/panelTray.test.ts
+                           the tray's pure rules (strict read, round trip, a
+                           fold keeping the per-panel choice, the tour lock,
+                           the folded counts), the API client, and the wiring
+                           pinned at the source: the half-height cap, hidden
+                           not unmounted, every drawer inside the tray and the
+                           two modals outside it, App's ordered saves and lock
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -15964,6 +16012,137 @@ is the why and the traps.
   3. Any earlier note describing `raw_zip` as rebuilding exactly one member:
      `rewrite_raw_zip_members` now replaces several and appends new ones;
      the single-member entry points delegate to it unchanged.
+
+## Room for the paper — implemented notes (the panel tray)
+
+Owner ask (Abraham, 2026-09-23): "The user needs the option to toggle
+visibility of all dropdown panels. right now the document panel barely has
+any real estate to show the actual spec." It was measured before anything
+changed. The fix adds one route pair, one config file, one component and one
+capability. It adds no dependency, env knob, SSE event or project-format
+change, and no VERSION bump. Which release carries it is the owner's call;
+the draft is below.
+
+- **The measurement.** The test session was the tutorial's structural
+  practice copy plus five attached references, loaded as a `.baspec`, at the
+  app's default window size (1440×900). Nine collapsed bars take 34–40px each
+  (ten in the shell, with the Project panel). Waiting on you and Project facts
+  both open themselves the first time something lands in them, which on a
+  project load is at once. The document scroller got **48px**, and the stack
+  overflowed the window: Documents was cut off. After the change the
+  scroller gets 358px with the tray open (capped) and 750px folded. At the
+  1100×700 minimum window it gets 241px and 533px.
+- **Three mechanisms, each answering part of the complaint.** *Fold*: one
+  click hides every panel, and the 30px bar that stays still counts what
+  needs attention. *Choose*: a checkbox per panel. *Cap*: the open tray is at
+  most `max-h-[50%]` of the panel, with its own scroll under a fixed bar. The
+  cap is the one change nobody opts into. It means an opened panel scrolls
+  inside the tray instead of squeezing the paper, and no auto-expansion can
+  take the specification to zero again.
+- **Fold and choose are separate state (`{folded, hidden}`), on purpose.**
+  "Hide all" is a fold, not every id added to `hidden`, so Show brings back
+  exactly the tray the user had chosen. Pinned by the tests, and by a revert
+  where the fold clears the list.
+- **A hidden panel is `display:none`, never unmounted.** Each drawer owns
+  real state: the review walk's cursor and draft, a half-typed standard, the
+  QC accept-set, the research area picker. A fold is a request for room, not
+  a reason to lose that state. Folding also leaves the auto-expansions alone:
+  a panel that opens itself while folded is open when the tray comes back.
+  Nothing inside a drawer listens on `window` (the review walk's keys are a
+  React handler on the walker), so a hidden drawer cannot act on keystrokes.
+- **`panels: Record<PanelId, ReactNode>` is the completeness check.** tsc
+  refuses a tray that leaves a panel out, and the source test also pins that
+  no drawer renders outside the tray. The two modals that used to sit between
+  ProjectFactsPanel and StandardsStrip (NextSectionDialog, HarvestDialog)
+  moved out of it. Inside a folded tray they would have been hidden when
+  opened from the action bar or the Export menu.
+- **The layout is kept on the server because browser storage cannot keep
+  it.** `webview.start` defaults to `private_mode=True`, and main.py keeps
+  that default: "In private mode, cookies and local storage are not
+  preserved". The packaged app also binds an ephemeral port, so each launch
+  is a new origin. The store is `ui_preferences.json` in `app_config_dir()`,
+  beside the key file and `update_check.json`.
+  - The read is lenient. A missing, corrupt or oversized file, a BOM, or a
+    wrong type all read as the defaults. Ids are pattern-checked, deduped and
+    bounded to 32. Only a real boolean folds, because `"false"` is truthy.
+  - The write is strict. `StrictBool`, the id pattern and `max_length` turn a
+    bad body into a 422 that leaves the file untouched.
+  - The write is atomic, through `project_brief.write_brief_atomically`
+    (prefix `.buildaspec-ui-`). A failed write is a 500 `write_failed`, and
+    the old file stays whole.
+  - The backend stores the ids opaquely, and the frontend drops any id it
+    does not know. Adding a panel is a frontend-only change, and an old file
+    cannot break a new build.
+  - This is the codebase's first `@app.put` (full replacement). The desktop
+    CORS list already allowed PUT, and the install hold refuses it during an
+    update download, which is harmless.
+- **Saves go out in click order.** App chains them on a promise, so each
+  PUT waits for the previous one. The server runs plain `def` routes on a
+  threadpool, where two PUTs could otherwise land in either order. A failed
+  save is `console.debug`, not `console.error`: clientLog ships errors to
+  diagnostics as faults, and an unremembered layout is not one.
+- **The layout lives in App, above the per-session remount.** ArtifactPanel
+  is keyed by `sessionNonce`, and a layout belongs to the user, not the
+  session. The same reasoning moved `consumeTutorialUpdateInvitation` up.
+  It is `null` until read, and the tray renders nothing until then
+  (`ready: false`), so a folded tray never flashes open at launch. A failed
+  read falls back to the defaults.
+- **The tour owns the layout while it runs.**
+  `panelTrayLocked = onboarding.phase.kind !== "idle" || inProtectedWorkspace`.
+  A panel hidden with `display:none` is still FOUND by the overlay's
+  `querySelector`, which degrades to the "not available" card only on a null
+  result. The spotlight would sit on a zero-size box at the window's corner.
+  While locked, every panel shows and both controls are disabled, with a Tip
+  saying why. Checked in Chromium: a folded, two-panel-hidden layout came back
+  untouched after walking the tour to the new step.
+- **The folded bar keeps the signals.** It shows blocks to review
+  (`reviewCounts(doc).total`), issues, open items and open follow-ups, only
+  for panels the user has not left out, because leaving a panel out is a
+  choice already made about it. v1.16.0's promise ("nothing the assistant
+  needs from you gets lost") survives a fold.
+- **Capability and tour.** `document.panels` is declared on both controls
+  (one capability, two controls: the `updates.manage` precedent). A step,
+  `panel-tray`, is appended to the END of the paper chapter, anchored on the
+  tray bar. No resume index moves, so `TOUR_VERSION` stays 8 (and
+  `projectPanel.test.ts` pins 8). Help's How to use gains a "Give the paper
+  room" step.
+- **Also fixed: the Documents strip's border.** `ReferenceDocumentsStrip`
+  used `border-line bg-surface-2/40`, and neither token exists in the theme.
+  Tailwind v4's default border colour is `currentColor`, so the Documents bar
+  drew a bright line above itself. It now uses `border-edge bg-bg/70` like
+  its siblings.
+- **Found, not done:**
+  - `QCDrawer`'s batch-progress line has the same undefined `border-line
+    bg-paper-2` pair.
+  - `onboardingStorage`'s tour-completed flag has the same one-launch
+    lifetime in the packaged app, so the "New to this software" chip is
+    treated as untoured every launch.
+  - The document panel's action bar wraps its button labels at 1440 px, and
+    at the 1100 px minimum its left-hand controls overlap one another.
+- **Deliberately not done:** a keyboard shortcut, and drag-to-resize for the
+  split between the paper and the tray.
+- **Tests.** `tests/test_ui_preferences.py` has 22 cases, parametrized
+  included, and `frontend/tests/panelTray.test.ts` has 10 tests. For the
+  revert matrix, each of 23 mechanisms was disabled in place and the exact
+  text restored afterwards: 12 backend (the reader's five rules, the BOM, the
+  atomic write, the strict boolean, the pattern, the bound, the write-failure
+  answer, the dedupe) and 11 frontend (the strict read, unknown ids, the
+  fold keeping the choice, the tour lock, the counts' exclusion, the cap,
+  hidden not unmounted, waiting for the read, ordered saves, the protected
+  workspace in the lock, and the modals outside the tray). Every row turned
+  at least one test red.
+- **Release-note draft** (a "Document panel" section, for whichever release
+  carries it):
+
+  > **More room for the specification.** The panels under the document —
+  > Review, Research, Final QC, Issues, Open items, Waiting on you, Project,
+  > Project facts, Standards and Documents — now sit in one tray with its own
+  > Panels bar. Hide folds them all away and gives the height back to the
+  > specification, while the bar keeps counting what needs you. Choose…
+  > leaves out the panels you never use. The open tray never takes more than
+  > half the panel, so opening a long panel scrolls inside it instead of
+  > squeezing the specification off the screen. Your layout is remembered
+  > the next time you open the app.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

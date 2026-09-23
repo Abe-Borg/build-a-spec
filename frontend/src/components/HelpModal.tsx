@@ -231,6 +231,19 @@ function HowToUse({
             d: "Hit “Draft full section” to lay down every PART and article in one pass, or build it through chat. A full draft anchors on the section, the project type, and the country, so if any of the three is still unrecorded the button asks you about them first — answer, then draft. Once there is content on the page, the inline structure controls let you add and rearrange articles by hand.",
           },
           {
+            t: "Give the paper room",
+            d: (
+              <>
+                Review, Research, Final QC and the other panels sit in one tray
+                under the paper, and the tray never takes more than half the
+                panel. Its <Tag>Panels</Tag> bar hides them all in one click —
+                the bar keeps counting what needs you — and{" "}
+                <Tag>Choose…</Tag> leaves out the panels you never use. The
+                layout is remembered between launches.
+              </>
+            ),
+          },
+          {
             t: "Walk the Review queue",
             d: (
               <>

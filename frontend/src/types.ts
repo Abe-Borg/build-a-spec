@@ -2048,6 +2048,16 @@ export interface ReleaseNotesPayload {
   entries: ReleaseNote[];
 }
 
+/**
+ * The document panel's panel-tray layout, remembered between launches
+ * (`GET` / `PUT /api/ui/preferences`, backend/ui_preferences.py). The server
+ * stores the ids opaquely; lib/panelTray.ts owns what they mean.
+ */
+export interface UiPreferencesPayload {
+  panels_folded: boolean;
+  hidden_panels: string[];
+}
+
 export interface ProjectLoadResult extends DocPayload {
   chat: { role: Role; text: string }[];
   /** `POST /api/project/open-section` only: the section number opened. */

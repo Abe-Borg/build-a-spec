@@ -46,6 +46,7 @@ import type {
   TutorialStartPayload,
   TutorialStatusPayload,
   ReleaseNotesPayload,
+  UiPreferencesPayload,
   UpdateCheckPayload,
   UsageSummary,
 } from "../types";
@@ -1626,6 +1627,29 @@ export async function getReleaseNotes(
 
 export async function markReleaseNotesSeen(): Promise<void> {
   await fetch("/api/release-notes/seen", { method: "POST" });
+}
+
+/**
+ * The panel tray's saved layout. Kept on disk by the server, not in browser
+ * storage: the packaged app's WebView runs in private mode on a new port
+ * every launch, so localStorage never survives a relaunch.
+ */
+export async function getUiPreferences(): Promise<UiPreferencesPayload> {
+  const resp = await fetch("/api/ui/preferences");
+  if (!resp.ok) throw new Error(`ui preferences ${resp.status}`);
+  return resp.json();
+}
+
+/** Remember the panel tray's layout for the next launch. */
+export async function saveUiPreferences(
+  payload: UiPreferencesPayload,
+): Promise<void> {
+  const resp = await fetch("/api/ui/preferences", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error(`ui preferences save ${resp.status}`);
 }
 
 export class UpdateInstallError extends Error {

@@ -356,6 +356,16 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "This practice state contains real findings on purpose. Lint runs with no model call and no network: stale or unrecorded editions, unresolved placeholders, template markers, empty articles, duplicate article titles, and an unset section header. Each finding links to the block it came from. Lint is advisory — it never blocks an edit or a turn — but a clean report is required for issue readiness.",
       },
+      {
+        id: "panel-tray",
+        capabilities: ["document.panels"],
+        mode: "explanatory",
+        anchor: "panel-tray",
+        placement: "top",
+        title: "Room for the paper",
+        body:
+          "Every panel in this chapter lives in one tray under the paper, and its bar folds the whole tray away, giving that height back to the specification. A folded bar still counts what is waiting to be reviewed, the issues, the open items, and what is waiting on you. Choose… leaves out the panels you never use, and an open tray never takes more than half the panel — an opened panel scrolls inside it. The layout is remembered between launches. The tour keeps every panel open so each step can point at one, and your layout comes back when it ends.",
+      },
     ],
   },
   {

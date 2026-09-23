@@ -635,6 +635,25 @@ class SessionState:
             self._lint_cache = (section, module, {**reports, inputs: issues})
         return [dict(issue) for issue in issues]
 
+    def preserved_chrome(self) -> tuple[str, ...]:
+        """The imported package's header, footer and cover-page lines.
+
+        What the ``stale_document_identifier`` lint reads for a section
+        number the body no longer carries. Every surface that lints the live
+        document reads this one derivation: the doc payload, readiness, the
+        PROJECT CONTEXT a turn sends, and the ``lint`` event a doc-changing
+        turn emits after it commits. So none of them can report a finding
+        another one drops.
+
+        Empty for a from-scratch document, and empty once the retained bytes
+        are gone: the lines describe one specific upload, and reporting them
+        beside a document that no longer carries it would be a warning about
+        nothing.
+        """
+        if self.source_format_map is None or self.source_docx_bytes is None:
+            return ()
+        return self.source_format_map.preserved_chrome()
+
     def claim_model_turn(self) -> tuple[object, int] | None:
         """Atomically claim the single streaming-turn slot.
 
@@ -2431,12 +2450,7 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
         # The model is told too: it is the one that can offer to renumber
         # the section, and a stale footer is exactly the kind of thing a
         # reviewer expects it to notice.
-        preserved_chrome=(
-            tuple(session.source_format_map.preserved_chrome())
-            if getattr(session, "source_format_map", None) is not None
-            and session.source_docx_bytes is not None
-            else ()
-        ),
+        preserved_chrome=session.preserved_chrome(),
     )
     if lint_items:
         lines = [
@@ -5370,11 +5384,15 @@ def stream_user_turn(
                         },
                         {
                             "type": "lint",
+                            # Linted exactly as the doc payload behind it is,
+                            # preserved chrome included, so the stream never
+                            # drops a finding the refetch then restores.
                             "items": session.document_lint(
                                 session.doc.doc,
                                 unstructured_import=(
                                     session.import_is_unstructured()
                                 ),
+                                preserved_chrome=session.preserved_chrome(),
                             ),
                             "standards": standards_payload(session),
                         },

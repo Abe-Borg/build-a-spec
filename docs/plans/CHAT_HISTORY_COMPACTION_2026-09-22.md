@@ -113,7 +113,7 @@ see Phase 5.
 |---|---|---|---|---|
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
-| 2 | Fetched web-page text out of saved history | **in review** | `a6e5fea` (PR #183) | commit-time + load-time elision; live canary built, its one request (the owner's run) gates the merge — see Phase 2 → Canary result |
+| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`) | commit-time + load-time elision; live canary built but **never run** — the PR merged without it. Ships in 1.21.0 **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`) until the canary passes — see Phase 2 → Canary result |
 | 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | unblocked (D1 and D3 decided 2026-09-22); ship both halves together |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
@@ -121,16 +121,21 @@ see Phase 5.
 A status moves to **complete** only after the PR merges, set by the next
 session that touches this file (the project-workspace convention).
 
-**Where it stands (2026-09-22, recorded while Phase 2 is in review).**
-Phase 1 is on `master`. The owner decided D1–D4 on 2026-09-22 (see the
-Decisions table). No real measurements have been supplied yet, so the
-numbers under "What actually fills the history" are still the synthetic
-ones.
+**Where it stands (2026-09-23, recorded at the 1.21.0 closeout).**
+Phases 1 and 2 are on `master`, and both ship in 1.21.0 (the
+project-workspace closeout, `project-workspace/07_RELEASE_CLOSEOUT.md`).
+The owner decided D1–D4 on 2026-09-22 (see the Decisions table). No real
+measurements have been supplied yet, so the numbers under "What actually
+fills the history" are still the synthetic ones.
 
-- **Phase 2** is built and in review in PR #183. Its live canary has not
-  been run yet: that takes the owner's API key and one paid request, and
-  the PR should not merge until the canary reports acceptance (see Phase 2
-  → Canary result).
+- **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, which
+  has still not been run. It needs the owner's API key and one paid
+  request, and no key was available to the closeout session. So 1.21.0
+  ships the trim **switched off**: the code, the tests and the canary are
+  on `master`, and `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` (default `0`) gates
+  both the commit-time and the load-time elision. Turning it on by default
+  is a one-line change, plus the Phase 2 release note, once the canary
+  reports acceptance (see Phase 2 → Canary result).
 - **Phase 3** is next, and nothing blocks building it: D1 is 600k tokens
   with the last 3 user turns kept, and D3 is our own summarizer. It ships
   the condensed conversation and the recall tool together, as its own PR.
@@ -214,8 +219,8 @@ between calls, which is what it maps new ids with.
   them load-bearing: commit elision → 3 red, load elision → 1 red, tool
   scoping → 2 red.
 
-**Release-note draft** (for whichever release carries this; see "Release
-policy" below):
+**Release-note draft** (shipped in 1.21.0; see "Release policy"
+below):
 
 > **Long sessions stay lighter.** Every edit used to save a full copy of
 > the section's outline into the conversation, and the model re-read all
@@ -284,13 +289,30 @@ updating that ground rule in the same change.
 
 **Canary result** (the owner's run; paste its output here):
 
-- **Pending**: not yet run. The command is
-  `.venv\Scripts\python tools\fetch_elision_canary.py --run`. Phase 2 should
-  merge only after the canary reports that the provider accepted the
-  conversation.
+- **Not run** as of the 1.21.0 closeout (2026-09-23). PR #183 merged
+  without it, and the closeout session had no API key to run it with. The
+  command is `.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
+  request, about two cents at most). It forces the trim on for its own
+  request whatever the switch below says, so it tests the shape the switch
+  would turn on.
+- **What that decided:** 1.21.0 ships the trim **switched off**
+  (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`), so no saved history
+  takes the unverified shape. With the switch off, commit and project load
+  keep fetched page text exactly as they did before this phase. Phase 1's
+  outline trim is unaffected, and Developer tools and the offline profiler
+  still count the fetched pages that keep their text.
+- **When it passes:** paste its output here. Then flip the default in
+  `backend/settings.py` (`test_the_page_text_trim_ships_switched_off`
+  pins it and will need its expectation changed with it), add the
+  Release-note draft below to the next release, and update README.md's
+  Configuration row and "Fetched web pages" subsection.
+- **If it is refused:** run it again with `--control`, record both outputs
+  here, and rework the elision before the default changes. One option is
+  to also drop the citations that point into a trimmed page, keeping their
+  quoted passages in the note.
 
-**Release-note draft** (for whichever release carries this; see "Release
-policy" below):
+**Release-note draft** (NOT in 1.21.0, which ships the trim switched
+off; it goes into the release that turns the trim on by default):
 
 > **Web pages the assistant reads stop riding along.** When the assistant
 > read a web page during a chat, the page's full text was saved into the
@@ -469,3 +491,8 @@ writes a "Release-note draft" in this file, and the next release's
 closeout writes the real entry from the drafts. v1.20.0 was published
 2026-09-22, so its entry is frozen. `project-workspace/07_RELEASE_CLOSEOUT.md`
 step 3 names this file so the drafts are collected.
+
+**1.21.0 (2026-09-23)** is that release. It carries Phase 1 and
+Phase 2, and its entry uses Phase 1's draft. Phase 2's draft waits: the
+trim ships switched off until its canary passes, and a release note
+describing a change nobody receives would be false.

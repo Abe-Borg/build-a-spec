@@ -409,7 +409,14 @@ proves Word's layout:
 - [ ] **In a tour, the button is absent**; with a turn streaming, it is
       disabled.
 
-### The project has a home (Project workspace Phase 2)
+### Project workspace (v1.21.0)
+
+The project-workspace program's rows, one subsection per phase. Phase 2's
+Project panel was already in the 1.20.0 build, but 1.21.0 is the first
+release to announce it, so its rows belong to this release. Phase 1 (Next
+section →) is under v1.20.0 above.
+
+#### The project has a home (Phase 2)
 
 - [ ] **Save beside a brief and see the panel.** In a section that has
       exported a project brief (Export → *Export project brief*), save the
@@ -442,7 +449,7 @@ proves Word's layout:
       sections of a practice project with no folder, no *Open* and no
       *Next section →*.
 
-### The brief is a living file (Project workspace Phase 3)
+#### The brief is a living file (Phase 3)
 
 - [ ] **Save twice from two sections, then read the brief.** With two
       sections of one project in their folder (the Phase 2 rows above), open
@@ -483,7 +490,7 @@ proves Word's layout:
       found. Edit it again so two documents share one `rid`: Pull and Save
       both refuse to merge it, and the file is left exactly as it was.
 
-### Harvest: nothing settled is left in the transcript (Project workspace Phase 4)
+#### Harvest: nothing settled is left in the transcript (Phase 4)
 
 - [ ] **A real harvest on a real section (paid, owner-run).** In a section
       with a conversation that settled things the assistant never recorded
@@ -548,7 +555,7 @@ proves Word's layout:
       is disabled and its tooltip says why.
 - [ ] **In the tour** the Project facts step never shows *Harvest facts…*.
 
-### See what each turn carries (Project workspace Phase 5, part A)
+#### See what each turn carries (Phase 5, part A)
 
 - [ ] **The Context makeup row after one turn.** Before any message,
       Settings → *Developer tools* → Session state shows *Context makeup*
@@ -564,23 +571,34 @@ proves Word's layout:
       `docs/plans/project-workspace/05_RELEVANCE_TRIM.md` (the gate), not
       here — it is not a release check.
 
-### Chat history compaction (Phases 1–2)
+### Chat history compaction (v1.21.0; Phases 1–2, Phase 2 switched off)
 
-- [ ] **The fetch elision canary passes** before any release that carries
-      Phase 2: `.venv\Scripts\python tools\fetch_elision_canary.py --run`
-      (one request, about two cents at most). It sends a saved conversation
-      whose fetched page text was trimmed while a reply still cites the page,
-      and must report that the provider accepted it. If it reports a refusal,
-      do not release; run it again with `--control` and record both outputs
-      in the compaction plan's Phase 2 section.
-- [ ] **A fetched page leaves the saved conversation.** Ask the assistant to
-      read a public web page and quote something from it. After the reply,
-      Settings → Developer tools → Session state → **History makeup** does
-      not mention "fetched pages still carrying text", and the next message
-      still gets an answer (the assistant may read the page again). Save,
-      copy the `.baspec` to a `.zip` and open its `project.json`: the page's
-      address and title are there and its body text is not. The quoted
-      passage is still there, inside the reply's citation.
+- [ ] **Stale outlines leave the saved conversation** (Phase 1). In a
+      section of a few articles, press *Draft full section*, then send one
+      more message. Settings → Developer tools → Session state → **History
+      makeup** mentions no stale outlines. Save, copy the `.baspec` to a
+      `.zip` and open its `project.json`: each edit result says its outline
+      was omitted instead of repeating the document.
+- [ ] **With the default, a fetched page stays in the saved conversation.**
+      1.21.0 ships the page-text trim switched off. Ask the assistant to read
+      a public web page and quote something from it. After the reply,
+      **History makeup** reports the page ("1 fetched pages carrying their
+      text"), and the saved `project.json` still holds the page's text.
+- [ ] **The fetch elision canary passes** before any release that switches
+      the page-text trim on by default (not a 1.21.0 check):
+      `.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
+      request, about two cents at most). It sends a saved conversation whose
+      fetched page text was trimmed while a reply still cites the page, and
+      must report that the provider accepted it. If it reports a refusal,
+      keep the default off; run it again with `--control` and record both
+      outputs in the compaction plan's Phase 2 section.
+- [ ] **With the trim switched on, a fetched page leaves the saved
+      conversation.** Launch with `BUILD_A_SPEC_ELIDE_FETCHED_PAGES=1` and
+      repeat the web-page check. **History makeup** no longer mentions
+      fetched pages carrying their text, and the next message still gets an
+      answer (the assistant may read the page again). In `project.json` the
+      page's address and title are there and its body text is not. The
+      quoted passage is still there, inside the reply's citation.
 
 ### State that must recover (v1.17.0)
 

@@ -115,7 +115,12 @@ backend/
                            every 1h write on it is silently underpriced;
                            HARVEST_EFFORT (Project workspace Phase 4, default
                            medium — the fact harvest extracts, it drafts
-                           nothing)
+                           nothing); ELIDE_FETCHED_PAGE_TEXT
+                           (BUILD_A_SPEC_ELIDE_FETCHED_PAGES, default OFF —
+                           the compaction Phase 2 page-text trim ships
+                           switched off in 1.21.0 until its live canary
+                           passes; commit and project load read it at call
+                           time)
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive, gated on the
                            draft prerequisites via _draft_prerequisites —
@@ -1095,7 +1100,10 @@ backend/
                            stay; a fetched PDF keeps its own note) out of
                            COMMITTED history — COW, same list object when
                            nothing changed, applied by _committed_messages
-                           and by project load; history_composition = sizes
+                           and by project load (the page-text half only
+                           while settings.ELIDE_FETCHED_PAGE_TEXT is on —
+                           off by default since 1.21.0; the module reads no
+                           settings, its callers do); history_composition = sizes
                            by category plus the stale_outlines /
                            fetched_page_texts canaries, never text
                            (Developer tools, the support bundle,
@@ -12370,6 +12378,118 @@ export's QA rows) is the next PR and was deliberately not started.
   dropped → 7; the payload not consulting pending revisions → 1; the scan
   cache → 1; the event's `refusal` → 1; the filename scrub → 1; the splice's
   deleted words not emitted as their own piece → 30.
+
+## The project workspace program, as shipped — implemented notes (v1.21.0 closeout)
+
+Phase 7 of `docs/plans/project-workspace/`: the one release for Phases 2–6,
+and the only phase that touches a version number. It is mostly
+documentation and the release entry, plus one code change the release could
+not ship without. No new route, SSE event, dep or project-format change;
+one new env knob.
+
+- **1.21.0 is a minor bump, and its page describes it alone.** v1.20.0 was
+  published on 2026-09-22. The GitHub Releases API says so; `git tag -l` is
+  empty in a fresh clone. Its entry is therefore frozen. Handed the
+  published releases the way the workflow hands them, the renderer covers
+  "1.21.0 (since 1.20.0)". All five version sites moved (settings.py,
+  package.json, both root lockfile fields, the README headline), and
+  `check_release_version.py --tag v1.21.0` and `npm ci --dry-run` pass.
+- **What it carries.** Project workspace Phases 2, 3, 4 and 5A. Phase 2
+  (the folder and the Project panel) was already in the 1.20.0 build,
+  because the v1.20.0 tag was cut after PR #176 merged. So 1.21.0's entry
+  is its first announcement and says so rather than calling it new. It also
+  carries chat-history compaction Phases 1–2 and redline Phase 0, from the
+  two plans that adopted this program's one-release-at-the-end policy.
+  Redline Phase 1's backend (PR #187) merged while this PR was in review,
+  so the 1.21.0 build carries that too. It is reachable only through the
+  API (`?redline=master&mode=preserved`) until Phase 1's UI PR adds the
+  menu item, so the entry does not announce it; its draft waits for the
+  release that carries the UI.
+  Step 3 names only the compaction plan's drafts. The redline plan's Phase 0
+  draft is collected too, which is recorded as a deviation in
+  `07_RELEASE_CLOSEOUT.md`. Phase 5 Part B (waiting on the gate
+  measurement) and Phase 6 (deferred by D5) are left out.
+- **The entry says what a spec author can now DO.** Its sections are
+  Projects, Project facts, Chat, Word export and Troubleshooting. Phase 4's
+  source check is stated plainly as a change to what the assistant may
+  record. Compaction Phase 2's draft is deliberately absent: a release note
+  for a behaviour nobody receives would be false.
+- **Compaction Phase 2 ships switched off.** This is the closeout's one code
+  change. PR #183 merged (`7fc6e24`) without the live canary its own plan
+  had made the merge gate. The canary was still unrun at the closeout: it
+  needs the owner's API key and one paid request, and none was available
+  here. The shape it checks is a saved reply whose `char_location`
+  citations point into a page whose text was replaced. Anthropic does not
+  document whether that is accepted. A refusal would make every later
+  message in the project a 400, and once the project is saved the page text
+  is gone for good. That is the unpaired-`server_tool_use` failure again,
+  with no load-time repair to fall back on. So the release does not bet on
+  it:
+  - `settings.ELIDE_FETCHED_PAGE_TEXT` (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`,
+    default **off**) gates both halves, `_committed_messages` and
+    `load_project`. Each reads the setting at call time, so tests
+    monkeypatch it. With it off, both keep page text exactly as they did
+    before Phase 2. Phase 1's outline trim is untouched.
+  - `_committed_messages(..., *, elide_fetched_pages=None)`: `None` means
+    the setting. The canary passes `True`. It exists to decide whether the
+    switch can be turned on, so the switch must not reach it (pinned).
+  - The offline profiler's "Now" applies the page trim only while the
+    switch is on, and says "kept" when it is off. Developer tools' History
+    makeup no longer says pages are "still carrying text", which read as a
+    leftover; it says "carrying their text".
+  - `history_hygiene` stays a leaf and reads no settings; its callers do.
+  - **Turning it on** takes a recorded canary pass (the compaction plan's
+    Phase 2 → Canary result), then five edits: the default,
+    `test_the_page_text_trim_ships_switched_off` (it reads the default from
+    the source, so no developer environment can make it pass or fail),
+    Phase 2's release note, and the README row and subsection.
+- **Docs.** README: "Project workspace (in progress)" is retitled "Shipped
+  in v1.21.0 (…)". Its opening now says what shipped and what did not, and
+  Phase 2's bullet that pointed to Phase 3 "below" was rewritten so the
+  section reads as one. The compaction and redline sections say what ships
+  in 1.21.0 and stay "in progress", since both programs continue. The new
+  knob has a Configuration row. Runbook: the four program sections now sit
+  under one "Project workspace (v1.21.0)" heading; the compaction rows were
+  rewritten for the switch, plus the Phase 1 row that plan never added.
+  "Minimum before any release" is unchanged. The trust dossier needed no
+  edit. Every number it quotes was re-checked against the code: 8
+  searches / 4 fetches, 50 rounds, 4 research workers, the 40/12
+  governing-codes budgets, 16 continuations, 8 QC workers, 5 lenses,
+  2/3 seats, the 25k reference context, and 40 harvest proposals at medium
+  effort. It already has a harvest card, the brief card says the file is
+  written on save, and its "no model runs that you did not start" bullet
+  names the harvest as never automatic.
+- **Errata.** These sections are append-only, so corrections to earlier
+  ones are recorded here:
+  1. "Fetched page text stays out of saved history — implemented notes
+     (compaction Phase 2)" says commit and project load elide fetched page
+     text, and that "the elision should not merge before" its canary
+     passes. It merged without the canary. Since 1.21.0 both halves run
+     only while `ELIDE_FETCHED_PAGE_TEXT` is on, and it is off by default.
+     Its `fetched_page_texts` canary is zero only while the switch is on;
+     with it off, it counts the pages the history keeps. The same
+     correction applies to that section's erratum on "Conversation engine
+     invariants → Strip at commit".
+  2. "The project has a home — implemented notes (Project workspace Phase
+     2)" says "No release: Phases 2–6 ship together (Phase 7), so VERSION
+     stays 1.20.0". That is true of the version and false of the release.
+     The v1.20.0 tag was cut at `0a744ab`, after PR #176 merged, so Phase 2
+     shipped in the 1.20.0 build without a release note. The program
+     README's "Release policy" recorded this at the time. 1.21.0's entry is
+     the first to announce it.
+- **Redline Phase 0's QA rows came with PR #187.** The closeout wrote none:
+  master had none, and #187 was adding them at the same place in the
+  runbook. #187 then merged during this PR's review, so the release has
+  them. The merge of master into this branch resolved three docs conflicts:
+  the two CLAUDE.md sections kept in merge order (#187's first), and the
+  redline status paragraphs in the plan and the plans index combined.
+- **Tests:** 5 new. Four are in `test_fetched_page_elision.py`: the shipped
+  default read from the source, and commit, load and the profiler each
+  keeping the page with the switch off. The trim's own tests there now run
+  with the switch on through an autouse fixture. One is in
+  `test_fetch_elision_canary.py`: the canary ignores the switch. Each
+  mechanism was reverted in place to prove it load-bearing: commit gate →
+  1 red, load gate → 1, canary forcing → 4, profiler gate → 1, default → 1.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

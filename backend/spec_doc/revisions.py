@@ -553,6 +553,146 @@ def first_difference(left_body, right_body, *, exclude_bookmarks=frozenset()):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Native moves: the structural check
+# ---------------------------------------------------------------------------
+
+_W_MOVE_FROM_RANGE_START = qn("w:moveFromRangeStart")
+_W_MOVE_FROM_RANGE_END = qn("w:moveFromRangeEnd")
+_W_MOVE_TO_RANGE_START = qn("w:moveToRangeStart")
+_W_MOVE_TO_RANGE_END = qn("w:moveToRangeEnd")
+_MOVE_RANGE_KIND = {
+    _W_MOVE_FROM_RANGE_START: (_W_MOVE_FROM, "start"),
+    _W_MOVE_FROM_RANGE_END: (_W_MOVE_FROM, "end"),
+    _W_MOVE_TO_RANGE_START: (_W_MOVE_TO, "start"),
+    _W_MOVE_TO_RANGE_END: (_W_MOVE_TO, "end"),
+}
+#: Elements that carry a revision's own id — the ids that must not repeat. A
+#: range END repeats its start's id by design and is checked separately.
+_ID_BEARING = (
+    _WRAPPERS
+    | {_W_PPR_CHANGE, _W_RPR_CHANGE, _W_NUMBERING_CHANGE}
+    | set(_OTHER_CHANGES)
+    | {_W_CELL_INS, _W_CELL_DEL, _W_CELL_MERGE}
+    | {_W_MOVE_FROM_RANGE_START, _W_MOVE_TO_RANGE_START}
+)
+
+#: What :func:`move_range_problem` answers — a closed vocabulary, never text.
+MOVE_PROBLEMS = frozenset(
+    {
+        "duplicate_id",
+        "unnamed_range",
+        "unpaired_name",
+        "unclosed_range",
+        "stray_range_end",
+        "overlapping_ranges",
+        "content_outside_range",
+    }
+)
+
+
+def move_range_problem(root) -> str | None:
+    """``None`` when every tracked move under ``root`` is well formed, else
+    the first problem found (one of :data:`MOVE_PROBLEMS`).
+
+    The structural half of the redline's self-check for Word's own "Moved"
+    marks — what Accept All and Reject All cannot see, because both simply
+    drop the range markers:
+
+    * no revision id is used twice (a range end repeats its start's, by
+      design), and none is a bookmark's;
+    * every range start carries a name, and every name pairs exactly one
+      moved-from range with exactly one moved-to range;
+    * every range start has exactly one end of its own kind, after it, and
+      no two ranges of one kind overlap;
+    * moved content sits only inside a range of its own kind: every
+      ``w:moveFrom``/``w:moveTo`` wrapper wholly inside one, and every
+      paragraph whose mark is flagged moved with the range still open at
+      the paragraph's end, where its mark is.
+
+    ECMA-376 Part 1 (5th ed.) §17.13.5.21–.28 make each of these a
+    conformance condition; every Word-authored tracked-move file checked
+    while building this (Open-XML-PowerTools RP015/RP018, LibreOffice's
+    tdf104797, tdf123460 and table-move samples) passes it.
+    """
+    root = _plain(root)
+    elements = list(root.iter())
+    order = {element: position for position, element in enumerate(elements)}
+    # The position of each element's last descendant (itself when it has
+    # none), in one reverse pass: a child's subtree ends where its parent's
+    # last child's subtree does.
+    last: dict = {}
+    for element in reversed(elements):
+        children = [child for child in element]
+        last[element] = last[children[-1]] if children else order[element]
+
+    seen_ids: set[str] = set()
+    bookmark_ids = {
+        start.get(_W_ID, "") for start in root.iter(_W_BOOKMARK_START)
+    }
+    for element in root.iter():
+        if not isinstance(element.tag, str) or element.tag not in _ID_BEARING:
+            continue
+        identifier = element.get(_W_ID, "")
+        if identifier in seen_ids or identifier in bookmark_ids:
+            return "duplicate_id"
+        seen_ids.add(identifier)
+
+    ranges: dict[str, list] = {_W_MOVE_FROM: [], _W_MOVE_TO: []}
+    open_starts: dict[str, tuple[str, int]] = {}
+    names: dict[str, dict[str, int]] = {}
+    for element in root.iter(*_MOVE_RANGE_KIND):
+        kind, edge = _MOVE_RANGE_KIND[element.tag]
+        identifier = element.get(_W_ID, "")
+        if edge == "start":
+            name = element.get(_W_NAME, "")
+            if not name.strip():
+                return "unnamed_range"
+            counts = names.setdefault(name, {_W_MOVE_FROM: 0, _W_MOVE_TO: 0})
+            counts[kind] += 1
+            open_starts[identifier] = (kind, order[element])
+            continue
+        opened = open_starts.pop(identifier, None)
+        if opened is None or opened[0] != kind:
+            return "stray_range_end"
+        ranges[kind].append((opened[1], order[element]))
+    if open_starts:
+        return "unclosed_range"
+    if any(counts != {_W_MOVE_FROM: 1, _W_MOVE_TO: 1} for counts in names.values()):
+        return "unpaired_name"
+
+    for kind_ranges in ranges.values():
+        kind_ranges.sort()
+        for (_start, end), (start, _end) in zip(kind_ranges, kind_ranges[1:]):
+            if start < end:
+                # "If multiple move source containers surround the same
+                # text, the document is non-conformant" (§17.13.5.24).
+                return "overlapping_ranges"
+
+    def inside(kind: str, first: int, final: int) -> bool:
+        return any(start < first and end > final for start, end in ranges[kind])
+
+    for element in root.iter(_W_MOVE_FROM, _W_MOVE_TO):
+        parent = element.getparent()
+        if parent is not None and parent.tag in _MARKER_PARENTS:
+            if parent.tag != _W_RPR:
+                continue
+            paragraph = next(
+                (a for a in parent.iterancestors() if a.tag == _W_P), None
+            )
+            if paragraph is None:  # pragma: no cover - a run's own rPr
+                continue
+            # A paragraph's mark is its END: the range must still be open
+            # after the paragraph's last content — which is why Word closes
+            # a whole-paragraph move BETWEEN paragraphs, not inside one.
+            if not inside(element.tag, last[paragraph], last[paragraph]):
+                return "content_outside_range"
+            continue
+        if not inside(element.tag, order[element], last[element]):
+            return "content_outside_range"
+    return None
+
+
 def duplicate_bookmark_names(root) -> set[str]:
     """Bookmark names that start more than once under ``root``."""
     seen: set[str] = set()
@@ -567,11 +707,13 @@ def duplicate_bookmark_names(root) -> set[str]:
 
 __all__ = [
     "Difference",
+    "MOVE_PROBLEMS",
     "REVISION_TAGS",
     "accept_all",
     "canonical_body",
     "duplicate_bookmark_names",
     "first_difference",
     "has_revisions",
+    "move_range_problem",
     "reject_all",
 ]

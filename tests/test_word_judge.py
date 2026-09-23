@@ -208,12 +208,19 @@ def test_the_judge_replays_every_corpus_master_under_the_sweeps_own_edits():
 
 @pytest.fixture(scope="module")
 def targeted(tmp_path_factory):
+    """Every targeted case, rendered with Word's own "Moved" marks on — the
+    shipped default, pinned here so an operator's own switch cannot change
+    what these tests prove."""
+    from backend import settings
+
     workspace = tmp_path_factory.mktemp("judge-targeted")
-    return [
-        judge.build_judge_cases(group, workspace / group.slug)
-        for group in judge.judge_groups()
-        if group.group_id.startswith("targeted/")
-    ]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(settings, "REDLINE_NATIVE_MOVES", True)
+        return [
+            judge.build_judge_cases(group, workspace / group.slug)
+            for group in judge.judge_groups()
+            if group.group_id.startswith("targeted/")
+        ]
 
 
 def test_every_targeted_case_is_a_real_redline(targeted):
@@ -237,7 +244,8 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
     for batch in targeted:
         for case in batch.rendered:
             for key, value in case.stats["redline"].items():
-                totals[key] = totals.get(key, 0) + value
+                if isinstance(value, int):
+                    totals[key] = totals.get(key, 0) + value
             body = judge.word_body(case.redline)
             moved |= case.moved_bookmarks
             for element in body.iter():
@@ -245,7 +253,10 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
                     continue
                 name = etree.QName(element).localname
                 parent = element.getparent()
-                if name in ("ins", "del") and parent is not None:
+                if (
+                    name in ("ins", "del", "moveFrom", "moveTo")
+                    or name.endswith(("RangeStart", "RangeEnd"))
+                ) and parent is not None:
                     where = etree.QName(parent).localname
                     markup.add(f"{name}@{where}")
                 elif name in ("pPrChange", "rPrChange", "delText", "delInstrText"):
@@ -264,6 +275,7 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
         "moves_added",
         "leftovers",
         "last_mark_untracked",
+        "moves_native",
     ):
         assert totals.get(kind, 0) > 0, kind
     assert {
@@ -280,8 +292,19 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
         "delText",
         "delInstrText",  # a deleted field instruction
         "deleted-drawing",
+        # Word's own "Moved" marks (Phase 2, PR B):
+        "moveFrom@p",  # moved-away runs
+        "moveTo@p",  # moved-here runs
+        "moveFrom@rPr",  # a moved-away paragraph mark
+        "moveTo@rPr",  # a moved-here paragraph mark
+        "moveFrom@hyperlink",  # a moved provision's link, wrapped inside
+        "moveTo@hyperlink",
+        "moveFromRangeStart@p",  # a range opens inside its first paragraph...
+        "moveToRangeStart@p",
+        "moveFromRangeEnd@body",  # ...and closes between paragraphs
+        "moveToRangeEnd@body",
     } <= markup, markup
-    assert moved == {"_Ref77"}
+    assert moved == {"_Ref77", "_Ref44"}
 
 
 # ---------------------------------------------------------------------------
@@ -356,12 +379,15 @@ def _add_word_noise(body, seed: str):
         paragraph = rng.choice(paragraphs)
         properties = paragraph.find(qn("w:pPr"))
         position = 0 if properties is None else 1
-        # Word numbers its _GoBack bookmark like any other: an id no other
-        # bookmark in the document holds.
+        # Word numbers its _GoBack bookmark like any other annotation, from
+        # the one counter it numbers bookmarks, revisions and move ranges
+        # from (every Word-authored move sample does): an id nothing else in
+        # the document holds. It never renumbers anything else.
         taken = [
-            int(marker.get(qn("w:id")))
-            for marker in body.iter(qn("w:bookmarkStart"), qn("w:bookmarkEnd"))
-            if (marker.get(qn("w:id")) or "").isdigit()
+            int(element.get(qn("w:id")))
+            for element in body.iter()
+            if isinstance(element.tag, str)
+            and (element.get(qn("w:id")) or "").isdigit()
         ]
         go_back_id = str(max(taken, default=-1) + 1)
         start = etree.Element(qn("w:bookmarkStart"))
@@ -448,6 +474,78 @@ def test_a_faithful_word_passes_every_targeted_case(targeted, tmp_path, noise):
         assert verdict.failures == [], verdict.failures
         assert {case["status"] for case in verdict.cases} == {"pass"}, batch.group.group_id
         assert verdict.word_build == "16.0.fake"
+
+
+def _move_ranges(body) -> list[tuple]:
+    """Every move range marker, in document order: its kind, id, name and
+    parent — what a model of a Word save must leave exactly as it was."""
+    return [
+        (
+            etree.QName(marker).localname,
+            marker.get(qn("w:id")),
+            marker.get(qn("w:name")),
+            etree.QName(marker.getparent()).localname,
+        )
+        for marker in body.iter()
+        if isinstance(marker.tag, str)
+        and etree.QName(marker).localname.startswith(("moveFromRange", "moveToRange"))
+    ]
+
+
+def test_the_save_model_never_splits_duplicates_or_renumbers_a_move(targeted):
+    """The faithful fake Word resolves through the oracle, so its model of a
+    save must leave every move range exactly as it found it — never split,
+    duplicated or renumbered — and number its _GoBack from ids nothing else
+    holds, as Word's one counter does. Its split runs stay inside their
+    move wrapper."""
+    from backend.spec_doc.revisions import move_range_problem
+
+    checked = 0
+    for batch in targeted:
+        for case in batch.rendered:
+            body = judge.word_body(case.redline)
+            ranges = _move_ranges(body)
+            if not ranges:
+                continue
+            wrapped = sum(1 for _ in body.iter(qn("w:moveFrom"), qn("w:moveTo")))
+            noisy = _add_word_noise(judge.word_body(case.redline), case.name)
+            assert _move_ranges(noisy) == ranges, case.name
+            assert sum(1 for _ in noisy.iter(qn("w:moveFrom"), qn("w:moveTo"))) == wrapped
+            assert move_range_problem(noisy) is None, case.name
+            checked += 1
+    assert checked >= 8
+
+
+def test_a_word_that_keeps_both_copies_of_a_move_fails(targeted, tmp_path):
+    """A Word that resolves a native move its own way — keeping both copies
+    — fails on the native-move cases and says where."""
+    batch = next(b for b in targeted if b.group.group_id == "targeted/native-moves")
+    verdict = judge.judge_batch(
+        batch, tmp_path / "both-copies", resolve=_fake_word(accept=_unwrap_moves)
+    )
+    for case in batch.rendered:
+        mine = [f for f in verdict.failures if f.startswith(f"{batch.group.group_id} {case.name}:")]
+        assert any("Accept All in Word differs" in f for f in mine), (case.name, mine)
+    assert {case["case"] for case in verdict.cases if case["status"] == "fail"} == {
+        case.name for case in batch.rendered
+    }
+
+
+def test_the_judge_renders_with_the_switch_the_route_passes(tmp_path, monkeypatch):
+    """``build_judge_cases`` reads ``settings.REDLINE_NATIVE_MOVES`` per
+    call, exactly as the export route does: on, Word's own "Moved" marks;
+    off, the Phase 1 deletion plus insertion — so Word judges the file a
+    user gets either way."""
+    from backend import settings
+
+    group = _group("targeted/native-moves")
+    for native in (True, False):
+        monkeypatch.setattr(settings, "REDLINE_NATIVE_MOVES", native)
+        batch = judge.build_judge_cases(group, tmp_path / str(native))
+        for case in batch.rendered:
+            marked = any(True for _ in judge.word_body(case.redline).iter(qn("w:moveTo")))
+            assert marked is native, (native, case.name)
+            assert case.stats["redline"]["native_moves"] is native
 
 
 def test_a_faithful_noisy_word_passes_every_corpus_mix(tmp_path):

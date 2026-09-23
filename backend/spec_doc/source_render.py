@@ -96,10 +96,14 @@ from .source_format import (
     SourceFormatMap,
 )
 from .revision_marks import (
+    MOVE_FROM,
+    MOVE_TO,
+    add_move_range,
     delete_content,
     insert_content,
     mark_paragraph,
     mark_table,
+    move_content,
     neutralize_last_paragraph,
     record_paragraph_properties,
 )
@@ -1493,6 +1497,86 @@ def _crosses_field_boundary(paragraph) -> bool:
     return depth != 0
 
 
+#: Why a move is shown as a deletion plus an insertion rather than as Word's
+#: own "Moved" marks (Phase 2, PR B) — a closed vocabulary the export event
+#: counts (``redline.moves_fallback``). Counts only, never text.
+MOVE_FALLBACK_EDITED = "edited"
+MOVE_FALLBACK_SECTION_BREAK = "section_break"
+MOVE_FALLBACK_LAST_PARAGRAPH = "last_paragraph"
+MOVE_FALLBACK_LOCKED = "locked"
+MOVE_FALLBACK_MARKUP = "markup"
+MOVE_FALLBACK_UNPAIRED = "unpaired"
+MOVE_FALLBACK_SELF_CHECK = "self_check"
+MOVE_FALLBACK_REASONS = frozenset(
+    {
+        MOVE_FALLBACK_EDITED,
+        MOVE_FALLBACK_SECTION_BREAK,
+        MOVE_FALLBACK_LAST_PARAGRAPH,
+        MOVE_FALLBACK_LOCKED,
+        MOVE_FALLBACK_MARKUP,
+        MOVE_FALLBACK_UNPAIRED,
+        MOVE_FALLBACK_SELF_CHECK,
+    }
+)
+
+#: What a paragraph shown as a native move may hold, and nothing else: runs
+#: of plain text (tabs, breaks, hyphens, symbols), bookmarks, proofing marks
+#: and hyperlinks holding the same. A field, a drawing, a text box, a content
+#: control, math, an annotation — anything the move wrappers have never been
+#: seen around in Word — keeps the deletion-plus-insertion rendering, which
+#: is proven.
+_MOVE_PARAGRAPH_CHILDREN = frozenset(
+    {
+        _W_R,
+        _W_BOOKMARK_START,
+        _W_BOOKMARK_END,
+        qn("w:proofErr"),
+        qn("w:hyperlink"),
+    }
+)
+_MOVE_LINK_CHILDREN = frozenset(
+    {_W_R, _W_BOOKMARK_START, _W_BOOKMARK_END, qn("w:proofErr")}
+)
+_MOVE_RUN_CHILDREN = frozenset(
+    qn(f"w:{name}")
+    for name in (
+        "rPr",
+        "t",
+        "tab",
+        "br",
+        "cr",
+        "noBreakHyphen",
+        "softHyphen",
+        "ptab",
+        "lastRenderedPageBreak",
+        "sym",
+    )
+)
+
+
+def _native_move_safe(paragraph) -> bool:
+    """Can ``paragraph`` travel as a native move? Only when everything in it
+    is plain (:data:`_MOVE_PARAGRAPH_CHILDREN`)."""
+
+    def runs_plain(container, allowed) -> bool:
+        for child in container:
+            tag = child.tag
+            if not isinstance(tag, str) or tag == _W_PPR:
+                continue
+            if tag not in allowed:
+                return False
+            if tag == _W_R and any(
+                isinstance(c.tag, str) and c.tag not in _MOVE_RUN_CHILDREN
+                for c in child
+            ):
+                return False
+            if tag == qn("w:hyperlink") and not runs_plain(child, _MOVE_LINK_CHILDREN):
+                return False
+        return True
+
+    return paragraph.tag == _W_P and runs_plain(paragraph, _MOVE_PARAGRAPH_CHILDREN)
+
+
 def _give_up_identity(element) -> None:
     """The old copy of a moved element: its bookmarks and ``w14`` ids go
     with the new copy, because a file must never carry a bookmark name (or
@@ -1568,12 +1652,15 @@ class _RedlineBuilder:
         assembler: _Assembler,
         moved_uids: set[str],
         marks,
+        *,
+        native_moves: bool = False,
     ):
         self.content = loaded.content
         self.format_map = format_map
         self.assembler = assembler
         self.moved_uids = moved_uids
         self.marks = marks
+        self.native_moves = native_moves
         self.stats: dict = {
             "kept": 0,
             "spliced": 0,
@@ -1585,6 +1672,11 @@ class _RedlineBuilder:
             "moves_added": 0,
             "leftovers": 0,
             "last_mark_untracked": 0,
+            # Phase 2 (PR B): how many moved elements carry Word's own
+            # "Moved" marks, and why each of the others does not (empty
+            # when native moves are off: nothing was decided).
+            "moves_native": 0,
+            "moves_fallback": {},
         }
 
     # -- helpers -------------------------------------------------------------
@@ -1804,13 +1896,121 @@ class _RedlineBuilder:
         self._tracked(lambda: delete_content(element, self.marks))
         return element, "w:del"
 
+    # -- native moves (Phase 2, PR B) ---------------------------------------
+    def _move_fallback(self, reason: str) -> None:
+        counts = self.stats["moves_fallback"]
+        counts[reason] = counts.get(reason, 0) + 1
+
+    def _move_refusal(
+        self, record: Record, from_index: int | None, to_index: int, last: int
+    ) -> str:
+        """Why the move of ``record`` (its new copy, at ``to_index``) is NOT
+        shown as Word's own "Moved" marks — ``""`` when it can be. Only a
+        PURE move qualifies: an element that renders unchanged at its new
+        position (a clean clone, never a splice) and whose old copy is an
+        ordinary deleted one."""
+        if record.kind == RECORD_SPLICED:
+            return MOVE_FALLBACK_EDITED
+        source = self.content[record.source]
+        if record.strip_break or _holds_break(source):
+            # Its break stays where it was (D-3): the old copy is an emptied
+            # holder, not a whole moved paragraph.
+            return MOVE_FALLBACK_SECTION_BREAK
+        if from_index is None or record.kind not in (RECORD_KEPT, RECORD_CARRIED):
+            return MOVE_FALLBACK_UNPAIRED  # pragma: no cover - by construction
+        if last in (from_index, to_index):
+            # Word cannot track a document's last paragraph mark.
+            return MOVE_FALLBACK_LAST_PARAGRAPH
+        if source.tag != _W_P or self._locked_reason(record.source):
+            return MOVE_FALLBACK_LOCKED
+        if not _native_move_safe(source):
+            return MOVE_FALLBACK_MARKUP
+        return ""
+
+    def _native_moves(self, ordered: list[Record]) -> tuple[dict[int, str], list]:
+        """Which records of ``ordered`` are shown as native moves.
+
+        Returns ``(sides, groups)``: ``sides`` maps an index of ``ordered``
+        to ``"from"`` (the old copy) or ``"to"`` (the new one), and
+        ``groups`` lists each named move as its ``(to_index, from_index)``
+        pairs, in document order. Consecutive native moves whose old copies
+        are consecutive too, in the same order — a provision and its
+        children, a block of siblings — share one name, so Word shows them
+        as one move."""
+        destinations: dict[int, int] = {}
+        origins: dict[int, int] = {}
+        for index, record in enumerate(ordered):
+            if not record.moved:
+                continue
+            if record.kind in _REMOVED_KINDS:
+                origins[record.source] = index
+            else:
+                destinations[record.source] = index
+        last = len(ordered) - 1
+        pairs: list[tuple[int, int]] = []
+        for source, to_index in destinations.items():
+            from_index = origins.get(source)
+            reason = self._move_refusal(ordered[to_index], from_index, to_index, last)
+            if reason:
+                self._move_fallback(reason)
+                continue
+            pairs.append((to_index, from_index))
+        pairs.sort()
+        groups: list[list[tuple[int, int]]] = []
+        for to_index, from_index in pairs:
+            if (
+                groups
+                and to_index == groups[-1][-1][0] + 1
+                and from_index == groups[-1][-1][1] + 1
+            ):
+                groups[-1].append((to_index, from_index))
+            else:
+                groups.append([(to_index, from_index)])
+        sides: dict[int, str] = {}
+        for to_index, from_index in pairs:
+            sides[to_index] = "to"
+            sides[from_index] = "from"
+        self.stats["moves_native"] = len(pairs)
+        return sides, groups
+
+    def _render_move_source(self, record: Record):
+        """The old copy of a pure move: everything it held marked moved
+        away (``w:moveFrom``), its paragraph mark too. It gives its
+        bookmarks and ``w14`` ids up to the new copy (D-6), exactly as the
+        deleted old copy of the Phase 1 rendering does."""
+        self.stats["deleted"] += 1
+        element = copy.deepcopy(self.content[record.source])
+        self._check_trackable(element, record.source, moved=True)
+        _give_up_identity(element)
+        self._tracked(lambda: move_content(element, MOVE_FROM, self.marks))
+        return element, MOVE_FROM
+
+    def _render_move_destination(self, record: Record):
+        """The new copy of a pure move: the clean export's clone, its
+        content and paragraph mark marked moved here (``w:moveTo``)."""
+        self.stats["moved"] += 1
+        element = self.assembler.render_accepted(record)
+        self._check_trackable(element, record.source, moved=True)
+        self._tracked(lambda: move_content(element, MOVE_TO, self.marks))
+        return element, MOVE_TO
+
     def render(self, ordered: list[Record]) -> tuple[list, set[str]]:
         """The redline's body elements, and the bookmark names that moved
         with a new copy (the one documented Reject-All limit)."""
         rendered: list[tuple] = []
         moved_names: set[str] = set()
-        for record in ordered:
-            if record.kind in _REMOVED_KINDS:
+        sides, groups = (
+            self._native_moves(ordered) if self.native_moves else ({}, [])
+        )
+        for index, record in enumerate(ordered):
+            side = sides.get(index)
+            if side == "from":
+                rendered.append(self._render_move_source(record))
+            elif side == "to":
+                element, flag = self._render_move_destination(record)
+                moved_names |= _bookmark_names([element])
+                rendered.append((element, flag))
+            elif record.kind in _REMOVED_KINDS:
                 rendered.append(self._render_deleted(record))
             elif record.moved:
                 element, flag = self._render_inserted(record)
@@ -1834,7 +2034,28 @@ class _RedlineBuilder:
             # change whose side there is empty.
             neutralize_last_paragraph(element, flag, self.marks)
             self.stats["last_mark_untracked"] += 1
-        return [element for element, _flag in rendered], moved_names
+        # Each named move's ranges: opened inside its first paragraph, closed
+        # between paragraphs right after its last one (Word's own shape, so
+        # the last paragraph's mark is inside the range).
+        closing: dict[int, list] = {}
+        for group in groups:
+            name = self.marks.move_name()
+            for tag, indexes in (
+                (MOVE_FROM, [from_index for _to, from_index in group]),
+                (MOVE_TO, [to_index for to_index, _from in group]),
+            ):
+                end = add_move_range(
+                    [rendered[index][0] for index in indexes],
+                    tag,
+                    name,
+                    self.marks,
+                )
+                closing.setdefault(indexes[-1], []).append(end)
+        body: list = []
+        for index, (element, _flag) in enumerate(rendered):
+            body.append(element)
+            body.extend(closing.get(index, ()))
+        return body, moved_names
 
 
 def _keep_in_place(sources: list[int], pinned: list[bool], movers: list[bool]) -> list[int]:
@@ -1898,6 +2119,19 @@ def _self_check(loaded: _LoadedBody, redline: list, clean: list, moved_names) ->
         )
 
 
+def _check_move_ranges(redline: list, loaded: _LoadedBody) -> None:
+    """The structural half of the self-check for Word's own "Moved" marks —
+    the best defence against a Word repair prompt without Word: every move
+    name pairs one moved-from range with one moved-to range, every range is
+    closed, moved content sits only inside a range of its own kind, and no
+    revision id is used twice."""
+    from .revisions import move_range_problem
+
+    problem = move_range_problem(_body_of(loaded, redline))
+    if problem is not None:
+        raise SourceRedlineError(REDLINE_PACKAGE_CHECK, detail={"move_check": problem})
+
+
 def render_preserving_redline(
     *,
     source_bytes: bytes,
@@ -1907,6 +2141,7 @@ def render_preserving_redline(
     author: str,
     date: str,
     stats: dict | None = None,
+    native_moves: bool = False,
 ) -> bytes:
     """The upload with every change since ``baseline`` as a Word tracked
     change: Accept All gives :func:`render_preserving_docx`'s output and
@@ -1916,6 +2151,14 @@ def render_preserving_redline(
     Every part other than ``word/document.xml`` is the upload's, byte for
     byte — ``word/settings.xml`` included: Track Changes is not switched on
     in the file (Decision 4).
+
+    ``native_moves`` (Phase 2, PR B) shows a provision moved unchanged as
+    Word's own "Moved" marks — ``w:moveFrom`` where it was, ``w:moveTo``
+    where it is, the two ranges paired by name — instead of a deletion plus
+    an insertion. Off, the output is byte for byte the Phase 1 rendering.
+    Native moves never add a refusal: a native render that fails any check
+    is rendered again without them (``redline.moves_fallback["self_check"]``
+    counts the moves that lost their marks) before anything is refused.
     """
     from .diffing import diff_sections
     from .revision_marks import RevisionMarks, highest_annotation_id
@@ -1941,34 +2184,63 @@ def render_preserving_redline(
         if element is not None
     ]
     diff = diff_sections(baseline, current, detect_moves=True)
-    marks = RevisionMarks(
-        author=author,
-        date=date,
-        first_id=highest_annotation_id(source_bytes) + 1,
-    )
-    builder = _RedlineBuilder(
-        loaded, format_map, assembler, _subtree_uids(current, diff.moved or []), marks
-    )
-    try:
-        ordered = builder.plan(records, removed)
-        redline, moved_names = builder.render(ordered)
-    except AssertionError as exc:  # a mark holding a section break, deleted
-        raise SourceRedlineError(REDLINE_SECTION_BREAK) from exc
-    if stats is not None:
-        stats.update(assembler.stats)
-        stats["redline"] = {**builder.stats, "revisions": marks.count}
-    _self_check(loaded, redline, clean, moved_names)
-    rebuilt = _serialize(loaded, redline)
-    payload = replace_document_xml_raw(source_bytes, rebuilt)
-    try:
-        audit_package_preservation_streaming(
-            source_bytes, payload, expected_document_xml=rebuilt
+    moved_uids = _subtree_uids(current, diff.moved or [])
+    first_id = highest_annotation_id(source_bytes) + 1
+
+    def builder_for(native: bool) -> _RedlineBuilder:
+        marks = RevisionMarks(author=author, date=date, first_id=first_id)
+        return _RedlineBuilder(
+            loaded, format_map, assembler, moved_uids, marks, native_moves=native
         )
-    except SourceAuditError as exc:
-        raise SourceRedlineError(
-            REDLINE_PACKAGE_CHECK, detail={"blocker": exc.blocker}
-        ) from exc
-    return payload
+
+    def render(builder: _RedlineBuilder, fallback: dict | None = None) -> bytes:
+        try:
+            ordered = builder.plan(records, removed)
+            redline, moved_names = builder.render(ordered)
+        except AssertionError as exc:  # a mark holding a section break, deleted
+            raise SourceRedlineError(REDLINE_SECTION_BREAK) from exc
+        if stats is not None:
+            stats.update(assembler.stats)
+            redline_stats = {
+                **builder.stats,
+                "revisions": builder.marks.count,
+                "native_moves": builder.native_moves,
+            }
+            if fallback is not None:
+                redline_stats["moves_fallback"] = dict(fallback)
+            stats["redline"] = redline_stats
+        _self_check(loaded, redline, clean, moved_names)
+        if builder.native_moves:
+            _check_move_ranges(redline, loaded)
+        rebuilt = _serialize(loaded, redline)
+        payload = replace_document_xml_raw(source_bytes, rebuilt)
+        try:
+            audit_package_preservation_streaming(
+                source_bytes, payload, expected_document_xml=rebuilt
+            )
+        except SourceAuditError as exc:
+            raise SourceRedlineError(
+                REDLINE_PACKAGE_CHECK, detail={"blocker": exc.blocker}
+            ) from exc
+        return payload
+
+    if not native_moves:
+        return render(builder_for(False))
+    builder = builder_for(True)
+    try:
+        return render(builder)
+    except SourceRedlineError:
+        if not builder.stats["moves_native"]:
+            # Nothing was shown as a native move, so the rendering that
+            # failed IS the Phase 1 rendering: its refusal stands.
+            raise
+    # Native moves must never turn an export that works into a refusal:
+    # render again without them, and count the moves that lost their marks.
+    fallback = dict(builder.stats["moves_fallback"])
+    fallback[MOVE_FALLBACK_SELF_CHECK] = (
+        fallback.get(MOVE_FALLBACK_SELF_CHECK, 0) + builder.stats["moves_native"]
+    )
+    return render(builder_for(False), fallback)
 
 
 __all__ = [

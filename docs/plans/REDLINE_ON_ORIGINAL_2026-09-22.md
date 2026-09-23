@@ -28,9 +28,14 @@ built (PR #197):** a resolve mode for the hidden-Word automation, an optional Wi
 suite in which real Word accepts and rejects every targeted shape and every
 corpus master under the corpus sweep's edits, and a producer recipe that
 records Word's own tracked moves. It changes nothing in the app, so it needs
-no release note. **PR B, native "Moved" marks, starts only after PR A merges
-and the owner's Windows results are in**; start it from PR A's as-built note
-(the evidence it collects, and the questions it leaves for PR B).
+no release note. **PR B (#204), native "Moved" marks, is built** — without the
+owner's Windows results. This plan made PR B wait for them and for Word's own
+tracked-move sample; the owner waived that gate on 2026-09-23 (Decision 8,
+the compaction plan's D5 is the precedent): it was waived, not passed. So the
+native moves ship behind a switch (`BUILD_A_SPEC_REDLINE_NATIVE_MOVES`, on by
+default; `0` is the Phase 1 rendering byte for byte), and "Phase 2 (PR B) —
+as built" lists what the first Windows run should check. No release entry
+yet; its draft is under "Release-note drafts".
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
 the Batch 5 diff engine and redline writer (`diffing.py`, `docx_export.py`),
 and the retained upload + formatting map every import already keeps.
@@ -1058,6 +1063,10 @@ above, plus the "Found, not done" lists — this one's and Phase 0's.
 - the `moveFrom` run content (`w:t` vs `w:delText`);
 - the range-marker pairing.
 
+(PR B verified both against ECMA-376, [MS-OI29500] and public Word-authored
+files instead: the Word-saved sample was never produced, and the owner waived
+waiting for it — Decision 8.)
+
 **Size:** one medium PR.
 
 #### Phase 2 (PR A) — as built
@@ -1176,18 +1185,229 @@ Reject All row is replaced by the judge.
 
 **What PR B inherits.**
 
-- The judge, and the owner's first Windows results (recorded below when they
-  arrive).
+- The judge, and the owner's first Windows results — which were to come
+  first. *The owner waived them as PR B's gate on 2026-09-23 (Decision 8):
+  PR B was built without them, not after them passed. They are still owed,
+  and are now what confirms the native moves — or turns them off (the
+  switch).*
 - Once pushed and pinned, the Word-saved tracked-move sample, and the
   judge's report on it: whether Word's Accept All and Reject All of its own
   moves match the app's resolver, and where the moved paragraph's bookmark
   lands each way — the evidence D-6's moved-bookmark limit and the
-  `moved_annotation` refusal are re-decided from.
+  `moved_annotation` refusal are re-decided from. *Waived with the rest:
+  the sample does not exist yet, so PR B keeps both exactly as Phase 1
+  decided them.*
 - The questions to settle against ECMA-376 and that sample, citing clauses:
   `w:moveFrom` run content (`w:t` or `w:delText`); range-marker pairing
-  (`w:name`, ids); how a moved paragraph mark is recorded.
+  (`w:name`, ids); how a moved paragraph mark is recorded. *Settled against
+  ECMA-376, [MS-OI29500] and public Word-authored move files instead of the
+  sample — see "Phase 2 (PR B) — as built".*
 
-**Owner's Windows results:** pending.
+**Owner's Windows results:** not run. The owner waived them as PR B's gate
+on 2026-09-23 (Decision 8), so they were never a precondition that passed;
+record them here when they are run. They check the judge's native-move
+groups too.
+
+#### Phase 2 (PR B) — as built
+
+**Built 2026-09-23 in PR B (#204), without the owner's Windows results** — the gate
+"What PR B inherits" set was waived by the owner that day (Decision 8), not
+passed: nobody has run `tests/test_redline_word_judge.py` or the corpus's
+TrackedMove recipe, so the Word-saved tracked-move sample this plan named does
+not exist. The markup was settled from the sources below instead, and the
+native moves ship behind a switch. It bumped no VERSION and added no
+`release_notes.py` entry; the draft is under "Release-note drafts". The
+contract is in `docs/DOCX_FIDELITY.md` ("A pure move is Word's own 'Moved'
+marks"); the why and the traps in `CLAUDE.md` → "Word's own "Moved" marks —
+implemented notes (redline Phase 2, PR B)".
+
+**What it does.** A PURE move — an element the diff and `_keep_in_place`
+already move (detection is unchanged, the moves a section break forces
+included) and that renders unchanged at its new position, a clean clone and
+never a splice — is written as Word's own move: where it was, its runs in
+`w:moveFrom` and its paragraph mark flagged `w:moveFrom`; where it is,
+`w:moveTo`; the two carry one name. Everything else keeps the Phase 1
+deletion plus insertion. Code: `revision_marks.move_content`,
+`add_move_range`, `RevisionMarks.range_start` / `move_name`, `mark_paragraph`
+taking the move tags; `source_render._RedlineBuilder._native_moves` /
+`_move_refusal` / `_render_move_source` / `_render_move_destination`,
+`_native_move_safe`, the `MOVE_FALLBACK_*` vocabulary,
+`render_preserving_redline(native_moves=)` and `_check_move_ranges`;
+`revisions.move_range_problem`; `settings.REDLINE_NATIVE_MOVES`, passed by
+`app._render_original_redline` per request.
+
+**The markup, settled from the sources** (each question PR A left, with its
+clause; ECMA-376 Part 1 numbering, 5th ed. = ISO/IEC 29500-1, and
+[MS-OI29500] revision 2025-02-18):
+
+1. **`w:moveFrom` run content is `w:t`.** §17.13.5.22's example holds
+   `<w:moveFrom …><w:r><w:t>…</w:t></w:r></w:moveFrom>`; §17.3.3.7 reserves
+   `w:delText` for text inside `w:del` (§17.13.5.14). The schema would allow
+   `w:delText` (`CT_RunTrackChange` → `EG_ContentRunContent` →
+   `EG_RunInnerContent`), but every Word-authored move checked writes `w:t`,
+   and LibreOffice's tdf#165933 fix ("avoid w:delText inside w:moveFrom")
+   calls it invalid. [MS-OI29500] has no note.
+2. **The range markers.**
+   - *Name.* §17.13.5.24 / .28: the start's `w:name` "links a group of move
+     source content with the corresponding group of move destination
+     content" — one name pairs one moved-from range with one moved-to range.
+     [MS-OI29500] §2.1.340 / §2.1.344 apply the bookmark notes (§2.1.356):
+     (b) Word allows at most 40 characters, (c) with duplicate names the last
+     is kept. So every name is unique in the file: `move` and digits, Word's
+     own spelling, at most 18 characters here.
+   - *Ids.* §17.13.5.24: the start's `w:id` links it to its end (a start
+     without its end, or two starts with one id, is non-conformant; §17.13.2
+     links every start and end by id). The spec states no shared id space,
+     but Word numbers bookmarks, revisions and move ranges from ONE counter
+     in every sample (RP015: mark 0, range start 1, run wrapper 2, mark 3,
+     `_GoBack` 4, range start 5, wrapper 6). The export already numbers its
+     changes from one counter above everything in the package, so ranges
+     take ids from it too. [MS-OI29500] §2.1.317(a): never -1.
+   - *Attributes.* The starts are `CT_MoveBookmark`: `w:id`, `w:name`,
+     `w:author` and `w:date` required. The ends are `CT_MarkupRange`: the id
+     only. Word writes exactly that.
+   - *Placement.* The schema allows the markers both inside a paragraph and
+     between paragraphs. §17.13.5.21 / .26's paragraph-move example puts both
+     at body level. **Word** (RP015, tdf104797, tdf123460) puts the start
+     INSIDE the first moved paragraph, right after its properties, and the
+     end BETWEEN paragraphs, right after the last one — so the last
+     paragraph's mark, which is the paragraph's end, is inside the range, as
+     §17.13.5.21 / .26 require. The writer does exactly what Word does. (The
+     first cut closed the range inside the last paragraph: the words moved,
+     the mark stayed outside the container. The move check now refuses that
+     shape, and every Word-authored sample passes it.)
+   - *Several paragraphs.* One named range may span several: Word's table
+     move (LibreOffice's TC-table-DnD-move) spans four paragraphs, each with
+     its own mark flag and run wrapper. §17.13.5.23 / .24 / .27 / .28: ranges
+     that "surround the same text" are non-conformant, so ranges of one kind
+     never overlap.
+3. **The moved paragraph mark.** `w:pPr/w:rPr/w:moveFrom` (§17.13.5.21, "this
+   paragraph mark was part of the content which was moved") and
+   `w:moveTo` (§17.13.5.26), `CT_TrackChange` (id and author required),
+   first in `CT_ParaRPr`. The spec defines no Accept / Reject semantics for
+   them (unlike §17.13.5.15's deleted mark, "combined with the following
+   paragraph"), and [MS-OI29500] §2.1.337(a) / §2.1.342(a) say "Word ignores
+   this element": Word takes the mark's fate from the range around it — hence
+   placement above. The oracle resolves them like a deleted / inserted mark
+   (the moved-away paragraph gone whole on Accept All, the moved-here one on
+   Reject All), which is what Word's own files need.
+
+Sources, and how they were reached: learn.microsoft.com, c-rex.net,
+datypic.com and ecma-international.org were blocked from the session, so the
+text was read from git mirrors — the Open XML SDK class docs that feed the
+learn.microsoft.com pages (`OfficeDev/open-xml-docs-ref-dotnet@29af67d`,
+`MoveFromRun`, `MoveToRun`, `MoveFromRangeStart/End`, `MoveToRangeStart/End`,
+`MoveFrom`, `MoveTo`, `DeletedText`), a transcription of ECMA-376 5th ed.
+Part 1 (`hellowac/ecma-376-zh-cn@842e114`; third-party, word for word with the
+SDK text wherever they overlap), the official [MS-OI29500] DOCX
+(`DnaCalc/Foundation@0e76db6`), and the ISO/IEC 29500-4:2016 transitional
+`wml.xsd`. Word-authored files read for reference, never committed:
+`TestFiles/RP/RP015-MoveFrom-MoveTo.docx` and `RP018-MoveFrom-MoveTo-CC.docx`
+(Open-XML-PowerTools, `OfficeDev/Open-Xml-PowerTools@5881422`), and
+LibreOffice core `@382bad9`'s `sw/qa/extras/ooxmlexport/data/tdf104797.docx`,
+`tdf123460.docx`, `TC-table-DnD-move.docx`, `TC-table-Separate-Move.docx`
+and `sw/qa/core/text/data/redline-move.docx` (`tdf165933.docx` there is a
+Collabora-made negative example). The oracle's move check passes all seven.
+
+**Choices, where the sources left one open:**
+
+1. **Consecutive pure moves share one name.** A provision with its
+   sub-provisions, or a run of siblings moved together — consecutive native
+   moves whose old copies are consecutive too, in the same order — is one
+   named move, so Word shows one; anything else gets its own name. (Both are
+   conformant; one name per block is what Word writes for one move.)
+2. **Pure only.** `edited` (the element also changed — a relettered
+   provision in a typed-letter master is the common case), `section_break`
+   (a moved provision holding the break: its old copy is the emptied holder,
+   D-3), `last_paragraph` (either copy is the body's last paragraph, whose
+   mark Word cannot track), `locked` (tables and other preserved blocks: a
+   table row has no move element, and Word's table moves span cells, which
+   this does not attempt), `markup` (a conservative whitelist: runs of text,
+   tabs, breaks, hyphens and symbols, bookmarks, proofing marks and
+   hyperlinks holding the same — anything else, a field, a drawing, a text
+   box, a content control, math, keeps the proven rendering; [MS-OI29500]
+   §2.1.338(b) says Word shows a move in math as an insertion and a deletion
+   anyway), `self_check` (below), and `unpaired` (unreachable by
+   construction; defensive). Counted in the `export` event's
+   `redline.moves_fallback`.
+3. **Native moves never add a refusal.** A native rendering that fails any
+   check — Accept All, Reject All, bookmarks, the new move check, the package
+   audit — is rendered again with native moves off, its moves counted as
+   `self_check`, before anything is refused. A refusal the Phase 1 rendering
+   earns (a moved comment, say) is raised as before, without a second
+   render.
+4. **The structural move check is in the oracle** (`revisions.
+   move_range_problem`, sharing no code with the writer, D-7's rule): no id
+   twice (nor a bookmark's), every name pairing one moved-from range with one
+   moved-to range, every start with one end of its kind after it, no overlap,
+   and moved content only inside a range of its kind — a flagged mark counts
+   as the paragraph's end. A failure is `package_check_failed` with
+   `detail.move_check` (a closed code, never text).
+5. **D-6 and the `moved_annotation` refusal are exactly as Phase 1 decided
+   them.** Re-deciding either needed the Word sample that is not coming: the
+   moved-away copy gives its bookmarks and `w14` ids up to the moved-here
+   copy, as the deleted old copy did.
+6. **The switch.** `settings.REDLINE_NATIVE_MOVES`
+   (`BUILD_A_SPEC_REDLINE_NATIVE_MOVES`, default on), read per request by the
+   route; `render_preserving_redline(native_moves=)` defaults to off, so
+   `spec_doc` reads no settings and every caller that does not ask gets the
+   Phase 1 rendering. **Off is byte for byte the Phase 1 rendering**, proven
+   before merging against a copy of `master`'s `source_render.py` and
+   `revision_marks.py` (the D-1 refactor's method): identical on all 1,814
+   renders — the corpus sweep's own 54 mixes, 1,080 wider mixes (17 corpus
+   masters × 60 mixes of up to 14 edits) and 680 fixture mixes (17
+   hand-built masters × 40) — with no refusal among them.
+
+**Unverified in Word** — the first Word run (the judge's `targeted/native-*`
+groups, and the manual rows in `docs/RELEASE_WINDOWS.md` → "Word's own
+'Moved' marks") should check these first:
+
+1. That Word's Accept All removes a moved-away paragraph whole, and Reject
+   All a moved-here one, from this markup — [MS-OI29500] says Word ignores
+   the paragraph-mark flags, so this rests on the range covering the mark.
+   (The oracle does; the PowerTools baselines of RP015 leave an empty
+   paragraph, but they are PowerTools output, not Word's.)
+2. That the Reviewing Pane lists one "Moved" entry per name, including a
+   range spanning several whole body paragraphs (Word's own multi-paragraph
+   sample is a table move).
+3. That this file opens with no repair prompt: the range start inside the
+   first paragraph (Word's placement, not the spec example's), the end
+   between paragraphs, and names spelled `move` + digits.
+4. Where a moved bookmark lands after Word's Accept All and Reject All
+   (D-6's limit), once the TrackedMove sample exists.
+
+If Word disagrees on any of it, `BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0` gives
+back the Phase 1 rendering with no other change.
+
+**Measured** (recorded, not asserted):
+
+- **The committed corpus sweep** (17 corpus masters × the sweep's 3 mixes)
+  now runs both ways; with native moves on, no refusal and no `self_check`.
+- **Wider corpus sweep** (17 × 60 mixes, 1,080 renders): 128 moves, **52
+  native, 76 `edited`**, nothing else; no refusal, no failed check. Most
+  corpus masters letter their provisions by hand, so a moved provision is
+  usually relettered.
+- **Fixture sweep** (the suite's 17 hand-built masters × 200 mixes, 3,400
+  renders): 537 moves, **295 native**; fallbacks `edited` 206,
+  `section_break` 19, `last_paragraph` 7, `markup` 7, `locked` 3, and never
+  `self_check` or `unpaired`; no refusal. **On typed-letter masters `edited`
+  fires on 154 of 180 moves (86%)** — the 23 native ones there are moves
+  whose text happened not to change (a sub-provision moved with its parent
+  keeps its own letter); on Word-numbered masters 272 of 357 moves (76%) are
+  native, and their 52 `edited` are a move plus an edit of the same
+  provision in one mix.
+
+**Found, not done:**
+
+- **[MS-OI29500] §2.1.188(a): "Word will fail to load a file if ins, del,
+  moveTo, or moveFrom contains inline customXml."** The native path never
+  wraps one (`markup`), but Phase 1's `w:ins`/`w:del` writer lists
+  `w:customXml` as wrappable, so a deleted, inserted or edited provision
+  holding inline custom XML would produce such a file — and the self-check
+  cannot see it. Suggested as its own task.
+- Recent Word writes an optional `w16du:dateUtc` on revision wrappers
+  (ignorable); not written.
+- Phase 1's and the follow-up's "Found, not done" lists stand unchanged.
 
 ### Phase 3 — Later, only if wanted
 
@@ -1262,7 +1482,8 @@ Reject All row is replaced by the judge.
 
 Abraham answered all seven on 2026-09-22, each as recommended (the seventh
 was Phase 0's open question, deviation 7). They are binding on every phase;
-changing one is a new decision, recorded here.
+changing one is a new decision, recorded here. The eighth (2026-09-23) went
+against the recommendation, and says so.
 
 | # | Decision | Ratified |
 |---|---|---|
@@ -1273,6 +1494,7 @@ changing one is a new decision, recorded here.
 | 5 | Author shown on each change | **"Build-a-Spec".** Matches today's redline and makes Word's "Reject all changes by Build-a-Spec" meaningful. The alternative was the user's name, set once in Settings. |
 | 6 | Phase 0 may change the shipped *Export Word (keeps your formatting)* output | **Yes.** It is strictly better output, and it is what makes Accept All trustworthy. |
 | 7 | Where a provision added right after a section's last paragraph lands (Phase 0 deviation 7) — ratified 2026-09-22 | **Keep today's placement:** after the break, at the top of the next section, because a break stays with the content above it. The alternative was Word's own Enter behaviour, which keeps the new text in the section. |
+| 8 | Build Phase 2 PR B (native "Moved" marks) before the owner has run the real-Word judge on Windows and produced Word's own tracked-move sample? — decided 2026-09-23 | **Yes: build it without them.** The recommendation (and this plan's own gate) was to wait. The gate was **waived, not passed**: nobody will run the judge or the recipe for now. The fix if Word disagrees is one switch away — `BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0` gives back the Phase 1 rendering byte for byte — and "Phase 2 (PR B) — as built" lists what the first Word run should check. The compaction plan's D5 is the precedent. |
 
 ## Risks
 
@@ -1308,6 +1530,17 @@ changing one is a new decision, recorded here.
   master already carries someone's tracked changes, accept or reject them in
   Word and import it again first; the redline of extracted provisions still
   works either way."
+- **Phase 2 (native moves):** "Moves show as moves. In the redline on your
+  original, a provision you moved without changing it is now marked with
+  Word's own Moved marks instead of a deletion where it was and an insertion
+  where it is. A provision moved with its sub-provisions, or several moved
+  together, is marked as one move. A move that also changed something (in a
+  master with typed letters, its new letter counts) still shows as a
+  deletion and an insertion. Accept All and Reject All still give the updated section and
+  your original back, and the app still checks both before it hands you the
+  file. If Word ever shows a move wrongly, setting
+  BUILD_A_SPEC_REDLINE_NATIVE_MOVES to 0 brings back the old way of showing
+  moves."
 - **Phase 1 follow-up (links and the nesting level):** "Links and new
   sub-provisions survive *Export Word (keeps your formatting)* — and so the
   redline on your original. A provision holding a hyperlink keeps the link,

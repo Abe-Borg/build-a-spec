@@ -78,6 +78,7 @@ _W_BOOKMARK_START = qn("w:bookmarkStart")
 _W_BOOKMARK_END = qn("w:bookmarkEnd")
 _W_TXBX_CONTENT = qn("w:txbxContent")
 _W_ID = qn("w:id")
+_W_NAME = qn("w:name")
 _W_AUTHOR = qn("w:author")
 _W_DATE = qn("w:date")
 
@@ -151,6 +152,7 @@ class RevisionMarks:
         self._next = max(1, int(first_id))
         self.first_id = self._next
         self.count = 0
+        self.move_names = 0
 
     def stamp(self, element):
         element.set(_W_ID, str(self._next))
@@ -159,6 +161,26 @@ class RevisionMarks:
         self._next += 1
         self.count += 1
         return element
+
+    def range_start(self, tag: str, name: str):
+        """A new ``w:moveFromRangeStart`` / ``w:moveToRangeStart`` named
+        ``name``: an id from the same counter as every revision (so above
+        everything already in the package), the author and the date. Not
+        counted as a revision — the range brackets one."""
+        element = etree.Element(qn(tag))
+        element.set(_W_ID, str(self._next))
+        element.set(_W_AUTHOR, self.author)
+        element.set(_W_DATE, self.date)
+        element.set(_W_NAME, name)
+        self._next += 1
+        return element
+
+    def move_name(self) -> str:
+        """A move name no other move in this export carries — Word's own
+        spelling, ``move`` and digits — built from the ids this export owns,
+        so it is unique by construction."""
+        self.move_names += 1
+        return f"move{self.first_id}{self.move_names:04d}"
 
     def wrapper(self, tag: str):
         """A new stamped ``w:ins`` / ``w:del`` (``tag`` in Clark or ``w:``
@@ -229,10 +251,13 @@ def holds_section_break(paragraph) -> bool:
 
 
 def mark_paragraph(paragraph, tag: str, marks: RevisionMarks) -> None:
-    """Flag ``paragraph``'s mark inserted (``"w:ins"``) or deleted
-    (``"w:del"``). A mark holding a section break is never flagged deleted:
-    Accept All would merge two Word sections."""
-    if tag == "w:del" and holds_section_break(paragraph):
+    """Flag ``paragraph``'s mark inserted (``"w:ins"``), deleted
+    (``"w:del"``), moved away (``"w:moveFrom"``) or moved here
+    (``"w:moveTo"``). A mark holding a section break is never flagged
+    deleted or moved away: Accept All would merge two Word sections."""
+    if tag not in _PARAGRAPH_MARK_TAGS:
+        raise ValueError(f"not a paragraph-mark revision: {tag!r}")
+    if tag in ("w:del", MOVE_FROM) and holds_section_break(paragraph):
         raise AssertionError(
             "a paragraph mark holding a section break must never be deleted"
         )
@@ -413,6 +438,63 @@ def insert_content(container, marks: RevisionMarks) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Native moves (Phase 2, PR B)
+# ---------------------------------------------------------------------------
+
+#: The two move wrappers: content moved away from here, and moved here.
+MOVE_FROM = "w:moveFrom"
+MOVE_TO = "w:moveTo"
+_PARAGRAPH_MARK_TAGS = frozenset({"w:ins", "w:del", MOVE_FROM, MOVE_TO})
+_MOVE_RANGES = {
+    MOVE_FROM: ("w:moveFromRangeStart", "w:moveFromRangeEnd"),
+    MOVE_TO: ("w:moveToRangeStart", "w:moveToRangeEnd"),
+}
+
+
+def move_content(container, tag: str, marks: RevisionMarks) -> None:
+    """Mark everything in ``container`` moved away (``"w:moveFrom"``) or
+    moved here (``"w:moveTo"``), in place — grouped into wrappers exactly as
+    an insertion or a deletion is, inside a hyperlink, never around one.
+
+    Moved-away text stays ``w:t``. ECMA-376 Part 1 §17.3.3.7 reserves
+    ``w:delText`` for text inside a ``w:del``; the ``w:moveFrom`` example of
+    §17.13.5.22 holds ``w:t``, and so does every Word-authored move checked
+    (LibreOffice goes further: its tdf#165933 fix calls ``w:delText`` inside
+    ``w:moveFrom`` invalid)."""
+    if tag not in _MOVE_RANGES:
+        raise ValueError(f"not a move wrapper: {tag!r}")
+    _wrap_content(container, tag, marks, deleted=False)
+
+
+def add_move_range(paragraphs, tag: str, name: str, marks: RevisionMarks):
+    """Bracket ``paragraphs`` — whole, consecutive body paragraphs, in order
+    — with the named range of move ``tag``, the way Word writes a
+    whole-paragraph move: the ``…RangeStart`` goes into the first paragraph,
+    right after its properties; the ``…RangeEnd`` (the start's id, nothing
+    else) goes BETWEEN paragraphs, right after the last one, so that the
+    last paragraph's mark — its end — is inside the range too. Returns the
+    end, for the caller to place as the next body element.
+
+    ECMA-376 Part 1 §17.13.5.21 and .26: a moved paragraph mark outside a
+    move container is non-conformant; §17.13.5.24 and .28: the start's
+    ``w:name`` pairs a moved-from range with its moved-to range, and its
+    ``w:id`` links it to its end. One name, one moved-from range, one
+    moved-to range, is one move in Word's Reviewing Pane."""
+    if tag not in _MOVE_RANGES:
+        raise ValueError(f"not a move wrapper: {tag!r}")
+    if not paragraphs:
+        raise ValueError("a move range needs a paragraph")
+    start_tag, end_tag = _MOVE_RANGES[tag]
+    start = marks.range_start(start_tag, name)
+    first = paragraphs[0]
+    properties = first.find(_W_PPR)
+    first.insert(0 if properties is None else first.index(properties) + 1, start)
+    end = etree.Element(qn(end_tag))
+    end.set(_W_ID, start.get(_W_ID))
+    return end
+
+
+# ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
 
@@ -478,9 +560,12 @@ def mark_table(table, tag: str, marks: RevisionMarks) -> None:
 
 
 __all__ = [
+    "MOVE_FROM",
+    "MOVE_TO",
     "RevisionMarks",
     "UNTRACKABLE_REASONS",
     "UntrackableContent",
+    "add_move_range",
     "as_deleted",
     "delete_content",
     "highest_annotation_id",
@@ -488,6 +573,7 @@ __all__ = [
     "insert_content",
     "mark_paragraph",
     "mark_table",
+    "move_content",
     "neutralize_last_paragraph",
     "paragraph_mark_properties",
     "record_mark_properties",

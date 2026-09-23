@@ -68,6 +68,10 @@ test("the redline on your original states its promise, its check, its refusal an
   assert.match(entry.description, /already carries tracked changes is refused/);
   assert.match(entry.description, /accept or reject them in Word, save, and import the file again/);
   assert.match(entry.description, /moved keeps its bookmarks/);
+  // Phase 2 (PR B): a move made without a change is Word's own Moved marks,
+  // and the entry says which moves are not.
+  assert.match(entry.description, /moved without changing it shows as Word's own Moved marks/);
+  assert.match(entry.description, /also changed shows as a deletion and an insertion/);
   // And the extracted-provisions redline stops claiming to be the only one.
   const normalized = SOURCE_OUTPUT_GUIDANCE.find((item) => item.id === "normalized-redline");
   assert.ok(normalized);

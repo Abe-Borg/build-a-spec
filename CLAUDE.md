@@ -13963,8 +13963,8 @@ waived.
 ## The duplicate lint proves before it compares — implemented notes
 
 Two scans ran before every chat reply and could take seconds. Owner
-request (Abraham, 2026-09-23): make them cheap without moving a single
-finding. No route, SSE event, dependency, env knob, project-format change
+request (Abraham, 2026-09-23; PR #200): make them cheap without moving a
+single finding. No route, SSE event, dependency, env knob, project-format change
 or VERSION bump; the user-facing note is a draft in the PR body (the owner
 picks the release).
 

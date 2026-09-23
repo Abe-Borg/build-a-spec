@@ -135,7 +135,11 @@ backend/
                            MOVES, default ON — redline Phase 2 PR B, its Word
                            gate waived by the owner, not passed; 0 = the
                            Phase 1 rendering byte for byte; read per request
-                           by app._render_original_redline)
+                           by app._render_original_redline);
+                           REDLINE_COMMENTS (BUILD_A_SPEC_REDLINE_COMMENTS,
+                           default ON — redline Phase 3, owner decision 9;
+                           0 = the redline without comments byte for byte;
+                           read per request by app._render_original_redline)
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive, gated on the
                            draft prerequisites via _draft_prerequisites —
@@ -256,7 +260,18 @@ backend/
                            /api/chat/compaction/status answers {pending,
                            compaction} for the chat's poll (a quiet path,
                            read under the guard), and the reference DELETE
-                           answers the record its truncation left
+                           answers the record its truncation left;
+                           redline Phase 3: the panel's QC apply captures
+                           fix-survival evidence (capture_fix_evidence +
+                           finding_evidence_keys) before commit_turn and
+                           writes the durable fix record
+                           (session.record_qc_fixes) right after
+                           mark_applied; _ExportInputs gains comment_profile
+                           / comment_references / comment_fix_log (captured
+                           under the guard for a redline on the original)
+                           and _render_original_redline passes
+                           redline_basis.redline_comment_basis(...) as
+                           comments= only while settings.REDLINE_COMMENTS
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -455,6 +470,19 @@ backend/
                            + APPLY_QC_FIXES_TOOL. app.py keeps same-name
                            assignment aliases so route globals and every
                            monkeypatching test still hit the single seam
+  qc/fix_log.py            [Redline on your original, Phase 3] the DURABLE
+                           record of applied QC fixes (the retained result is
+                           replaced by the next run, so nothing else could say
+                           which change a fix made): fix_log_entries (one
+                           entry per SURVIVING finding — title, severity,
+                           lens, issue, accepted sources with titles,
+                           applied_at, run_id, the fix-survival evidence
+                           JSON-normalized), written wherever mark_applied is
+                           (the panel route and the chat commit, same ids);
+                           entry_covers (field compared minus status and
+                           source_item_id; a deletion's absence; a move's
+                           exact parent + index); covered_uids;
+                           sanitize_fix_log (lenient, newest 500 kept)
   qc/context.py            [v1.11.0] qc_review_context_block: the FINAL QC
                            REVIEW block in every turn's PROJECT CONTEXT —
                            compact open findings (ids, severity, fix class),
@@ -1018,7 +1046,19 @@ backend/
                            definition has with a visible label (not numFmt
                            none, not a blank lvlText) and draws as a provision
                            (_promoted_heading_kind says no), else the kin's
-                           level is kept; counted as level_offset / level_kept
+                           level is kept; counted as level_offset / level_kept.
+                           Redline on your original, Phase 3:
+                           render_preserving_redline(comments=) — per element
+                           uid a CommentBasis, None (the default) = no pass,
+                           byte for byte; _RedlineBuilder.changes aligns each
+                           rendered element with (inserted|edited|deleted|
+                           moved, uid); the pass runs AFTER the self-check
+                           and the move check (_commented_redline: add_comments
+                           on copies, rewrite_raw_zip_members, the streaming
+                           audit with expected_parts) and on ANY failure
+                           returns None — the redline goes out without
+                           comments (counted redline.comments.fallback),
+                           never a refusal
   spec_doc/source_splice.py
                            [Redline on your original, D-2; built in Phase 0]
                            the word-level splice shared with the Phase 1
@@ -1133,7 +1173,30 @@ backend/
                            counter, not counted as a revision) + move_name
                            ("move" + digits, unique per export); mark_paragraph
                            takes the move tags and refuses w:moveFrom on a
-                           section-break holder like w:del
+                           section-break holder like w:del; Phase 3:
+                           RevisionMarks.take_id (an id from the one counter,
+                           not counted — the comments pass's ids)
+  spec_doc/redline_comments.py
+                           [Redline on your original, Phase 3] Build-a-Spec's
+                           comments on the changes: CommentBasis / CommentLink
+                           / CommentSite, plan_comments (which changes, the
+                           research-only-for-new-words rule, the locked skip,
+                           neighbours sharing one comment), add_comments →
+                           CommentedPackage (the body with anchors — start
+                           after the first paragraph's pPr, end + a plain
+                           reference run at the last's end, never inside a
+                           tracked change — and the comment parts: an
+                           existing comments part appended to, else a new
+                           word/comments.xml registered by a document
+                           relationship + content-type Override; links as
+                           external relationships in comments.xml.rels;
+                           the upload's comment/hyperlink styles when
+                           defined, else Word's look as direct formatting;
+                           extension parts untouched), proving itself
+                           (_check_body, _check_pairing, _check_part) and
+                           raising CommentPassError with a closed
+                           COMMENT_FALLBACK_REASONS code; safe_link_url
+                           (http/https + host only); strip_comment_anchors
   spec_doc/xml_text.py     XML 1.0-safe artifact text: the handful of code points
                            XML cannot carry (C0 controls, lone surrogates)
                            render as VISIBLE \uXXXX escapes rather than being
@@ -1169,7 +1232,11 @@ backend/
                            condensed-conversation record; on load
                            CompactionRecord.from_dict keeps it only while it
                            still describes the loaded history, logs INFO when
-                           it does not, and gives the session a fresh runner)
+                           it does not, and gives the session a fresh runner);
+                           redline Phase 3 adds an optional `qc_fix_log` key
+                           (sanitize_fix_log both ways, omitted when empty;
+                           assigned unconditionally on load so an older file
+                           clears the outgoing session's record)
   spec_doc/project_package.py
                            the .baspec container: a small versioned ZIP
                            (manifest.json + project.json + the retained
@@ -1180,11 +1247,21 @@ backend/
                            source export: indexes the immutable upload,
                            copies every unchanged local record verbatim,
                            rebuilds one member + the central-directory
-                           offsets; ambiguous layouts are mutation blockers
+                           offsets; ambiguous layouts are mutation blockers.
+                           Redline Phase 3: rewrite_raw_zip_members replaces
+                           SEVERAL members and appends new ones (deflated,
+                           no descriptor, ASCII names, the document part's
+                           timestamps) under the same discipline, and
+                           audit_raw_zip_rewrite checks it record by record;
+                           replace_raw_zip_member / audit_raw_zip_replacement
+                           delegate, byte for byte as before
   spec_doc/source_audit.py memory-bounded package-preservation checks on the
                            DECOMPRESSED contract (raw-record fidelity is
                            raw_zip's job) — unrelated members are never
-                           materialized in memory
+                           materialized in memory; expected_parts= (redline
+                           Phase 3) names the other parts a rewrite may
+                           change or append and the bytes each must hold —
+                           anything unnamed is still refused
   spec_doc/source_mapping.py
                            immutable anchors from the semantic tree back to
                            the imported DOCX (kept OUTSIDE SpecSection: they
@@ -1397,7 +1474,11 @@ backend/
                            identity and the lint inputs by value; provisional
                            trees are linted fresh and never kept; cleared on
                            reset/load); the PROJECT CONTEXT escape uses
-                           compaction.CONTEXT_BOUNDARY_PATTERN
+                           compaction.CONTEXT_BOUNDARY_PATTERN; redline
+                           Phase 3 adds SessionState.qc_fix_log (wiped by
+                           reset) + record_qc_fixes (newest 500 kept), and the
+                           chat commit writes the fix record for exactly the
+                           surviving ids it marks applied
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -1823,7 +1904,14 @@ tests/
                            sample check, JudgeReport (report.json, file names
                            never paths); Phase 2 PR B: renders with
                            settings.REDLINE_NATIVE_MOVES (what the route
-                           sends) and adds the targeted/native-move* groups
+                           sends) and adds the targeted/native-move* groups;
+                           Phase 3: renders with settings.REDLINE_COMMENTS
+                           and judge_comment_bases (a basis for every
+                           element), adds targeted/commented-master, removes
+                           Build-a-Spec's comment anchors BY ID (read from
+                           the comments part Word saved) from the resolved
+                           side before comparing, and fails a Word that
+                           loses one of those comments
   test_word_judge.py       [Phase 2 PR A] the judge proven without Word: each
                            tolerance removes exactly what it names, the
                            self-check applies none, the targeted cases cover
@@ -1836,13 +1924,43 @@ tests/
                            the save model never splits, duplicates or
                            renumbers a move range, a Word keeping both copies
                            of a move fails, and the judge renders with the
-                           switch the route passes
+                           switch the route passes; Phase 3: a renumbering
+                           Word still passes (ids read from Word's file), a
+                           Word losing a comment fails, the strip removes
+                           only the named anchors, and the comments switch
   test_redline_word_judge.py
                            [Phase 2 PR A] the gated Windows suite (skips
                            unless BUILD_A_SPEC_WORD_JUDGE=1): one test per
                            group, real Word via tools/render_docx_word.
                            resolve_docx, plus Word's own tracked-move sample
                            once the corpus has it
+  test_redline_comments.py [Redline on your original, Phase 3] the comments
+                           on the changes: the wording (grounded, lead,
+                           attached, unresolved, QC, both, newest record,
+                           caps/links/trim, the header line), the pass on
+                           every master shape (typed, Word- and
+                           style-numbered, a link, a native move, an emptied
+                           break holder, the last paragraph deleted and
+                           appended, a locked block skipped, a master that
+                           already has comments — classic and with Word
+                           2013+ parts), every row proving additivity, the
+                           anchors' placement, both resolutions with the
+                           anchors set aside and the package; the three
+                           proof checks directly; every fallback seam; the
+                           route (fix record through undo/redo/edit/review,
+                           deletion and move fixes, research and attached
+                           bases); the switch and its ast pin; the corpus
+                           sweep with the fallback never firing
+  test_qc_fix_log.py       [Phase 3] the durable fix record: the panel and
+                           the chat commit (survivors only, a voided fix
+                           never logged, a rolled-back turn nothing), save /
+                           load / rerun, the lenient bounded reader, never in
+                           a brief nor a QC input, and entry_covers
+  test_raw_zip_rewrite.py  [Phase 3] several members replaced and new ones
+                           appended by the raw-record writer: envelopes and
+                           descriptors kept, one member == the single
+                           replacement byte for byte, determinism, refused
+                           names, and the audit's refusals
   frontend/tests/tour.test.ts
                            [Batch 6] passive tour-data invariants and current anchors
   test_stop.py             [Batch 7] chat stop mid-stream (truncates the live

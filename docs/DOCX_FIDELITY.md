@@ -358,8 +358,10 @@ page and draws nothing.
 treated as identity rather than content. Every package part except
 `word/document.xml` is the upload's, byte for byte — `word/settings.xml`
 included: Track Changes is not switched on in the file (Decision 4), and a
-file whose Track Changes was already on keeps it on. The retained upload is
-never modified; this is a new file.
+file whose Track Changes was already on keeps it on — except the parts that
+carry Build-a-Spec's comments on the changes (below), each of which is new
+or the upload's plus additions only. The retained upload is never modified;
+this is a new file.
 
 **The file checks its own promise before anyone sees it.** The export renders
 the redline and the clean export from one plan, then runs pure-XML Accept All
@@ -609,6 +611,134 @@ desktop app, **Open redline in Word** (`js_api.open_in_word("preserved",
 Word; it is offered only while the redline is available. *Redline of
 extracted provisions* (`?redline=master&mode=normalized`) stays below them.
 
+### Build-a-Spec's comments on the changes
+
+Each change the redline marks that has a **recorded basis** also carries a
+Word comment, authored `Build-a-Spec` (initials `BAS`, dated at export),
+saying what the change rests on. It is always on (owner decision,
+2026-09-23); `BUILD_A_SPEC_REDLINE_COMMENTS=0` switches it off, read per
+request, and then the file is byte for byte what the redline wrote before
+comments existed. **The file may go to a client**, and the comments carry
+research text and links to sources, so every surface that offers the export
+says so.
+
+**What a comment says** — never more than the record does:
+
+* **Research** (`source_item_id` names an `r-…` item in the current
+  research). A grounded item: `Basis: requirements research (item r-…,
+  researched <date>)`, its requirement, `Authority: …`, `Code reference: …`,
+  then `Sources:` and the sources grounding ACCEPTED. An ungrounded one:
+  `Basis: a requirements research lead (item r-…) that was not verified
+  against a retrieved source`, then `Cited (not verified):` and what it
+  cited.
+* **Attached document** (`ref-…`): `Basis: attached document "<title>"
+  (<file name>).` — no link; it is a file on the user's machine.
+* **A Final QC fix**, from the durable fix record (below): `Changed by a
+  Final QC fix, applied <date>: <title> (<severity>, <lens>)`, the issue,
+  then `Sources:` and the finding's accepted sources, each titled.
+
+A change with both kinds of basis gets one comment, the QC fix first. Only an
+`http`/`https` URL with a host becomes a clickable link (anything else stays
+text); a heading lists at most five, then `+N more`; long text is cut near
+500 characters with `…`; every string goes through `xml_safe_text`, so a
+control character shows as a visible escape rather than breaking the file.
+
+**Which changes.** Only what the redline marks: an inserted provision, an
+edited one (spliced or the fallback), a deleted one (the emptied holder of a
+displaced section break included), and a moved one (Word's own Moved marks or
+the deletion-plus-insertion fallback), on its NEW copy. A research or
+attached-document basis speaks for new words, so it applies only to an
+inserted provision or an edited or moved one whose text differs from the
+import — a relettered provision (only its letter changed) and a pure move
+get none. A QC basis applies to any change whose element the fix record
+still covers, deletions and moves included. Never commented: a status-only
+change (it is not tracked), a preserved block (a table, a picture, …), a
+change with no basis. A `source_item_id` the current research does not hold
+gives no comment and is counted (`unresolved_source`). Neighbouring changed
+paragraphs whose comments would read the same share ONE comment spanning
+them, when nothing but those paragraphs sits between them.
+
+**The fix record** (`SessionState.qc_fix_log`, `backend/qc/fix_log.py`). An
+applied fix used to leave only a disposition event, and the next successful
+Final QC run replaces the retained result — so after the ordinary "apply,
+then re-run", nothing could say which change a fix made. One entry per
+finding is now written where the finding is marked applied (the panel's
+Apply and the chat's commit, for exactly the same ids — a rolled-back turn
+writes nothing, a fix voided later in its own turn is never logged): its
+title, final severity, lens, issue, accepted sources with titles, when it
+was applied, the run, and the fix-survival evidence the apply path computes.
+An entry covers an element **only while the element reads as the fix left
+it**: a paragraph's text, an article's or PART's title, the section's number
+and title (said on the upload's header line), a deletion still absent, and a
+move also still at exactly the position the fix put it (the same parent and
+index — the chat commit's own strictness). Status and source link are
+ignored, so confirming a fixed provision in the review walk keeps its
+comment; an undo takes the comment away, a redo brings it back. The newest
+record of a finding speaks. The record rides the project file (an optional
+`qc_fix_log` key, read leniently), is cleared by a new session, and is never
+carried in a project brief nor an input to Final QC. A fix applied before
+this record existed has no entry, so its change gets no QC comment.
+
+**The markup** (the sources and clauses are in the plan's "Phase 3 (comments
+on changes) — as built"):
+
+* The range opens (`w:commentRangeStart`) right after the first paragraph's
+  `w:pPr`, and closes (`w:commentRangeEnd`), followed by a plain run holding
+  `w:commentReference`, at the end of the last paragraph. Every anchor is a
+  direct child of a `w:p` and **never inside `w:ins`, `w:del`, `w:moveFrom`
+  or `w:moveTo`**, so neither resolution removes it.
+* Ids come from the redline's own revision counter, above every `w:id` in
+  the package, so no comment id equals a bookmark's, a revision's or an
+  existing comment's.
+* `w:comment` carries `w:id`, `w:author`, `w:date` and `w:initials`; its
+  first paragraph opens with a `w:annotationRef` run, as Word's own do. A
+  link is `w:hyperlink r:id` naming an external relationship in
+  `word/_rels/comments.xml.rels`.
+* Styles: the upload's own comment-text, comment-reference and hyperlink
+  styles when it defines them (by id, or by Word's built-in names
+  "annotation text", "annotation reference", "Hyperlink"); otherwise direct
+  formatting in Word's own look — 10 pt text, an 8 pt reference mark, links
+  blue and underlined. `word/styles.xml` is never touched.
+* A new `word/comments.xml` is registered by a relationship in
+  `word/_rels/document.xml.rels` (`Target="comments.xml"`) and a
+  content-type `Override`; an upload that already has a comments part is
+  appended to, never given a second one. Word 2013+'s extension parts
+  (`commentsExtended`, `commentsIds`, `commentsExtensible`, `people`) are
+  left as they are: Build-a-Spec's comments get no entries there, which
+  their schema allows.
+
+**The contract, as revised.** Every package part except `word/document.xml`
+and the comment parts — `word/comments.xml`, `word/_rels/comments.xml.rels`,
+`word/_rels/document.xml.rels`, `[Content_Types].xml` — is the upload's,
+byte for byte; each comment part is new, or the upload's with the pass's
+additions only (canonically). The comments are added by a separate pass that
+runs **after** the self-check and the move check have passed and changes
+neither, and it proves its own output before anything is written:
+
+* removing exactly its anchors gives back the proved body, element for
+  element;
+* every id pairs one `w:comment` with one range start, one range end and one
+  reference, in that order, each a direct child of a paragraph and outside
+  every tracked change;
+* each rewritten part, minus the pass's additions, equals the upload's part;
+* the package is rewritten by the raw-record writer extended to replace
+  several members and append new ones with the byte-exact discipline
+  (`raw_zip.rewrite_raw_zip_members`, audited record by record), and the
+  streaming package audit is told exactly which parts may differ and what
+  each must hold.
+
+If any of that fails, the redline is written **without comments** — Moved
+marks kept — and the export event counts why
+(`redline.comments.fallback`). It is never a refusal. With the anchors set
+aside, Accept All still gives the formatted export and Reject All the
+upload's body; the comments themselves stay anchored through both.
+
+**Counts.** The `export` event's `render.redline.comments`: `added`,
+`elements` (the changed paragraphs they cover), `skipped` by reason
+(`no_basis`, `locked`, `unresolved_source`) and `fallback` (`""`, or one of
+`parts_unreadable`, `body_check`, `pairing_check`, `part_check`,
+`package_check`, `error`). Counts only, never text.
+
 ### Real Word as the judge
 
 The self-check proves the promise with the app's own resolver.
@@ -659,9 +789,9 @@ would prove nothing, and one that tolerated less would report differences
 that are not there.
 
 **The body is what is compared,** because every tracked change is in it:
-every other part of the redline is the upload's byte for byte (the
-self-check's package check), and neither resolution changes anything outside
-the body. The judge cannot see a repair prompt (alerts are off in an owned
+every other part of the redline is the upload's byte for byte, the comment
+parts' additions aside (the self-check's package check and the comments
+pass's own), and neither resolution changes anything outside the body. The judge cannot see a repair prompt (alerts are off in an owned
 Word, so a file Word refuses to open fails its job instead) or how the
 Reviewing Pane draws the changes; those stay manual rows in
 `docs/RELEASE_WINDOWS.md`.
@@ -675,6 +805,19 @@ it). The cases are placeholder text, so the report may carry it; it never
 carries a path. A mix the redline refuses for a structural reason (the corpus
 sweep's own list) is recorded and not sent to Word; any other refusal is a
 failed self-check and fails the judge.
+
+**Build-a-Spec's comments are set aside by id.** With
+`settings.REDLINE_COMMENTS` on (read per call, as the route does), every
+change the redline can comment carries one (the judge supplies a basis for
+every element), and one targeted master already holds a reviewer's comment.
+The comments are the redline's own annotation, not part of either
+resolution, so their anchors are removed from what Word resolved — never
+from the reference — before comparing, by the ids read from the comments
+part Word saved (author `Build-a-Spec`), so a Word that renumbers comments on
+save is still judged correctly. That is the moved-bookmark pattern, not a
+Word-save tolerance: a save does not write them. What the judge does require
+of them is that every one survives Accept All and Reject All, still
+anchored.
 
 The same suite has Word resolve **its own** tracked moves — the Word-saved
 sample the corpus producer's TrackedMove recipe makes
@@ -696,7 +839,7 @@ style-numbered master and a move a section break forced.
 | Source-preserving patched DOCX | `GET /api/export/docx?mode=source` after a proven-safe body change | Clone of the imported package | Only approved `word/document.xml` text slices or numbered-island paragraph spans change. Unchanged member payloads, local records, inter-record gaps, archive comment, and trailing bytes remain exact. Central-directory records change only for the replacement metadata and required local-header offsets. The proposed output is independently audited before return. |
 | Appearance-preserving DOCX | `GET /api/export/docx?mode=preserved`, and the default for an imported document that has released the byte-exact claim (i.e. every import) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical. Untouched provisions are byte-identical elements; edited ones keep their paragraph properties and their own runs (unchanged words keep their formatting); preserved blocks are verbatim; section breaks survive every edit. See the section above. |
 | Normalized DOCX | `GET /api/export/docx?mode=normalized` | Current SectionFormat tree | Generates a new DOCX with Build-a-Spec styles, schedules, and genuine Word automatic numbering. It does not preserve source-package formatting or opaque parts. Fresh projects default to this mode. |
-| Redline on your original | `GET /api/export/docx?redline=master&mode=preserved`, and the default for a bare `redline=master` whenever it is available (`preserved_redline_available`) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical (Track Changes is not switched on). Every change since the import is a native Word tracked change by "Build-a-Spec", dated at export. Accept All gives exactly the appearance-preserving export; Reject All gives the upload's body back (a moved provision's bookmarks excepted). A provision moved unchanged is Word's own "Moved" marks (`w:moveFrom`/`w:moveTo`, paired by name), switchable off. Both are checked before the file is returned, and a failure is a 409 naming the check. It never adds tracked changes to the retained source. See the section above. |
+| Redline on your original | `GET /api/export/docx?redline=master&mode=preserved`, and the default for a bare `redline=master` whenever it is available (`preserved_redline_available`) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` and the comment parts is byte-identical (Track Changes is not switched on); the comment parts are new or the upload's plus Build-a-Spec's comments only — a comment on each change with a recorded basis, switchable off. Every change since the import is a native Word tracked change by "Build-a-Spec", dated at export. Accept All gives exactly the appearance-preserving export; Reject All gives the upload's body back (a moved provision's bookmarks excepted). A provision moved unchanged is Word's own "Moved" marks (`w:moveFrom`/`w:moveTo`, paired by name), switchable off. Both are checked before the file is returned, and a failure is a 409 naming the check. It never adds tracked changes to the retained source. See the section above. |
 | Normalized redline | `GET /api/export/docx?redline=master&mode=normalized` (and a bare `redline=master` when the redline on the original is unavailable), or `GET /api/export/docx?redline=version&base=N` | Semantic baseline/version and current SectionFormat tree | Generates a new DOCX containing Word `w:ins`/`w:del` markup. It is a semantic provision redline, not a source-package redline. It never adds tracked changes to the retained source. |
 
 Redline display labels remain positional literal text so a move or a preceding

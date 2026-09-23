@@ -511,6 +511,52 @@ Word**, from the **packaged** app. The switch is
       Export the redline again: no Moved marks. Accept All and Reject All
       give the same two files as above.
 
+### Comments on the changes (redline program, Phase 3)
+
+Built before anyone ran the judge on Windows, so these rows, and the judge's
+comment checks, are the first time Word sees Build-a-Spec's comments. In
+**real Word**, from the **packaged** app, on an imported master. The switch
+is `BUILD_A_SPEC_REDLINE_COMMENTS`, on by default.
+
+- [ ] **A comment on each change with a basis, with working links.** Run
+      research, then have the assistant add or reword a provision from a
+      research finding (its ◆ chip shows); attach a document and have one
+      provision drafted from it; apply one Final QC fix. Export → *Redline
+      on your original*. The file opens with **no repair prompt**. Each of
+      those changes carries a comment by **Build-a-Spec** in the margin:
+      the research one names the finding (requirement, authority, code
+      reference, date) and lists its sources, the attached-document one
+      names the document, the QC one names the finding, its severity, lens
+      and issue. **Click each source link**: it opens the web page. A
+      provision you reworded by hand, and one only relettered, carry none.
+- [ ] **The comments survive Accept All and Reject All.** Review → Accept →
+      Accept All Changes: every Build-a-Spec comment is still there,
+      attached to text; undo, then Reject All Changes: the same. Apart from
+      the comments, the two results are what the rows above describe
+      (the formatted export; your original).
+- [ ] **A master that already has comments keeps them.** Import a master a
+      reviewer commented on in Word, edit a provision from research, export
+      the redline: the reviewer's comments are all still there, unchanged,
+      beside Build-a-Spec's, and replying to one of them in Word works.
+- [ ] **With the switch off** the file carries no Build-a-Spec comments —
+      it is the redline as before. Quit the app, then start it from a
+      terminal with the switch set — in PowerShell:
+
+      ```powershell
+      $env:BUILD_A_SPEC_REDLINE_COMMENTS = "0"
+      .\dist\BuildASpec\BuildASpec.exe
+      ```
+
+      in Command Prompt:
+
+      ```bat
+      set BUILD_A_SPEC_REDLINE_COMMENTS=0
+      .\dist\BuildASpec\BuildASpec.exe
+      ```
+
+      Export the redline again: no comments by Build-a-Spec, and the file
+      otherwise the same.
+
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 
 - [ ] Attach one of each reference type — `.docx`, `.pdf`, `.txt`, `.xml`,

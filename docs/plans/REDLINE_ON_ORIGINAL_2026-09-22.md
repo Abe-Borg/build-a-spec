@@ -47,6 +47,16 @@ native moves ship behind a switch (`BUILD_A_SPEC_REDLINE_NATIVE_MOVES`, on by
 default; `0` is the Phase 1 rendering byte for byte), and "Phase 2 (PR B) —
 as built" lists what the first Windows run should check. No release entry
 yet; its draft is under "Release-note drafts".
+**Phase 3 is decided and built** (owner decisions 9–12, 2026-09-23): of
+its four ideas only the comments were wanted. **Every change with a recorded
+basis now carries a Word comment from Build-a-Spec** saying what it rests on
+— the research finding, attached document or Final QC fix — with clickable
+source links, always on, behind a switch (`BUILD_A_SPEC_REDLINE_COMMENTS`,
+on by default; `0` is today's redline byte for byte). A durable record of
+applied QC fixes makes the QC half possible. Built without real Word, like
+PR B: "Phase 3 (comments on changes) — as built" lists what the first
+Windows run should look at. No release entry yet; its draft is under
+"Release-note drafts".
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
 the Batch 5 diff engine and redline writer (`diffing.py`, `docx_export.py`),
 and the retained upload + formatting map every import already keeps.
@@ -1642,13 +1652,171 @@ back the Phase 1 rendering with no other change.
 
 ### Phase 3 — Later, only if wanted
 
-- A redline against any version, on the original.
+- A redline against any version, on the original. **Dropped** (Decision 10).
 - Layering on masters that carry pending revisions. Word's "Reject all
-  changes by Build-a-Spec" would then give back the original.
+  changes by Build-a-Spec" would then give back the original. **Skipped**
+  (Decision 12).
 - A comment on each change citing the research item or QC finding behind it.
-  `Paragraph.source_item_id` already carries the link.
+  `Paragraph.source_item_id` already carries the link. **Built** (Decisions
+  9 and 13): see "Phase 3 (comments on changes) — as built".
 - Redlining the section number in headers and footers. This breaks the
   "headers are never rewritten" contract, so it needs its own decision.
+  **Declined** (Decision 11): headers and footers are never rewritten.
+
+#### Phase 3 (comments on changes) — as built
+
+**Built 2026-09-23, without real Word**, like PR B: nobody has run the
+judge on Windows, so the markup was settled from the sources below and the
+feature ships behind a switch. No VERSION bump and no `release_notes.py`
+entry; the draft is under "Release-note drafts". The contract is in
+`docs/DOCX_FIDELITY.md` ("Build-a-Spec's comments on the changes"); the why,
+the traps and the revert matrix in `CLAUDE.md` → "Comments on the changes —
+implemented notes (redline Phase 3)".
+
+**What it does.** Each change the redline marks — an inserted, edited,
+deleted or moved provision, the emptied holder of a displaced section break
+included — that has a recorded basis gets a Word comment by `Build-a-Spec`
+(initials `BAS`, the redline's own date) saying what it rests on:
+
+- a research item its `source_item_id` names (`r-…`): a grounded one names
+  the finding, its requirement, authority and code reference and the date it
+  was researched, then `Sources:` and the sources grounding ACCEPTED; an
+  ungrounded one says it is a lead not verified against a retrieved source
+  and lists what it CITED under `Cited (not verified):`;
+- an attached document (`ref-…`): `Basis: attached document "<title>"
+  (<file name>).`, no link;
+- a Final QC fix: `Changed by a Final QC fix, applied <date>: <title>
+  (<severity>, <lens>)`, the issue, and the finding's accepted sources.
+
+Research and attached bases speak only for NEW words (an inserted provision,
+or an edited or moved one whose text changed since the import); QC bases for
+any change the fix record still covers. Status-only changes, preserved
+blocks and changes with no basis get none; a source id that resolves to
+nothing is counted, not described. Neighbouring changed paragraphs whose
+comments read the same share one comment spanning them.
+
+**The durable fix record** (`SessionState.qc_fix_log`, `backend/qc/
+fix_log.py`) is what makes the QC half possible: the retained result is
+replaced by the next successful run, and an applied fix left only a
+disposition event. One entry per finding, written where `mark_applied` is
+called (the panel's apply route and the chat commit block, for the same ids
+— survivors only in chat); an entry covers an element only while it reads as
+the fix left it (text or title; absence for a deletion; for a move also the
+exact parent and index — **the chosen strictness**, the same as the chat
+commit's own survival check; status and source link ignored). Project key
+`qc_fix_log`, lenient load, reset clears it, never in a brief or the QC
+manifest. **Fixes applied before this build have no entry and get no
+comment.**
+
+**The markup, settled from the sources.** ECMA-376 Part 1 (5th ed. =
+ISO/IEC 29500-1) and Part 2, the transitional `wml.xsd`, [MS-OI29500]
+(rev. 2025-02-18) and [MS-DOCX] (rev. 2025-11-13), and Word-saved samples
+(LibreOffice's `sw/qa` corpus and Open-Xml-PowerTools). ISO/IEC 29500-4's
+prose was not reached; the transitional URIs come from the Open XML SDK's
+part data and Word's own files.
+
+1. **The comment.** `CT_Comment`: `w:id` and `w:author` required, `w:date`
+   and `w:initials` optional (wml.xsd; §17.13.4.2; [MS-OI29500] notes on
+   §17.13.4.2 via §17.13.5.18(b): Word treats `author` as required, limits
+   initials to 9 and author to 255 characters, reads the date in the
+   user's time zone, and does not support revisions inside a comment). Its
+   first paragraph opens with an `w:annotationRef` run (§17.13.4.1,
+   optional; every Word save inspected writes it).
+2. **The anchors.** `w:commentRangeStart`/`End` are range markup allowed in
+   a paragraph, between paragraphs and inside tracked changes;
+   `w:commentReference` lives in a run (wml.xsd `EG_RangeMarkupElements`,
+   `EG_RunInnerContent`). A range without a matching reference, or only one
+   end of a range, is non-conformant (§17.13.4.3–.5); a range may span
+   paragraphs (§17.13.2). **Chosen:** start right after the first
+   paragraph's `w:pPr`, end and a plain reference run at the end of the last
+   paragraph, never inside `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`. Word
+   writes both shapes (inside a `w:del`: LibreOffice's
+   `redline-range-comment.docx`; outside wrappers beside a deleted mark:
+   `tdf154478.docx`), and no source says how Word's Accept/Reject treats an
+   anchor inside a wrapper — outside is the shape both resolutions keep.
+3. **Ids.** "A unique identifier for an annotation" (the shared `id`
+   attribute text); duplicate comment ids load only one (§17.13.4.2);
+   Word refuses -1 and reads the type as a 32-bit int ([MS-OI29500]
+   §17.13.5.1(a), §17.18.10(a)); every Word save inspected numbers
+   comments, bookmarks and revisions from one sequence. **Chosen:** the
+   redline's own revision counter (`RevisionMarks.take_id`), above every
+   `w:id` in the package.
+4. **Links in a comment.** `w:hyperlink r:id` names a relationship "in the
+   associated relationship part item" (§17.16.22); a comments part may hold
+   explicit relationships to hyperlinks (§11.3.2, §15.3); the part's
+   relationships item is `/word/_rels/comments.xml.rels` (Part 2 §6.5.2.3),
+   `Id` unique `xsd:ID`, `TargetMode="External"` (Part 2 §6.5.3.4).
+   **Chosen:** ids `rIdBas<n>`; only an `http`/`https` URL with a host is
+   linked, anything else stays text.
+5. **Registration.** At most one comments part per story, the target of an
+   implicit relationship from the main document (§11.3.2, §11.3.10); one
+   `Override` per part name (Part 2 §7.2.3.2.1). **Chosen:** a new part is
+   `word/comments.xml`, `Target="comments.xml"` from
+   `word/_rels/document.xml.rels`, with its content-type `Override` (and one
+   for a new `.rels` part when the package has no `rels` default); an
+   existing comments part is appended to, never a second one.
+6. **Word 2013+ extension parts.** `commentsExtended`, `commentsIds`,
+   `commentsExtensible`, `people` ([MS-DOCX] §2.5.3.1–2, §2.8.3.1,
+   §2.10.3.1, §2.5.3.5): every child is `minOccurs="0"` and nothing requires
+   an entry per comment; a `people` entry must match a comment, not the
+   reverse. **Chosen: add nothing to them** (the state Word 2007/2010 files
+   and LibreOffice's own output have) — no `w14:paraId`, no `people` entry.
+7. **Styles.** Word's built-in names "annotation text", "annotation
+   reference", "Hyperlink" ([MS-OI29500] §17.7.4.9(d)); a reference to a
+   style that does not exist applies no style (§17.3.1.27, §17.3.2.29).
+   **Chosen:** the upload's own styles when defined (by id or built-in
+   name), else direct formatting in Word's look (10 pt text, an 8 pt
+   reference mark, blue underlined links); `word/styles.xml` untouched.
+
+**The contract and its proof.** Every part except `word/document.xml` and
+the comment parts is byte-identical; a comment part is new, or the upload's
+plus additions only. The comments are a separate pass after the D-7
+self-check and the move check (`revisions.py` and the self-check are
+unchanged), working on copies, and it proves its output: removing its
+anchors gives the proved body element for element; every id paired and
+placed as above with one `w:comment`; each rewritten part minus its
+additions equals the upload's canonically; the package written by
+`raw_zip.rewrite_raw_zip_members` (several members replaced, new ones
+appended, audited record by record) and checked by the streaming package
+audit with the parts it may change named. Any failure writes the redline
+without comments (Moved marks kept), counted as `redline.comments.fallback`
+— never a refusal. The corpus sweep asserts the fallback never fires.
+
+**The switch.** `settings.REDLINE_COMMENTS`
+(`BUILD_A_SPEC_REDLINE_COMMENTS`, on). `spec_doc` reads no settings:
+`render_preserving_redline(comments=)` defaults to none, and
+`app._render_original_redline` passes the bases only while the setting is
+on; the export captures the research profile, the attached documents'
+identities and a copy of the fix record under the guard, and
+`backend/redline_basis.py` turns them into bases outside it. **Switch off is
+the redline byte for byte:** proven once against a copy of `master`'s
+modules (at `df4d55f`), identical on **4,348 renders** — the corpus sweep's
+own mixes (108 renders), 18 corpus masters × 60 wider mixes (2,160) and the
+suite's 26 hand-built masters × 40 mixes (2,080), each with Moved marks on
+and off — with no refusal among them.
+
+**Counts.** `render.redline.comments`: `added`, `elements`, `skipped` by
+reason, `fallback`. Counts only.
+
+**The judge.** `tests/word_judge.py` supplies a basis for every element, so
+every commentable change carries a comment, adds a master a reviewer already
+commented on, and removes Build-a-Spec's anchors — by the ids read from the
+comments part Word saved — from what Word resolved before comparing (the
+moved-bookmark pattern, not a Word-save tolerance). It fails a Word that
+loses one of those comments on Accept All or Reject All.
+
+**Unverified in Word** (what the first Windows run should look at first):
+
+1. that the files open with no repair prompt, with and without an existing
+   comments part, and beside Word 2013+'s extension parts that carry no
+   entry for the new comments;
+2. that the Reviewing Pane and the margin show each comment by
+   Build-a-Spec, and each link opens its page;
+3. that Accept All and Reject All keep every comment anchored, as the app's
+   resolver does (the judge checks this);
+4. how Word draws a comment whose range spans several paragraphs, and one
+   anchored on a deleted or moved-away paragraph;
+5. the direct formatting on a master without comment styles.
 
 ## Tests (Phase 1)
 
@@ -1714,7 +1882,8 @@ back the Phase 1 rendering with no other change.
 Abraham answered all seven on 2026-09-22, each as recommended (the seventh
 was Phase 0's open question, deviation 7). They are binding on every phase;
 changing one is a new decision, recorded here. The eighth (2026-09-23) went
-against the recommendation, and says so.
+against the recommendation, and says so. Ninth to thirteenth (2026-09-23)
+settle Phase 3.
 
 | # | Decision | Ratified |
 |---|---|---|
@@ -1726,6 +1895,11 @@ against the recommendation, and says so.
 | 6 | Phase 0 may change the shipped *Export Word (keeps your formatting)* output | **Yes.** It is strictly better output, and it is what makes Accept All trustworthy. |
 | 7 | Where a provision added right after a section's last paragraph lands (Phase 0 deviation 7) — ratified 2026-09-22 | **Keep today's placement:** after the break, at the top of the next section, because a break stays with the content above it. The alternative was Word's own Enter behaviour, which keeps the new text in the section. |
 | 8 | Build Phase 2 PR B (native "Moved" marks) before the owner has run the real-Word judge on Windows and produced Word's own tracked-move sample? — decided 2026-09-23 | **Yes: build it without them.** The recommendation (and this plan's own gate) was to wait. The gate was **waived, not passed**: nobody will run the judge or the recipe for now. The fix if Word disagrees is one switch away — `BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0` gives back the Phase 1 rendering byte for byte — and "Phase 2 (PR B) — as built" lists what the first Word run should check. The compaction plan's D5 is the precedent. |
+| 9 | Phase 3's comments on changes — decided 2026-09-23 | **Build them, always on, with no choice at export.** Each change with a recorded basis carries a Word comment from Build-a-Spec. A switch (`BUILD_A_SPEC_REDLINE_COMMENTS`) exists only as the escape hatch, the Decision 8 posture. |
+| 10 | Phase 3's redline against any version, on the original — decided 2026-09-23 | **Dropped.** The redline on the original stays master-only; the redline of extracted provisions covers versions. |
+| 11 | Phase 3's redlining of the section number in headers and footers — decided 2026-09-23 | **Declined.** Headers and footers are never rewritten; a stale number there stays a lint finding. |
+| 12 | Phase 3's layering on masters that carry pending revisions — decided 2026-09-23 | **Skipped.** Such a master stays refused with its fix named (Decision 3). |
+| 13 | Do the comments carry clickable source links? — decided 2026-09-23 | **Yes.** Research and QC sources are hyperlinks (only `http`/`https`), knowing the file may go to a client; every surface that offers the export says the file carries research text and links. |
 
 ## Risks
 
@@ -1793,6 +1967,20 @@ against the recommendation, and says so.
   In a master whose provisions Word numbers, a new sub-provision (the first
   '1.' under an 'A.') now prints at its own level instead of one level up,
   whenever your master's numbering defines that level."
+- **Phase 3 (comments on changes):** "The redline on your original now
+  says why. Each change that rests on something carries a Word comment from
+  Build-a-Spec: a provision written from a research finding names the
+  finding — its requirement, authority and code reference — with links to
+  the sources it was verified against (or labels it a lead that was not
+  verified); one written from an attached document names the document; and a
+  change a Final QC fix made names the finding, its severity and issue, and
+  its sources. The links are clickable, and the comments are part of the
+  file — read them before you send it to a client. Your own edits get no
+  comment, your own comments are kept, and everything else in the file is
+  still your original's. Fixes applied from now on are remembered with the
+  project, so their comments survive the next Final QC run; a fix applied
+  before this version has none. Setting BUILD_A_SPEC_REDLINE_COMMENTS to 0
+  turns the comments off."
 - **Phase 1 follow-up (custom XML inside a tracked change):** "A redline on
   your original of a master that carries inline custom XML markup now opens
   in Word. Build-a-Spec used to put that markup inside its tracked changes,

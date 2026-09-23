@@ -19,13 +19,12 @@ Category names, counts and character totals are all that travel;
 artifacts are identified by a SHA-256 prefix, and the local console line
 names the file so you can tell your own inputs apart.
 
-Usage (Windows):
+Usage (Windows; each command is one line and runs as written in
+PowerShell and in Command Prompt):
 
-    .venv\\Scripts\\python tools\\chat_history_profile.py ^
-        "C:\\path\\some-project.baspec"
+    .\\.venv\\Scripts\\python tools\\chat_history_profile.py "C:\\path\\some-project.baspec"
 
-    .venv\\Scripts\\python tools\\chat_history_profile.py ^
-        "C:\\specs\\*.baspec" --out history-measurement.md
+    .\\.venv\\Scripts\\python tools\\chat_history_profile.py "C:\\specs\\*.baspec" --out history-measurement.md
 """
 
 from __future__ import annotations

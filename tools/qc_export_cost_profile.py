@@ -16,14 +16,12 @@ output by a SHA-256 prefix rather than a filename, because a filename
 routinely carries a client's name; the local console line names the file
 so you can tell them apart on your own machine.
 
-Usage (Windows):
+Usage (Windows; each command is one line and runs as written in
+PowerShell and in Command Prompt):
 
-    .venv\\Scripts\\python tools\\qc_export_cost_profile.py ^
-        "C:\\path\\FINAL QC REPORT 210500.json" ^
-        "C:\\path\\some-project.baspec"
+    .\\.venv\\Scripts\\python tools\\qc_export_cost_profile.py "C:\\path\\FINAL QC REPORT 210500.json" "C:\\path\\some-project.baspec"
 
-    .venv\\Scripts\\python tools\\qc_export_cost_profile.py ^
-        "C:\\path\\*.json" --out measurements.md
+    .\\.venv\\Scripts\\python tools\\qc_export_cost_profile.py "C:\\path\\*.json" --out measurements.md
 
 Accepts, in any mix:
   * ``GET /api/qc/export.json`` downloads (the ``{report, current_state}``

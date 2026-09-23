@@ -339,7 +339,7 @@ updating that ground rule in the same change.
   one. Every chat request also goes through the citation repair (Phase 3 →
   As built), which drops a citation that no longer fits its document on the
   way out. **Run 2 is owed**, with the same command:
-  `.venv\Scripts\python tools\fetch_elision_canary.py --run` (one request,
+  `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one request,
   about two cents at most). It forces the trim on for its own request
   whatever the switch below says, so it tests the shape the switch would
   turn on.

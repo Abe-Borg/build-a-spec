@@ -32,8 +32,8 @@ and — on a tag build — publishes a GitHub Release with both assets.
    user who updates. Write for a spec author, not a developer — what they
    can now *do*, not the subsystem that changed.
 2. Bump `VERSION` in `backend/settings.py` **and** `version` in
-   `frontend/package.json` to the same value, then
-   `cd frontend && npm install --package-lock-only` to refresh the lock.
+   `frontend/package.json` to the same value, then run
+   `npm install --package-lock-only` inside `frontend` to refresh the lock.
    (`tests/test_updates.py::test_version_consistency_gate` enforces the
    match; a mismatch would ship an app that permanently sees itself as out
    of date.)
@@ -618,7 +618,7 @@ section →) is under v1.20.0 above.
       text"), and the saved `project.json` still holds the page's text.
 - [ ] **The fetch elision canary passes** before any release that switches
       the page-text trim on by default (not a 1.21.0 check):
-      `.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
+      `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
       request, about two cents at most). It sends a saved conversation whose
       fetched page text was trimmed to a note that carries the passage the
       reply quoted, with the reply's citation into the old text removed,
@@ -733,6 +733,9 @@ code shape, and these rows guard the behavior. Stop the backend process
 
 ## Manual release (on a Windows machine)
 
+The commands below run as written in PowerShell (the Windows default
+terminal) and in Command Prompt. Run them from the repo root.
+
 ### 0. One-time setup
 
 - Python 3.11+ and Node 22+ installed (`npm test` needs Node's type stripping; 20 cannot parse the `.ts` tests).
@@ -744,6 +747,10 @@ code shape, and these rows guard the behavior. Stop the backend process
   `pip install -r requirements.txt` didn't pull it — it is what loads
   pywebview's Edge WebView2 backend, and PyInstaller can only bundle what
   is installed.
+- In PowerShell, `.\.venv\Scripts\activate` runs `Activate.ps1`. If
+  PowerShell refuses because running scripts is disabled on this system,
+  allow local scripts for your account once with
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 ### 1. Version bump + consistency gate
 
@@ -753,15 +760,15 @@ code shape, and these rows guard the behavior. Stop the backend process
    below checks all three.
 2. Gate:
 
-   ```bat
+   ```
    python packaging\windows\check_release_version.py --tag vX.Y.Z
    ```
 
 ### 2. Build
 
-```bat
+```
 python -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\activate
 pip install -r requirements.txt
 pip install pythonnet pyinstaller
 
@@ -777,10 +784,10 @@ Output: `dist\BuildASpec\` (one-folder app).
 
 ### 3. Smoke-test the frozen app
 
-```bat
-dist\BuildASpec\BuildASpec.exe --version
-dist\BuildASpec\BuildASpec.exe --selfcheck
-dist\BuildASpec\BuildASpec.exe --boot-check
+```
+.\dist\BuildASpec\BuildASpec.exe --version
+.\dist\BuildASpec\BuildASpec.exe --selfcheck
+.\dist\BuildASpec\BuildASpec.exe --boot-check
 ```
 
 `--selfcheck` imports the FastAPI surface, the research engine, the
@@ -788,24 +795,28 @@ compliance checker, the updater, the docx importer, and pywebview, and
 verifies the bundled frontend is present — exit 0 required. `--boot-check`
 then starts the backend headless exactly the way the app does and waits for
 `/api/health` — the check a pure import cannot make, which is what catches a
-windowed-mode boot crash (set `BUILD_A_SPEC_DISABLE_UPDATE_CHECK=1` first,
-as the workflow does). (The build is windowed, so set
-`BUILD_A_SPEC_SELFCHECK_OUT=selfcheck.txt` to capture output to a file if
-the console shows nothing.) Then launch it plainly once and click through:
-chat turn, import, export.
+windowed-mode boot crash (set the environment variable
+`BUILD_A_SPEC_DISABLE_UPDATE_CHECK` to `1` first, as the workflow does).
+(The build is windowed, so set `BUILD_A_SPEC_SELFCHECK_OUT` to
+`selfcheck.txt` to capture output to a file if the console shows nothing.)
+PowerShell sets an environment variable with `$env:NAME = "value"`, for
+example `$env:BUILD_A_SPEC_SELFCHECK_OUT = "selfcheck.txt"`; Command Prompt
+uses `set NAME=value`. The `set` form does not carry over: in PowerShell it
+creates a PowerShell variable the app never sees. Then launch it plainly
+once and click through: chat turn, import, export.
 
 ### 4. Installer
 
 Optionally fetch the WebView2 bootstrapper first so the installer bundles
 it (the app already falls back to a browser window without it):
 
-```bat
-curl -L -o packaging\windows\MicrosoftEdgeWebview2Setup.exe "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+```
+curl.exe -L -o packaging\windows\MicrosoftEdgeWebview2Setup.exe "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 ```
 
 Then compile:
 
-```bat
+```
 ISCC /DMyAppVersion=X.Y.Z packaging\windows\installer.iss
 ```
 
@@ -815,20 +826,14 @@ profile and launch once. **Do not change the AppId GUID in
 
 ### 5. Manifest
 
-```bat
-python packaging\windows\render_release_notes.py ^
-    --version 0.9.0 ^
-    --notes-out release-notes.txt ^
-    --body-out release-body.md
-
-python packaging\windows\make_manifest.py ^
-    --version 0.9.0 ^
-    --installer dist\installer\BuildASpecSetup.exe ^
-    --url https://github.com/Abe-Borg/build-a-spec/releases/download/v0.9.0/BuildASpecSetup.exe ^
-    --out latest.json ^
-    --notes-file release-notes.txt ^
-    --published-at 2026-07-21
 ```
+python packaging\windows\render_release_notes.py --version X.Y.Z --notes-out release-notes.txt --body-out release-body.md
+
+python packaging\windows\make_manifest.py --version X.Y.Z --installer dist\installer\BuildASpecSetup.exe --url https://github.com/Abe-Borg/build-a-spec/releases/download/vX.Y.Z/BuildASpecSetup.exe --out latest.json --notes-file release-notes.txt --published-at YYYY-MM-DD
+```
+
+Each command is one line on purpose: `^` continues a line only in Command
+Prompt, and PowerShell reads it as an argument.
 
 `--notes` still takes a literal string, but prefer `--notes-file` so the
 manifest, the release page, and the app's own What's-new modal all come from
@@ -840,7 +845,7 @@ must be https — `parse_manifest` refuses anything else.
 
 ### 6. GitHub Release
 
-1. Tag: `git tag v0.9.0 && git push --tags`.
+1. Tag: `git tag vX.Y.Z`, then `git push --tags`.
 2. Create the release for the tag; upload **both**
    `BuildASpecSetup.exe` and `latest.json` as assets.
 3. Publish (not a draft, not a pre-release) — the updater reads

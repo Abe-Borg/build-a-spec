@@ -303,6 +303,18 @@ CHAT_MAX_FETCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_FETCHES", 4, minimum=1)
 # panels instead; the debrief endpoints themselves stay callable either way.
 AUTO_DEBRIEF = _bool_env("BUILD_A_SPEC_AUTO_DEBRIEF", True)
 
+# Whether saved chat history drops the text of the web pages the chat fetched
+# (chat-history compaction Phase 2): a committed turn keeps each fetch's URL,
+# title and retrieval time and replaces the page text with a short note, and
+# a project saved earlier is trimmed the same way when it is opened. OFF by
+# default until ``tools/fetch_elision_canary.py --run`` reports that the
+# provider accepts a saved reply whose citations point into a page whose
+# text was replaced. Anthropic does not document that, and a refusal would
+# fail every later message in the affected project. The canary forces the
+# trim on for its own request, whatever this says. Flip the default only
+# with a recorded pass (the compaction plan's Phase 2 → Canary result).
+ELIDE_FETCHED_PAGE_TEXT = _bool_env("BUILD_A_SPEC_ELIDE_FETCHED_PAGES", False)
+
 # --- Research (Phase 4) -----------------------------------------------------
 
 RESEARCH_MODEL = (

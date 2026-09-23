@@ -52,23 +52,23 @@ dependency edges and the phase gates; start there, not here.
 Phase 0's open question: a provision added after a section's last paragraph
 keeps landing at the top of the next section). **Phase 0 (PR #184) ships in
 1.21.0** (the project-workspace closeout). **Phase 1 is built:** its backend
-(PR #187) is in 1.21.0, and its UI (PR #190 — the menu item, *Open redline
-in Word*, the capability, the copy) is on `master`. No release entry
-announces the redline yet; the owner picks the release, and the real-Word QA
-rows are still to run. A follow-up fixed the two losses Phase 1 recorded in
+(PR #187) is in 1.21.0, and its UI (PR #190 — the menu item, *Open redline in
+Word*, the capability, the copy) is on `master`. No release entry announces
+the redline yet; the owner picks the release, and the real-Word QA rows are
+still to run. A follow-up (PR #193) fixed the two losses Phase 1 recorded in
 the formatted export: a provision holding a hyperlink is spliced instead of
 rebuilt from its first run (every fallback in the corpus sweep had been a
-link — none are now), and a new sub-provision in a Word-numbered master
-takes its own numbering level. Phase 2 (native Word "Moved" marks, real Word
-as the judge) is next and not started; a fresh session starts from the
-plan's two Phase 1 as-built notes and the follow-up's. The program adds a tracked-changes copy of the Word
-file you imported: every non-body part stays byte-identical, Reject All
-gives back the upload, and Accept All gives *Export Word (keeps your
-formatting)*. The export checks both halves itself and refuses when either
-check fails. Phase 0 fixed the four bugs found in today's formatted export
-along the way — relettered provisions lost their tab and bold, a section
-break was dropped or duplicated, and a "(Not used.)" line went stale — plus
-five more of the same export's defects it turned up.
+link — none are now), and a new sub-provision in a Word-numbered master takes
+its own numbering level. Phase 2 (native Word "Moved" marks, real Word as the
+judge) is next and not started; a fresh session starts from the plan's two
+Phase 1 as-built notes and the follow-up's. The program adds a
+tracked-changes copy of the Word file you imported: every non-body part stays
+byte-identical, Reject All gives back the upload, and Accept All gives
+*Export Word (keeps your formatting)*. The export checks both halves itself
+and refuses when either check fails. Phase 0 fixed the four bugs found in
+today's formatted export along the way — relettered provisions lost their tab
+and bold, a section break was dropped or duplicated, and a "(Not used.)" line
+went stale — plus five more of the same export's defects it turned up.
 
 ## Retired
 

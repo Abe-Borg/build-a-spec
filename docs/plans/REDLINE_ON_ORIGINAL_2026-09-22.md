@@ -16,12 +16,12 @@ was written, so a v1.21.0 tag cut from `master` after PR #190 merges ships
 the menu item too, and that entry (not frozen until tagged) would need the
 draft. The new export's real-Word QA rows in `docs/RELEASE_WINDOWS.md` are
 still to run.
-**The two losses Phase 1 recorded in the formatted export are fixed** (a
-follow-up PR, 2026-09-23): a provision holding a hyperlink is spliced like
-any other instead of being rebuilt from its first run, and a new
-sub-provision in a Word-numbered master takes its own numbering level — see
-"Phase 1 follow-up (links and the nesting level) — as built". No release
-entry either; its draft is under "Release-note drafts".
+**The two losses Phase 1 recorded in the formatted export are fixed**
+(PR #193, 2026-09-23): a provision holding a hyperlink is spliced like any
+other instead of being rebuilt from its first run, and a new sub-provision
+in a Word-numbered master takes its own numbering level — see "Phase 1
+follow-up (links and the nesting level) — as built". No release entry
+either; its draft is under "Release-note drafts".
 **Phase 2 is next and not started**; start from the two Phase 1 as-built
 notes and the follow-up's.
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
@@ -898,8 +898,8 @@ done" lists, none of which this PR touched.
 
 #### Phase 1 follow-up (links and the nesting level) — as built
 
-**Built 2026-09-23**, one PR, fixing the two losses the backend as-built note
-recorded under "Found, not done". Both were losses of *Export Word (keeps
+**Built 2026-09-23 in PR #193**, fixing the two losses the backend as-built
+note recorded under "Found, not done". Both were losses of *Export Word (keeps
 your formatting)*, so the redline's Accept All reproduced them by
 construction; fixing the export fixes both. It bumped no VERSION, added no
 `release_notes.py` entry and changed no route, payload, SSE event,

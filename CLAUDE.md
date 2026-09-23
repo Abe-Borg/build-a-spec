@@ -13077,8 +13077,8 @@ docstrings and one test only: no code, route, dependency or version change.
 
 The two losses the Phase 1 backend PR recorded under "Found, not done" in
 `docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`, both in *Export Word (keeps
-your formatting)* and so, by construction, in the redline's Accept All. One
-PR, owner-requested (Abraham, 2026-09-23). No route, SSE event, dependency,
+your formatting)* and so, by construction, in the redline's Accept All.
+PR #193, owner-requested (Abraham, 2026-09-23). No route, SSE event, dependency,
 env knob, project-format change or VERSION bump; the release-note draft is
 in the plan ("Release-note drafts"), and the plan's "Phase 1 follow-up
 (links and the nesting level) — as built" note carries the decisions and

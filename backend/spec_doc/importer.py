@@ -14,11 +14,12 @@ Parsing philosophy — **keep everything, warn loudly**: office masters vary
 wildly, so unrecognized structure is never dropped. A paragraph that fits
 no heading pattern becomes a level-0 paragraph under the current article; a
 paragraph arriving before any article lands in a synthetic ``IMPORTED
-CONTENT`` article; nesting deeper than SectionFormat's four levels clamps
-to level four. Every such decision is recorded in ``ImportResult.warnings``
-so the reviewer knows exactly where the parse guessed. Every imported block
-enters with status ``imported`` (not yet reviewed for this project) and the
-interview pivots to gap-and-adapt mode.
+CONTENT`` article; nesting deeper than SectionFormat's five levels (``A.``
+/ ``1.`` / ``a.`` / ``1)`` / ``a)``) clamps to level five. Every such
+decision is recorded in ``ImportResult.warnings`` so the reviewer knows
+exactly where the parse guessed. Every imported block enters with status
+``imported`` (not yet reviewed for this project) and the interview pivots
+to gap-and-adapt mode.
 
 Both manual-label masters ("A. Provide...") and Word-auto-numbered masters
 (labels live in ``w:numPr``, not the text) are handled: explicit text
@@ -41,7 +42,7 @@ neither grammar can match a normalized export.
 Numbering is resolved the way Word resolves it: a paragraph's own
 ``w:numPr`` first, else the ``w:numPr`` its paragraph STYLE carries (through
 ``w:basedOn`` chains). Office masters keep the whole outline on their
-PRT/ART/PR1-PR4 styles and the paragraph carries only ``w:pStyle`` — read
+PRT/ART/PR1-PR5 styles and the paragraph carries only ``w:pStyle`` — read
 direct numbering alone, every heading in such a master exposes its bare
 title ("SUMMARY") and the file arrives as one flat blob. The CSI style NAMES
 (PRT, ART, PR1..PR5) are the secondary signal, consulted only when the
@@ -244,12 +245,16 @@ _ARTICLE_RE = re.compile(r"^([1-5])\.(\d{1,2})\.?\s+[-–—]?\s*(\S.*)$")
 _BARE_SECTION_RE = re.compile(
     r"^(\d{2})\s?(\d{2})\s?(\d{2})(?:\.(\d{2}))?\s*[-–—]\s*(\S.*)$"
 )
-# Manual paragraph labels by depth.
+# Manual paragraph labels by depth — the five forms model._paragraph_label
+# writes back. A typed "a)" used to match none of them and fell through to
+# the unlabelled branch: a top-level provision with the letter left in its
+# text, relettering every provision after it.
 _LEVEL_RES = (
     re.compile(r"^([A-Z]{1,2})\.\s+(\S.*)$"),  # A.  (depth 0)
     re.compile(r"^(\d{1,2})\.\s+(\S.*)$"),  # 1.  (depth 1)
     re.compile(r"^([a-z]{1,2})\.\s+(\S.*)$"),  # a.  (depth 2)
     re.compile(r"^(\d{1,2})\)\s+(\S.*)$"),  # 1)  (depth 3)
+    re.compile(r"^([a-z]{1,2})\)\s+(\S.*)$"),  # a)  (depth 4)
 )
 
 # The label grammars that promote a ``w:numPr`` paragraph to a HEADING. A
@@ -258,8 +263,8 @@ _LEVEL_RES = (
 # one that renders two decimal placeholders joined by a dot is the
 # auto-numbered form of the "2.01 TITLE" article label. Everything else —
 # including every ``lvlText`` the app's own normalized exports write
-# ("%1.", "%2.", "%3.", "%4)") — stays a provision, which is what keeps the
-# export/re-import round trip untouched by construction.
+# ("%1.", "%2.", "%3.", "%4)", "%5)") — stays a provision, which is what
+# keeps the export/re-import round trip untouched by construction.
 _PART_LVLTEXT_RE = re.compile(r"\bPART\b", re.IGNORECASE)
 _ARTICLE_LVLTEXT_RE = re.compile(r"^%\d+\.%\d+\.?\s*$")
 _ARTICLE_NUM_FMTS = frozenset({"", "decimal", "decimalZero"})
@@ -286,7 +291,7 @@ _CSI_STYLE_KINDS: dict[str, object] = {
     "PR2": 1,
     "PR3": 2,
     "PR4": 3,
-    "PR5": 3,
+    "PR5": 4,
 }
 # Cover-page lines that are labels or metadata rather than the title.
 _FRONT_MATTER_TITLE_STOP_RE = re.compile(
@@ -1531,7 +1536,7 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
 
         # Word numbering — the paragraph's own or its style's — is structural
         # metadata, so it must win over text-pattern heuristics. Normalized
-        # exports deliberately keep the generated A./1./a./1) marker out of
+        # exports deliberately keep the generated A./1./a./1)/a) marker out of
         # w:t; their semantic text may therefore begin with strings such as
         # "END OF SECTION", "PART 2", "1.2", or "A." without becoming a false
         # heading or manual label on re-import. A numbered line also cannot

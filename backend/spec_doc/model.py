@@ -5,7 +5,7 @@ PART 2 - PRODUCTS / PART 3 - EXECUTION) holding articles holding nested
 paragraphs. Element ids are **stable**: every container carries a
 monotonic sequence counter, so ``pt1.a2.p3`` never changes meaning when
 siblings are inserted or deleted — display numbering (1.1 / A. / 1. / a. /
-1)) is derived from position at serialization time instead.
+1) / a)) is derived from position at serialization time instead.
 
 Edits arrive as ``apply_spec_edits`` op lists and are applied
 **transactionally**: the batch runs against a working copy and the live
@@ -49,8 +49,14 @@ DEFAULT_STATUS = "assumed"
 
 PART_TITLES = ("PART 1 - GENERAL", "PART 2 - PRODUCTS", "PART 3 - EXECUTION")
 
-# A. -> 1. -> a. -> 1)  (SectionFormat paragraph levels)
-MAX_PARAGRAPH_DEPTH = 4
+# A. -> 1. -> a. -> 1) -> a)  (CSI SectionFormat's five paragraph levels,
+# the PR1..PR5 styles of a MasterSpec-derived office master). The model
+# stopped at four until an imported master's fifth level came back clamped
+# into the fourth; a sixth is beyond SectionFormat, and the importer still
+# clamps it with a warning.
+MAX_PARAGRAPH_DEPTH = 5
+#: The labels, one per depth, as every error message and prompt names them.
+PARAGRAPH_LABEL_FORMS = ("A.", "1.", "a.", "1)", "a)")
 
 TBD_RE = re.compile(r"\[TBD:\s*([^\]]*)\]")
 
@@ -318,29 +324,34 @@ def _validate_profile_shape(data: Any) -> dict[str, str]:
     return clean
 
 
+def _letters(index: int, first: str) -> str:
+    """``A`` … ``Z``, ``AA``, ``AB`` … for a 0-based ``index`` (``first`` is
+    ``"A"`` or ``"a"``)."""
+    letters = ""
+    i = index
+    while True:
+        letters = chr(ord(first) + i % 26) + letters
+        i = i // 26 - 1
+        if i < 0:
+            return letters
+
+
 def _paragraph_label(depth: int, index: int) -> str:
-    """SectionFormat label for a paragraph at ``depth``, 0-based ``index``."""
+    """SectionFormat label for a paragraph at ``depth``, 0-based ``index``.
+
+    ``A.`` / ``1.`` / ``a.`` / ``1)`` / ``a)`` — the five forms
+    ``importer._LEVEL_RES`` strips from a typed master, so an export writes
+    back exactly the label the import took off.
+    """
     if depth == 0:  # A. B. ... Z. AA. AB. ...
-        letters = ""
-        i = index
-        while True:
-            letters = chr(ord("A") + i % 26) + letters
-            i = i // 26 - 1
-            if i < 0:
-                break
-        return f"{letters}."
+        return f"{_letters(index, 'A')}."
     if depth == 1:
         return f"{index + 1}."
     if depth == 2:
-        letters = ""
-        i = index
-        while True:
-            letters = chr(ord("a") + i % 26) + letters
-            i = i // 26 - 1
-            if i < 0:
-                break
-        return f"{letters}."
-    return f"{index + 1})"
+        return f"{_letters(index, 'a')}."
+    if depth == 3:
+        return f"{index + 1})"
+    return f"{_letters(index, 'a')})"
 
 
 def labelled_paragraphs(
@@ -989,7 +1000,8 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             if _paragraph_depth(section, node.uid) + 1 >= MAX_PARAGRAPH_DEPTH:
                 raise SpecEditError(
                     "add_paragraph: maximum nesting depth reached "
-                    f"({MAX_PARAGRAPH_DEPTH} levels: A. / 1. / a. / 1))."
+                    f"({MAX_PARAGRAPH_DEPTH} levels: "
+                    f"{' / '.join(PARAGRAPH_LABEL_FORMS)})."
                 )
             parent_seq_owner = node
             siblings = node.children
@@ -1390,7 +1402,8 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "Element ids are stable and hierarchical: parts are pt1/pt2/pt3 "
         "(fixed); articles are like pt1.a2; paragraphs are like pt1.a2.p3 "
         "(nested: pt1.a2.p3.p1). New ids are assigned by the server and "
-        "returned in the result. Display numbering (1.1, A., 1., a., 1)) "
+        "returned in the result. Display numbering (1.1, "
+        f"{', '.join(PARAGRAPH_LABEL_FORMS)}) "
         "is derived from position automatically — the optional 'numbering' "
         "field is only used when setting the section number.\n"
         "\n"
@@ -1398,7 +1411,8 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "- add_article: target_id = a part id; text = the article title; "
         "position = an optional 0-based insertion index.\n"
         "- add_paragraph: target_id = an article id (top-level paragraph) "
-        "or a paragraph id (nested subparagraph, max 4 levels); text = the "
+        "or a paragraph id (nested subparagraph, max "
+        f"{MAX_PARAGRAPH_DEPTH} levels); text = the "
         "provision text; status = confirmed | assumed | needs_input "
         "(defaults to assumed).\n"
         "- move: target_id = an article or paragraph id; position = its "

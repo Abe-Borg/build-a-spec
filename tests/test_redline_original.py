@@ -1814,14 +1814,15 @@ def _shape(section):
     )
 
 
-#: Every provision level the app nests (A. / 1. / a. / 1)) under an article
-#: level — the shape of a real multilevel list.
+#: Every provision level the app nests (A. / 1. / a. / 1) / a)) under an
+#: article level — the shape of a real multilevel list.
 _DEEP_LEVELS = {
     1: ("decimalZero", "%1.%2"),
     2: ("upperLetter", "%3."),
     3: ("decimal", "%4."),
     4: ("lowerLetter", "%5."),
     5: ("decimal", "%6)"),
+    6: ("lowerLetter", "%7)"),
 }
 
 
@@ -1846,7 +1847,7 @@ def _deep_numbered_master() -> bytes:
 
 def _style_numbered_master() -> bytes:
     """The office-master shape: the outline lives on paragraph STYLES (ART
-    and PR1..PR4 carry the numbering), and the body uses only PR1."""
+    and PR1..PR5 carry the numbering), and the body uses only PR1."""
     from tests.test_import_office_master import _add_style
     from tests.test_importer import _define_numbering
 
@@ -1855,7 +1856,14 @@ def _style_numbered_master() -> bytes:
     body = _add_style(document, "SpecBody", num_id=None, ilvl=None)
     styles = {
         name: _add_style(document, name, num_id=70, ilvl=level, based_on=body)
-        for name, level in (("ART", 1), ("PR1", 2), ("PR2", 3), ("PR3", 4), ("PR4", 5))
+        for name, level in (
+            ("ART", 1),
+            ("PR1", 2),
+            ("PR2", 3),
+            ("PR3", 4),
+            ("PR4", 5),
+            ("PR5", 6),
+        )
     }
     for line in ("SECTION 21 05 00", "COMMON WORK RESULTS", "PART 1 - GENERAL"):
         document.add_paragraph(line)
@@ -1906,13 +1914,18 @@ def test_every_depth_a_word_numbered_master_defines_reimports_as_the_tree(
     imported = _parse(tmp_path, source)
     parent = imported.section.parts[0].articles[0].paragraphs[0].uid
     section = imported.section
-    for text in ("Spring isolators.", "Open springs.", "Seismic snubbers."):
+    for text in (
+        "Spring isolators.",
+        "Open springs.",
+        "Seismic snubbers.",
+        "Neoprene bushings.",
+    ):
         section = _edit(
             section, {"action": "add_paragraph", "target_id": parent, "text": text}
         )
         parent = _find(section, text).uid
     redline, stats = _verify(source, imported, section)
-    assert (stats["level_offset"], stats["level_kept"]) == (3, 0)
+    assert (stats["level_offset"], stats["level_kept"]) == (4, 0)
     clean = render_preserving_docx(
         source_bytes=source, format_map=imported.format_map, current=section
     )

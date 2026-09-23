@@ -619,7 +619,7 @@ TEMPLATE_DOCUMENT_TOOL_NAME = "submit_template_document"
 # output in this app (research findings, QC findings/verdicts/consolidation).
 # Those describe flat, fully-enumerable payloads; this one carries a whole
 # serialized :class:`SpecSection` — a RECURSIVE tree (paragraphs nest inside
-# paragraphs to four levels), which the strict-mode schema subset cannot
+# paragraphs to five levels), which the strict-mode schema subset cannot
 # express without the recursion it does not support. Declaring ``strict``
 # over a free-form object would risk a 400 on the one call whose failure the
 # user sees as "AI Generalize is broken", to buy validation the structural

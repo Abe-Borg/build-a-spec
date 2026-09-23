@@ -804,7 +804,13 @@ backend/
                            versions[index], and every change of document
                            installs a new doc object, which is what the
                            session's lint memo keys on);
-                           open_questions; outline; APPLY_SPEC_EDITS_TOOL schema
+                           open_questions; outline; APPLY_SPEC_EDITS_TOOL schema.
+                           Five paragraph levels (MAX_PARAGRAPH_DEPTH 5;
+                           PARAGRAPH_LABEL_FORMS A. / 1. / a. / 1) / a),
+                           which the refusal message and the tool
+                           description are built from); _paragraph_label
+                           is the ONE label writer — see "The fifth
+                           paragraph level"
   spec_doc/diffing.py      [Batch 5] pure diff_sections(base, cur) -> SectionDiff:
                            uid join (unchanged/changed/inserted/deleted, deleted at
                            base position, moves unmarked), word-level token_runs
@@ -834,7 +840,13 @@ backend/
                            paragraph's w:numPr, else its STYLE's through
                            basedOn chains — OR the CSI style names PRT/ART/
                            PR1..PR5 as the fallback); keep-everything-warn-
-                           loudly. The section identity is read in the FRONT
+                           loudly. Five provision levels, each read three
+                           ways: a typed A./1./a./1)/a) label (_LEVEL_RES —
+                           the five forms _paragraph_label writes back), Word
+                           numbering placed relative to the article's list,
+                           or the PRn style name (PR5 = the fifth level);
+                           deeper clamps to the fifth, with a warning that
+                           names where. The section identity is read in the FRONT
                            MATTER (before the first PART/article heading) and
                            once — SECTION line / bare header / "Section
                            Number:" field, then the page header/footer as the
@@ -1948,6 +1960,19 @@ tests/
                            the chat engine escaping with this module's very
                            pattern object, and the lookbehind changing no
                            match (a randomized span-for-span sweep)
+  test_fifth_paragraph_level.py
+                           SectionFormat's fifth level (a)) end to end: the
+                           labels and the refused sixth, a five-level file
+                           loading and a six-level one refused, the tool
+                           description naming the model's limit; the importer
+                           three ways (style numbering PR1..PR5, typed a),
+                           direct numbering, the PR5 name alone) and a sixth
+                           level still clamping with its ref; the normalized
+                           export's fifth list level + its redline's a), both
+                           re-imported; the formatted export's untouched round
+                           trip (typed: the no-op that used to reletter the
+                           file), a relettered a), a new a) taking the list's
+                           fifth level; the redline on the original; the route
   test_lint_cost.py        the duplicate lint proves before it compares: no
                            SequenceMatcher for forty long number-free
                            siblings (counted, never timed), every finding
@@ -13959,6 +13984,146 @@ waived.
   3. "Stale outlines stay out of saved history (compaction Phase 1)" lists
      trimming outlines within a turn as Phase 5, as if still to come. It
      was dropped (D6).
+
+## The fifth paragraph level — implemented notes
+
+Reported (Abraham, 2026-09-23), with the import notes of a WATER BASED FIRE
+PROTECTION SYSTEMS master: a pending-tracked-changes notice, the section
+title read from the cover page, five lines of "nesting deeper than 4 levels —
+clamped to level 4 (at 2.18.B.3.b.2, id …)", and seven blocks of front
+matter. Three of those are the importer working as designed. The clamp is
+the bug (PR #199). No new route, SSE event, dependency, env knob or
+project-format change, and no VERSION bump: which release carries it is
+the owner's call, and the release-note draft is below.
+
+- **SectionFormat has five paragraph levels, and the model had four.** CSI
+  SectionFormat nests a provision `A.` / `1.` / `a.` / `1)` / `a)` under its
+  article, and a MasterSpec-derived master carries them on PR1..PR5. The
+  model stopped at `1)` (`MAX_PARAGRAPH_DEPTH = 4`). The importer's
+  `_CSI_STYLE_KINDS` knew PR5 existed and mapped it to depth 3, the same as
+  PR4, silently, since that path never warns.
+- **Two failure modes, and the typed one was worse.** In a Word-numbered
+  master (the report's case) every `a)` line clamped into the fourth level
+  and became a sibling of the `1)` it belonged to. The provisions were
+  numbered `2)`, `3)` … in the panel, and the model read the same wrong
+  structure. In a typed-label master nothing warned. `a)` matched none of
+  `_LEVEL_RES`, so the line fell through to the unlabelled branch and became
+  a depth-0 provision with "a)" left in its text. Every provision after it
+  was relettered in the tree, and the next `2)` was hung under the wrong
+  parent with a misleading "jumped deeper" warning. The formatted export of
+  that UNTOUCHED import then rewrote the file, turning "2)" into "1." and
+  "B." into "E.": the untouched-provision check compares normalized text, and
+  the relettered tree's labels no longer matched the upload.
+  `test_an_untouched_five_level_master_round_trips_element_for_element[typed]`
+  is red against the old code for exactly that reason.
+- **One label vocabulary, five forms, one writer.**
+  `model.PARAGRAPH_LABEL_FORMS` names them. `_paragraph_label` letters depth
+  4 as lowercase + `)`, sharing a `_letters` helper with `A.` and `a.`, so
+  `z)` is followed by `aa)`. `_LEVEL_RES` gains the matching fifth regex,
+  so the importer strips exactly what the exporter writes back. The
+  add_paragraph refusal and the `APPLY_SPEC_EDITS_TOOL` description are
+  built from the constants. A limit changed in one place cannot leave the
+  model reading a different number, and a test pins the description to the
+  constant.
+- **The normalized export's list gains a fifth level** (`lowerLetter`,
+  `%5)`). Without it, `SectionFormatNumbering.apply` raises on a depth-4
+  paragraph, and the clean export 500s. The lvlText is a single token like the
+  other four, so neither the PART grammar nor `_ARTICLE_LVLTEXT_RE` can ever
+  match it, and the export/re-import round trip still holds by
+  construction. The normalized redline writes literal labels and needed no
+  change beyond the model's.
+- **The formatted export and the redline on the original needed no code
+  change.** `_render_paragraph`, `_Walker.template_for` and
+  `_Assembler._nesting_level` are generic over depth. The tests prove it
+  anyway. The untouched round trip (Word-numbered and typed) clones every
+  element byte for byte with zero splices or fallbacks. A new `a)` in a
+  typed master reletters its siblings with the master's tab. A new `a)`
+  under a PR4 in a master whose body never uses PR5 takes the list's fifth
+  level through `level_offset`. The redline on the original passes its full
+  `_verify` (Accept All = the formatted export, Reject All = the upload) and
+  re-imports as the tree.
+- **The editor.** `MAX_PARAGRAPH_LEVELS` is 5, so a `1)` offers "Add
+  subparagraph". `structuralEditing.test.ts` reads `MAX_PARAGRAPH_DEPTH` off
+  model.py and requires them equal. The frontend limit is only a UI hint,
+  and one raised on one side alone would offer an add the server refuses
+  or hide one it allows.
+- **A sixth level still clamps**, now to the fifth, and the warning says
+  "nesting deeper than 5 levels — clamped to level 5" with the provision's
+  ref and id. The trace code (`nesting_clamped`, and `max_depth` read from
+  the message) is unchanged. SectionFormat stops at `a)`, and keeping
+  everything with a warning is the importer's posture.
+- **Compatibility, all of it deliberate.**
+  - A project imported before this change keeps its stored tree, and
+    importing the master again is the way to the fifth level. For a typed
+    master that matters: its stored tree is relettered, so its formatted
+    export keeps writing those letters until it is re-imported.
+  - An older build refuses a project or template with depth-4 content
+    (a 400: "Malformed document data: paragraph nesting exceeds 4 levels").
+    Project briefs carry no document and are unaffected.
+  - `_TOOL_GUIDE` (the stable prompt) and the tool description changed.
+    Tools render first, so every chat session writes its cached prefix once
+    more. The Final QC lens system prompt embeds the tool description
+    (`_op_vocabulary`), so the lens lineage writes once more too. Neither is
+    hashed into the QC input manifest, and the version did not move, so no
+    retained Final QC result reads stale because of this.
+  - The tutorial's coverage still requires four levels (`deepest >= 3`).
+    That is a minimum, and the showcase is unchanged.
+- **Found, not done.** Help's "Quick question or spot edit" recipe still
+  says an imported DOCX keeps nested structure disabled, which has been
+  stale since v1.14.0 (every import is detached and fully editable). It is
+  suggested as a separate task, since it is unrelated to the level count.
+- **Release-note draft** (for whichever release carries it; a "Word import"
+  section):
+
+  > **Masters that nest five levels deep import whole.** SectionFormat
+  > nests a provision five levels under its article — A. / 1. / a. / 1) /
+  > a) — and office masters carry the fifth on their PR5 style. Build-a-Spec
+  > stopped at four. A Word-numbered master's a) lines were flattened into
+  > the level above ("nesting deeper than 4 levels — clamped"), and a typed
+  > a) was not read as a label at all, which relettered every provision
+  > after it, in the panel and, on Export Word (keeps your formatting), in
+  > the file. The fifth level now imports, edits and exports like the other
+  > four. Import a master again to get it. A project with a fifth level
+  > cannot be opened by an older version of the app.
+
+- **Tests.** `tests/test_fifth_paragraph_level.py` (19; 18 red against the
+  old code — the Word-numbered untouched round trip passes both ways,
+  since clamped provisions were still cloned verbatim). Updated in place:
+  `test_spec_doc.py`'s depth-limit test now builds five levels and refuses
+  the sixth, and its forged `too_deep` snapshot nests six;
+  `test_redline_original.py`'s `_DEEP_LEVELS` and `_style_numbered_master`
+  gain the fifth level (list level 6, `PR5`), and the every-depth test adds
+  four sub-provisions and expects `(4, 0)` offsets;
+  `test_normalized_word_numbering.py` pins one shared FIVE-level definition
+  (renamed `…_five_level_definition`), and its fixture gains a fifth-level
+  provision, so the per-provision `ilvl`, restart, indent and re-import
+  tests cover depth 4; and `structuralEditing.test.ts`'s limit test says
+  five, next to the new pin. Revert matrix, each mechanism reverted in an
+  isolated copy of the tree: the depth limit → 20 red; the fifth label → 12;
+  the fifth Word list level → 10; the typed `a)` regex → 5; the frontend
+  limit → 2; the refusal message, the tool description's limit, its label
+  list and PR5's style-name depth → 1 each.
+- **Errata** (the notes are append-only, so corrections to earlier sections
+  go here):
+  1. "Keep the formatting, edit the content" says `_paragraph_label`
+     regenerates "exactly the four forms" (`A.` / `1.` / `a.` / `1)`). It is
+     five now, with `a)`.
+  2. "Attached text is untrusted on EVERY channel" (the AI-generalize
+     tool note), and the templates.py comment it quotes, say paragraphs
+     "nest four levels". They nest five.
+  3. "Conversation engine invariants" lists display numbering as (1.1 / A. /
+     1. / a. / 1)). `a)` joins it.
+  4. "Importing an office master actually works" says office masters keep
+     the outline on "PRT/ART/PR1–PR4 styles". PR1–PR5, and until this
+     change PR5 was read as a second PR4.
+  5. "Links and the nesting level survive the formatted export" proves the
+     offset on "the suite's own four-level masters" (`_deep_numbered_master`
+     and `_style_numbered_master`, numbering on PR1–PR4). Both now define
+     the fifth level (list level 6, `PR5`), and the every-depth test adds a
+     fourth sub-provision (four offsets). The nesting-heavy sweep's seeds
+     never reach the fifth level, so its count is unaffected (it measures
+     29 per master kind either way — the "23" recorded there predates this
+     change).
 
 ## The duplicate lint proves before it compares — implemented notes
 

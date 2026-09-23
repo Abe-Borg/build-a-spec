@@ -1685,9 +1685,18 @@ frontend/src/
                            behind AgentActivityModal) so a card and its
                            modal cannot disagree
   lib/researchLive.ts      research's live-state layer — the qcLive.ts
-                           sibling: mergeResearchEvent (run-aware reset),
+                           sibling: mergeResearchEvent (run-aware reset; a
+                           reset takes the NEW run's lifecycle via
+                           resetToRun — running on a start frame — never
+                           the previous round's status),
                            reconcileResearchSnapshotUpdate (watermark, not
                            length), classifyResearchStreamEnd (closed union)
+  lib/researchAreas.ts     the research drawer's area choice, pure:
+                           chosenResearchAreas (current areas only, module
+                           order), researchAgainPlan (nothing or everything
+                           chosen = a full round; a true subset = scope
+                           "selected") and toggleResearchArea — the ONE plan
+                           the Research again label, tooltip and click read
   lib/saveBlob.ts          the ONE anchor-click save (deferred 1s revoke);
                            figures.downloadBlob delegates to it
   lib/sourceCapabilities.ts
@@ -1743,7 +1752,11 @@ frontend/src/
                            .tally-flash counters, retry notices, and the report
                            modal's exact telemetry line on completion; the
                            header summary + start label read the fold's
-                           done/total, never events[last]) / ResearchReportModal (the full
+                           done/total, never events[last]; Choose areas…
+                           only RECORDS the areas for the next round —
+                           Research again runs them through
+                           lib/researchAreas's plan and clears the choice
+                           once the server accepts the round) / ResearchReportModal (the full
                            research findings report — a read-only modal grouping
                            the completed profile's items by dimension/agent with
                            per-dimension telemetry + full item detail; the same
@@ -2247,6 +2260,12 @@ tests/
   frontend/tests/reviewQueue.test.ts
                            siblingRefs against that fixture, the queue's
                            order, and no ref shared by two paragraphs
+  frontend/tests/researchAreas.test.ts
+                           the area choice's rules, and source-level pins
+                           that the picker starts nothing, Research again
+                           runs the choice and clears it only once started,
+                           and App's start handler guards re-entry and shows
+                           running at once
   test_research_cost_profile.py
                            [Research/QC cost Tier 1, Chunk 1] the research
                            cost profiler over files the app really writes
@@ -15964,6 +15983,180 @@ is the why and the traps.
   3. Any earlier note describing `raw_zip` as rebuilding exactly one member:
      `rewrite_raw_zip_members` now replaces several and appends new ones;
      the single-member entry points delegate to it unchanged.
+
+## Choosing research areas registers; Research again runs them — implemented notes
+
+Reported (Abraham, 2026-09-23): choosing areas to research again "seems to
+kick off the research, but the GUI doesn't display that properly", and the
+choice should register without starting anything until Research again is
+pressed. Two separate things, both fixed here, frontend only: no route, no
+SSE event, no dependency, no env knob, no project-format change, no version
+bump. `POST /api/research/start`'s `scope: "selected"` contract is exactly
+what v1.19.0 shipped.
+
+- **Reproduced before anything changed, in a real browser.** A scratch
+  harness (not committed) ran the real backend and the built frontend with
+  `backend.app.get_client` patched to a fake research client whose stream
+  events are delayed (~0.8 s each), so a round stays running for ~10 s, and
+  drove it with the global Playwright against `/opt/pw-browsers`. After round
+  1, "Research 2 selected areas" left the drawer on "complete · 4/4
+  grounded", with no agent board and Research again still enabled, for the
+  whole round; a full Research again did exactly the same. Chrome's network
+  events (a CDP session) showed the stream's bytes arriving live and the
+  start frame's status refetch going out and coming back at once. The
+  transport was fine; the display was wrong.
+- **The cause: a new run's reset kept the old run's status.**
+  `mergeResearchEvent` resets the log when a `research_started` frame opens
+  a new run, and deliberately "never touches status/error/profile". So after
+  round N finished, round N+1's first frame produced a hybrid snapshot: round
+  N+1's events under round N's `complete`. The start frame is a milestone,
+  so it triggers a refetch, and the server answers with exactly what the
+  stream has already delivered (the replay arrives as one burst, merged
+  before the response can land). At an EQUAL watermark,
+  `reconcileResearchSnapshotUpdate` refuses to move a terminal status back
+  to `running`, which is correct for a status that belongs to the log beside
+  it. A lower watermark is rejected outright. Only a refetch that happened to
+  reach FURTHER than the live log could rescue it. So every round after the
+  first displayed as finished until its last milestone, the scoped ones
+  included, and so did a round restarted after a stop (`failed`, with the
+  stop's message still on screen). The first round of a session was spared
+  only because `idle` ranks below `running`.
+- **Why the suite missed it.** The reconnect tests pinned the log reset and
+  asserted nothing about status on a new run. "Restarting a stopped round is
+  settled by the merge" fed reconcile a fetch that reached FURTHER (seq 1)
+  than the local log (seq 0), which is the one case that already worked.
+- **`resetToRun` (lib/researchLive.ts) is the fix.** A reset now takes the
+  new run's lifecycle from the frame that opens it: `running` for a start
+  frame or a later round's worker frame, `complete` / `failed` (with the
+  frame's error) for a later round's terminal frame, so a reset never claims
+  "running" for a run that has already ended. `error_kind` is cleared: the
+  auth modal is driven by the accepted refetch (`acceptResearchSnapshot`),
+  never by a merge. The profile and the coverage are kept, because rounds
+  accumulate and the server keeps the profile through the next round.
+  Within a run the merge still never writes status. This is what Final QC's
+  merge has always done (`qc_started` → running through
+  `applyLifecycleEvent`); research was the sibling that did not.
+- **`onStartResearch` shows running at once, and only once.** After the
+  POST succeeds it replaces the snapshot with `running`, an EMPTY event log
+  (the last round's frames would fold into finished cards under a running
+  header), and the profile and coverage kept. The buttons lock
+  immediately and the board opens on "Starting research…". The follower's
+  first frame then resets onto the new round's log, and `startsNewResearchRun`
+  reads the empty log as new. `researchStartingRef` refuses a second start
+  while one is in flight. A double click used to send two POSTs, and the
+  loser's "already running" 409 marked the round that WAS running as
+  `failed`, which then stuck at an equal watermark just like the bug above.
+  The handler returns `Promise<boolean>` (true = the server accepted),
+  checks the workspace epoch after the POST, and a refused start now keeps
+  the PROFILE on the snapshot it writes. Dropping it made a refused repeat
+  round look as if research had never run (no findings, no rounds, no area
+  picker) until the next poll. The `ArtifactPanel` and `ResearchDrawer`
+  prop types carry the boolean.
+- **The picker only records a choice.** Its "Research N selected areas"
+  button made choosing and starting a single click. The picker now has
+  *Done* (closes and keeps the choice), *Clear*, and a live line saying what
+  Research again will run. The choice stays visible with the list closed: the
+  toggle reads "2 of 4 areas chosen", a "Next round: …" line names the
+  areas, and the main button says "Research again: 2 areas (round N)".
+  `lib/researchAreas.ts` is the one plan the label, the tooltip and the click
+  all read. `chosenResearchAreas` keeps only areas the module still declares,
+  in module order (an id the module dropped would otherwise make the server
+  refuse the whole round by name). `researchAgainPlan` treats nothing chosen
+  or everything chosen as a full round (`scope: "all"`) and sends only a true
+  subset as `selected`. The drawer clears the choice when `onStart` resolves
+  true, keeps it on a refusal, and drops it when the snapshot goes null (a
+  workspace transition, because module ids repeat across projects). The
+  toggle is never disabled, since choosing starts nothing and so is safe
+  while a turn streams. With a subset chosen, Retry goes quiet so there is
+  one accent action. Retry does not consume the choice.
+- **No capability or tour-order change.** The chooser, Retry and Research
+  again all still declare `research.run` (the `updates.manage` precedent).
+  The `research-run` step's body gained one descriptive sentence, and step
+  order is unchanged, so `TOUR_VERSION` stays. The trust dossier's Research
+  card now describes the chooser, which it never mentioned. HelpModal needed
+  no change. The chat note reads "Researching the N areas you chose".
+- **Release note.** A "Research" section with two items went into the
+  UNRELEASED 1.21.0 entry, in the same commit as the fix (the PR #202
+  precedent): whichever commit is tagged 1.21.0, the build and its note
+  agree. v1.20.0 is still the latest published release (checked through the
+  Releases API).
+- **Checked in the browser after the fix, on the same harness.**
+  - Ticking areas leaves the server `complete`.
+  - Research again runs only the chosen areas (the roster names exactly
+    them), and the drawer shows `researching… · 0/2 agents` within ~150 ms.
+  - A full round, and a round restarted after a stop, both show running.
+  - A 409 injected with `page.route` keeps the findings and the choice.
+  - With a failed area, Retry sits quiet beside the chosen round.
+- **Tests.**
+  - `frontend/tests/researchLive.test.ts`: +5, and one test renamed to say
+    "within a run". The new ones cover a new round's start frame taking
+    running, a restart dropping the stop's error, the reproduced
+    equal-watermark race (and a slower fetch rejected while the snapshot
+    stays running), the same race after a stop, and a later round's worker
+    and terminal frames each taking the state they say. All five fail
+    against the old merge.
+  - `frontend/tests/researchAreas.test.ts` (new, 12): the plan's rules, plus
+    source-level pins that the picker block has no `onStart(`, that
+    Research again sends the plan and clears only behind `if (started)`,
+    that the toggle has no `disabled=`, that the null-snapshot branch clears
+    the choice, and that the handler has the guard, the running snapshot and
+    the kept profile. It is registered in `package.json`.
+- **Revert matrix.** Each mechanism was reverted in place, the exact text
+  restored after, and `git status` checked clean after the run. All 18 rows
+  turn a test red:
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the picker's Done also starts a round | 1 |
+  | the choice cleared even when the start is refused | 1 |
+  | Research again ignoring the choice | 1 |
+  | the main button back to a bare full round | 1 |
+  | choosing disabled while busy | 1 |
+  | the choice surviving a workspace transition | 1 |
+  | every area chosen sent as a selection | 1 |
+  | the plan in click order | 1 |
+  | stale ids reaching the server | 2 |
+  | no title fallback | 1 |
+  | a toggle that duplicates | 1 |
+  | no re-entry guard | 1 |
+  | no running-at-once snapshot | 1 |
+  | a refused start dropping the findings | 1 |
+  | the merge keeping the old status on a new run | 4 |
+  | a later-round frame keeping the old status | 1 |
+  | the reset reading every frame as running | 1 |
+  | the reset keeping the old error | 1 |
+
+  The first run found one row uncaught (the workspace-transition clear): a
+  file-wide regex matched a `setPicked([])` in the Clear button. The test
+  now reads the effect's own branch.
+- **Harness traps, for whoever repeats this.**
+  - `pgrep -f "python server.py" | xargs kill` matches the invoking shell's
+    own command line and kills it (exit 144); record the server PID instead.
+  - A server restart over the same XDG state makes the next launch "ran
+    before" with no seen-version marker, so the What's-new modal
+    (`z-[60]`) opens and swallows clicks; `POST /api/release-notes/seen`
+    first.
+  - `BUILD_A_SPEC_AUTO_DEBRIEF=0`, or a finished round fires a chat turn
+    at the fake API key.
+- **Errata** (the notes are append-only, so corrections to earlier sections
+  go here):
+  1. "Live research visibility" says the merge never touches
+     status/error/profile ("Status/error/profile stay snapshot-owned"). That
+     is still true within a run. A new run's reset now takes that run's
+     status and clears the error.
+  2. "Research follower reconnect" says the generation bump and the merge's
+     log reset keep a restart honest, and that "by the time a fetch for the
+     new round lands, the local log is the new round's". That held for the
+     log, not for the status. The reset kept the previous round's terminal
+     status, so every round after the first displayed as finished while it
+     ran. The reconcile docstring now says so too.
+  3. "A dispute stays dismissed, and a 1-seat panel stops lying (v1.19.0)"
+     shipped the picker with its own start button, so choosing and starting
+     were one click. The picker no longer starts anything; Research again
+     runs the choice. The `onStartResearch` prop that section documents now
+     returns `Promise<boolean>`.
+  4. The trust dossier's Research card named a "Start research" button. The
+     button reads "Research requirements", and the card now says so.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

@@ -160,12 +160,54 @@ function startsNewResearchRun(
   return round !== 0 && incoming !== 0 && round !== incoming;
 }
 
+/** Replace the log with a NEW run's first frame — and take that run's
+ *  lifecycle with it.
+ *
+ *  The previous status and error describe the log being thrown away, so
+ *  keeping them made a hybrid: this round's events under the last round's
+ *  `complete` (or a stop's `failed` and its message). That hybrid is what
+ *  left the drawer saying "complete", with Research again still clickable,
+ *  for the whole of every round after the first: the milestone refetch the
+ *  start frame triggers usually reaches exactly as far as the local log,
+ *  and at an equal watermark the reconcile below refuses to move a
+ *  terminal status back to `running` — correctly, for a status that
+ *  belongs to the log beside it. Final QC's merge has always done this
+ *  (`qc_started` sets running); research is its sibling.
+ *
+ *  The status comes from the frame, never assumed: a start frame, or any
+ *  worker frame of a later round, says the run is going; a later round's
+ *  terminal frame says it ended. The profile stays — rounds accumulate,
+ *  and the server keeps it through the next round — and so does the
+ *  coverage, until the milestone refetch replaces both. */
+function resetToRun(
+  base: ResearchSnapshot,
+  event: ResearchEvent,
+): ResearchSnapshot {
+  if (event.type === "research_complete") {
+    return { ...base, status: "complete", error: "", error_kind: "", events: [event] };
+  }
+  if (event.type === "research_failed") {
+    return {
+      ...base,
+      status: "failed",
+      error: event.error ?? "",
+      // The kind rides the authoritative refetch this terminal frame
+      // triggers; the auth modal is driven from there, never from a merge.
+      error_kind: "",
+      events: [event],
+    };
+  }
+  return { ...base, status: "running", error: "", error_kind: "", events: [event] };
+}
+
 /**
  * Merge one streamed research event into the local snapshot's event log.
  *
- * Never touches status/error/profile — those stay snapshot-owned (the
- * authoritative refetch is generation- and epoch-guarded). A genuinely new
- * `research_started` restarts the local log (the server clears it per round).
+ * Within a run it never touches status/error/profile — those stay
+ * snapshot-owned (the authoritative refetch is generation- and
+ * epoch-guarded). A genuinely new `research_started` restarts the local log
+ * (the server clears it per round) AND takes the new run's lifecycle — see
+ * `resetToRun`, which says why keeping the old one broke every later round.
  *
  * Replay overlap after a reconnect — every frame of the round, every time —
  * returns the PREVIOUS snapshot object untouched: the runner log is
@@ -188,7 +230,7 @@ export function mergeResearchEvent(
   // replay and drop the frame, and the re-sort path would overwrite the live
   // round's frame at that sequence with the foreign one.
   if (event.type === "research_started") {
-    if (startsNewResearchRun(base, event)) return { ...base, events: [event] };
+    if (startsNewResearchRun(base, event)) return resetToRun(base, event);
   } else {
     const localRound = researchEventsRound(base.events);
     const incomingRound =
@@ -198,7 +240,7 @@ export function mergeResearchEvent(
       // follower missed the roster frame; take the reset and let the
       // milestone refetch restore the roster. An EARLIER round is an
       // abandoned run's straggler and belongs to no log on screen.
-      return incomingRound > localRound ? { ...base, events: [event] } : base;
+      return incomingRound > localRound ? resetToRun(base, event) : base;
     }
   }
 
@@ -271,7 +313,11 @@ function statusRank(status: ResearchSnapshot["status"]): number {
  * flight, and `mergeResearchEvent` resets the log on the new round's
  * `research_started` frame, which always precedes the milestone refetch
  * that frame triggers. By the time a fetch for the new round lands, the
- * local log is the new round's.
+ * local log is the new round's — and so is the local status. That second
+ * half was missing: the reset used to keep the previous round's terminal
+ * status, so the equal-watermark rule below protected a `complete` that
+ * belonged to a log no longer on screen, and every round after the first
+ * displayed as finished while it ran.
  */
 export function reconcileResearchSnapshotUpdate(
   previous: ResearchSnapshot | null,

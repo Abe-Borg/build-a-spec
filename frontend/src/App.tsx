@@ -373,6 +373,11 @@ export default function App() {
   const busyRef = useRef(false);
   const manualEditBusyRef = useRef(false);
   const researchFollowRef = useRef(false);
+  // One research start at a time. The drawer's buttons disable once the
+  // snapshot says running, and the start request is in flight before then:
+  // a second click there sent a second start, whose "already running" 409
+  // then marked the round that WAS running as failed.
+  const researchStartingRef = useRef(false);
   const qcFollowRef = useRef(false);
   // Dedup for the gentle auth-error modal (chat, research, QC): a failed
   // snapshot fires it once, not once per poll tick. Checked and cleared
@@ -1470,10 +1475,22 @@ export default function App() {
     replaceResearchSnapshot,
   ]);
 
+  /** Start a research round. Resolves true when the server accepted it —
+   *  the drawer clears the areas the user chose only then, so a refused
+   *  start keeps their choice for the retry. Never rejects. */
   const onStartResearch = useCallback(
-    async (scope: ResearchScope = "all", dimensionIds?: string[]) => {
+    async (
+      scope: ResearchScope = "all",
+      dimensionIds?: string[],
+    ): Promise<boolean> => {
+    if (researchStartingRef.current) return false;
+    researchStartingRef.current = true;
+    const epoch = workspaceEpochRef.current;
     try {
       await startResearch(currentWorkspaceLease(), scope, dimensionIds);
+      // A new session or project replaced this one while the start was in
+      // flight: nothing below describes what is on screen now.
+      if (workspaceEpochRef.current !== epoch) return false;
       // Clear the auth-modal dedup ref for this fresh attempt — see
       // researchAuthHandledRef's declaration comment: refreshResearch (not
       // an effect) is what actually reopens the modal.
@@ -1484,28 +1501,52 @@ export default function App() {
       // (it numbers from profile_result.round_count, and a discarded round
       // never advances it) — so round identity alone cannot see it.
       researchRefreshGenerationRef.current += 1;
+      // The server set the run going before it answered, so say so NOW
+      // instead of when the stream's first frame lands: the buttons lock at
+      // once and the board opens on "Starting research…". The event log
+      // starts empty — the last round's frames would fold into finished
+      // cards under a running header — and the profile and coverage stay,
+      // because rounds accumulate and the server keeps both through this
+      // one. The follower's first frame then resets onto this round's log.
+      const previous = researchSnapshotRef.current;
+      replaceResearchSnapshot({
+        status: "running",
+        error: "",
+        error_kind: "",
+        events: [],
+        profile: previous?.profile,
+        coverage: previous?.coverage,
+      });
       // Open the drawer onto the live agent board — the run is the show.
       bumpDrawer("research");
       addNote(
         scope === "gaps"
           ? "Retrying the incomplete research areas — progress in the Research panel."
           : scope === "selected"
-            ? `Researching ${dimensionIds?.length ?? 0} selected area${
+            ? `Researching the ${dimensionIds?.length ?? 0} area${
                 (dimensionIds?.length ?? 0) === 1 ? "" : "s"
-              } — progress in the Research panel.`
+              } you chose — progress in the Research panel.`
             : "Started requirements research — progress in the Research panel.",
       );
       void followResearch();
+      return true;
     } catch (e) {
+      if (workspaceEpochRef.current !== epoch) return false;
       replaceResearchSnapshot({
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
         events: researchSnapshotRef.current?.events ?? [],
-        // Coverage is what the drawer's retry control is built from; a
-        // refused start has not changed it, so carry it rather than
-        // dropping the control until the next successful poll.
+        // A refused start has changed neither the findings nor the
+        // coverage the retry and area controls are built from, so both
+        // are carried. Dropping the profile here made a refused repeat
+        // round look like research had never run at all — no findings,
+        // no rounds, no area picker — until the next poll.
+        profile: researchSnapshotRef.current?.profile,
         coverage: researchSnapshotRef.current?.coverage,
       });
+      return false;
+    } finally {
+      researchStartingRef.current = false;
     }
     },
     [

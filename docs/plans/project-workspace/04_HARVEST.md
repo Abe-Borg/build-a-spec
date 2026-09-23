@@ -391,6 +391,13 @@ As built, 2026-09-22:
     the facts store. The harvest already honours that plan's standing rule:
     it reads `session.history` (the full record, never a compacted view), so
     `turn:N` stays the Nth assistant bubble of the saved conversation.
+    *Follow-up, 2026-09-23: the summary exists now (compaction Phase 3,
+    PR #189) and carries that list; D1–D4 were decided on 2026-09-22. The
+    owner then dropped this hookup for now on 2026-09-23 (the compaction
+    plan's D4), so nothing is wired and this harvest reads no summary. The
+    list stays in every summary for the chat model. The seam above still
+    describes how to revive it; the compaction plan's "Where it stands"
+    names the one question to settle first (what a summary line cites).*
 
 From the Codex review of PR #185, 2026-09-22:
 

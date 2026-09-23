@@ -98,14 +98,16 @@ decides):
   on its priority: a summary exists only once a chat is condensed, and the
   harvest already reads this whole conversation, so the wiring pays off
   only in chats far longer than this one. It stays owed unless the owner
-  reverses D4.
+  reverses D4. *The owner dropped it for now the same day (Decisions →
+  D4).*
 - **Phase 5** is the one open item with a measurable payoff. A full draft
   of about 25 article-by-article edit calls writes each ~10.8k-token
   outline once and re-reads it on every later call. That is about $0.68
   written (25 × 10.8k at $2.50/M) plus about $0.65 read (300 × 10.8k at
   $0.20/M), roughly $1.30 per full draft of a section this size. Returning
   only the edited article's outline would remove most of it. It still needs
-  the paid before/after its section names.
+  the paid before/after its section names. *The owner decided the same day
+  not to do it (Decisions → D6).*
 
 Two more growth sources, both kept forever today:
 
@@ -119,7 +121,7 @@ Two more growth sources, both kept forever today:
 
 The same outlines also pile up *inside* the full-draft turn itself (~220k
 tokens by the last article), which commit-time elision does not touch —
-see Phase 5.
+see Phase 5, which the owner decided not to do (D6).
 
 ## The design: three layers, cheapest and safest first
 
@@ -137,7 +139,7 @@ see Phase 5.
 | Could be lost | Where it survives |
 |---|---|
 | Provision text | Never summarized; the full document is sent every turn |
-| Settled decisions | Project facts ledger, plus the rationale in the summary; decisions the ledger is missing go to the harvest (Phase 4) |
+| Settled decisions | Project facts ledger, plus the rationale in the summary; decisions the ledger is missing are listed in the summary, which the model reads with every later message (the plan also sent that list to the harvest — Phase 4, dropped for now) |
 | Open questions and next steps | "Waiting on you" ledger, plus the summary's "where things stand" |
 | Rejected options, preferences, corrections | Their own sections in the summary — what generic summaries drop first |
 | Exact numbers and wording | Kept verbatim in the summary; everything else through recall |
@@ -174,9 +176,9 @@ see Phase 5.
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
 | 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, merged `7e32d14`); default on (PR #194, merged `7634c8d`) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. The second run (2026-09-23) **passed** on that shape, so the trim is **on by default** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0` turns it off) — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, merged `7e32d14`); default on (PR #196) | both halves; backstop always on. Routine condensing shipped off until the recall check, and is **on by default** since owner decision D5 (2026-09-23), without that check (`BUILD_A_SPEC_CHAT_COMPACTION=0` turns it off). A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
-| 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
-| 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, merged `7e32d14`); default on `4e29be8` (PR #196, merged `030be7d`) | both halves; backstop always on. Routine condensing shipped off until the recall check, and is **on by default** since owner decision D5 (2026-09-23), without that check (`BUILD_A_SPEC_CHAT_COMPACTION=0` turns it off). A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
+| 4 | Promote before prune | **dropped for now** | | handed to project-workspace Phase 4 (`project-workspace/04_HARVEST.md`), then dropped for now by the owner on 2026-09-23 (D4). The summary still lists the decisions the ledgers are missing and the model reads that list; the harvest does not read it (see Phase 4) |
+| 5 | Within-turn outline trim (optional) | **dropped** | | the owner decided on 2026-09-23 not to do it (D6; see Phase 5) |
 
 A status moves to **complete** only after the PR merges, set by the next
 session that touches this file (the project-workspace convention).
@@ -184,16 +186,34 @@ session that touches this file (the project-workspace convention).
 **Where it stands (2026-09-23; recorded at the 1.21.0 closeout, updated
 when PR #189 merged, when the Phase 2 canary's first run came back
 refused, when its second run passed, when the owner supplied a real
-measurement, and when the owner turned routine condensing on).** Phases 1–3 are on `master`. 1.21.0 was prepared to carry
+measurement, when the owner turned routine condensing on, and when the
+owner dropped D4's harvest hookup and Phase 5).** **No implementation work
+is left in this plan.** Phases 1–3 are on `master`. Phase 4 (D4's harvest
+hookup) is dropped for now and Phase 5 is dropped, both by the owner on
+2026-09-23 (below). What remains is not code:
+
+- whichever release next ships from `master` owes Phase 2's and Phase 3's
+  release-note drafts (see "Release policy");
+- the release checklist's two compaction sections
+  (`docs/RELEASE_WINDOWS.md`) are to be run before that release;
+- the recall check that D5 waived (Phase 3 → "Before it is on by
+  default") is still how to learn what a summary loses, worth running once
+  a real conversation passes the trigger. It is paid and optional;
+- one small cleanup found along the way and left as it is: a saved PDF
+  note keeps the page citations that pointed into the PDF. The request
+  repair drops them before anything is sent, so nothing breaks
+  (CLAUDE.md → "Citations must fit the request that carries them").
+
+1.21.0 was prepared to carry
 Phases 1 and 2 (the project-workspace closeout,
 `project-workspace/07_RELEASE_CLOSEOUT.md`), but it is not tagged. The owner decided D1–D4 on
 2026-09-22 (see the Decisions table). The owner supplied one real
 measurement on 2026-09-23 ("Measured on a real project", under "What
 actually fills the history"). It pointed to keeping routine condensing off
 for now; the owner decided otherwise the same day (D5: on by default,
-without the recall check). It puts a price on Phase 5. It does not change
-D4: that wiring stays decided and outstanding (below), with little payoff
-for projects this size.
+without the recall check). It put a price on Phase 5 and showed little
+payoff for D4's hookup in projects this size; the owner dropped both the
+same day (D6, and D4 for now).
 
 - **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, so
   the 1.21.0 closeout switched it off: `BUILD_A_SPEC_ELIDE_FETCHED_PAGES`
@@ -224,19 +244,28 @@ for projects this size.
   fetched, which shifted every later citation's `document_index`. The
   citation repair (PR #192) fixes every outgoing request (see Phase 3 →
   As built).
-- **D4 is yes, and half of it is in.** Phase 3's summary lists the
-  decisions missing from the ledgers, each tagged with the turn it was
-  settled in, and that list is saved with the summary. Feeding it to the
-  harvest (project-workspace Phase 4, merged in PR #185) is not wired yet —
-  a harvest proposal must cite a source that resolves, and a summary line
-  is not one (see Phase 3 → As built). The harvest spec keeps the seam
-  (`project-workspace/04_HARVEST.md`, deviation 23): one more framed,
-  neutralized block in `HarvestInputs`, reaching the sheet through the same
-  checks and commit. That deviation was written before D1, D3 and D4 were
-  decided, so it still calls them open.
-- **Phase 5** is optional and still waits on a measured before/after on
-  real full drafts. The real measurement puts its payoff at roughly $1.30
-  per full draft of a section that size.
+- **D4 is dropped for now** (owner, 2026-09-23; it was decided yes on
+  2026-09-22). Every summary still lists the decisions missing from the
+  ledgers, each tagged with the turn it was settled in, and the model reads
+  that list with every later message; it is saved with the summary. The
+  harvest (project-workspace Phase 4, PR #185) does not read it, and
+  nothing connects the two. Little is lost: the harvest reads the full
+  saved conversation, never the summary. The one gap is a very long chat
+  that was never harvested. A harvest reads at most
+  `HARVEST_MAX_TRANSCRIPT_CHARS` (400,000) characters of conversation it has
+  not read before and skips the oldest past that, and the measured project
+  would have about that much typed text around turn 130, where it would be
+  condensed. Harvesting now and then avoids the gap. To revive D4, start
+  from the harvest spec's seam (`project-workspace/04_HARVEST.md`,
+  deviation 23: one more framed, neutralized block in `HarvestInputs`,
+  through the same checks and commit), after settling what a summary line
+  cites: a harvest proposal must cite a source that resolves, and a
+  summary line's turn N (the Nth message the user sent) is not the
+  harvest's `turn:N` (the Nth assistant reply) — see Phase 3 → As built.
+- **Phase 5 is dropped** (owner, 2026-09-23; D6). The real measurement put
+  its payoff at roughly $1.30 per full draft of a section that size. A
+  full-draft turn keeps re-reading its edit outlines within the turn, as it
+  always has; Phase 1 still removes them once the turn is saved.
 
 ## Decisions (owner)
 
@@ -245,8 +274,9 @@ for projects this size.
 | D1 | Trigger size for condensing, and how many turns to keep word for word | 150k tokens of committed conversation (the API's own default threshold); keep the last 3 user turns | **decided 2026-09-22: condense at 600k tokens of committed conversation; keep the last 3 user turns word for word.** Differs from the recommendation, so the figures under Phase 3's "Cost" (which assume 150k) scale up for the Phase 3 build |
 | D2 | Drop fetched web-page text when a turn is saved, like PDFs? | Yes: the reply keeps its cited passages; the model can re-fetch | **decided 2026-09-22: yes** |
 | D3 | Our own summarizer, or Anthropic's on-demand compaction beta? | Our own (reasons under Phase 3) | **decided 2026-09-22: our own summarizer**, not the on-demand compaction beta |
-| D4 | Should flagged decisions become Project-facts suggestions? | Yes, via the harvest (Phase 4 hand-off) | **decided 2026-09-22: yes**, through the harvest (the Phase 4 hand-off) |
+| D4 | Should flagged decisions become Project-facts suggestions? | Yes, via the harvest (Phase 4 hand-off) | **decided 2026-09-22: yes**, through the harvest (the Phase 4 hand-off). **Dropped for now 2026-09-23**: the summary keeps its list for the model, and the harvest does not read it (see Phase 4) |
 | D5 | Turn routine condensing on by default before the paid recall check? | No: keep it off until the check passes ("Before it is on by default"); the real measurement put the trigger around turn 130 for a project like the one measured | **decided 2026-09-23: on by default, without the recall check.** `BUILD_A_SPEC_CHAT_COMPACTION=0` turns it off; the backstop runs either way |
+| D6 | Do Phase 5, the within-turn outline trim? | None made: its payoff is roughly $1.30 per full draft of a section the size measured, and it needs a paid before/after on real full drafts first | **decided 2026-09-23: no** |
 
 Phase 1 needs none of these: it removes only data that is stale by
 construction and duplicated in full by every turn's PROJECT CONTEXT.
@@ -721,7 +751,9 @@ condensing off while that happens.
   the user sent, while the harvest's `turn:N` is the Nth assistant reply,
   and the two can differ when a turn committed no reply text); and the
   harvest reads the full history, so a summary line would compete with the
-  turn it came from. `04_HARVEST.md` deviation 23 keeps the seam.
+  turn it came from. `04_HARVEST.md` deviation 23 keeps the seam. *The
+  owner dropped this hookup for now on 2026-09-23 (see Phase 4); the list
+  stays in every summary for the model.*
 - **Cost at D1, re-estimated** (Sonnet 5 list prices; the "Cost" section
   above assumed 150k). One routine summary re-reads ~600k tokens from the
   last turn's cache (~$0.12 at the 0.1× read rate), sends a ~2k-token
@@ -807,13 +839,26 @@ policy" below):
 
 ## Phase 4 — promote before prune
 
-Handed off. The summary instruction's "decisions the ledgers are missing"
-list is exactly the input project-workspace Phase 4 (the harvest,
-`project-workspace/04_HARVEST.md`) proposes facts from. Wire the two
-together there — as a candidate source for the harvest's preview — rather
-than building a second path into the facts store.
+**Dropped for now (owner, 2026-09-23; D4).** What stays: every summary
+still carries its "Decisions the ledgers are missing" list, one decision
+per line with the turn it was settled in, and the model reads it with
+every later message, so a decision the project facts never recorded stays
+in front of the model after its turn is condensed. What is not built: the
+fact harvest reading that list. The harvest reads the full saved
+conversation instead, so the list would only matter in a very long chat
+that was never harvested (see "Where it stands" → D4).
+
+The hand-off as planned, kept for anyone reviving it: the summary
+instruction's "decisions the ledgers are missing" list is exactly the input
+project-workspace Phase 4 (the harvest, `project-workspace/04_HARVEST.md`)
+proposes facts from. Wire the two together there — as a candidate source
+for the harvest's preview — rather than building a second path into the
+facts store.
 
 ## Phase 5 — within-turn outline trim (optional)
+
+**Dropped (owner, 2026-09-23; D6).** What it would have done, for the
+record:
 
 The full-draft turn itself re-reads every outline it has been returned
 (~220k tokens by the last article of a 300-paragraph section). Returning

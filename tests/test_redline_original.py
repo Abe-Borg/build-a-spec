@@ -821,6 +821,10 @@ def test_a_section_renumber_on_a_header_line(tmp_path):
 
 
 def test_a_fallback_paragraph_deletes_all_and_inserts_the_new_text(tmp_path):
+    """A paragraph the splice cannot map — a ``w:sym`` symbol here — is
+    rewritten whole: everything it held deleted, one run inserted. It also
+    holds a hyperlink (no longer a fallback reason on its own), whose runs
+    are deleted where they sit: a hyperlink cannot be wrapped in ``w:del``."""
     from tests.docx_fidelity_helpers import _append_hyperlink
 
     document = Document()
@@ -833,7 +837,8 @@ def test_a_fallback_paragraph_deletes_all_and_inserts_the_new_text(tmp_path):
         document.add_paragraph(line)
     linked = document.add_paragraph("A. See ")
     _append_hyperlink(linked, "the client standard", "https://example.com/std")
-    linked.add_run(" for isolators.")
+    symbol = linked.add_run(" for isolators ")
+    etree.SubElement(symbol._r, qn("w:sym")).set(qn("w:char"), "F0B7")
     document.add_paragraph("END OF SECTION")
     source = _save(document)
     imported = _parse(tmp_path, source)
@@ -844,11 +849,159 @@ def test_a_fallback_paragraph_deletes_all_and_inserts_the_new_text(tmp_path):
     )
     redline, stats = _verify(source, imported, section)
     assert stats["redline"]["fallback"] == 1
-    assert stats["fallback"] == {"hyperlink": 1}
-    # The hyperlink's runs are deleted where they sit (a hyperlink cannot be
-    # wrapped in w:del).
+    assert stats["fallback"] == {"symbol": 1}
     hyperlink = _body(redline).find(f".//{qn('w:hyperlink')}")
     assert hyperlink.find(f"{qn('w:del')}/{qn('w:r')}") is not None
+
+
+def _linked_master(*, bookmark: bool = False) -> bytes:
+    """The reported shape: a typed-letter master whose provision A holds a
+    bold phrase and a hyperlink (optionally a bookmark closing inside it)."""
+    from tests.docx_fidelity_helpers import _append_hyperlink
+
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1\tSUMMARY",
+    ):
+        document.add_paragraph(line)
+    provision = document.add_paragraph()
+    provision.add_run("A.\tSection includes ")
+    provision.add_run("vibration isolation").bold = True
+    provision.add_run(" per ")
+    _append_hyperlink(provision, "the client standard", "https://example.com/std")
+    if bookmark:
+        link = provision._p.find(qn("w:hyperlink"))
+        start = etree.Element(qn("w:bookmarkStart"))
+        start.set(qn("w:id"), "12")
+        start.set(qn("w:name"), "_Ref12")
+        provision._p.insert(provision._p.index(link), start)
+        etree.SubElement(link, qn("w:bookmarkEnd")).set(qn("w:id"), "12")
+    provision.add_run(" for mechanical equipment.")
+    document.add_paragraph("B.\tRelated requirements are specified elsewhere.")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def _links(body) -> list:
+    return list(body.iter(qn("w:hyperlink")))
+
+
+def test_relettering_a_provision_with_a_link_keeps_the_link_untracked(tmp_path):
+    """The letter change is the only tracked change: the link, its target
+    and its runs are kept as they are — not deleted and re-inserted as the
+    fallback used to show them."""
+    source = _linked_master()
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section = _edit(
+        imported.section,
+        {
+            "action": "add_paragraph",
+            "target_id": article.uid,
+            "position": 0,
+            "text": "Provide seismic restraints.",
+        },
+    )
+    redline, stats = _verify(source, imported, section)
+    assert stats["fallback"] == {}
+    assert _tracked(redline, "w:del") == ["A.", "B."]
+    (link,) = _links(_body(redline))
+    assert link.find(qn("w:del")) is None and link.find(qn("w:ins")) is None
+    assert link.get(qn("r:id")) == _links(_body(source))[0].get(qn("r:id"))
+
+
+def test_an_edit_inside_a_link_is_tracked_inside_it(tmp_path):
+    source = _linked_master()
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+    section = _edit(
+        imported.section,
+        {
+            "action": "replace",
+            "target_id": first.uid,
+            "text": "Section includes vibration isolation per the owner standard "
+            "for mechanical equipment.",
+        },
+    )
+    redline, stats = _verify(source, imported, section)
+    assert stats["redline"]["spliced"] == 1 and stats["redline"]["fallback"] == 0
+    (link,) = _links(_body(redline))
+    assert [t.text for t in link.iter(qn("w:delText"))] == ["client"]
+    assert "".join(t.text for t in link.find(qn("w:ins")).iter(qn("w:t"))) == "owner"
+
+
+def test_words_added_beside_a_link_are_tracked_outside_it(tmp_path):
+    """A link never grows: words added right after it are a tracked
+    insertion outside the ``w:hyperlink``, and Accept All leaves the link
+    covering exactly the words it covered."""
+    source = _linked_master()
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+    section = _edit(
+        imported.section,
+        {
+            "action": "replace",
+            "target_id": first.uid,
+            "text": "Section includes vibration isolation per the client standard "
+            "and NFPA 13 for mechanical equipment.",
+        },
+    )
+    redline, _ = _verify(source, imported, section)
+    (link,) = _links(_body(redline))
+    assert link.find(qn("w:ins")) is None
+    assert "and NFPA 13" in "".join(_tracked(redline, "w:ins"))
+    (accepted,) = _links(accept_all(_body(redline)))
+    assert "".join(t.text for t in accepted.iter(qn("w:t"))) == "the client standard"
+
+
+def test_deleting_all_of_a_links_words(tmp_path):
+    """The link's runs are deleted inside it. Accept All leaves the link
+    empty — it shows nothing, and the self-check's comparison drops it —
+    and the formatted export does not write it at all."""
+    source = _linked_master()
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+    section = _edit(
+        imported.section,
+        {
+            "action": "replace",
+            "target_id": first.uid,
+            "text": "Section includes vibration isolation per mechanical equipment.",
+        },
+    )
+    redline, _ = _verify(source, imported, section)
+    (link,) = _links(_body(redline))
+    assert [t.text for t in link.iter(qn("w:delText"))] == ["the client standard"]
+    clean = render_preserving_docx(
+        source_bytes=source, format_map=imported.format_map, current=section
+    )
+    assert _links(_body(clean)) == []
+
+
+def test_a_replacement_running_into_a_link_keeps_the_link_whole(tmp_path):
+    """Typed over the words before a link and the link's first word: the new
+    words go in front of the link, which keeps its other words — one link,
+    never two halves around the new words. The bookmark closing inside the
+    link stays inside it."""
+    source = _linked_master(bookmark=True)
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+    section = _edit(
+        imported.section,
+        {
+            "action": "replace",
+            "target_id": first.uid,
+            "text": "Section includes vibration isolation under client standard "
+            "for mechanical equipment.",
+        },
+    )
+    redline, _ = _verify(source, imported, section)
+    for body in (_body(redline), accept_all(_body(redline))):
+        (link,) = _links(body)
+        assert link.find(qn("w:bookmarkEnd")) is not None
 
 
 def test_a_complex_field_in_a_rewritten_provision_is_deleted_as_runs(tmp_path):
@@ -1595,23 +1748,171 @@ def _shape(section):
     )
 
 
-@pytest.mark.parametrize("seed", range(10))
-def test_reimporting_the_redline_reproduces_the_current_tree(tmp_path, seed):
-    """The Batch 5 invariant, now on your original: the app's own Accept-All
-    reader, given the redline, reads back the tree it was exported from.
+#: Every provision level the app nests (A. / 1. / a. / 1)) under an article
+#: level — the shape of a real multilevel list.
+_DEEP_LEVELS = {
+    1: ("decimalZero", "%1.%2"),
+    2: ("upperLetter", "%3."),
+    3: ("decimal", "%4."),
+    4: ("lowerLetter", "%5."),
+    5: ("decimal", "%6)"),
+}
 
-    Typed letters here, because a new provision nested deeper than any
-    provision a Word-numbered master already has takes its kin's
-    ``w:ilvl`` in today's formatted export (a Phase 0 limit, recorded in the
-    plan) — so for those the redline re-imports exactly as the formatted
-    export does, which is the promise, but not as the tree."""
-    source = _typed_letter_master()
+
+def _deep_numbered_master() -> bytes:
+    """A Word-numbered master (direct ``w:numPr``) whose list defines every
+    provision level, while its body uses only the first — so every
+    sub-provision an edit adds is cloned from kin one or more levels up."""
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    _define_numbering(document, 50, _DEEP_LEVELS)
+    _numbered(document, "SUMMARY", 1, "50")
+    _numbered(document, "Section includes vibration isolation.", 2, "50")
+    _numbered(document, "Related requirements.", 2, "50")
+    _numbered(document, "SUBMITTALS", 1, "50")
+    _numbered(document, "Product data.", 2, "50")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def _style_numbered_master() -> bytes:
+    """The office-master shape: the outline lives on paragraph STYLES (ART
+    and PR1..PR4 carry the numbering), and the body uses only PR1."""
+    from tests.test_import_office_master import _add_style
+    from tests.test_importer import _define_numbering
+
+    document = Document()
+    _define_numbering(document, 70, _DEEP_LEVELS)
+    body = _add_style(document, "SpecBody", num_id=None, ilvl=None)
+    styles = {
+        name: _add_style(document, name, num_id=70, ilvl=level, based_on=body)
+        for name, level in (("ART", 1), ("PR1", 2), ("PR2", 3), ("PR3", 4), ("PR4", 5))
+    }
+    for line in ("SECTION 21 05 00", "COMMON WORK RESULTS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    for text, style in (
+        ("SUMMARY", "ART"),
+        ("Section includes:", "PR1"),
+        ("Related requirements.", "PR1"),
+        ("SUBMITTALS", "ART"),
+        ("Product data.", "PR1"),
+    ):
+        document.add_paragraph(text, style=styles[style])
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+_REIMPORT_MASTERS = {
+    "typed": _typed_letter_master,
+    "numbered": _deep_numbered_master,
+    "style_numbered": _style_numbered_master,
+}
+
+
+@pytest.mark.parametrize("master", sorted(_REIMPORT_MASTERS))
+@pytest.mark.parametrize("seed", range(10))
+def test_reimporting_the_redline_reproduces_the_current_tree(tmp_path, master, seed):
+    """The Batch 5 invariant, now on your original: the app's own Accept-All
+    reader, given the redline, reads back the tree it was exported from —
+    for typed letters, and for Word numbering on the paragraph itself or on
+    its style. A sub-provision deeper than any the master has takes its own
+    numbering level (``_Assembler._nesting_level``); it used to keep its
+    kin's, and came back as its parent's sibling."""
+    source = _REIMPORT_MASTERS[master]()
     imported = _parse(tmp_path, source)
     section = _edit_mix(imported.section, seed, 1 + seed % 6)
     redline, _ = _verify(source, imported, section, allow_moved_bookmarks=True)
     (tmp_path / "redline.docx").write_bytes(redline)
     reread = parse_master_docx(tmp_path / "redline.docx").section
     assert _shape(reread) == _shape(section)
+
+
+@pytest.mark.parametrize("master", ["numbered", "style_numbered"])
+def test_every_depth_a_word_numbered_master_defines_reimports_as_the_tree(
+    tmp_path, master
+):
+    """The chain the random mix may not reach: a sub-provision at every depth
+    the app nests, each cloned from kin further and further up."""
+    source = _REIMPORT_MASTERS[master]()
+    imported = _parse(tmp_path, source)
+    parent = imported.section.parts[0].articles[0].paragraphs[0].uid
+    section = imported.section
+    for text in ("Spring isolators.", "Open springs.", "Seismic snubbers."):
+        section = _edit(
+            section, {"action": "add_paragraph", "target_id": parent, "text": text}
+        )
+        parent = _find(section, text).uid
+    redline, stats = _verify(source, imported, section)
+    assert (stats["level_offset"], stats["level_kept"]) == (3, 0)
+    clean = render_preserving_docx(
+        source_bytes=source, format_map=imported.format_map, current=section
+    )
+    for payload in (redline, clean):
+        (tmp_path / "out.docx").write_bytes(payload)
+        assert _shape(parse_master_docx(tmp_path / "out.docx").section) == _shape(
+            section
+        )
+
+
+@pytest.mark.parametrize("master", ["numbered", "style_numbered"])
+def test_a_nesting_heavy_mix_reimports_as_the_tree(tmp_path, master):
+    """The scripted mix rarely nests (one seed in ten adds a sub-provision
+    here), so this one alternates a scripted edit with a new provision
+    under a random existing one — dozens of clones from kin at another
+    depth, amid deletes, moves and new articles."""
+    source = _REIMPORT_MASTERS[master]()
+    imported = _parse(tmp_path, source)
+    offset = 0
+    for seed in range(8):
+        rng = random.Random(seed)
+        section = imported.section
+        for step in range(8):
+            if step % 2:
+                op = _scripted_edit(section, rng)
+            else:
+                parents = [p for _parent, ps in _paragraph_lists(section) for p in ps]
+                op = (
+                    {
+                        "action": "add_paragraph",
+                        "target_id": rng.choice(parents).uid,
+                        "text": f"Provide {rng.choice(_MIX_WORDS)} restraints.",
+                    }
+                    if parents
+                    else None
+                )
+            if op is None:
+                continue
+            try:
+                section, _ = apply_edits(section, [op])
+            except SpecEditError:
+                continue
+        redline, stats = _verify(source, imported, section, allow_moved_bookmarks=True)
+        offset += stats["level_offset"]
+        assert stats["level_kept"] == 0
+        (tmp_path / "redline.docx").write_bytes(redline)
+        assert _shape(parse_master_docx(tmp_path / "redline.docx").section) == _shape(
+            section
+        ), (master, seed)
+    assert offset >= 8
+
+
+def _find(section, text):
+    return next(
+        paragraph
+        for part in section.parts
+        for article in part.articles
+        for paragraph in _walk_paragraphs(article.paragraphs)
+        if paragraph.text == text
+    )
+
+
+def _walk_paragraphs(nodes):
+    for node in nodes:
+        yield node
+        yield from _walk_paragraphs(node.children)
 
 
 def test_reimporting_the_redline_matches_reimporting_the_formatted_export(tmp_path):
@@ -1645,10 +1946,13 @@ def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path):
     self-check, which would mean the writer broke its own promise.
 
     The fallback count is the evidence D-2's eligibility is widened from;
-    every fallback carries a reason from the closed vocabulary."""
+    every fallback carries a reason from the closed vocabulary. The corpus
+    masters hold plain hyperlinks in their provisions — every fallback of
+    Phase 1's sweep was one — and those are now spliced, never rewritten."""
     from tests.docx_corpus import build_case, corpus_cases
 
     fallbacks: collections.Counter = collections.Counter()
+    spliced = 0
     produced = 0
     for case in corpus_cases():
         source = build_case(case, tmp_path)
@@ -1668,9 +1972,11 @@ def test_every_corpus_master_keeps_the_promise_under_a_mix_of_edits(tmp_path):
                 )
                 continue
             produced += 1
+            spliced += stats["spliced"]
             fallbacks.update(stats.get("fallback", {}))
-    assert produced
+    assert produced and spliced
     assert set(fallbacks) <= set(FALLBACK_REASONS)
+    assert "hyperlink" not in fallbacks
 
 
 # ---------------------------------------------------------------------------

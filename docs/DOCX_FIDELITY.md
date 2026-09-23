@@ -88,7 +88,20 @@ package part. Inside the body:
   or typed) and separator (a typed letter's tab, an article number's
   `1.01` width or ` - ` dash). It never copies the kin's identity (`w14:paraId`
   / `w14:textId`, which Word expects to be unique), bookmarks, comment
-  anchors or section break;
+  anchors or section break. When the kin sits at ANOTHER depth — the first
+  sub-provision anywhere under an "A." has no kin at its own depth — a
+  Word-numbered clone takes its own level: the kin's `w:ilvl` offset by the
+  depth difference (the importer reads `ilvl` relative to the article's
+  list), in the kin's own numbering instance, written on the clone's own
+  `w:numPr` with the instance named explicitly — even when the kin's
+  numbering came from its paragraph style, whose style the clone keeps. Only
+  a level the master's numbering defines with a visible label (not
+  `numFmt="none"`, not an empty `lvlText`), and draws as a provision rather
+  than a PART or article heading, is taken; otherwise the clone keeps its
+  kin's level (Word shows it one level up — never a number the master's list
+  cannot draw, nor no number at all) and the `export` event counts it
+  (`render.level_kept`, beside `render.level_offset`). A typed-letter clone needs none of this: its label
+  ("1.") carries its level;
 * blank spacer paragraphs travel with the provision below them, so spacing
   survives a reorder;
 * body content the tree never modelled that sits ABOVE a modelled element —
@@ -165,14 +178,16 @@ routinely built from text boxes) though the paragraph stays an `image` block.
 The formatting of *new* words is inherited from a neighbour: a word typed
 over others takes the formatting of the first character it replaced, and an
 inserted word the formatting of the character before it — what Word itself
-does. Unchanged words keep their own. A paragraph the splice cannot yet map
-(a hyperlink, field, content control, comment or note reference, `w:sym` or
-drawing inside it) is still rebuilt from its first run's properties; the
-export's `export` diagnostics event counts those fallbacks by reason
-(`render.fallback`), which is the evidence the splice's eligibility widens
-from. And a revision-bearing paragraph is rewritten rather than cloned,
-because the importer showed the Accept-All view and cloning the original
-markup would export text the user never saw.
+does (at a hyperlink, refined below). Unchanged words keep their own. A
+paragraph the splice cannot yet map (a field, content control, comment or
+note reference, `w:sym` or drawing inside it — or a hyperlink holding
+anything but runs, bookmarks and spelling markers: a nested link, a field)
+is still rebuilt from its first run's properties; the export's `export`
+diagnostics event counts those fallbacks by reason (`render.fallback`),
+which is the evidence the splice's eligibility widens from. And a
+revision-bearing paragraph is rewritten rather than cloned, because the
+importer showed the Accept-All view and cloning the original markup would
+export text the user never saw.
 
 **The splice's rules.** The source paragraph's visible characters are mapped
 to the nodes that produce them — `w:t` characters, `w:tab`/`w:ptab` (`\t`),
@@ -200,6 +215,39 @@ of keep / delete / insert steps whose keep and delete ranges partition the
 source in order, so rendering keep + insert gives this export and rendering
 delete as `w:del` and insert as `w:ins` gives the planned redline — the
 redline's Accept All equals this export by construction.
+
+**Hyperlinks are spliced like the rest of the paragraph.** A `w:hyperlink`'s
+runs and markers are mapped the way the importer reads the link (its own
+runs, python-docx `CT_Hyperlink.text`), each remembering the link it sits
+in, so an edit keeps the link — its target, its runs and their formatting —
+on every word it did not change, and a provision merely relettered keeps its
+link whole. Four rules decide what an edit does at a link, each so a link
+never quietly changes what it covers:
+
+* **New words go in a link only when they are wholly its own:** words typed
+  over words that all sit in one link stay in it (its display text changed;
+  its target did not), and words inserted between two characters of one link
+  go in it. Anywhere else — at either edge of a link, or replacing words on
+  both sides of one — new words go outside every link: **a link never grows**
+  to cover words added beside it.
+* **New words never borrow a link's look from outside it.** They take Word's
+  formatting source (above) when that character sits where they go — in the
+  same link, or outside every link — and otherwise the nearest character that
+  does, ties to the earlier one (with none, the first run where they go). A
+  word added after a link is not drawn in its blue underline.
+* **A link is never split.** A replacement that runs INTO a link from outside
+  it (typed over the words before a link and its first word) puts its new
+  words in front of the link, at its edge, and the link keeps its other
+  words. A link's own zero-width content — a bookmark closing inside it at the
+  insertion point, a bookmark opening it ahead of prepended words — stays
+  inside it.
+* **A link whose words are all deleted is gone** — an empty hyperlink shows
+  nothing — unless a bookmark or other marker inside it (never deleted) keeps
+  it. An empty hyperlink in the upload is carried where it was.
+
+A paragraph with no hyperlink renders byte for byte as it did before links
+were mapped (checked over 7,500 seeded edits, clean and redline): every rule
+above is a no-op there.
 
 **Mechanics.** `spec_doc/source_format.py` records, per semantic element, the
 source body-child index it came from and whether its label was Word's
@@ -303,7 +351,14 @@ The word-level changes are the splice's own edit script
 (`source_splice.render_redline` beside `render_clean`, over the same pieces),
 so a relettered provision is a one-token letter change with its tab kept, and
 zero-width content (a page break, a bookmark) lands exactly where the clean
-export puts it — including words prepended after a leading page break.
+export puts it — including words prepended after a leading page break. A
+hyperlink is written once, holding its own pieces: a word changed inside it
+is a `w:del`/`w:ins` inside the `w:hyperlink` (a hyperlink cannot sit inside
+a tracked change; its runs can), a word added beside it is tracked outside
+it, and a link whose words were all deleted keeps its deleted runs, so
+Accept All leaves it empty: it shows nothing, exactly as the clean export,
+which does not write it (the self-check's comparison drops an empty
+hyperlink, since Word shows nothing for one).
 
 **Typed letters are tracked; Word numbering is not.** In a typed-letter master
 a provision relettered by an insert above it carries a tracked letter change
@@ -389,11 +444,11 @@ edits the whole redline took about 0.7 s, of which the self-check was about
 times the clean export, which renders once inside it. The pending-revisions
 scan (about 0.1 s) is cached per upload for the payload.
 
-**Limits.** A provision nested deeper than any provision a Word-numbered
-master already has is cloned from kin at another depth and keeps that kin's
-`w:ilvl` — a limit of the appearance-preserving export, which the redline's
-Accept All reproduces by construction. The redline is master-only in this
-phase: a redline on the original against an arbitrary version is a 400.
+**Limits.** A new provision nested deeper than any the master's own numbering
+defines keeps its kin's level (see the appearance-preserving export above),
+and the redline's Accept All reproduces that by construction. The redline is
+master-only in this phase: a redline on the original against an arbitrary
+version is a 400.
 
 **In the app.** The Export menu of an imported document offers **Redline on
 your original (tracked changes)** right under *Export Word (keeps your

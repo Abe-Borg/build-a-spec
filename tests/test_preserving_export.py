@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
 from docx import Document
 from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
@@ -1482,3 +1483,301 @@ def test_a_control_character_in_a_provision_exports_as_a_visible_escape(tmp_path
     exported = _render(source, section, imported.format_map)
 
     assert "A.\tBad \\u000B char." in [p.text for p in _paragraphs(exported)]
+
+
+# ---------------------------------------------------------------------------
+# Hyperlinks and nesting levels (the redline plan's two "Found, not done")
+# ---------------------------------------------------------------------------
+
+
+def _linked_typed_master() -> bytes:
+    """A typed-letter master whose provision A holds a bold phrase and a
+    hyperlink — the paragraph every edit used to flatten."""
+    from tests.docx_fidelity_helpers import _append_hyperlink
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL", "1.1\tSUMMARY"):
+        document.add_paragraph(line)
+    provision = document.add_paragraph()
+    provision.add_run("A.\tSection includes ")
+    provision.add_run("vibration isolation").bold = True
+    provision.add_run(" per ")
+    _append_hyperlink(provision, "the client standard", "https://example.com/std")
+    provision.add_run(" for mechanical equipment.")
+    document.add_paragraph("B.\tRelated requirements are specified elsewhere.")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def test_a_relettered_provision_keeps_its_link_emphasis_and_tab(tmp_path):
+    """The reported reproduction. Adding a provision above one that holds a
+    hyperlink reletters it, and a hyperlink sent the whole paragraph to the
+    fallback: the link became plain text, the bold phrase lost its bold and
+    the tab after "B." became a space. Now the splice maps the link."""
+    source = _linked_typed_master()
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": article.uid,
+                "position": 0,
+                "text": "Provide seismic restraints.",
+            }
+        ],
+    )
+    stats: dict = {}
+    exported = render_preserving_docx(
+        source_bytes=source, format_map=imported.format_map, current=section, stats=stats
+    )
+    assert stats["fallback"] == {}
+    relettered = _paragraph(exported, "B.\t")
+    assert relettered.text == (
+        "B.\tSection includes vibration isolation per the client standard "
+        "for mechanical equipment."
+    )
+    assert [run.text for run in relettered.runs if run.bold] == ["vibration isolation"]
+    (link,) = relettered._p.findall(qn("w:hyperlink"))
+    source_link = _paragraph(source, "A.\t")._p.find(qn("w:hyperlink"))
+    assert link.get(qn("r:id")) == source_link.get(qn("r:id"))
+    assert "".join(t.text for t in link.iter(qn("w:t"))) == "the client standard"
+    assert link.find(f".//{qn('w:u')}") is not None  # the link keeps its look
+
+
+def test_a_word_added_after_a_link_is_not_part_of_it(tmp_path):
+    source = _linked_typed_master()
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+    section, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "replace",
+                "target_id": first.uid,
+                "text": "Section includes vibration isolation per the client standard "
+                "latest edition for mechanical equipment.",
+            }
+        ],
+    )
+    exported = _render(source, section, imported.format_map)
+    edited = _paragraph(exported, "A.\t")
+    (link,) = edited._p.findall(qn("w:hyperlink"))
+    assert "".join(t.text for t in link.iter(qn("w:t"))) == "the client standard"
+    added = [r for r in edited.runs if "latest" in r.text]
+    assert added and all(r._r.find(f".//{qn('w:u')}") is None for r in added)
+
+
+def _numbered_levels_master(levels: dict, *, typed_article: bool = False) -> bytes:
+    """Direct Word numbering on every provision, one article, two provisions
+    at the list's provision level (the ilvl drawing "%N." upper letters)."""
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    _define_numbering(document, 50, levels)
+    provision = next(i for i, (fmt, _t) in levels.items() if fmt == "upperLetter")
+    if typed_article:
+        document.add_paragraph("1.1 SUMMARY")
+    else:
+        _numbered(document, "SUMMARY", provision - 1, "50")
+    _numbered(document, "Section includes vibration isolation.", provision, "50")
+    _numbered(document, "Related requirements.", provision, "50")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def _add_child(tmp_path, source: bytes):
+    """Add a provision under the first one; the export, its stats, and the
+    new provision's own ``w:numPr``."""
+    imported = _parse(tmp_path, source)
+    parent = imported.section.parts[0].articles[0].paragraphs[0]
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "add_paragraph", "target_id": parent.uid, "text": "Spring isolators."}],
+    )
+    stats: dict = {}
+    exported = render_preserving_docx(
+        source_bytes=source, format_map=imported.format_map, current=section, stats=stats
+    )
+    (added,) = [p._p for p in _paragraphs(exported) if p.text.endswith("Spring isolators.")]
+    return section, exported, stats, added.find(f"{qn('w:pPr')}/{qn('w:numPr')}")
+
+
+def _level(numbering) -> tuple[str, str]:
+    return (
+        numbering.find(qn("w:ilvl")).get(qn("w:val")),
+        numbering.find(qn("w:numId")).get(qn("w:val")),
+    )
+
+
+def _depths(payload: bytes, tmp_path) -> list[tuple[int, str]]:
+    path = tmp_path / "reread.docx"
+    path.write_bytes(payload)
+
+    def walk(nodes, depth):
+        for node in nodes:
+            yield depth, node.text
+            yield from walk(node.children, depth + 1)
+
+    article = parse_master_docx(path).section.parts[0].articles[0]
+    return list(walk(article.paragraphs, 0))
+
+
+def test_a_new_sub_provision_takes_its_own_numbering_level(tmp_path):
+    """No provision in the master sits one level down, so the new one is
+    cloned from its parent-level kin — and used to keep its ``w:ilvl``, so
+    Word drew it one level up and the importer read it back as its parent's
+    sibling. Its level is now the kin's offset by the depth difference."""
+    source = _numbered_levels_master(
+        {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3."), 3: ("decimal", "%4.")}
+    )
+    section, exported, stats, numbering = _add_child(tmp_path, source)
+    assert (stats["level_offset"], stats["level_kept"]) == (1, 0)
+    assert _level(numbering) == ("3", "50")
+    assert _depths(exported, tmp_path) == [
+        (0, "Section includes vibration isolation."),
+        (1, "Spring isolators."),
+        (0, "Related requirements."),
+    ]
+
+
+def test_a_style_numbered_kin_gives_the_clone_its_own_level_explicitly(tmp_path):
+    """Numbering on the paragraph STYLE (PR1), the office-master shape: the
+    clone keeps its kin's style and gains its own ``w:numPr`` naming both
+    the level and the instance, which Word and the importer read alike."""
+    from tests.test_import_office_master import _add_style
+    from tests.test_importer import _define_numbering
+
+    document = Document()
+    _define_numbering(
+        document, 70, {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3."), 3: ("decimal", "%4.")}
+    )
+    body = _add_style(document, "SpecBody", num_id=None, ilvl=None)
+    article = _add_style(document, "ART", num_id=70, ilvl=1, based_on=body)
+    provision = _add_style(document, "PR1", num_id=70, ilvl=2, based_on=body)
+    for line in ("SECTION 21 05 00", "COMMON WORK RESULTS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    document.add_paragraph("SUMMARY", style=article)
+    document.add_paragraph("Section includes vibration isolation.", style=provision)
+    document.add_paragraph("Related requirements.", style=provision)
+    document.add_paragraph("END OF SECTION")
+    source = _save(document)
+    _section, exported, stats, numbering = _add_child(tmp_path, source)
+    assert stats["level_offset"] == 1
+    assert _level(numbering) == ("3", "70")
+    added = _paragraph(exported, "Spring isolators.")._p
+    style = added.find(f"{qn('w:pPr')}/{qn('w:pStyle')}")
+    assert style is not None and style.get(qn("w:val")) == "PR1"
+    assert [depth for depth, _text in _depths(exported, tmp_path)] == [0, 1, 0]
+
+
+def test_a_new_sibling_of_word_numbered_kin_is_its_kins_clone_unchanged(tmp_path):
+    """Kin at the new provision's own depth needs no level of its own: the
+    clone is the kin's paragraph exactly — in a style-numbered master, no
+    ``w:numPr`` of its own beside the style's — and nothing is counted."""
+    from tests.test_import_office_master import _add_style
+    from tests.test_importer import _define_numbering
+
+    document = Document()
+    _define_numbering(
+        document, 70, {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3."), 3: ("decimal", "%4.")}
+    )
+    body = _add_style(document, "SpecBody", num_id=None, ilvl=None)
+    article = _add_style(document, "ART", num_id=70, ilvl=1, based_on=body)
+    provision = _add_style(document, "PR1", num_id=70, ilvl=2, based_on=body)
+    for line in ("SECTION 21 05 00", "COMMON WORK RESULTS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    document.add_paragraph("SUMMARY", style=article)
+    document.add_paragraph("Section includes vibration isolation.", style=provision)
+    document.add_paragraph("Related requirements.", style=provision)
+    document.add_paragraph("END OF SECTION")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    target = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "add_paragraph", "target_id": target.uid, "text": "Spring isolators."}],
+    )
+    stats: dict = {}
+    exported = render_preserving_docx(
+        source_bytes=source, format_map=imported.format_map, current=section, stats=stats
+    )
+    assert (stats["level_offset"], stats["level_kept"]) == (0, 0)
+    added = _paragraph(exported, "Spring isolators.")._p
+    kin = _paragraph(exported, "Related requirements.")._p
+    assert added.find(f"{qn('w:pPr')}/{qn('w:numPr')}") is None
+    assert etree.tostring(added.find(qn("w:pPr"))) == etree.tostring(kin.find(qn("w:pPr")))
+    assert [depth for depth, _text in _depths(exported, tmp_path)] == [0, 0, 0]
+
+
+def test_a_level_the_masters_numbering_does_not_define_keeps_its_kins(tmp_path):
+    """The master's list stops at the provision level: there is no number
+    to give a sub-provision, so it keeps its kin's level (one level up in
+    Word — never a number the master's numbering cannot draw), and the
+    export's diagnostics count it."""
+    source = _numbered_levels_master({1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3.")})
+    _section, _exported, stats, numbering = _add_child(tmp_path, source)
+    assert (stats["level_offset"], stats["level_kept"]) == (0, 1)
+    assert _level(numbering) == ("2", "50")
+
+
+@pytest.mark.parametrize(
+    "label",
+    [("none", "%4."), ("decimal", ""), ("decimal", "  ")],
+    ids=["numFmt-none", "empty-lvlText", "blank-lvlText"],
+)
+def test_a_level_that_draws_no_label_is_never_taken(tmp_path, label):
+    """The definition has the next level down, but it draws no label —
+    ``numFmt="none"``, or an empty ``lvlText`` — so a sub-provision given it
+    would print with no number at all. It keeps its kin's level instead: a
+    label, one level up (Codex review on PR #193)."""
+    source = _numbered_levels_master(
+        {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3."), 3: label}
+    )
+    _section, _exported, stats, numbering = _add_child(tmp_path, source)
+    assert (stats["level_offset"], stats["level_kept"]) == (0, 1)
+    assert _level(numbering) == ("2", "50")
+
+
+def test_a_level_the_numbering_draws_as_a_heading_is_never_taken(tmp_path):
+    """A list whose next level down is written "%2.%3" draws ARTICLE
+    numbers there, and the importer promotes such a paragraph to an
+    article: a sub-provision given that level would come back as a heading.
+    It keeps its kin's level instead."""
+    source = _numbered_levels_master(
+        {1: ("upperLetter", "%2."), 2: ("decimal", "%2.%3")}, typed_article=True
+    )
+    _section, exported, stats, numbering = _add_child(tmp_path, source)
+    assert (stats["level_offset"], stats["level_kept"]) == (0, 1)
+    assert _level(numbering) == ("1", "50")
+    path = tmp_path / "reread.docx"
+    path.write_bytes(exported)
+    assert len(parse_master_docx(path).section.parts[0].articles) == 1
+
+
+def test_a_typed_letter_kin_is_never_renumbered(tmp_path):
+    """A typed label carries its own level ("1." under "A."): nothing to
+    offset, and no Word numbering is invented for it."""
+    source = _typed_letter_master()
+    _section, _exported, stats, numbering = _add_child(tmp_path, source)
+    assert (stats["level_offset"], stats["level_kept"]) == (0, 0)
+    assert numbering is None
+
+
+def test_numbering_that_cannot_be_read_offsets_nothing():
+    """The export reads the upload's numbering the way the importer does,
+    and degrades the way it does: a package whose numbering or styles cannot
+    be read has none. Nothing raises, and no level is offset — a new
+    sub-provision keeps its kin's."""
+    from backend.spec_doc.source_render import _NumberingTables
+
+    tables = _NumberingTables(b"not a Word package")
+    assert tables.draws_a_provision(0, 1) is False
+    assert (tables.catalog, tables.style_numbering, tables.default_style_id) == (
+        {},
+        {},
+        "",
+    )

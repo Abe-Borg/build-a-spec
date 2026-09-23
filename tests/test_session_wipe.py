@@ -69,6 +69,10 @@ _STATE_PROBES = {
     "project_link": lambda s: s.project_link,
     "usage": lambda s: s.usage.snapshot(),
     "last_context_tokens": lambda s: s.last_context_tokens,
+    # What that turn's PROJECT CONTEXT block was made of (Project
+    # workspace Phase 5A). A breakdown that outlived its conversation would
+    # have Developer tools describe a context the fresh session never sent.
+    "last_context_sizes": lambda s: s.last_context_sizes,
     "turn_active": lambda s: s.turn_active,
     "_active_turn_token": lambda s: s._active_turn_token,
     "stop_requested": lambda s: s.stop_requested.is_set(),
@@ -205,6 +209,7 @@ def _dirty(session: SessionState) -> None:
     session.suggested_prompts.append("It's a hyperscale data center.")
     session.usage.add("interview", {"input_tokens": 100, "output_tokens": 20})
     session.last_context_tokens = 142_000
+    session.last_context_sizes = {"research": 38_000, "total": 65_000}
     session.turn_active = True
     session._active_turn_token = object()
     session.stop_requested.set()

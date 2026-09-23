@@ -1521,6 +1521,14 @@ def snapshot() -> dict[str, Any]:
             "turn_active": session.turn_active,
             "stop_requested": session.stop_requested.is_set(),
             "last_context_tokens": session.last_context_tokens,
+            # What that turn's PROJECT CONTEXT block was made of: estimated
+            # tokens per block, never text (Project workspace Phase 5A — the
+            # measurement that gates the research relevance trim).
+            "last_context_sizes": (
+                dict(session.last_context_sizes)
+                if session.last_context_sizes is not None
+                else None
+            ),
             "unsaved": sessions.has_unsaved_progress(session),
             "import_report_present": session.import_report is not None,
             "import": _import_report_facts(session.import_report),

@@ -481,6 +481,7 @@ def turn_prompts(
     system_text: str,
     context_text: str,
     user_text: str,
+    context_sizes: dict[str, int] | None = None,
 ) -> None:
     """Record the turn's prompt material as one ``prompt_refs`` event.
 
@@ -488,6 +489,12 @@ def turn_prompts(
     ``recorder.prompt_ref`` — content-hashed into prompts.jsonl once per
     distinct text (the stable system block therefore costs one entry per
     app run); deep mode inlines the text into the event itself.
+
+    ``context_sizes`` is the PROJECT CONTEXT block's composition — estimated
+    tokens per block (``conversation.CONTEXT_SIZE_KEYS``, Project workspace
+    Phase 5A). Numbers, never text, so they ride the event itself at every
+    capture level: a trace reader sees what each turn carried without
+    resolving a single prompt ref.
     """
     try:
         recorder = get_recorder()
@@ -499,6 +506,7 @@ def turn_prompts(
             system=recorder.prompt_ref("system", system_text),
             project_context=recorder.prompt_ref("project_context", context_text),
             user=recorder.prompt_ref("user", user_text),
+            context_sizes=dict(context_sizes or {}),
         )
     except Exception:  # noqa: BLE001
         pass

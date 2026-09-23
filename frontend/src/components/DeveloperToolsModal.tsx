@@ -66,15 +66,19 @@ function eventFields(event: Record<string, unknown>): string {
 
 /** The saved conversation by category, largest first: what the model
  *  re-reads on every turn. Sizes only (the backend never sends text), and
- *  tokens are the app's len/4 estimate. A nonzero stale-outline count means
- *  something committed an edit result without the outline elision. */
+ *  tokens are the app's len/4 estimate. A nonzero stale-outline or
+ *  fetched-page count means something committed without the matching
+ *  saved-history trim. */
 function historyMakeup(h: HistoryComposition): string {
   const top = h.categories
     .slice(0, 4)
     .map((c) => `${c.category} ${h.chars ? Math.round((100 * c.chars) / h.chars) : 0}%`)
     .join(" · ");
   const stale = h.stale_outlines ? ` · ${h.stale_outlines} stale outlines` : "";
-  return `~${h.estimated_tokens.toLocaleString()} tokens (est.) in ${h.messages} messages${top ? ` · ${top}` : ""}${stale}`;
+  const pages = h.fetched_page_texts
+    ? ` · ${h.fetched_page_texts} fetched pages still carrying text`
+    : "";
+  return `~${h.estimated_tokens.toLocaleString()} tokens (est.) in ${h.messages} messages${top ? ` · ${top}` : ""}${stale}${pages}`;
 }
 
 function Row({ name, value, mono }: { name: string; value: string; mono?: boolean }) {

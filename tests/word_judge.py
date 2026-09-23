@@ -364,7 +364,7 @@ def build_judge_cases(group: JudgeGroup, workspace: Path) -> JudgeBatch:
     formatted export — exactly as the app does, author and all."""
     workspace.mkdir(parents=True, exist_ok=True)
     upload = group.upload(workspace)
-    master = workspace / f"{group.slug}.upload.docx"
+    master = workspace / "upload.docx"
     master.write_bytes(upload)
     imported = parse_master_docx(master)
     cases: list[JudgeCase | RefusedCase] = []

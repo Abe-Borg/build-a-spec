@@ -130,7 +130,12 @@ backend/
                            summary is a billed background call, 0 switches
                            it off) and the NON-knob
                            CHAT_CONTEXT_BACKSTOP_FRACTION (0.85, runs either
-                           way) + CHAT_COMPACTION_MAX_TOKENS
+                           way) + CHAT_COMPACTION_MAX_TOKENS;
+                           REDLINE_NATIVE_MOVES (BUILD_A_SPEC_REDLINE_NATIVE_
+                           MOVES, default ON — redline Phase 2 PR B, its Word
+                           gate waived by the owner, not passed; 0 = the
+                           Phase 1 rendering byte for byte; read per request
+                           by app._render_original_redline)
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive, gated on the
                            draft prerequisites via _draft_prerequisites —
@@ -968,7 +973,19 @@ backend/
                            never flagged — its formatting is recorded instead
                            (neutralize_last_paragraph), so the empty paragraph
                            Word leaves there sets nothing; a moved old copy
-                           gives up its bookmarks and w14 ids. D-5 refuses a package with
+                           gives up its bookmarks and w14 ids. Phase 2 PR B
+                           (native_moves=, off by default; the route passes
+                           settings.REDLINE_NATIVE_MOVES): a PURE move — an
+                           unchanged clean clone, KEPT or CARRIED — renders as
+                           w:moveFrom / w:moveTo, consecutive pairs sharing one
+                           name (_native_moves); anything else falls back to
+                           the deletion + insertion by a closed reason
+                           (MOVE_FALLBACK_REASONS: edited / section_break /
+                           last_paragraph / locked / markup / self_check /
+                           unpaired), counted as redline.moves_native +
+                           moves_fallback; a native render failing any check
+                           (incl. _check_move_ranges) is rendered again with
+                           native moves off before anything is refused. D-5 refuses a package with
                            pending revisions; untrackable blocks refuse by
                            name (SourceRedlineError.reason, a closed
                            vocabulary with server-authored sentences); the
@@ -1050,7 +1067,13 @@ backend/
                            (Word cannot track the last mark, but an empty
                            paragraph still prints its number or breaks its
                            page — anything it sets is a difference);
-                           duplicate_bookmark_names. Re-parses into
+                           duplicate_bookmark_names; move_range_problem
+                           (Phase 2 PR B: the structural check on native moves
+                           — ids unique and never a bookmark's, one moved-from
+                           and one moved-to range per name, ranges closed and
+                           never overlapping, moved content and flagged marks
+                           only inside a range of their kind; a closed
+                           MOVE_PROBLEMS code, never text). Re-parses into
                            plain lxml first (_plain) — python-docx's CT_P
                            overrides .text
   spec_doc/revision_marks.py
@@ -1075,7 +1098,18 @@ backend/
                            other row properties, rows inside sdt/customXml and
                            nested tables included), UntrackableContent with a
                            closed reason (simple_field, block_content_control,
-                           field_block, pending_revisions, untrackable_markup)
+                           field_block, pending_revisions, untrackable_markup);
+                           Phase 2 PR B: move_content (w:moveFrom / w:moveTo
+                           wrappers, w:t kept — w:delText is for w:del only),
+                           add_move_range (the start inside the first moved
+                           paragraph, after its properties; the END returned
+                           for the caller to place BETWEEN paragraphs, so the
+                           last mark is inside the range — Word's shape),
+                           RevisionMarks.range_start (an id from the one
+                           counter, not counted as a revision) + move_name
+                           ("move" + digits, unique per export); mark_paragraph
+                           takes the move tags and refuses w:moveFrom on a
+                           section-break holder like w:del
   spec_doc/xml_text.py     XML 1.0-safe artifact text: the handful of code points
                            XML cannot carry (C0 controls, lone surrogates)
                            render as VISIBLE \uXXXX escapes rather than being
@@ -1715,7 +1749,9 @@ tests/
                            hand-built revision XML: every wrapper, mark joins,
                            row/cell resolution, property changes, text boxes,
                            and the canonical comparison's tolerances and its
-                           no-text Difference
+                           no-text Difference; native moves (Phase 2 PR B):
+                           one copy either way, Word's range shape, and every
+                           MOVE_PROBLEMS code
   test_redline_original.py [Redline on your original, Phase 1] the invariant
                            matrix — every row asserts Accept All == the
                            formatted export AND Reject All == the upload, plus
@@ -1736,7 +1772,15 @@ tests/
                            Its sweep's edit mixes and refusal list are public
                            (CORPUS_SWEEP_SEEDS / corpus_sweep_edits /
                            STRUCTURAL_REFUSALS): the real-Word judge replays
-                           exactly them
+                           exactly them. Phase 2 PR B: _verify(native_moves=)
+                           adds the move check and the switch-off "no move
+                           markup" pin; native-move rows (a pure move, one
+                           with children, a block of siblings, separate
+                           names, a section-break-forced move, style-numbered,
+                           beside a link, a bookmark), every fallback reason
+                           byte-equal to the switch-off file, the self-check
+                           re-render, re-import and the corpus sweep both
+                           ways, and the switch's ast pin
   word_judge.py            [Redline on your original, Phase 2 PR A] real Word
                            as the redline's judge, minus Word: the targeted
                            groups (every markup shape the writer emits) + the
@@ -1748,7 +1792,9 @@ tests/
                            (rsids, w:proofErr, w:lastRenderedPageBreak,
                            _GoBack — never in the app), the tracked-move
                            sample check, JudgeReport (report.json, file names
-                           never paths)
+                           never paths); Phase 2 PR B: renders with
+                           settings.REDLINE_NATIVE_MOVES (what the route
+                           sends) and adds the targeted/native-move* groups
   test_word_judge.py       [Phase 2 PR A] the judge proven without Word: each
                            tolerance removes exactly what it names, the
                            self-check applies none, the targeted cases cover
@@ -1757,7 +1803,11 @@ tests/
                            rewrite plus randomly placed save markup), wrong,
                            swapped, mis-authored, leaving changes, losing a
                            bookmark, unreadable — pass or fail as they should,
-                           over every targeted and corpus case
+                           over every targeted and corpus case; Phase 2 PR B:
+                           the save model never splits, duplicates or
+                           renumbers a move range, a Word keeping both copies
+                           of a move fails, and the judge renders with the
+                           switch the route passes
   test_redline_word_judge.py
                            [Phase 2 PR A] the gated Windows suite (skips
                            unless BUILD_A_SPEC_WORD_JUDGE=1): one test per
@@ -14616,6 +14666,218 @@ picks the release).
      one object now, `compaction.CONTEXT_BOUNDARY_PATTERN`.
   3. "Phase 3 — implemented notes" → Lint: it still recomputes on demand,
      now through `SessionState.document_lint`, once per committed version.
+
+## Word's own "Moved" marks — implemented notes (redline Phase 2, PR B)
+
+The second of Phase 2's two pull requests in
+`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`. Since Phase 1 the redline on
+your original has shown a moved provision as a deletion where it was and an
+insertion where it is. Now a provision moved WITHOUT being changed is Word's
+own move: `w:moveFrom` where it was, `w:moveTo` where it is, the two ranges
+paired by one name, so the Reviewing Pane can say "Moved". No route, SSE event,
+dependency or project-format change; one env knob; no VERSION bump and no
+`release_notes.py` entry (the owner picks the release, and the draft is in the
+plan's "Release-note drafts"). The contract is in `docs/DOCX_FIDELITY.md` → "A
+pure move is Word's own 'Moved' marks". The clauses, the sources, the choices
+and the list of what real Word must check first are in the plan's "Phase 2
+(PR B) — as built". This section is the why and the traps.
+
+- **Built without Word, by owner decision 8 (2026-09-23).** The plan's gate
+  for PR B was the owner's Windows judge run plus Word's own tracked-move
+  sample. The owner waived it; it was not passed. Nobody has run
+  `tests/test_redline_word_judge.py` or the TrackedMove recipe, so the markup
+  was settled from the spec, [MS-OI29500] and the Open XML SDK docs instead,
+  checked against seven Word- and LibreOffice-authored files read from public
+  repositories and never committed. The compaction plan's D5 is the
+  precedent. What makes shipping it safe is the switch.
+- **The switch.** `settings.REDLINE_NATIVE_MOVES`
+  (`BUILD_A_SPEC_REDLINE_NATIVE_MOVES`, default on). `spec_doc` still reads no
+  settings: `render_preserving_redline(native_moves=)` defaults to OFF, and
+  `app._render_original_redline` passes the setting when it runs, so a
+  changed value takes effect on the next export without a restart. **Off is
+  the Phase 1 rendering byte for byte.** That was proven once before merging,
+  the D-1 way: `master`'s `source_render.py` and `revision_marks.py` copied
+  into a scratch module and rendered against the new code with the switch
+  off, identical on all 1,814 renders — the corpus sweep's own 54 mixes,
+  1,080 wider mixes (17 corpus masters × 60 mixes of up to 14 edits) and 680
+  fixture mixes (17 hand-built masters × 40) — with no refusal among them.
+  The suite keeps the cheap half of that proof: with the switch off the
+  redline carries no move markup at all, and every Phase 1 move test still
+  passes that way.
+- **Detection did not change; only the rendering did.** Which elements move
+  is still `diff_sections(detect_moves=True)` plus `_keep_in_place`, the
+  moves a section break forces included, and `moves_added` still counts
+  those. `_native_moves` runs over the builder's ordered records and pairs a
+  moved-here record with the moved-away copy of the same element. Everything
+  about that pairing is already in the D-1 plan: the moved-here copy is a
+  clean record with `moved=True`, the moved-away copy a U-only
+  `RECORD_DELETED` with `moved=True`.
+- **"Pure" means an unchanged clean clone, and everything else keeps the
+  proven rendering.** `_move_refusal` names why a move falls back, from a
+  closed vocabulary (`MOVE_FALLBACK_REASONS`): `edited` (the moved-here
+  record was spliced — in a typed-letter master a new letter is enough),
+  `section_break` (a moved break holder: its old copy is the emptied holder,
+  whose mark D-3 never moves), `last_paragraph` (either copy is the body's
+  last paragraph, whose mark Word cannot track), `locked` (a table or other
+  preserved block: a table row has no move element), `markup` (anything
+  outside a short whitelist — text runs, tabs, breaks, hyphens, symbols,
+  bookmarks, proofing marks and hyperlinks holding the same; a field, a
+  drawing, a text box, a content control or math keeps the deletion plus
+  insertion), `self_check` (below) and `unpaired` (unreachable by
+  construction; defensive). The export event counts both sides:
+  `redline.native_moves` (was the switch on), `redline.moves_native` and
+  `redline.moves_fallback` by reason. With the switch on, `moves_native` plus
+  the fallbacks equals `moved`, which `_verify` asserts on every row.
+- **Consecutive pure moves share one name.** A provision moved with its
+  sub-provisions, or a run of siblings moved together, is one named move — so
+  Word shows one — whenever the moved-here copies are consecutive and their
+  moved-away copies are consecutive in the same order. Anything else gets its
+  own name. Both shapes are conformant; one name per block is what Word
+  writes for one move.
+- **Native moves never add a refusal.** A native rendering that fails any
+  check — Accept All, Reject All, bookmarks, the new move check, the package
+  audit — is rendered again with native moves off, and its moves are counted
+  as `self_check`. A refusal is raised only if that second rendering refuses
+  too. When no move was shown natively, the failed rendering already IS the
+  Phase 1 one, so its refusal stands without a second render. A refusal
+  Phase 1 earns (a moved comment is still `moved_annotation`) therefore comes
+  back the same both ways; the corpus sweep asserts `self_check` never fires.
+- **The first cut closed the range in the wrong place, and it mattered.** The
+  schema lets a range marker sit inside a paragraph or between paragraphs,
+  and the first writer closed each range inside the last moved paragraph,
+  after its runs. That leaves the paragraph MARK outside the range. §17.13.5.21
+  / .26 say a flagged mark is part of the moved content, and [MS-OI29500]
+  §2.1.337(a) / §2.1.342(a) say Word ignores the mark's own move flag — so
+  Word decides the mark's fate from the range around it, and a mark outside
+  that range is not moved. Every Word-authored sample (RP015, tdf104797,
+  tdf123460) puts the start INSIDE the first paragraph, after its properties,
+  and the end BETWEEN paragraphs, right after the last one. `add_move_range`
+  now inserts the start and RETURNS the end, and the builder places it as the
+  next body element. The move check refuses the first cut's shape, and all
+  seven samples pass it.
+- **Moved-away text stays `w:t`.** The schema would allow `w:delText` inside
+  `w:moveFrom`, and Phase 1's deletion writer turns every `w:t` into one. But
+  §17.3.3.7 reserves `w:delText` for `w:del`, every Word-authored move writes
+  `w:t`, and LibreOffice's tdf#165933 fix calls `w:delText` inside
+  `w:moveFrom` invalid. `move_content` is therefore `_wrap_content(...,
+  deleted=False)`, not `delete_content`.
+- **Ids and names.** Range starts take ids from the same counter as every
+  revision (`RevisionMarks.range_start`), which already starts above every
+  `w:id` in the package — Word numbers bookmarks, revisions and ranges from
+  one counter too. A range start is not counted in `marks.count`, the
+  number of revisions. Names are `move` + digits, Word's own spelling
+  (`move_name`: `first_id` followed by a four-digit count, so unique in the
+  export and at most ~18 characters against Word's 40). [MS-OI29500] keeps
+  only the last of two ranges sharing a name, so a name pairs exactly one
+  moved-from range with one moved-to range.
+- **The move check lives in the oracle, not the writer.**
+  `revisions.move_range_problem` shares no code with `revision_marks` (D-7's
+  rule) and returns a closed `MOVE_PROBLEMS` code: an id used twice or shared
+  with a bookmark, a blank name, a name without exactly one range of each
+  kind, a start with no matching end (or an end with no start), two ranges of
+  one kind overlapping, and moved content outside a range of its kind — a
+  flagged mark counting as the paragraph's end. `_check_move_ranges` runs it
+  after the self-check whenever native moves are on, and a failure is
+  `package_check_failed` with `detail.move_check`. It is the best defence
+  against a repair prompt available without Word.
+- **What stayed exactly as Phase 1 decided.** D-6: the moved-away copy gives
+  its bookmarks and `w14` ids up to the moved-here copy, so Reject All
+  restores a moved provision's text but not its bookmarks. `moved_annotation`
+  still refuses a moved comment or note reference. `mark_paragraph` now takes
+  the move tags and refuses `w:moveFrom` on a section-break holder exactly as
+  it refuses `w:del` (an explicit raise, never `assert`). The extracted-
+  provisions redline (`redline=version`, and `redline=master&mode=normalized`)
+  still shows no moves, per Batch 5's frozen decision; it was out of scope.
+- **The judge renders with the switch the route passes.**
+  `tests/word_judge.build_judge_cases` reads `settings.REDLINE_NATIVE_MOVES`,
+  so the first Windows run judges exactly the file a user downloads. New
+  targeted groups (`targeted/native-moves`, `native-move-link`,
+  `native-move-bookmark`, `native-move-style-numbered`,
+  `native-move-two-breaks`) cover every shape the writer emits, and the fake
+  Words prove them. Trap for whoever edits `_add_word_noise`: a model of a
+  Word save must never split, duplicate or renumber a move range, and its
+  `_GoBack` bookmark must take an id above EVERY `w:id` in the file, not only
+  the bookmarks' — a revision id reused by `_GoBack` collides in the move
+  check (a row of the revert matrix below).
+- **What the fixtures and the corpus say** (recorded, not asserted).
+  Corpus, 17 masters × 60 mixes (1,080 renders): 128 moves, 52 native, 76
+  `edited`, and nothing else. Most corpus masters letter their provisions
+  by hand, so a moved provision is usually relettered. Fixtures, the suite's
+  17 masters × 200 mixes (3,400 renders): 537 moves, 295 native; `edited`
+  206, `section_break` 19, `last_paragraph` 7, `markup` 7, `locked` 3, and
+  never `self_check` or `unpaired`. **On typed-letter masters `edited` fires
+  on 154 of 180 moves (86%)**; on Word-numbered masters 272 of 357 moves
+  (76%) are native. No refusal anywhere.
+- **Found, not done.** [MS-OI29500] §2.1.188(a): Word fails to load a file
+  whose `w:ins`, `w:del`, `w:moveTo` or `w:moveFrom` contains inline
+  `w:customXml`. The native path never wraps one (`markup`), but Phase 1's
+  `w:ins`/`w:del` writer lists `w:customXml` as wrappable, so a deleted,
+  inserted or edited provision holding one would produce such a file — and
+  the self-check cannot see it. Suggested as its own task. Recent Word also
+  writes an optional `w16du:dateUtc` on revisions; not written.
+- **One frontend pin changed on purpose.**
+  `frontend/tests/sourceCapabilities.test.ts` now also requires the
+  redline-original guidance to name the "Moved" marks and the
+  deletion-plus-insertion fallback — the copy was rewritten in Help, the trust
+  dossier and `SOURCE_OUTPUT_GUIDANCE`, and a promise the redline makes
+  should be pinned where it is stated. No capability or tour change.
+- **Tests: 31 new functions** — `tests/test_revisions.py` 9,
+  `tests/test_redline_original.py` 18 (several parametrized: every fallback
+  reason, re-import and the corpus sweep both ways), `tests/test_word_judge.py`
+  3, `tests/test_diagnostics.py` 1 — plus the existing `_verify`, schema-order,
+  bookmark, writer-guard and coverage tests extended in place. The redline,
+  revision and judge suites also pass with `BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0`.
+- **Revert matrix** (each mechanism reverted in place, one at a time, the
+  exact text restored after, `git diff` clean after every row; failing tests
+  in the redline, revision, judge and diagnostics suites):
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the setting's default off | 1 |
+  | the route not passing the switch | 2 |
+  | the renderer's own default on | 1 |
+  | native rendering never chosen in the builder | 9 |
+  | `edited` fallback | 1 |
+  | `section_break` fallback | 1 |
+  | `last_paragraph` fallback | 1 |
+  | `locked` fallback | 1 |
+  | `markup` fallback | 1 |
+  | no re-render after a failed check | 1 |
+  | the move check not run | 1 |
+  | the range end inside the last paragraph | 2 |
+  | no grouping of consecutive moves | 2 |
+  | one name for every move | 1 |
+  | a range start reusing the next revision's id | 1 |
+  | moved-away text written as `w:delText` | 1 |
+  | `w:moveFrom` allowed on a break holder | 1 |
+  | the moved-away copy keeping its identity | 1 |
+  | `moves_native` not counted | 2 |
+  | a native destination not counted as `moved` | 1 |
+  | the oracle letting an id repeat | 2 |
+  | the oracle not pairing names | 1 |
+  | the oracle letting a range stay open | 1 |
+  | the oracle letting ranges overlap | 1 |
+  | the oracle not requiring a flagged mark inside its range | 2 |
+  | the judge ignoring the switch | 2 |
+  | the judge missing bookmarks on a moved-here copy | 1 |
+  | the save model numbering `_GoBack` from bookmarks only | 1 |
+
+- **Errata** (these notes are append-only, so corrections to earlier sections
+  go here):
+  1. "Redline on your original — implemented notes (Phase 1, backend PR)"
+     describes every move as a deleted old copy plus a new copy. With the
+     switch on (the default), a PURE move is `w:moveFrom` / `w:moveTo`; the
+     moved-away copy still gives up its bookmarks and `w14` ids exactly as
+     the deleted copy did. Its "A section break is never moved or deleted"
+     bullet now covers `w:moveFrom` too.
+  2. "Real Word as the judge (Phase 2, PR A)" says Word's own tracked moves
+     "are PR B's evidence" and that the manifest entry "waits for the
+     fixture". PR B was built without them (decision 8); the fixture and its
+     manifest entry still wait for the owner's Windows run, and the gated
+     suite still skips.
+  3. The Layout entries for `settings.py`, `source_render.py`,
+     `revisions.py`, `revision_marks.py` and the redline and judge tests are
+     maintained current and were updated in place.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

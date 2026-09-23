@@ -855,8 +855,9 @@ Word run should check first.
 
 - **A provision you moved without changing it shows as moved.** Where it was,
   its words and its paragraph mark are marked moved away (`w:moveFrom`); where
-  it is, moved here (`w:moveTo`); the two carry one name, so Word draws them
-  green with a "Moved" balloon and lists one move in the Reviewing Pane. A
+  it is, moved here (`w:moveTo`); the two carry one name, which is how Word
+  pairs the two halves of one move (real Word has yet to confirm how it shows
+  them — the plan lists that first among the checks). A
   provision and its sub-provisions moved together, or a run of siblings
   moved together, is one move. Moved-away text stays ordinary text, as in
   Word's own files.
@@ -2387,7 +2388,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_LENS` | `8` | web_search allowance for the other lenses + verifiers. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE` | `8` | web_fetch allowance for the code-compliance lens. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_LENS` | `4` | web_fetch allowance for the other lenses + verifiers. |
-| `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` | `1` | In the redline on your original, show a provision you moved without changing it as Word's own "Moved" marks (green, with a "Moved" balloon; `w:moveFrom` where it was and `w:moveTo` where it is) instead of a deletion there and an insertion here. On by default since redline Phase 2 PR B, which was built without real Word's verdict on it (the owner waived that gate on 2026-09-23). `0` gives back the Phase 1 rendering, byte for byte — the switch to reach for if Word ever shows a native move wrongly. Either way the export checks that Accept All gives the formatted export and Reject All your original before handing the file over, and a native rendering that fails that check is rendered again without Moved marks. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_NATIVE_MOVES = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0`. |
+| `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` | `1` | In the redline on your original, show a provision you moved without changing it as Word's own "Moved" marks (`w:moveFrom` where it was and `w:moveTo` where it is) instead of a deletion there and an insertion here. On by default since redline Phase 2 PR B, which was built without real Word's verdict on it (the owner waived that gate on 2026-09-23). `0` gives back the Phase 1 rendering, byte for byte — the switch to reach for if Word ever shows a native move wrongly. Either way the export checks that Accept All gives the formatted export and Reject All your original before handing the file over, and a native rendering that fails that check is rendered again without Moved marks. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_NATIVE_MOVES = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0`. |
 | `BUILD_A_SPEC_PORT` | `8756` | Fixed loopback backend port used only in Vite development. Packaged/browser production pre-binds an exclusive OS-assigned ephemeral loopback port per launch. |
 | `BUILD_A_SPEC_DEV` | off | Point the window at the Vite dev server. |
 | `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). Traces may contain document text; treat them as sensitive project data. `0` disables. |

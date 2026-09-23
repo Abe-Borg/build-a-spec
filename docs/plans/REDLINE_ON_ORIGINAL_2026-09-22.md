@@ -1531,13 +1531,12 @@ against the recommendation, and says so.
   Word and import it again first; the redline of extracted provisions still
   works either way."
 - **Phase 2 (native moves):** "Moves show as moves. In the redline on your
-  original, a provision you moved without changing it now shows as Word's
-  own Moved marks — green, with a Moved balloon, and one entry per move in
-  the Reviewing Pane — instead of a deletion where it was and an insertion
+  original, a provision you moved without changing it is now marked with
+  Word's own Moved marks instead of a deletion where it was and an insertion
   where it is. A provision moved with its sub-provisions, or several moved
-  together, is one move. A move that also changed something (in a master
-  with typed letters, its new letter counts) still shows as a deletion and
-  an insertion. Accept All and Reject All still give the updated section and
+  together, is marked as one move. A move that also changed something (in a
+  master with typed letters, its new letter counts) still shows as a
+  deletion and an insertion. Accept All and Reject All still give the updated section and
   your original back, and the app still checks both before it hands you the
   file. If Word ever shows a move wrongly, setting
   BUILD_A_SPEC_REDLINE_NATIVE_MOVES to 0 brings back the old way of showing

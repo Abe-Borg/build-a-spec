@@ -94,6 +94,10 @@ RECALL_SNIPPET_CHARS = 700
 RECALL_MAX_TURNS = 6
 RECALL_MAX_CHARS = 60_000
 RECALL_MAX_QUERY_CHARS = 500
+# A page of a long turn ends at the last whitespace within this many
+# characters of its limit, so a number or a quoted wording is never split
+# across two pages (a hard cut only when there is no whitespace that close).
+RECALL_PAGE_BOUNDARY_LOOKBACK = 200
 
 RECALL_ELIDED_NOTE = (
     "[Recalled conversation text omitted from saved history: it is a copy of "
@@ -115,9 +119,11 @@ RECALL_CONVERSATION_TOOL: dict[str, Any] = {
         "the user ruled out — rather than trusting the summary's "
         "paraphrase. Pass `query` (a few keywords) to find the turns that "
         "mention something, or `turns` ([first, last], at most 6 turns) to "
-        "read those turns word for word. Results show what the user and you "
-        "said; tool calls are named, not reproduced. Early in a session "
-        "nothing has been condensed and this has nothing to return."
+        "read those turns word for word. A turn too long to show in one call "
+        "ends with a note naming the `offset` that reads on: pass it with "
+        "that one turn. Results show what the user and you said; tool calls "
+        "are named, not reproduced. Early in a session nothing has been "
+        "condensed and this has nothing to return."
     ),
     "input_schema": {
         "type": "object",
@@ -132,6 +138,14 @@ RECALL_CONVERSATION_TOOL: dict[str, Any] = {
                 "description": (
                     "The first and last turn number to read word for word, "
                     "e.g. [12, 14]; [12] reads one turn."
+                ),
+            },
+            "offset": {
+                "type": "integer",
+                "description": (
+                    "With a single turn in `turns`: start reading that turn "
+                    "at this character. The note ending a partly shown turn "
+                    "(or a search match in a long turn) gives the number."
                 ),
             },
         },
@@ -737,6 +751,35 @@ class RecallTurn:
         )
 
 
+_USER_LABEL = "User: "
+_ASSISTANT_LABEL = "\n\nAssistant: "
+
+
+def _turn_body(turn: RecallTurn) -> str:
+    """The text a read shows for one turn; ``offset`` counts characters of
+    this (a search's offsets are computed against the same labels)."""
+    return f"{_USER_LABEL}{turn.user}{_ASSISTANT_LABEL}{turn.assistant or '(no text)'}"
+
+
+def _page_end(body: str, start: int, limit: int) -> int:
+    """Where a page of ``body`` that starts at ``start`` stops.
+
+    The whole rest when it fits in ``limit``; otherwise just after the last
+    whitespace within ``RECALL_PAGE_BOUNDARY_LOOKBACK`` characters of the
+    limit, so the next page starts on a whole word — a hard cut only when no
+    whitespace is that close. Always past ``start``, so reading on from the
+    returned offset always makes progress.
+    """
+    end = start + limit
+    if end >= len(body):
+        return len(body)
+    lowest = max(start + 1, end - RECALL_PAGE_BOUNDARY_LOOKBACK)
+    for index in range(end - 1, lowest - 1, -1):
+        if body[index].isspace():
+            return index + 1
+    return end
+
+
 def recall_turns(history: list[Any], hidden_turns: int) -> list[RecallTurn]:
     """Turns ``1..hidden_turns`` of ``history``, reduced to what was said."""
     starts = turn_starts(history)
@@ -792,7 +835,12 @@ def _term_pattern(term: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![\w]){re.escape(term)}(?![\w])")
 
 
-def _snippet(text: str, patterns: list[re.Pattern[str]]) -> str:
+def _snippet(text: str, patterns: list[re.Pattern[str]]) -> tuple[int, str]:
+    """``(start, snippet)``: the passage of ``text`` around its first match,
+    and where in ``text`` it begins. Positions come from the case-folded
+    text, so they are exact unless folding changes the text's length (a
+    few non-ASCII letters) — near, then, and a page read from there is
+    ``RECALL_MAX_CHARS`` long."""
     folded = text.casefold()
     position = min(
         (match.start() for p in patterns for match in [p.search(folded)] if match),
@@ -803,7 +851,9 @@ def _snippet(text: str, patterns: list[re.Pattern[str]]) -> str:
     end = min(len(text), start + RECALL_SNIPPET_CHARS)
     start = max(0, end - RECALL_SNIPPET_CHARS)
     snippet = " ".join(text[start:end].split())
-    return ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
+    return start, (
+        ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
+    )
 
 
 def _tools_line(turn: RecallTurn) -> str:
@@ -843,12 +893,26 @@ def _search(turns: list[RecallTurn], query: str) -> str:
         + (f", best {RECALL_MAX_MATCHES} shown" if len(scored) > RECALL_MAX_MATCHES else "")
         + "."
     ]
+    paged = False
     for _score, number, turn in scored[:RECALL_MAX_MATCHES]:
         lines.append("")
         lines.append(f"--- Turn {number} ---")
-        for label, text in (("User", turn.user), ("Assistant", turn.assistant)):
+        # A turn longer than one read: name where each passage starts, so
+        # the model reads that page instead of paging from the beginning.
+        long_turn = len(_turn_body(turn)) > RECALL_MAX_CHARS
+        for label, text, at in (
+            ("User", turn.user, len(_USER_LABEL)),
+            (
+                "Assistant",
+                turn.assistant,
+                len(_USER_LABEL) + len(turn.user) + len(_ASSISTANT_LABEL),
+            ),
+        ):
             if text and any(p.search(text.casefold()) for p in patterns):
-                lines.append(f"{label}: {_snippet(text, patterns)}")
+                start, snippet = _snippet(text, patterns)
+                where = f" (offset {at + start})" if long_turn else ""
+                paged = paged or long_turn
+                lines.append(f"{label}{where}: {snippet}")
         if not any(
             text and any(p.search(text.casefold()) for p in patterns)
             for text in (turn.user, turn.assistant)
@@ -860,11 +924,26 @@ def _search(turns: list[RecallTurn], query: str) -> str:
     lines.append(
         "Call recall_conversation with turns [N, N] to read a whole turn word "
         "for word."
+        + (
+            " A long turn shows an offset beside its passage: pass it with "
+            "turns [N] to start reading there."
+            if paged
+            else ""
+        )
     )
     return "\n".join(lines)
 
 
-def _read(turns: list[RecallTurn], first: int, last: int) -> str:
+def _read(
+    turns: list[RecallTurn], first: int, last: int, offset: int = 0
+) -> str:
+    """Turns ``first..last`` word for word, within ``RECALL_MAX_CHARS``.
+
+    The budget is shared evenly, so a long turn in a range is shown in
+    part; one turn read alone gets all of it, from ``offset`` on. A turn
+    shown in part says which characters it shows and ends with the exact
+    call that reads on — a turn of any length can be read to its end.
+    """
     chosen = [turn for turn in turns if first <= turn.number <= last]
     budget = RECALL_MAX_CHARS // max(1, len(chosen))
     lines = [
@@ -872,16 +951,25 @@ def _read(turns: list[RecallTurn], first: int, last: int) -> str:
         "(tool calls are named, not reproduced):"
     ]
     for turn in chosen:
+        body = _turn_body(turn)
+        start = offset if len(chosen) == 1 else 0
+        end = _page_end(body, start, budget)
         lines.append("")
-        lines.append(f"--- Turn {turn.number} ---")
-        body = f"User: {turn.user}\n\nAssistant: {turn.assistant or '(no text)'}"
-        if len(body) > budget:
-            body = (
-                body[:budget].rstrip()
-                + f"\n[… {len(body) - budget:,} more characters of this turn "
-                "not shown — read fewer turns per call to see them.]"
+        if start == 0 and end == len(body):
+            lines.append(f"--- Turn {turn.number} ---")
+            lines.append(body)
+        else:
+            lines.append(
+                f"--- Turn {turn.number} (characters {start + 1:,}–{end:,} of "
+                f"{len(body):,}) ---"
             )
-        lines.append(body)
+            lines.append(body[start:end].rstrip())
+            if end < len(body):
+                lines.append(
+                    f"[… {len(body) - end:,} more characters of turn "
+                    f"{turn.number} not shown — call recall_conversation with "
+                    f"turns [{turn.number}] and offset {end} to read on.]"
+                )
         tools = _tools_line(turn)
         if tools:
             lines.append(tools)
@@ -910,11 +998,21 @@ def recall_result(
         return ("recall_conversation: there are no condensed turns to read.", True)
     query = arguments.get("query")
     requested = arguments.get("turns")
+    offset = arguments.get("offset")
     if requested is not None and query:
         return (
             "recall_conversation: pass either `query` or `turns`, not both.",
             True,
         )
+    if offset is not None and (
+        isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
+    ):
+        return (
+            "recall_conversation: `offset` must be a whole number of "
+            "characters, 0 or more.",
+            True,
+        )
+    offset = offset or 0
     last_available = turns[-1].number
     if requested is not None:
         if (
@@ -943,8 +1041,28 @@ def recall_result(
                 "call; split the range.",
                 True,
             )
-        body = _read(turns, first, last)
+        if offset and first != last:
+            return (
+                "recall_conversation: `offset` reads on within one turn; pass "
+                "it with a single turn, e.g. turns [12].",
+                True,
+            )
+        if offset:
+            length = len(_turn_body(turns[first - 1]))
+            if offset >= length:
+                return (
+                    f"recall_conversation: turn {first} is {length:,} "
+                    f"characters long; `offset` must be below {length}.",
+                    True,
+                )
+        body = _read(turns, first, last, offset)
     elif isinstance(query, str) and query.strip():
+        if offset:
+            return (
+                "recall_conversation: `offset` reads on within one turn; pass "
+                "it with `turns`, not with `query`.",
+                True,
+            )
         if len(query) > RECALL_MAX_QUERY_CHARS:
             return (
                 f"recall_conversation: keep the query under "

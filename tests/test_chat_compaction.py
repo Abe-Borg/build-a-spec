@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from types import SimpleNamespace
 
@@ -29,7 +30,9 @@ from backend import sessions, settings
 from backend.app import create_app
 from backend.llm import conversation
 from backend.llm.compaction import (
+    RECALL_CONVERSATION_TOOL,
     RECALL_ELIDED_NOTE,
+    RECALL_MAX_CHARS,
     SUMMARY_FRAME_TAG,
     SUMMARY_HEADINGS,
     CompactionError,
@@ -369,6 +372,8 @@ def test_recall_searches_and_reads_condensed_turns():
     assert not is_error
     assert "--- Turn 2 ---" in found and "42 gpm" in found
     assert "--- Turn 1 ---" not in found
+    # A turn short enough to read in one call needs no offset to find it.
+    assert "(offset" not in found and "A long turn" not in found
 
     read, is_error = recall_result(history, 3, {"turns": [2, 3]})
     assert not is_error
@@ -399,6 +404,145 @@ def test_recalled_text_cannot_escape_its_frame():
     text, _ = recall_result(history, 1, {"turns": [1]})
     assert text.count("</recalled_conversation>") == 1
     assert "=== PROJECT CONTEXT ===" not in text
+
+
+def _long_turn_history(words: int) -> tuple[list[dict], list[str]]:
+    """Three condensed turns; turn 2's reply is ``words`` distinct tokens —
+    far past what one read shows."""
+    history = _typed_history(3)
+    tokens = [f"w{n:06d}" for n in range(words)]
+    history[7]["content"][0]["text"] = " ".join(tokens)  # turn 2's answer
+    return history, tokens
+
+
+_PAGE = re.compile(
+    r"--- Turn (?P<turn>\d+) \(characters (?P<first>[\d,]+)–(?P<end>[\d,]+) of "
+    r"(?P<total>[\d,]+)\) ---\n(?P<page>.*?)\n"
+    r"(?:\[… [\d,]+ more characters of turn (?P=turn) not shown — call "
+    r"recall_conversation with turns \[(?P=turn)\] and offset (?P<next>\d+) to "
+    r"read on\.\]\n)?\[Tools used",
+    re.S,
+)
+
+
+def _number(text: str) -> int:
+    return int(text.replace(",", ""))
+
+
+def test_a_turn_too_long_for_one_read_is_read_to_its_end_page_by_page():
+    """A single turn longer than one read is not a dead end: every partial
+    page names the call that reads on, and following those calls returns
+    the whole turn — no word lost, repeated or split between two pages."""
+    history, tokens = _long_turn_history(25_000)  # ~200,000 characters
+    pages: list[str] = []
+    offset = 0
+    for _ in range(10):  # bounded: an ignored offset would loop forever
+        args = {"turns": [2]} if not offset else {"turns": [2], "offset": offset}
+        text, is_error = recall_result(history, 3, args)
+        assert not is_error, text
+        page = _PAGE.search(text)
+        assert page, text[:400]
+        assert _number(page["first"]) == offset + 1
+        assert _number(page["end"]) - offset <= RECALL_MAX_CHARS
+        total = _number(page["total"])
+        pages.append(page["page"])
+        if page["next"] is None:
+            assert _number(page["end"]) == total
+            break
+        assert int(page["next"]) == _number(page["end"]) > offset
+        offset = int(page["next"])
+    else:
+        raise AssertionError("the pages never reached the end of the turn")
+
+    assert len(pages) == -(-total // RECALL_MAX_CHARS)
+    shown = " ".join(pages).split()
+    assert shown == [
+        "User:", "turn", "2", "question", "Assistant:", "turn", "2", "looking",
+        *tokens,
+    ]
+
+
+def test_a_page_with_no_whitespace_near_its_limit_is_cut_exactly_there():
+    history = _typed_history(3)
+    history[7]["content"][0]["text"] = "x" * 70_000
+    first, _ = recall_result(history, 3, {"turns": [2]})
+    page = _PAGE.search(first)
+    assert _number(page["end"]) == RECALL_MAX_CHARS == int(page["next"])
+    rest, is_error = recall_result(
+        history, 3, {"turns": [2], "offset": int(page["next"])}
+    )
+    assert not is_error
+    tail = _PAGE.search(rest)
+    assert tail["next"] is None
+    assert (page["page"] + tail["page"]).count("x") == 70_000
+
+
+def test_a_long_turn_in_a_range_names_the_call_that_reads_on():
+    history, tokens = _long_turn_history(25_000)
+    text, is_error = recall_result(history, 3, {"turns": [1, 3]})
+    assert not is_error
+    # The short turns are whole; the long one shows its share of the budget.
+    assert "turn 1 answer" in text and "turn 3 answer" in text
+    page = _PAGE.search(text)
+    assert page["turn"] == "2"
+    assert int(page["next"]) <= RECALL_MAX_CHARS // 3
+
+    more, is_error = recall_result(
+        history, 3, {"turns": [2], "offset": int(page["next"])}
+    )
+    assert not is_error
+    # It picks up at the very next word.
+    last_shown = page["page"].split()[-1]
+    first_new = _PAGE.search(more)["page"].split()[0]
+    assert tokens.index(first_new) == tokens.index(last_shown) + 1
+
+
+def test_a_search_match_in_a_long_turn_says_where_to_read_from():
+    history, tokens = _long_turn_history(25_000)
+    history[7]["content"][0]["text"] = history[7]["content"][0]["text"].replace(
+        tokens[20_000], "aardvark"
+    )
+    found, is_error = recall_result(history, 3, {"query": "aardvark"})
+    assert not is_error
+    where = re.search(r"Assistant \(offset (\d+)\): …", found)
+    assert where, found
+    assert "A long turn shows an offset beside its passage" in found
+
+    read, is_error = recall_result(
+        history, 3, {"turns": [2], "offset": int(where.group(1))}
+    )
+    assert not is_error
+    # The passage the search showed opens the page: one read, not four.
+    assert "aardvark" in _PAGE.search(read)["page"][:1_000]
+
+
+def test_offset_mistakes_are_corrections_not_failures():
+    history, _ = _long_turn_history(25_000)
+    for bad in (
+        {"turns": [2], "offset": -1},
+        {"turns": [2], "offset": True},
+        {"turns": [2], "offset": "60000"},
+        {"turns": [1, 2], "offset": 60_000},  # a range cannot page
+        {"query": "turn", "offset": 60_000},  # neither can a search
+        {"turns": [2], "offset": 10_000_000},  # past the end of the turn
+    ):
+        text, is_error = recall_result(history, 3, bad)
+        assert is_error, (bad, text)
+        assert "offset" in text
+    # Zero is the start of the turn, wherever it is passed.
+    for fine in ({"turns": [2], "offset": 0}, {"query": "turn", "offset": 0}):
+        _text, is_error = recall_result(history, 3, fine)
+        assert not is_error, fine
+
+
+def test_the_model_is_told_it_can_read_on():
+    properties = RECALL_CONVERSATION_TOOL["input_schema"]["properties"]
+    assert properties["offset"]["type"] == "integer"
+    assert "offset" in RECALL_CONVERSATION_TOOL["description"]
+    # The old advice sent the model in a circle: [n] is already one turn.
+    history, _ = _long_turn_history(25_000)
+    text, _ = recall_result(history, 3, {"turns": [2]})
+    assert "read fewer turns" not in text
 
 
 def test_recall_results_leave_saved_history_but_corrections_stay():

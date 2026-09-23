@@ -568,8 +568,10 @@ original back. Its first phase fixes the export that redline has to agree
 with, and it ships in v1.21.0. The redline itself (Phase 1, below) is
 built too: its backend is in v1.21.0, and its Export-menu item and *Open
 redline in Word* are on `master`, with no release entry yet — which release
-announces the redline is the owner's pick. Word's own "Moved" marks come
-next, so the program is still in progress.
+announces the redline is the owner's pick. So are fixes for the two losses
+Phase 1 recorded in the formatted export (links, and the level of a new
+sub-provision — below). Word's own "Moved" marks come next, so the program
+is still in progress.
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)
 
@@ -613,13 +615,14 @@ next, so the program is still in progress.
   the way the panel does**: a preserved table takes no letter, so the
   provision after it is "B.", not "C.".
 
-Still true: a provision whose paragraph holds a hyperlink, a field, a content
-control, a comment or footnote reference, a symbol or a drawing is rebuilt
-from its first run's formatting when you edit it, and so is a paragraph with
-pending tracked changes. Each export's diagnostics event (Settings →
-Developer tools) records the mode that ran and counts what the export did —
-provisions cloned, spliced, rebuilt by reason, added, preserved — never their
-text.
+Still true: a provision whose paragraph holds a field, a content control, a
+comment or footnote reference, a symbol or a drawing is rebuilt from its
+first run's formatting when you edit it, and so is a paragraph with pending
+tracked changes. (A hyperlink used to be on that list; see "Links and deeper
+provisions" below.) Each export's diagnostics event (Settings → Developer
+tools) records the mode that ran and counts what the export did — provisions
+cloned, spliced, rebuilt by reason, added, preserved, and new provisions
+given a numbering level of their own — never their text.
 
 ### The redline itself (Phase 1)
 
@@ -685,6 +688,50 @@ text.
   refused) and fetches `?redline=master&mode=preserved` from this launch's own
   server, with the same fresh temporary file, tutorial refusal and
   server-worded errors as *Open in Word*.
+
+### Links and deeper provisions (the two losses Phase 1 recorded)
+
+Both are on `master` with no release entry yet; the plan carries the
+release-note draft.
+
+- **A provision holding a hyperlink keeps it.** Editing or relettering such
+  a provision used to rebuild the whole paragraph from its first run: the
+  link became plain text, bold and italic went, and the tab after its letter
+  became a space. Links are now spliced like the rest of the paragraph — the
+  link, its target, its runs and their formatting stay on every word you did
+  not change, and the tab stays.
+- **A link never grows to cover words you added beside it.** Words typed
+  over words that are all inside one link stay in it (its display text
+  changes, its target does not), and words inserted between two of its
+  words go in it. Words added at a link's edge, or replacing words on both
+  sides of it, go outside every link — a replacement that runs into a link
+  lands in front of it, so a link is never split in two — and they never
+  borrow the link's blue underline.
+- **A link whose words you all deleted disappears** (a bookmark inside it
+  keeps it, empty). In the redline, deleted and inserted words inside a link
+  are marked inside the link, so Accept All and Reject All still give the
+  formatted export and your original.
+- **Still rebuilt from its first run:** a hyperlink holding anything but
+  runs, bookmarks and spelling marks — a field inside a link, a link inside
+  a link — along with the other cases listed above.
+- **A new sub-provision prints at its own level.** In a master whose
+  provisions Word numbers, a new provision nested deeper than any the master
+  already has at that depth — the first "1." under an "A.", say — was copied
+  from a shallower neighbour and kept that neighbour's numbering level, so
+  it printed one level up and re-imported as its parent's sibling. It now
+  takes its own level in the same list: the neighbour's, offset by how much
+  deeper it sits. Only a level the master's numbering defines with a
+  visible label, and draws as a provision rather than a PART or article
+  heading, is used; otherwise it keeps the neighbour's level (a label one
+  level up beats a provision printed with no number at all). A master with typed letters needs none of
+  this. The export's diagnostics event counts both outcomes (`level_offset`,
+  `level_kept`), and the redline's inserted copy is the same element, so its
+  Accept All matches.
+- **Where the numbering rides a paragraph style** (PR1, PR2, …), the new
+  provision keeps its neighbour's style and takes its level through its own
+  numbering properties: its number is right, and whether Word draws it at
+  the level's indent or the style's depends on how the master defines them.
+  `docs/RELEASE_WINDOWS.md` has the row that checks it in Word.
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -1941,13 +1988,16 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     source_render.py     appearance-preserving export: rebuilds the body from
                          the tree, cloning formatting from the retained upload
                          (untouched provisions byte-identical, edits spliced,
-                         section breaks kept with the content above them) —
+                         section breaks kept with the content above them, a
+                         new sub-provision numbered at its own Word level) —
                          and, from the same plan, the redline on your
                          original (every change a Word tracked change, its
                          Accept All / Reject All checked before return)
     source_splice.py     the word-level splice: an edit written into a
-                         paragraph's own runs — the clean export's words, and
-                         the redline's w:ins/w:del inside those same runs
+                         paragraph's own runs, hyperlinks included (a link
+                         never grows over words added beside it) — the clean
+                         export's words, and the redline's w:ins/w:del inside
+                         those same runs
     revisions.py         pure-XML Accept All / Reject All + the canonical
                          comparison: the redline's self-check and test oracle
     revision_marks.py    the revision writer: w:ins/w:del/w:pPrChange/

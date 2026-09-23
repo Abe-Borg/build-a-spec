@@ -1311,6 +1311,47 @@ def test_an_export_records_the_mode_that_ran_and_the_splice_counts(trace_env):
     assert "seismic" not in json.dumps(export)
 
 
+def test_an_export_counts_new_provisions_given_their_own_level(trace_env):
+    """A sub-provision deeper than any the Word-numbered master has is given
+    its own numbering level; the export event counts it (``level_offset``),
+    beside the ones the master's numbering could not number
+    (``level_kept``) — counts, never text."""
+    from tests.test_preserving_export import _import, _numbered_levels_master
+
+    client = TestClient(create_app())
+    _import(
+        client,
+        _numbered_levels_master(
+            {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3."), 3: ("decimal", "%4.")}
+        ),
+    )
+    doc = client.get("/api/doc").json()["doc"]
+    parent = doc["parts"][0]["articles"][0]["paragraphs"][0]["id"]
+    edit = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {"action": "add_paragraph", "target_id": parent, "text": "Snubbers."}
+            ]
+        },
+    )
+    assert edit.status_code == 200
+    assert client.get("/api/export/docx").status_code == 200
+
+    events = _wait_events(
+        lambda evs: any(
+            e["type"] == "export" and e.get("kind") == "docx" for e in evs
+        )
+    )
+    export = next(
+        e for e in events if e["type"] == "export" and e.get("kind") == "docx"
+    )
+    assert export["mode"] == "preserved"
+    assert export["render"]["level_offset"] == 1
+    assert export["render"]["level_kept"] == 0
+    assert "Snubbers" not in json.dumps(export)
+
+
 def test_a_redline_on_the_original_records_what_it_tracked(trace_env):
     """The redline's export event: the mode that ran (``preserved``), the
     redline asked for, and the counts of what was tracked — never text."""

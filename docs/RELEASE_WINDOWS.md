@@ -397,6 +397,44 @@ export; only Word proves Word agrees.
       redline in Word* is not offered, and *Redline of extracted provisions*
       still downloads.
 
+### Links and deeper provisions (redline program, Phase 1 follow-up)
+
+On a **real office master** whose provisions hold hyperlinks (a link to a
+referenced standard or to another section), in **real Word**. The suite
+proves the XML; only Word proves how a link and a numbering level look and
+behave.
+
+- [ ] **Edit a provision that holds a link**: reword a word outside the
+      link, and in another provision a word of the link's own text. Export
+      with *Export Word (keeps your formatting)*: each link is still a link —
+      clicking it goes where it went before — its text changed only where
+      you changed it, and the words around it keep their bold or italic. In
+      a master with typed letters, add a provision above one holding a link:
+      it is relettered and keeps its link and the tab after its letter.
+- [ ] **Add a word right after a link's text** (and, in another provision,
+      right before it): the new word is not blue or underlined and is not
+      part of the link — hovering it shows no link, and the link itself
+      still goes to the same place.
+- [ ] **Delete every word of a link**: nothing is left behind — no empty
+      link, nothing clickable, no stray underline.
+- [ ] **Redline on your original** of the same edits: Word shows a changed
+      word of a link's text as deleted and inserted inside the link; **Accept
+      All** leaves every surviving link working, and **Reject All** gives
+      back the original links, text and targets.
+- [ ] **Add the first sub-provision** under a provision of a Word-numbered
+      master — the first "1." under an "A." in a master that has none yet.
+      In the formatted export, and after Accept All in the redline, it
+      prints at its own level (indented under the "A.", in the master's
+      "1." format), not as the next letter beside its parent. Import the
+      export again: it comes back under its parent, not as its sibling.
+- [ ] **In a master whose numbering rides its paragraph styles** (PR1, PR2,
+      … — most office masters), do the same, and note where Word draws the
+      new sub-provision: at the level's own indent, or at its neighbour's
+      (the export keeps the neighbour's paragraph style and sets the level
+      on the paragraph; its number is right either way). Record what Word
+      does — it decides whether the export should also take the level's own
+      style.
+
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 
 - [ ] Attach one of each reference type — `.docx`, `.pdf`, `.txt`, `.xml`,

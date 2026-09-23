@@ -6,7 +6,12 @@
  * represented by the summary (which the user can read), everything below is
  * still sent word for word.
  */
-import type { ChatMessage, CompactionFacts } from "../types";
+import type {
+  ChatMessage,
+  CompactionFacts,
+  CompactionInfo,
+  CompactionStatus,
+} from "../types";
 
 /**
  * Where the divider goes: before the user message that starts turn
@@ -86,4 +91,84 @@ export function describeCompaction(facts: CompactionFacts): string {
     parts.push(`${facts.tokens_per_char.toFixed(3)} tokens/char`);
   }
   return parts.join(" · ");
+}
+
+/** The first wait before asking whether a background summary has landed,
+ *  and the longest wait between asks. A summary takes a minute or a few; the
+ *  status route is two small fields, so a few asks a minute cost nothing. */
+export const COMPACTION_POLL_FIRST_MS = 3_000;
+export const COMPACTION_POLL_MAX_MS = 20_000;
+
+/** The wait after `previous`: half as long again, up to the cap. */
+export function nextCompactionPollDelay(previous: number): number {
+  return Math.min(Math.round(previous * 1.5), COMPACTION_POLL_MAX_MS);
+}
+
+export interface CompactionFollowOptions {
+  /** One ask of the status route. */
+  fetchStatus: () => Promise<CompactionStatus>;
+  /** Called once, with the record as it stands, when the summary has
+   *  settled — landed, failed, or been dropped. */
+  onSettled: (compaction: CompactionInfo | null) => void;
+  /** False once the workspace this follow was started for has moved on: an
+   *  answer that arrives after that is dropped, and the asking stops. */
+  isCurrent: () => boolean;
+  /** The timer, injectable for tests. */
+  schedule?: (run: () => void, ms: number) => unknown;
+  cancel?: (handle: unknown) => void;
+}
+
+/**
+ * Ask until a background summary settles, then hand its record over once.
+ *
+ * A routine summary is written while the user reads the reply and usually
+ * lands after that turn's stream has closed, so no stream event can carry
+ * it. Only a settled answer is applied: an answer that still says "pending"
+ * changes nothing on screen, so an ask that raced a newer refresh cannot
+ * put an older record back. A failed ask keeps what is on screen and asks
+ * again. Returns the stop function — an effect's cleanup — after which
+ * nothing is asked or applied.
+ */
+export function followCompactionStatus(
+  options: CompactionFollowOptions,
+): () => void {
+  const schedule =
+    options.schedule ?? ((run: () => void, ms: number) => setTimeout(run, ms));
+  const cancel =
+    options.cancel ??
+    ((handle: unknown) =>
+      clearTimeout(handle as ReturnType<typeof setTimeout>));
+  let stopped = false;
+  let delay = COMPACTION_POLL_FIRST_MS;
+  let handle: unknown = undefined;
+
+  const ask = async (): Promise<void> => {
+    handle = undefined;
+    if (stopped) return;
+    let status: CompactionStatus | null = null;
+    try {
+      status = await options.fetchStatus();
+    } catch {
+      status = null;
+    }
+    if (stopped) return;
+    if (!options.isCurrent()) {
+      stopped = true;
+      return;
+    }
+    if (status && !status.pending) {
+      stopped = true;
+      options.onSettled(status.compaction);
+      return;
+    }
+    delay = nextCompactionPollDelay(delay);
+    handle = schedule(() => void ask(), delay);
+  };
+
+  handle = schedule(() => void ask(), delay);
+  return () => {
+    stopped = true;
+    if (handle !== undefined) cancel(handle);
+    handle = undefined;
+  };
 }

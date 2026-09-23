@@ -734,6 +734,64 @@ def test_the_summary_is_adopted_between_turns_never_during_one(monkeypatch):
     )
 
 
+def test_a_summary_that_lands_after_its_turn_is_announced_to_the_chat(monkeypatch):
+    """The summary usually finishes after its turn's stream has closed, so
+    no ``compaction`` event can carry it (Codex review, PR #189). The doc
+    payload the client re-syncs from says one is on its way, and the status
+    route — two small fields, never the text — answers until it lands."""
+    _enable(monkeypatch, threshold=4_500, keep_turns=1)
+    release = threading.Event()
+    fake = _Routed(_chat_turns(3), [_summary_turn()], gate=release)
+    _patch_client(monkeypatch, fake)
+    client = _client()
+    session = sessions.get_session()
+    nothing = {"ok": True, "pending": False, "compaction": None}
+    assert client.get("/api/doc").json()["compaction_pending"] is False
+    assert client.get("/api/chat/compaction/status").json() == nothing
+
+    _grow(client, 3)  # the third turn's commit starts the summary...
+    assert fake.summary_started.wait(5)  # ...which is held open
+    # The turn is over — this is the refresh the client makes next.
+    assert client.get("/api/doc").json()["compaction_pending"] is True
+    assert client.get("/api/chat/compaction/status").json() == {
+        "ok": True,
+        "pending": True,
+        "compaction": None,
+    }
+
+    release.set()
+    assert session.compaction_runner.wait(10)
+    # Adopted with no stream open: the next ask carries the record.
+    status = client.get("/api/chat/compaction/status").json()
+    assert status["pending"] is False
+    assert status["compaction"] == compaction_payload(session.compaction)
+    assert status["compaction"]["covers_turns"] == 2
+    assert "summary" not in status["compaction"]
+    assert client.get("/api/doc").json()["compaction_pending"] is False
+    # The client asks every few seconds while one is pending: a poll, kept
+    # out of the trace like every other.
+    from backend import app as app_module
+
+    assert "/api/chat/compaction/status" in app_module._QUIET_PATHS
+
+
+def test_a_summary_that_fails_in_the_background_stops_the_asking(monkeypatch):
+    # A refusal is not "still on its way": a client that kept asking would
+    # ask forever. Nothing is adopted, and nothing is pending.
+    _enable(monkeypatch, threshold=4_500, keep_turns=1)
+    bad = text_turn(["<summary>Just a paragraph.</summary>"])
+    fake = _Routed(_chat_turns(3), [bad])
+    _patch_client(monkeypatch, fake)
+    client = _client()
+    _grow(client, 3)
+    assert sessions.get_session().compaction_runner.wait(10)
+    assert client.get("/api/chat/compaction/status").json() == {
+        "ok": True,
+        "pending": False,
+        "compaction": None,
+    }
+
+
 def test_a_bad_summary_is_refused_billed_and_retried_later(monkeypatch):
     _enable(monkeypatch, threshold=4_500, keep_turns=1)
     bad = text_turn(

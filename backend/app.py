@@ -312,6 +312,9 @@ _QUIET_PATHS = frozenset(
         "/api/research/status",
         "/api/readiness",
         "/api/usage",
+        # Asked every few seconds while a background summary is on its way
+        # (compaction plan Phase 3) — never while nothing is pending.
+        "/api/chat/compaction/status",
     }
 )
 
@@ -1678,6 +1681,13 @@ def _preserved_chrome(session) -> tuple[str, ...]:
     return tuple(getattr(format_map, "header_footer_text", ()) or ())
 
 
+def _compaction_pending(session: Any) -> bool:
+    """Whether a background summary is running, or finished and waiting to
+    be adopted — i.e. the chat's divider may still move without a turn."""
+    runner = getattr(session, "compaction_runner", None)
+    return bool(runner is not None and runner.busy())
+
+
 def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
     """Build the full document payload.
 
@@ -1772,6 +1782,19 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # and after — what the chat draws its divider from. Never the
         # summary text, which can be long; GET /api/chat/compaction returns
         # it when the user asks to read it.
+        #
+        # ``compaction_pending`` says a background summary is still on its
+        # way: it usually lands after the turn's stream has closed, adopted
+        # with no stream left to announce it, so the chat asks the cheap
+        # status route (GET /api/chat/compaction/status) until it settles.
+        # The two fields agree when read under the guard — adoption settles
+        # the runner and swaps the record in one critical section — and
+        # every route the chat re-syncs from holds it (GET /api/doc, the
+        # status route, the session bundle, undo/redo/edit). The unguarded
+        # builders cannot race it: a project load installs a fresh runner,
+        # and an import bumps the generation, so a summary still running
+        # then is dropped at adoption rather than swapped in.
+        "compaction_pending": _compaction_pending(session),
         "compaction": compaction_payload(getattr(session, "compaction", None)),
         # Import honesty/recovery metadata. Native .baspec packages carry the
         # source as a separate binary member; legacy JSON remains source-less.
@@ -4260,6 +4283,31 @@ def create_app(
                     **(compaction_payload(record) or {}),
                     "summary": record.summary,
                 },
+            }
+        )
+
+    @app.get("/api/chat/compaction/status")
+    def chat_compaction_status() -> JSONResponse:
+        """Whether a background summary is still on its way, and the record.
+
+        A routine summary is written on a daemon thread while the user reads
+        the reply, and usually finishes after that turn's stream has closed:
+        it is adopted into the session with no stream left to announce it.
+        The chat asks this — two small fields, never the summary text —
+        while the document payload says one is pending, so the divider moves
+        when the summary lands rather than a turn later. Both are read under
+        the guard: adoption settles the runner and swaps the record in one
+        critical section, so the pair is never half-updated.
+        """
+        session = sessions.get_session()
+        with session.session_state_guard():
+            pending = _compaction_pending(session)
+            record = session.compaction
+        return JSONResponse(
+            {
+                "ok": True,
+                "pending": pending,
+                "compaction": compaction_payload(record),
             }
         )
 

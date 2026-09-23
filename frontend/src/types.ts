@@ -986,6 +986,10 @@ export interface DocPayload {
    *  nothing has been condensed. Never carries the summary text itself;
    *  `getCompactionSummary()` fetches that on demand. */
   compaction?: CompactionInfo | null;
+  /** A background summary is running, or finished and waiting to be
+   *  adopted — the divider may still move without a turn, so the chat asks
+   *  `getCompactionStatus()` until it settles. */
+  compaction_pending?: boolean;
   lint: LintIssue[];
   standards: StandardInfo[];
   profile_complete: boolean;
@@ -2155,6 +2159,15 @@ export interface CompactionInfo {
  *  fetched only when the user asks to read it. */
 export interface CompactionSummary extends CompactionInfo {
   summary: string;
+}
+
+/** `GET /api/chat/compaction/status`: whether a background summary is still
+ *  on its way, and the record as it stands. The chat asks this while the
+ *  document payload says one is pending — a summary usually lands after its
+ *  turn's stream has closed, with no stream left to announce it. */
+export interface CompactionStatus {
+  pending: boolean;
+  compaction: CompactionInfo | null;
 }
 
 /** The background summary runner, as `/api/diagnostics` reports it. */

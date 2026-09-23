@@ -1,6 +1,7 @@
 import type {
   BriefRefreshResult,
   CompactionInfo,
+  CompactionStatus,
   CompactionSummary,
   DiagnosticsActivity,
   DiagnosticsLog,
@@ -1216,6 +1217,20 @@ export async function getCompactionSummary(): Promise<CompactionSummary> {
     throw new Error(data.error ?? `summary failed (${resp.status})`);
   }
   return data.compaction as CompactionSummary;
+}
+
+/** Whether a background summary is still on its way, and the record now —
+ *  two small fields, never the summary text. */
+export async function getCompactionStatus(): Promise<CompactionStatus> {
+  const resp = await fetch("/api/chat/compaction/status");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `status failed (${resp.status})`);
+  }
+  return {
+    pending: data.pending === true,
+    compaction: (data.compaction ?? null) as CompactionInfo | null,
+  };
 }
 
 /* --- Research (Phase 4) --- */

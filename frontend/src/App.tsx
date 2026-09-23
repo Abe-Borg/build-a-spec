@@ -55,6 +55,7 @@ import {
   editDoc,
   fetchQcDebrief,
   fetchResearchDebrief,
+  getCompactionStatus,
   getDoc,
   getDocCapabilitiesStatus,
   getDocDiff,
@@ -99,6 +100,7 @@ import {
 } from "./lib/api";
 import type { HarvestCommitInput, ProjectFactInput } from "./lib/api";
 import { createLatestAnswer } from "./lib/latestAnswer";
+import { followCompactionStatus } from "./lib/compaction";
 import {
   emptyDebriefQueue,
   rememberDebrief,
@@ -187,6 +189,10 @@ export default function App() {
   // `compaction` event carry it; the chat draws a divider from it. The
   // transcript on screen is never condensed — only what the model is sent.
   const [compaction, setCompaction] = useState<CompactionInfo | null>(null);
+  // A background summary is still on its way (the doc payload says so): it
+  // usually lands after its turn's stream has closed, so the chat asks the
+  // status route until it settles — see the effect below refreshDoc.
+  const [compactionPending, setCompactionPending] = useState(false);
   // Established project facts and this session's place in its project
   // (v1.17.0). Like the follow-ups, never cleared at turn start: the ledger
   // persists until a fact is retired, which is the whole point of it.
@@ -562,6 +568,7 @@ export default function App() {
         setOpenItems(payload.open_questions);
         setFollowups(payload.followups ?? []);
         setCompaction(payload.compaction ?? null);
+        setCompactionPending(payload.compaction_pending ?? false);
         setProjectFacts(payload.project_facts ?? []);
         setProjectLink(payload.project_link ?? null);
         setHarvestStatus(payload.harvest ?? null);
@@ -586,6 +593,26 @@ export default function App() {
         if (workspaceEpochRef.current === epoch) setDoc(null);
       });
   }, [adoptWorkspaceLease]);
+
+  // A routine summary is written in the background while the user reads the
+  // reply, and usually lands after that turn's stream has closed — adopted
+  // on the server with no stream left to announce it (Codex review, PR
+  // #189). While one is on its way, and no turn is streaming (a turn
+  // re-syncs the divider itself, at its start and its end), ask the cheap
+  // status route until it settles, so the divider appears when the summary
+  // does rather than a turn later.
+  useEffect(() => {
+    if (!compactionPending || busy) return;
+    const epoch = workspaceEpochRef.current;
+    return followCompactionStatus({
+      fetchStatus: getCompactionStatus,
+      isCurrent: () => workspaceEpochRef.current === epoch,
+      onSettled: (record) => {
+        setCompaction(record);
+        setCompactionPending(false);
+      },
+    });
+  }, [compactionPending, busy]);
 
   const acceptQcSnapshot = useCallback((
     value: QcSnapshot,
@@ -1948,6 +1975,7 @@ export default function App() {
     setOpenItems([]);
     setFollowups([]);
     setCompaction(null);
+    setCompactionPending(false);
     setProjectFacts([]);
     setProjectLink(null);
     setHarvestStatus(null);
@@ -2016,6 +2044,7 @@ export default function App() {
     open_questions: OpenItem[];
     followups: FollowUp[];
     compaction?: CompactionInfo | null;
+    compaction_pending?: boolean;
     project_facts?: ProjectFact[];
     project_link?: ProjectLink | null;
     harvest?: HarvestStatus;
@@ -2042,6 +2071,7 @@ export default function App() {
     setOpenItems(payload.open_questions);
     setFollowups(payload.followups ?? []);
     setCompaction(payload.compaction ?? null);
+    setCompactionPending(payload.compaction_pending ?? false);
     setProjectFacts(payload.project_facts ?? []);
     setProjectLink(payload.project_link ?? null);
     setHarvestStatus(payload.harvest ?? null);
@@ -2088,6 +2118,7 @@ export default function App() {
         // A seeded or practice session's own (usually absent) summary — a
         // bundle that dropped it would keep the outgoing chat's divider.
         compaction: merged.compaction ?? null,
+        compaction_pending: merged.compaction_pending ?? false,
         project_facts: merged.project_facts ?? [],
         project_link: merged.project_link ?? null,
         // The seeded section's own (zero) reply count: without it, a

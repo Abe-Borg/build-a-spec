@@ -12,14 +12,26 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { deleteReference, getCompactionSummary } from "../src/lib/api.ts";
 import {
+  deleteReference,
+  getCompactionStatus,
+  getCompactionSummary,
+} from "../src/lib/api.ts";
+import {
+  COMPACTION_POLL_FIRST_MS,
+  COMPACTION_POLL_MAX_MS,
   compactTokens,
   condensedDividerIndex,
   condensedTurnsLabel,
   describeCompaction,
+  followCompactionStatus,
 } from "../src/lib/compaction.ts";
-import type { ChatMessage, CompactionFacts } from "../src/types.ts";
+import type {
+  ChatMessage,
+  CompactionFacts,
+  CompactionInfo,
+  CompactionStatus,
+} from "../src/types.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (...parts: string[]) =>
@@ -223,6 +235,223 @@ test("a reference delete hands back the record it left, or none", async (t) => {
   // An older server that never sent the key reads as nothing condensed.
   globalThis.fetch = respond(undefined);
   assert.equal((await deleteReference("ref-1")).compaction, null);
+});
+
+// --- Asking until a background summary lands -------------------------------
+
+const RECORD: CompactionInfo = {
+  covers_turns: 12,
+  created_at: "2026-09-23T00:00:00Z",
+  tokens_before: 610_000,
+  tokens_after: 95_000,
+  trigger: "background",
+  summary_chars: 9_000,
+};
+
+/** A timer the test drives by hand: nothing runs until `fire()`. */
+function manualClock() {
+  const queue: { run: () => void; ms: number; id: number }[] = [];
+  let next = 0;
+  return {
+    schedule: (run: () => void, ms: number) => {
+      next += 1;
+      queue.push({ run, ms, id: next });
+      return next;
+    },
+    cancel: (id: unknown) => {
+      const at = queue.findIndex((entry) => entry.id === id);
+      if (at >= 0) queue.splice(at, 1);
+    },
+    waiting: () => queue.length,
+    /** Run the next scheduled ask and let its answer settle. */
+    async fire(): Promise<number> {
+      const entry = queue.shift();
+      assert.ok(entry, "nothing was scheduled");
+      entry.run();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return entry.ms;
+    },
+  };
+}
+
+test("it asks until the summary lands, then hands the record over once", async () => {
+  const clock = manualClock();
+  const answers: CompactionStatus[] = [
+    { pending: true, compaction: null },
+    { pending: true, compaction: null },
+    { pending: false, compaction: RECORD },
+  ];
+  let asked = 0;
+  const settled: (CompactionInfo | null)[] = [];
+  followCompactionStatus({
+    fetchStatus: async () => answers[asked++],
+    isCurrent: () => true,
+    onSettled: (record) => settled.push(record),
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  });
+
+  // Nothing is asked at once — the summary has only just started.
+  assert.equal(asked, 0);
+  const waits = [await clock.fire(), await clock.fire(), await clock.fire()];
+  assert.equal(waits[0], COMPACTION_POLL_FIRST_MS);
+  assert.ok(waits[1] > waits[0] && waits[2] > waits[1], "the asks slow down");
+  // A "pending" answer changes nothing on screen; the settled one lands once.
+  assert.deepEqual(settled, [RECORD]);
+  assert.equal(clock.waiting(), 0, "no ask after it settled");
+});
+
+test("the asks slow down to a cap, and a failed summary settles too", async () => {
+  const clock = manualClock();
+  let asked = 0;
+  const settled: (CompactionInfo | null)[] = [];
+  followCompactionStatus({
+    fetchStatus: async () =>
+      ++asked < 12 ? { pending: true, compaction: null } : { pending: false, compaction: null },
+    isCurrent: () => true,
+    onSettled: (record) => settled.push(record),
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  });
+  let longest = 0;
+  while (clock.waiting()) longest = Math.max(longest, await clock.fire());
+  assert.equal(longest, COMPACTION_POLL_MAX_MS);
+  // A refused summary is "not pending" with no record: the asking stops.
+  assert.deepEqual(settled, [null]);
+});
+
+test("a dropped ask keeps what is on screen and asks again", async () => {
+  const clock = manualClock();
+  let asked = 0;
+  const settled: (CompactionInfo | null)[] = [];
+  followCompactionStatus({
+    fetchStatus: async () => {
+      asked += 1;
+      if (asked === 1) throw new Error("network");
+      return { pending: false, compaction: RECORD };
+    },
+    isCurrent: () => true,
+    onSettled: (record) => settled.push(record),
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  });
+  await clock.fire();
+  assert.deepEqual(settled, [], "a failure is not an answer");
+  assert.equal(clock.waiting(), 1, "and it asks again");
+  await clock.fire();
+  assert.deepEqual(settled, [RECORD]);
+});
+
+test("stopping, or a workspace that moved on, drops the answer", async () => {
+  // Stopped before the first ask: nothing is ever asked.
+  let clock = manualClock();
+  let asked = 0;
+  const stopEarly = followCompactionStatus({
+    fetchStatus: async () => {
+      asked += 1;
+      return { pending: false, compaction: RECORD };
+    },
+    isCurrent: () => true,
+    onSettled: () => assert.fail("a stopped follow must not apply"),
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  });
+  stopEarly();
+  assert.equal(clock.waiting(), 0);
+  assert.equal(asked, 0);
+
+  // Stopped while an ask is in flight (a turn started): its answer is dropped.
+  clock = manualClock();
+  let answer!: (status: CompactionStatus) => void;
+  const stopMidAsk = followCompactionStatus({
+    fetchStatus: () => new Promise<CompactionStatus>((resolve) => (answer = resolve)),
+    isCurrent: () => true,
+    onSettled: () => assert.fail("an answer after stop must not apply"),
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  });
+  await clock.fire();
+  stopMidAsk();
+  answer({ pending: false, compaction: RECORD });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(clock.waiting(), 0);
+
+  // The workspace changed (a new session, a project opened) mid-ask.
+  clock = manualClock();
+  let current = true;
+  followCompactionStatus({
+    fetchStatus: async () => {
+      current = false;
+      return { pending: false, compaction: RECORD };
+    },
+    isCurrent: () => current,
+    onSettled: () => assert.fail("another workspace's record must not apply"),
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  });
+  await clock.fire();
+  assert.equal(clock.waiting(), 0, "and the asking stops");
+});
+
+test("the status client reads the two fields and reports a refusal", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  let url = "";
+  globalThis.fetch = async (input) => {
+    url = String(input);
+    return new Response(
+      JSON.stringify({ ok: true, pending: true, compaction: null }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  assert.deepEqual(await getCompactionStatus(), { pending: true, compaction: null });
+  assert.equal(url, "/api/chat/compaction/status");
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ok: true, pending: false, compaction: RECORD }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  assert.deepEqual(await getCompactionStatus(), { pending: false, compaction: RECORD });
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ok: false, error: "stale workspace" }), {
+      status: 409,
+      headers: { "Content-Type": "application/json" },
+    });
+  await assert.rejects(getCompactionStatus(), /stale workspace/);
+});
+
+test("App asks while a summary is pending and no turn is streaming", () => {
+  const app = read("App.tsx");
+  const at = app.indexOf("followCompactionStatus({");
+  assert.ok(at > 0, "App follows the status route");
+  const effect = app.slice(app.lastIndexOf("useEffect(() => {", at), at + 500);
+  // Only while one is on its way, and never during a turn — a turn re-syncs
+  // the divider itself at its start and its end.
+  assert.match(effect, /if \(!compactionPending \|\| busy\) return;/);
+  assert.match(effect, /fetchStatus: getCompactionStatus/);
+  assert.match(effect, /isCurrent: \(\) => workspaceEpochRef\.current === epoch/);
+  assert.match(effect, /setCompaction\(record\);\s*setCompactionPending\(false\);/);
+  assert.match(effect, /\}, \[compactionPending, busy\]\);/);
+  // Every payload path carries the flag the effect keys on.
+  const refreshDoc = app.slice(
+    app.indexOf("const refreshDoc = useCallback("),
+    app.indexOf("const refreshDoc = useCallback(") + 1600,
+  );
+  assert.match(refreshDoc, /setCompactionPending\(payload\.compaction_pending \?\? false\)/);
+  const apply = app.slice(
+    app.indexOf("const applyDocPayload = ("),
+    app.indexOf("const applySessionBundle = "),
+  );
+  assert.match(apply, /setCompactionPending\(payload\.compaction_pending \?\? false\)/);
+  const clear = app.slice(
+    app.indexOf("const clearSessionState = () => {"),
+    app.indexOf("const startBlankSession = "),
+  );
+  assert.match(clear, /setCompactionPending\(false\)/);
 });
 
 test("App carries the record through every payload path", () => {

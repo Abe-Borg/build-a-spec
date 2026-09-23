@@ -1396,6 +1396,46 @@ def test_a_redline_on_the_original_records_what_it_tracked(trace_env):
     assert "seismic" not in json.dumps(export)
 
 
+def test_a_native_move_is_counted_in_the_redline_event(trace_env, monkeypatch):
+    """Phase 2 (PR B): the redline block says which rendering ran
+    (``native_moves``), how many moves carry Word's own "Moved" marks
+    (``moves_native``) and why each other one does not (``moves_fallback``,
+    by reason) — counts only, never text."""
+    from backend import settings
+    from tests.test_preserving_export import _import
+    from tests.test_redline_original import _numbered_master
+
+    monkeypatch.setattr(settings, "REDLINE_NATIVE_MOVES", True)
+    client = TestClient(create_app())
+    _import(client, _numbered_master())
+    doc = client.get("/api/doc").json()["doc"]
+    moved = doc["parts"][0]["articles"][0]["paragraphs"][2]["id"]
+    edit = client.post(
+        "/api/doc/edit",
+        json={"ops": [{"action": "move", "target_id": moved, "position": 0}]},
+    )
+    assert edit.status_code == 200
+    response = client.get(
+        "/api/export/docx", params={"redline": "master", "mode": "preserved"}
+    )
+    assert response.status_code == 200
+
+    events = _wait_events(
+        lambda evs: any(
+            e["type"] == "export" and e.get("redline") == "master" for e in evs
+        )
+    )
+    export = next(
+        e for e in events if e["type"] == "export" and e.get("redline") == "master"
+    )
+    tracked = export["render"]["redline"]
+    assert tracked["native_moves"] is True
+    assert tracked["moves_native"] == 1
+    assert tracked["moves_fallback"] == {}
+    assert tracked["moved"] == 1
+    assert "isolators" not in json.dumps(export)
+
+
 def test_a_refused_redline_records_the_check_and_the_first_mismatch(
     trace_env, monkeypatch
 ):

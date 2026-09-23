@@ -74,7 +74,12 @@ Windows suite where a hidden Word accepts and rejects every change and the
 result must match Word's own save of the formatted export or the upload —
 plus a corpus recipe that records Word's own tracked moves as evidence;
 its as-built note is "Phase 2 (PR A) — as built". PR B, native Word "Moved"
-marks, starts after PR A merges and the owner has run the judge on Windows.
+marks, is built too — without the owner's Windows run of the judge or Word's
+own tracked-move sample, which the plan had made its gate: the owner waived
+that gate on 2026-09-23 (the plan's Decision 8; waived, not passed). The
+native moves ship behind `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` (on by default,
+`0` is the Phase 1 rendering byte for byte), and "Phase 2 (PR B) — as built"
+lists what the first Word run should check. No release entry yet.
 The program adds a
 tracked-changes copy of the Word file you imported: every non-body part stays
 byte-identical, Reject All gives back the upload, and Accept All gives

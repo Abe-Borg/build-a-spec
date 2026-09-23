@@ -344,9 +344,19 @@ records that paragraph's formatting as a tracked formatting change whose side
 in that resolution is empty: what is left sets nothing, and an empty last
 paragraph that sets anything is a difference like any other. No bookmark name
 may appear twice in the redline, and every other package member must be
-byte-identical. If any check fails the route returns a 409 naming it, and the
-`export` diagnostics event records the check and the first mismatching
-element — its position and element names only, never text.
+byte-identical. When the redline carries Word's own "Moved" marks (below), a
+structural check of the moves runs too (`revisions.move_range_problem`): no
+revision id used twice or equal to a bookmark's, every move name pairing one
+moved-from range with one moved-to range, every range closed, no two ranges
+of one kind overlapping, and moved content only inside a range of its own
+kind — a moved paragraph's mark, which is the paragraph's end, included. If
+any check fails the route returns a 409 naming it, and the `export`
+diagnostics event records the check and the first mismatching element — its
+position and element names only, never text; a failed move check is
+`package_check_failed` with `detail.move_check` naming the problem. (A
+native-move rendering that fails any check is first rendered again without
+Moved marks, so a move check never reaches the route while the other half
+passes.)
 
 **Each element is decided against the upload, through the format map.** The
 plan the clean export renders (`_Assembler.plan()` — kept, spliced, inserted,
@@ -362,6 +372,7 @@ holder leaves) is the same plan the redline renders:
 | deleted, dropped | nothing | its runs deleted (`w:t` → `w:delText`, `w:instrText` → `w:delInstrText`), its paragraph mark deleted |
 | a table inserted or deleted | the table / nothing | every row flagged (`w:trPr/w:ins` or `w:del`), every cell's content marked |
 | the body's LAST paragraph, inserted or deleted | as above | its runs marked; its paragraph mark cannot be tracked, so its formatting is recorded instead (`w:pPrChange`, and `w:rPrChange` on the mark) with the empty side where the paragraph goes, and the one empty paragraph Word leaves there is plain |
+| a PURE move (kept or carried content, moved; native moves on) | the element at its new position | where it was: its runs and paragraph mark `w:moveFrom`; where it is: `w:moveTo`; the two ranges named alike (below) |
 
 The word-level changes are the splice's own edit script
 (`source_splice.render_redline` beside `render_clean`, over the same pieces),
@@ -398,8 +409,69 @@ the deleted old copy gives them up, because a file must never carry one
 bookmark name twice — which is the Reject-All exception above: Reject All
 restores a moved provision's text and formatting at its old position, but not
 its bookmarks (Word recreates `_GoBack` itself, and a TOC update restores
-`_Toc` anchors). The self-check excludes exactly those names. Word's own
-"Moved" marks are Phase 2.
+`_Toc` anchors). The self-check excludes exactly those names.
+
+**A pure move is Word's own "Moved" marks** (Phase 2, PR B; the
+`BUILD_A_SPEC_REDLINE_NATIVE_MOVES` switch, on by default — the export route
+reads it per request, and `render_preserving_redline(native_moves=)` defaults
+to off, so `spec_doc` reads no settings). Detection does not change: the same
+diff and the same body-level chain decide what moved, including the moves a
+section break forces (`moves_added`). What changes is how a move whose element
+renders UNCHANGED at its new position — a clean clone, never a splice — is
+written:
+
+* where it was, every run it held is wrapped in `w:moveFrom` and its paragraph
+  mark flagged `w:moveFrom` (the flag first in `w:pPr/w:rPr`, like any mark
+  revision); where it is, `w:moveTo` the same way. Moved-away text stays
+  `w:t`: ECMA-376 Part 1 §17.3.3.7 reserves `w:delText` for `w:del`, its
+  `w:moveFrom` example (§17.13.5.22) holds `w:t`, and so does every
+  Word-authored move checked. The wrappers go inside a hyperlink, never
+  around one, exactly as `w:ins`/`w:del` do;
+* each move is a NAMED range on each side (`w:moveFromRangeStart` /
+  `w:moveToRangeStart` carrying `w:id`, `w:author`, `w:date` and `w:name`;
+  the end carrying the start's `w:id` only — §17.13.5.23, .24, .27, .28). A
+  name pairs exactly one moved-from range with one moved-to range. The start
+  goes inside the first moved paragraph, right after its properties, and the
+  end BETWEEN paragraphs, right after the last one — Word's own shape (the
+  Open-XML-PowerTools RP015 sample Word wrote, and LibreOffice's tdf104797
+  and tdf123460), which keeps every moved paragraph mark inside the range, as
+  §17.13.5.21 and .26 require. A provision moved with its sub-provisions, or a
+  run of siblings moved together — consecutive moves whose old copies are
+  consecutive too, in the same order — is ONE named move, so Word shows one;
+* every id comes from the export's one counter, above everything already in
+  the package: Word itself numbers bookmarks, revisions and move ranges from
+  one counter, and a name is `move` and digits, unique in the file (Word
+  keeps names to 40 characters — [MS-OI29500] §2.1.340 applying §2.1.356(b));
+* the moved-away copy gives its bookmarks and `w14` ids up to the moved-here
+  copy exactly as the deleted old copy does, so D-6's one Reject-All limit is
+  unchanged, and so is the `moved_annotation` refusal.
+
+Everything else keeps the deletion-plus-insertion rendering, counted by
+reason in the `export` event (`redline.moves_fallback`; `moves_native` counts
+the native ones, `native_moves` says which rendering ran): `edited` (the
+element changed as well — in a typed-letter master a moved provision usually
+takes a new letter, which is an edit), `section_break` (a moved provision
+holding a section break: its old copy is the emptied holder, D-3),
+`last_paragraph` (either copy is the body's last paragraph, whose mark Word
+cannot track), `locked` (a table or other preserved block — a table row has no
+move element), `markup` (anything but runs of text, tabs, breaks, hyphens and
+symbols, bookmarks, proofing marks and hyperlinks holding the same: a field,
+a drawing, a text box, a content control, math — [MS-OI29500] §2.1.338(b)
+says Word treats a move in math as an insertion and a deletion anyway), and
+`self_check`. **Native moves never add a refusal:** a native rendering that
+fails any check is rendered again with native moves off, the moves counted as
+`self_check`, before anything is refused; switched off, the redline is the
+Phase 1 rendering byte for byte.
+
+Unverified in Word (the owner waived the real-Word gate for this, 2026-09-23;
+the first Word run should check these): that Word removes a moved-away
+paragraph whole on Accept All, and a moved-here one on Reject All
+([MS-OI29500] §2.1.337(a)/§2.1.342(a) say Word *ignores* the paragraph-mark
+`w:moveFrom`/`w:moveTo`, so Word must take the mark from the range around it —
+the shape Word itself writes); that the Reviewing Pane shows one "Moved" entry
+per name; that a range spanning several whole body paragraphs (Word's table
+samples span four) opens without a repair prompt; and that Word accepts a
+move name of this spelling.
 
 **No tracked change ever deletes a paragraph mark that holds a section break**
 (Accept All would merge two Word sections). A deleted or moved provision that
@@ -549,9 +621,13 @@ failed self-check and fails the judge.
 The same suite has Word resolve **its own** tracked moves — the Word-saved
 sample the corpus producer's TrackedMove recipe makes
 ([DOCX_FIDELITY_CORPUS.md](DOCX_FIDELITY_CORPUS.md)) — and requires the app's
-resolver (`revisions.accept_all`/`reject_all`, which Phase 2's native moves
-lean on) to give what Word gives, recording where the moved paragraph's
-bookmark lands each way.
+resolver (`revisions.accept_all`/`reject_all`, which the native moves lean
+on) to give what Word gives, recording where the moved paragraph's bookmark
+lands each way. The judge renders exactly as the route does, switch included
+(`settings.REDLINE_NATIVE_MOVES`), and its targeted groups cover every native
+shape: one move, a move with children, a block of siblings, two named moves,
+a move beside an edit, a move holding a link, a moved bookmark, a
+style-numbered master and a move a section break forced.
 
 ## Distinct user-visible contracts
 
@@ -562,7 +638,7 @@ bookmark lands each way.
 | Source-preserving patched DOCX | `GET /api/export/docx?mode=source` after a proven-safe body change | Clone of the imported package | Only approved `word/document.xml` text slices or numbered-island paragraph spans change. Unchanged member payloads, local records, inter-record gaps, archive comment, and trailing bytes remain exact. Central-directory records change only for the replacement metadata and required local-header offsets. The proposed output is independently audited before return. |
 | Appearance-preserving DOCX | `GET /api/export/docx?mode=preserved`, and the default for an imported document that has released the byte-exact claim (i.e. every import) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical. Untouched provisions are byte-identical elements; edited ones keep their paragraph properties and their own runs (unchanged words keep their formatting); preserved blocks are verbatim; section breaks survive every edit. See the section above. |
 | Normalized DOCX | `GET /api/export/docx?mode=normalized` | Current SectionFormat tree | Generates a new DOCX with Build-a-Spec styles, schedules, and genuine Word automatic numbering. It does not preserve source-package formatting or opaque parts. Fresh projects default to this mode. |
-| Redline on your original | `GET /api/export/docx?redline=master&mode=preserved`, and the default for a bare `redline=master` whenever it is available (`preserved_redline_available`) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical (Track Changes is not switched on). Every change since the import is a native Word tracked change by "Build-a-Spec", dated at export. Accept All gives exactly the appearance-preserving export; Reject All gives the upload's body back (a moved provision's bookmarks excepted). Both are checked before the file is returned, and a failure is a 409 naming the check. It never adds tracked changes to the retained source. See the section above. |
+| Redline on your original | `GET /api/export/docx?redline=master&mode=preserved`, and the default for a bare `redline=master` whenever it is available (`preserved_redline_available`) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical (Track Changes is not switched on). Every change since the import is a native Word tracked change by "Build-a-Spec", dated at export. Accept All gives exactly the appearance-preserving export; Reject All gives the upload's body back (a moved provision's bookmarks excepted). A provision moved unchanged is Word's own "Moved" marks (`w:moveFrom`/`w:moveTo`, paired by name), switchable off. Both are checked before the file is returned, and a failure is a 409 naming the check. It never adds tracked changes to the retained source. See the section above. |
 | Normalized redline | `GET /api/export/docx?redline=master&mode=normalized` (and a bare `redline=master` when the redline on the original is unavailable), or `GET /api/export/docx?redline=version&base=N` | Semantic baseline/version and current SectionFormat tree | Generates a new DOCX containing Word `w:ins`/`w:del` markup. It is a semantic provision redline, not a source-package redline. It never adds tracked changes to the retained source. |
 
 Redline display labels remain positional literal text so a move or a preceding

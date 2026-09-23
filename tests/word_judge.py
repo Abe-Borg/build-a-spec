@@ -345,12 +345,13 @@ class JudgeBatch:
 
 
 def _moved_bookmarks(redline: bytes) -> frozenset[str]:
-    """Bookmarks inside content an ``w:ins`` wraps: on a moved copy."""
+    """Bookmarks inside content a ``w:ins`` or ``w:moveTo`` wraps: on a
+    moved copy."""
     names = set()
     for start in word_body(redline).iter(_W_BOOKMARK_START):
         for ancestor in start.iterancestors():
             if (
-                ancestor.tag == f"{{{_W}}}ins"
+                ancestor.tag in (f"{{{_W}}}ins", f"{{{_W}}}moveTo")
                 and ancestor.getparent() is not None
                 and ancestor.getparent().tag != _W_RPR
             ):
@@ -361,7 +362,11 @@ def _moved_bookmarks(redline: bytes) -> frozenset[str]:
 
 def build_judge_cases(group: JudgeGroup, workspace: Path) -> JudgeBatch:
     """Import the group's upload once and render every edit's redline and
-    formatted export — exactly as the app does, author and all."""
+    formatted export — exactly as the app does, author and all, and with the
+    switch the export route passes (``settings.REDLINE_NATIVE_MOVES``, read
+    per call): Word judges the file a user would get."""
+    from backend import settings
+
     workspace.mkdir(parents=True, exist_ok=True)
     upload = group.upload(workspace)
     master = workspace / "upload.docx"
@@ -380,6 +385,7 @@ def build_judge_cases(group: JudgeGroup, workspace: Path) -> JudgeBatch:
                 author=JUDGE_AUTHOR,
                 date=JUDGE_DATE,
                 stats=stats,
+                native_moves=settings.REDLINE_NATIVE_MOVES,
             )
         except SourceRedlineError as exc:
             cases.append(RefusedCase(name, exc.reason))
@@ -476,7 +482,11 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
     section breaks), emptied section-break holders (and their numbering
     cancel), hyperlinks, a field, the fallback, the untrackable last
     paragraph, a leading page break, front matter, a picture, a bold mark,
-    row properties, and Track Changes already on."""
+    row properties, and Track Changes already on — and Word's own "Moved"
+    marks (Phase 2, PR B): one move, a move with children, a block of
+    siblings, two named moves, a move beside an edit, a move holding a
+    link, a moved bookmark, a style-numbered master and a move a section
+    break forced."""
     from tests import test_redline_original as matrix
     from tests.test_import_office_master import _office_master
     from tests.test_preserving_export import (
@@ -833,6 +843,60 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
             "targeted/bookmarked",
             upload(matrix._bookmarked_master),
             (("move-bookmarked", _edit(_move_provision(1, 0))),),
+        ),
+        # Word's own "Moved" marks (Phase 2, PR B): every native shape, on
+        # masters Word numbers itself — a typed letter would reletter a moved
+        # provision, an edit that keeps the Phase 1 rendering.
+        JudgeGroup(
+            "targeted/native-moves",
+            upload(matrix._numbered_family_master),
+            (
+                ("move-one", _edit(_move_provision(4, 0))),
+                ("move-with-children", _edit(_move_provision(0, 2))),
+                (
+                    "move-block-of-siblings",
+                    _edit(
+                        _move_provision(3, 0),
+                        lambda s: _move_provision(len(_article(s).paragraphs) - 1, 1)(s),
+                    ),
+                ),
+                (
+                    "two-separate-moves",
+                    _edit(_move_provision(4, 0), _move_provision(2, 4)),
+                ),
+                (
+                    "move-beside-an-edit",
+                    _edit(
+                        _move_provision(4, 0),
+                        _replace(2, "Related requirements are in Division 22."),
+                    ),
+                ),
+            ),
+        ),
+        JudgeGroup(
+            "targeted/native-move-link",
+            upload(matrix._numbered_family_master, link=True),
+            (("move-with-link", _edit(_move_provision(2, 0))),),
+        ),
+        JudgeGroup(
+            "targeted/native-move-bookmark",
+            upload(matrix._numbered_family_master, bookmark=True),
+            (("move-bookmarked", _edit(_move_provision(1, 0))),),
+        ),
+        JudgeGroup(
+            "targeted/native-move-style-numbered",
+            upload(matrix._style_numbered_master),
+            (("move-one", _edit(_move_provision(1, 0))),),
+        ),
+        JudgeGroup(
+            "targeted/native-move-two-breaks",
+            upload(matrix._numbered_two_break_master),
+            (
+                (
+                    "reverse-across-breaks",
+                    _edit(_move_provision(2, 0), lambda s: _move_provision(1, 2)(s)),
+                ),
+            ),
         ),
     ]
     return tuple(groups)

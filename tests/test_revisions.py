@@ -11,11 +11,13 @@ import pytest
 from lxml import etree
 
 from backend.spec_doc.revisions import (
+    MOVE_PROBLEMS,
     accept_all,
     canonical_body,
     duplicate_bookmark_names,
     first_difference,
     has_revisions,
+    move_range_problem,
     reject_all,
 )
 
@@ -134,6 +136,190 @@ def test_move_wrappers_resolve_like_insertions_and_deletions():
     assert _texts(accept_all(body)) == ["new"]
     assert _texts(reject_all(body)) == ["old"]
     assert not has_revisions(accept_all(body))
+
+
+def _moved_paragraph(side: str, text: str, *, flag: int, wrapper: int, start: str = "") -> str:
+    """One paragraph of a native move: its mark flagged ``w:<side>``, its
+    run in a ``w:<side>`` wrapper and — optionally — its range's start right
+    after its properties (where Word writes it)."""
+    return (
+        f"<w:p><w:pPr><w:rPr><w:{side} {_rev(flag)}/></w:rPr></w:pPr>{start}"
+        f"<w:{side} {_rev(wrapper)}><w:r><w:t>{text}</w:t></w:r></w:{side}></w:p>"
+    )
+
+
+def _range(side: str, edge: str, identifier: int, name: str = "move1") -> str:
+    if edge == "Start":
+        return f"<w:{side}RangeStart {_rev(identifier)} w:name='{name}'/>"
+    return f"<w:{side}RangeEnd w:id='{identifier}'/>"
+
+
+def _word_move(first: str = "B. Moved.", *, stays: str = "A. Stays.") -> str:
+    """Word's own shape for a whole paragraph moved below another (the
+    Open-XML-PowerTools RP015 sample, which Word wrote): each range opens
+    inside the moved paragraph and closes BETWEEN paragraphs, after it, so
+    the paragraph's mark is inside the range."""
+    return (
+        _moved_paragraph("moveFrom", first, flag=1, wrapper=2, start=_range("moveFrom", "Start", 3))
+        + _range("moveFrom", "End", 3)
+        + f"<w:p><w:r><w:t>{stays}</w:t></w:r></w:p>"
+        + _moved_paragraph("moveTo", first, flag=4, wrapper=5, start=_range("moveTo", "Start", 6))
+        + _range("moveTo", "End", 6)
+    )
+
+
+def test_a_moved_paragraph_resolves_to_one_copy_either_way():
+    """Phase 2 (PR B): a whole paragraph moved. Accept All keeps the copy
+    where it was moved to — the moved-away copy goes, mark and all, and
+    leaves no empty paragraph behind — and Reject All keeps the one where it
+    was. Neither leaves a range marker or a flag."""
+    body = _body(_word_move() + "<w:p><w:r><w:t>C. Last.</w:t></w:r></w:p>")
+    accepted, rejected = accept_all(body), reject_all(body)
+    assert _texts(accepted) == ["A. Stays.", "B. Moved.", "C. Last."]
+    assert _texts(rejected) == ["B. Moved.", "A. Stays.", "C. Last."]
+    for resolved in (accepted, rejected):
+        assert not has_revisions(resolved)  # the flags and markers went too
+    assert move_range_problem(body) is None
+
+
+def test_one_named_range_may_span_several_moved_paragraphs():
+    """A provision and its two children, moved as one: one name, one range
+    each side, opened in the first paragraph and closed after the last."""
+    moved_from = (
+        _moved_paragraph("moveFrom", "A. Parent.", flag=1, wrapper=2, start=_range("moveFrom", "Start", 20))
+        + _moved_paragraph("moveFrom", "1. Child one.", flag=3, wrapper=4)
+        + _moved_paragraph("moveFrom", "2. Child two.", flag=5, wrapper=6)
+        + _range("moveFrom", "End", 20)
+    )
+    moved_to = (
+        _moved_paragraph("moveTo", "A. Parent.", flag=7, wrapper=8, start=_range("moveTo", "Start", 21))
+        + _moved_paragraph("moveTo", "1. Child one.", flag=9, wrapper=10)
+        + _moved_paragraph("moveTo", "2. Child two.", flag=11, wrapper=12)
+        + _range("moveTo", "End", 21)
+    )
+    stay = "<w:p><w:r><w:t>B. Stays.</w:t></w:r></w:p>"
+    body = _body(moved_from + stay + moved_to + "<w:p><w:r><w:t>End.</w:t></w:r></w:p>")
+    assert _texts(accept_all(body)) == [
+        "B. Stays.",
+        "A. Parent.",
+        "1. Child one.",
+        "2. Child two.",
+        "End.",
+    ]
+    assert _texts(reject_all(body)) == [
+        "A. Parent.",
+        "1. Child one.",
+        "2. Child two.",
+        "B. Stays.",
+        "End.",
+    ]
+    assert move_range_problem(body) is None
+
+
+def test_deleted_text_inside_a_move_from_comes_back_on_reject():
+    """The schema lets a ``w:moveFrom`` run hold ``w:delText``
+    (``CT_RunTrackChange`` takes any run content), though ECMA-376 §17.3.3.7
+    reserves it for ``w:del``, Word never writes it, and LibreOffice's
+    tdf#165933 fix calls it invalid; the writer writes ``w:t``. The oracle
+    reads it either way: Reject All restores ordinary text and Accept All
+    removes it."""
+    body = _body(
+        f"<w:p>{_range('moveFrom', 'Start', 9)}"
+        f"<w:moveFrom {_rev(1)}><w:r><w:delText>old</w:delText></w:r></w:moveFrom>"
+        f"{_range('moveFrom', 'End', 9)}"
+        f"<w:r><w:t> kept</w:t></w:r></w:p>"
+    )
+    assert _texts(accept_all(body)) == [" kept"]
+    rejected = reject_all(body)
+    assert _texts(rejected) == ["old kept"]
+    assert rejected.find(f".//{{{W}}}delText") is None
+
+
+@pytest.mark.parametrize(
+    ("broken", "problem"),
+    [
+        # Two revisions sharing an id.
+        (lambda xml: xml.replace('w:id="5"', 'w:id="2"'), "duplicate_id"),
+        # A range start without a name.
+        (lambda xml: xml.replace("w:name='move1'", "", 1), "unnamed_range"),
+        # A name carried by a moved-from range and no moved-to one.
+        (lambda xml: xml.replace("w:name='move1'", "w:name='other'", 1), "unpaired_name"),
+        # A range never closed.
+        (lambda xml: xml.replace("<w:moveToRangeEnd w:id='6'/>", ""), "unclosed_range"),
+        # An end with no start of its kind.
+        (
+            lambda xml: xml.replace(
+                "<w:moveToRangeEnd w:id='6'/>", "<w:moveFromRangeEnd w:id='6'/>"
+            ),
+            "stray_range_end",
+        ),
+    ],
+    ids=["duplicate-id", "unnamed", "unpaired", "unclosed", "stray-end"],
+)
+def test_the_move_check_names_a_broken_range(broken, problem):
+    assert move_range_problem(_body(_word_move())) is None
+    assert move_range_problem(_body(broken(_word_move()))) == problem
+    assert problem in MOVE_PROBLEMS
+
+
+def test_a_range_closed_inside_its_paragraph_leaves_the_mark_outside():
+    """A paragraph's mark is its END, so a range that closes inside the
+    paragraph — after its words, before its mark — moves the words and not
+    the mark: non-conformant (ECMA-376 §17.13.5.21). Word closes a
+    whole-paragraph move between paragraphs."""
+    closed_inside = _word_move().replace(
+        "</w:moveFrom></w:p><w:moveFromRangeEnd w:id='3'/>",
+        "</w:moveFrom><w:moveFromRangeEnd w:id='3'/></w:p>",
+    )
+    assert closed_inside != _word_move()
+    assert move_range_problem(_body(closed_inside)) == "content_outside_range"
+
+
+def test_moved_content_outside_its_range_is_a_problem():
+    """A wrapper past its range's end, and a flagged mark on a paragraph no
+    range reaches: both are content outside a range."""
+    outside = _body(
+        f"<w:p>{_range('moveFrom', 'Start', 3)}{_range('moveFrom', 'End', 3)}"
+        f"<w:moveFrom {_rev(2)}><w:r><w:t>B.</w:t></w:r></w:moveFrom></w:p>"
+        + _moved_paragraph("moveTo", "B.", flag=4, wrapper=5, start=_range("moveTo", "Start", 6))
+        + _range("moveTo", "End", 6)
+    )
+    assert move_range_problem(outside) == "content_outside_range"
+    unreached = _body(
+        _word_move() + f"<w:p><w:pPr><w:rPr><w:moveTo {_rev(7)}/></w:rPr></w:pPr></w:p>"
+    )
+    assert move_range_problem(unreached) == "content_outside_range"
+
+
+def test_two_ranges_of_one_kind_may_not_overlap():
+    """"If multiple move source containers surround the same text, the
+    document is non-conformant" (ECMA-376 §17.13.5.24)."""
+    overlapping = _body(
+        f"<w:p>{_range('moveFrom', 'Start', 3)}{_range('moveFrom', 'Start', 7, 'move2')}"
+        f"<w:moveFrom {_rev(2)}><w:r><w:t>B.</w:t></w:r></w:moveFrom>"
+        f"{_range('moveFrom', 'End', 3)}{_range('moveFrom', 'End', 7)}</w:p>"
+        f"<w:p>{_range('moveTo', 'Start', 6)}<w:moveTo {_rev(5)}><w:r><w:t>B.</w:t></w:r></w:moveTo>"
+        f"{_range('moveTo', 'End', 6)}{_range('moveTo', 'Start', 8, 'move2')}{_range('moveTo', 'End', 8)}</w:p>"
+    )
+    assert move_range_problem(overlapping) == "overlapping_ranges"
+
+
+def test_a_move_id_may_not_be_a_bookmark_id():
+    """Bookmarks and move ranges share Word's one id counter (every
+    Word-authored move sample numbers them in one sequence)."""
+    body = _body(
+        _word_move()
+        + "<w:p><w:bookmarkStart w:id='3' w:name='_Ref1'/><w:bookmarkEnd w:id='3'/></w:p>"
+    )
+    assert move_range_problem(body) == "duplicate_id"
+
+
+def test_a_body_without_moves_has_no_move_problem():
+    body = _body(
+        "<w:p><w:bookmarkStart w:id='1' w:name='_Ref1'/><w:r><w:t>x</w:t></w:r>"
+        f"<w:bookmarkEnd w:id='1'/></w:p><w:p><w:ins {_rev(2)}><w:r><w:t>y</w:t></w:r></w:ins></w:p>"
+    )
+    assert move_range_problem(body) is None
 
 
 # ---------------------------------------------------------------------------

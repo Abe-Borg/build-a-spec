@@ -462,6 +462,55 @@ $env:BUILD_A_SPEC_WORD_JUDGE = "1"
       app's resolver. Record where the report says the moved bookmark
       landed each way.
 
+### Word's own "Moved" marks (redline program, Phase 2 PR B)
+
+Built before anyone ran the judge above on Windows (the owner waived that
+gate on 2026-09-23), so these rows, and the judge's `targeted/native-move*`
+groups, are the first time Word sees them. On a **Word-numbered** master
+(Word draws its own numbers, so a move there changes no text), in **real
+Word**, from the **packaged** app. The switch is
+`BUILD_A_SPEC_REDLINE_NATIVE_MOVES`, on by default.
+
+- [ ] **A moved provision shows as Moved.** Move one provision up past two
+      others (nothing else), and in another article move a provision that
+      has sub-provisions. Export → *Redline on your original*. The file
+      opens with **no repair prompt**; the Reviewing Pane lists each move
+      as a **Moved** change by Build-a-Spec — one entry per move, the
+      provision and its sub-provisions as ONE move — and the page shows it
+      green (double strikethrough where it was, double underline where it
+      is, with a "Moved" balloon in the margin on a Word that shows them).
+      Nothing is shown as an ordinary deletion or insertion.
+- [ ] **Accept All and Reject All** of that file (Review → Accept → Accept
+      All Changes, then undo and Reject All Changes): Accept All gives
+      exactly what *Export Word (keeps your formatting)* gives for the same
+      edits, with no empty paragraph where a provision moved from; Reject
+      All gives your original back, with no empty paragraph where one moved
+      to. (The judge's `targeted/native-moves` group checks the same with
+      Word's own save; this row is the eye check that the pane and the page
+      agree with it.)
+- [ ] **In a master with typed letters**, move a provision: it shows as a
+      deletion and an insertion (its letter changed with its position), and
+      a provision's sub-provisions moved with it show as Moved.
+- [ ] **With the switch off** the same move shows as a deletion where it was
+      and an insertion where it is, exactly as in Phase 1. Quit the app,
+      then start it from a terminal with the switch set (here from the build
+      folder; the installed app's own path works the same) — in PowerShell:
+
+      ```powershell
+      $env:BUILD_A_SPEC_REDLINE_NATIVE_MOVES = "0"
+      .\dist\BuildASpec\BuildASpec.exe
+      ```
+
+      in Command Prompt:
+
+      ```bat
+      set BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0
+      .\dist\BuildASpec\BuildASpec.exe
+      ```
+
+      Export the redline again: no Moved marks. Accept All and Reject All
+      give the same two files as above.
+
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 
 - [ ] Attach one of each reference type — `.docx`, `.pdf`, `.txt`, `.xml`,

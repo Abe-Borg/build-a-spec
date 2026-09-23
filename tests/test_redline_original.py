@@ -176,6 +176,26 @@ def _assert_schema_order(body) -> None:
         flagged = [i for i, t in enumerate(tags) if t in flags]
         others = [i for i, t in enumerate(tags) if t not in flags and t != qn("w:trPrChange")]
         assert all(f > o for f in flagged for o in others), tags
+    for custom in body.iter(qn("w:customXml")):  # its properties lead it
+        tags = [c.tag for c in custom if isinstance(c.tag, str)]
+        assert qn("w:customXmlPr") not in tags[1:], tags
+
+
+#: The revision wrappers that hold content; a paragraph-mark or row flag of
+#: the same name is empty, so it is never anyone's ancestor.
+_CONTENT_WRAPPERS = frozenset(
+    qn(f"w:{name}") for name in ("ins", "del", "moveFrom", "moveTo")
+)
+
+
+def _wrapped_custom_xml(body) -> list:
+    """Every inline ``w:customXml`` with a revision wrapper among its
+    ancestors: the one shape the schema allows and Word refuses to load."""
+    return [
+        element
+        for element in body.iter(qn("w:customXml"))
+        if any(a.tag in _CONTENT_WRAPPERS for a in element.iterancestors())
+    ]
 
 
 def _inserted_bookmarks(body) -> set[str]:
@@ -258,6 +278,10 @@ def _verify(
     assert all(r.get(qn("w:author")) == AUTHOR for r in revisions)
     assert all(r.get(qn("w:date")) == DATE for r in revisions)
     _assert_schema_order(r_body)
+
+    # Word will not load a tracked change holding inline custom XML
+    # ([MS-OI29500] §2.1.188(a)) — which neither resolution above can see.
+    assert _wrapped_custom_xml(r_body) == []
 
     # No tracked change ever deletes (or moves away) a mark holding a
     # section break.
@@ -1130,6 +1154,317 @@ def test_a_complex_field_in_a_rewritten_provision_is_deleted_as_runs(tmp_path):
     )
     redline, _ = _verify(source, imported, section)
     assert _body(redline).find(f".//{qn('w:delInstrText')}") is not None
+
+
+# ---------------------------------------------------------------------------
+# Inline custom XML: Word will not load one inside a tracked change
+# ---------------------------------------------------------------------------
+
+_XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+
+
+def _append_custom_xml(container, text: str):
+    """An inline ``w:customXml`` (smart-document markup around a term), its
+    properties first, holding one run of ``text``, appended to
+    ``container``."""
+    custom = etree.SubElement(container, qn("w:customXml"))
+    custom.set(qn("w:uri"), "urn:example:spec")
+    custom.set(qn("w:element"), "term")
+    attribute = etree.SubElement(etree.SubElement(custom, qn("w:customXmlPr")), qn("w:attr"))
+    attribute.set(qn("w:name"), "kind")
+    attribute.set(qn("w:val"), "equipment")
+    text_node = etree.SubElement(etree.SubElement(custom, qn("w:r")), qn("w:t"))
+    text_node.text = text
+    text_node.set(_XML_SPACE, "preserve")
+    return custom
+
+
+def _custom_xml_master(*, numbered: bool = False, held: bool = False) -> bytes:
+    """Provision A of 1.1 (of three) holds a term in inline custom XML, and
+    so does a cell of the 1.2 schedule. Typed letters by default; ``numbered`` makes
+    the provisions Word-numbered (so a move clones A verbatim instead of
+    relettering it); ``held`` gives A a section break of its own.
+
+    Word removes custom XML markup when it opens a file and has since 2010,
+    so a Word-saved master never holds one; other producers still write it.
+    The importer does not read text inside it (it mirrors python-docx), so
+    the tree has A as "Section includes for mechanical equipment." — none of
+    these rows depends on that."""
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    if numbered:
+        _define_numbering(
+            document, 60, {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3.")}
+        )
+        _numbered(document, "SUMMARY", 1, "60")
+        provision = _numbered(document, "Section includes ", 2, "60")
+    else:
+        document.add_paragraph("1.1\tSUMMARY")
+        provision = document.add_paragraph()
+        provision.add_run("A.\tSection includes ")
+    _append_custom_xml(provision._p, "vibration isolation")
+    provision.add_run(" for mechanical equipment.")
+    if held:
+        _hold_break(provision, document)
+    if numbered:
+        _numbered(document, "Related requirements are specified elsewhere.", 2, "60")
+        _numbered(document, "Provide seismic restraints.", 2, "60")
+        _numbered(document, "SCHEDULE", 1, "60")
+    else:
+        document.add_paragraph("B.\tRelated requirements are specified elsewhere.")
+        document.add_paragraph("C.\tProvide seismic restraints.")
+        document.add_paragraph("1.2\tSCHEDULE")
+    table = document.add_table(rows=2, cols=2)
+    table.rows[0].cells[0].text = "Equipment"
+    table.rows[0].cells[1].text = "Deflection"
+    _append_custom_xml(table.rows[1].cells[0].paragraphs[0]._p, "AHU-1")
+    table.rows[1].cells[1].text = "1 inch"
+    if numbered:
+        _numbered(document, "Provide isolators as scheduled.", 2, "60")
+    else:
+        document.add_paragraph("A.\tProvide isolators as scheduled.")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def _custom_xml_provision(section):
+    return section.parts[0].articles[0].paragraphs[0]
+
+
+def _custom_xml_schedule(section):
+    return next(
+        p for p in section.parts[0].articles[1].paragraphs if p.locked == "table"
+    )
+
+
+#: row → (master options, the edit, which wrappers sit INSIDE a custom XML
+#: element afterwards, and a stat the row must reach).
+_CUSTOM_XML_ROWS = {
+    "deleted": (
+        {},
+        lambda s: [{"action": "delete", "target_id": _custom_xml_provision(s).uid}],
+        {"del"},
+        ("deleted", 1),
+    ),
+    "edited": (
+        {},
+        lambda s: [
+            {
+                "action": "replace",
+                "target_id": _custom_xml_provision(s).uid,
+                "text": "Section includes seismic isolation for mechanical equipment.",
+            }
+        ],
+        {"del"},
+        ("fallback", 1),
+    ),
+    "moved": (
+        {"numbered": True},
+        lambda s: [
+            # Below both siblings, so A — not a sibling — is what moved.
+            {"action": "move", "target_id": _custom_xml_provision(s).uid, "position": 2}
+        ],
+        {"del", "ins"},
+        ("moved", 1),
+    ),
+    "schedule-deleted": (
+        {},
+        lambda s: [{"action": "delete", "target_id": _custom_xml_schedule(s).uid}],
+        {"del"},
+        ("deleted", 1),
+    ),
+    "break-holder-deleted": (
+        {"held": True},
+        lambda s: [{"action": "delete", "target_id": _custom_xml_provision(s).uid}],
+        {"del"},
+        ("leftovers", 1),
+    ),
+}
+
+
+@pytest.mark.parametrize("native", [False, True], ids=["phase-1", "native-moves"])
+@pytest.mark.parametrize("row", sorted(_CUSTOM_XML_ROWS))
+def test_inline_custom_xml_is_tracked_from_inside_never_wrapped(tmp_path, row, native):
+    """[MS-OI29500] §2.1.188(a): "Word will fail to load a file if ins, del,
+    moveTo, or moveFrom contains inline customXml." The schema allows it,
+    and the self-check's resolvers read it fine, so nothing else would
+    notice. The writer keeps the element outside every wrapper and tracks
+    what is inside it, the way it tracks a hyperlink's runs: deleted,
+    edited (the fallback — the splice cannot map custom XML), moved (both
+    copies), in a deleted table's cell, and as an emptied break holder.
+    Every row keeps the whole promise (``_verify``), and no ``w:customXml``
+    has a ``w:ins``/``w:del``/``w:moveFrom``/``w:moveTo`` ancestor — with
+    Word's own "Moved" marks on too (the app's default), where a paragraph
+    holding custom XML never travels as a native move: it keeps this
+    rendering (``moves_fallback["markup"]``)."""
+    options, edits, tracked_inside, (stat, minimum) = _CUSTOM_XML_ROWS[row]
+    source = _custom_xml_master(**options)
+    imported = _parse(tmp_path, source)
+    section = _edit(imported.section, *edits(imported.section))
+    redline, stats = _verify(source, imported, section, native_moves=native)
+    assert stats["redline"][stat] >= minimum, stats["redline"]
+    if native:
+        assert stats["redline"]["moves_native"] == 0
+        assert stats["redline"]["moves_fallback"] == (
+            {"markup": 1} if row == "moved" else {}
+        )
+    body = _body(redline)
+    elements = list(body.iter(qn("w:customXml")))
+    assert elements, "the custom XML elements are part of the redline"
+    assert not [
+        e
+        for e in elements
+        if any(
+            a.tag in (qn("w:ins"), qn("w:del"), qn("w:moveFrom"), qn("w:moveTo"))
+            for a in e.iterancestors()
+        )
+    ]
+    inside = {
+        etree.QName(child).localname
+        for element in elements
+        for child in element
+        if child.tag in _CONTENT_WRAPPERS
+    }
+    assert inside == tracked_inside, inside
+    for element in elements:
+        assert element[0].tag == qn("w:customXmlPr")
+        assert element[0].find(f".//{qn('w:del')}") is None
+
+
+@pytest.mark.parametrize("holder", ["sdt", "smartTag"])
+def test_custom_xml_inside_content_wrapped_whole_is_refused_by_name(tmp_path, holder):
+    """An inline content control or smart tag is wrapped whole, so custom XML
+    inside one would sit inside the wrapper — and cannot be moved out of it.
+    That is refused by name (``untrackable_markup``, a structural refusal)
+    rather than written as a file Word will not open."""
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL", "1.1\tSUMMARY"):
+        document.add_paragraph(line)
+    provision = document.add_paragraph()
+    provision.add_run("A.\tSee ")
+    wrapper = etree.SubElement(provision._p, qn(f"w:{holder}"))
+    if holder == "sdt":
+        etree.SubElement(wrapper, qn("w:sdtPr"))
+        inner = etree.SubElement(wrapper, qn("w:sdtContent"))
+    else:
+        wrapper.set(qn("w:uri"), "urn:example:tags")
+        wrapper.set(qn("w:element"), "place")
+        inner = wrapper
+    _append_custom_xml(inner, "the client standard")
+    provision.add_run(" for isolators.")
+    document.add_paragraph("B.\tRelated requirements are specified elsewhere.")
+    document.add_paragraph("END OF SECTION")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+    section = _edit(imported.section, {"action": "delete", "target_id": first.uid})
+    with pytest.raises(SourceRedlineError) as caught:
+        _verify(source, imported, section)
+    assert caught.value.reason == "untrackable_markup"
+    assert caught.value.reason in STRUCTURAL_REFUSALS
+    assert caught.value.detail == {"tag": "customXml"}
+    assert "cannot be shown as a tracked change" in str(caught.value)
+
+
+def test_the_writer_tracks_custom_xml_from_inside_and_leaves_its_properties_alone():
+    """``delete_content``/``insert_content`` directly: the element stays in
+    its container, its ``w:customXmlPr`` stays first and unwrapped, and its
+    content — nested custom XML and a hyperlink included — is wrapped
+    where it sits."""
+    from backend.spec_doc.revision_marks import (
+        RevisionMarks,
+        delete_content,
+        insert_content,
+    )
+
+    for mark, tag in ((delete_content, "del"), (insert_content, "ins")):
+        paragraph = etree.fromstring(
+            f'<w:p xmlns:w="{W}"><w:pPr/><w:r><w:t>See </w:t></w:r>'
+            "<w:customXml w:element='term'><w:customXmlPr/>"
+            "<w:r><w:t>the </w:t></w:r>"
+            "<w:customXml w:element='inner'><w:r><w:t>client</w:t></w:r></w:customXml>"
+            "<w:hyperlink w:anchor='x'><w:r><w:t> standard</w:t></w:r></w:hyperlink>"
+            "</w:customXml></w:p>"
+        )
+        mark(paragraph, RevisionMarks(author=AUTHOR, date=DATE))
+        assert _wrapped_custom_xml(paragraph) == []
+        outer = paragraph.find(qn("w:customXml"))
+        assert [etree.QName(c).localname for c in outer] == [
+            "customXmlPr",
+            tag,
+            "customXml",
+            "hyperlink",
+        ]
+        assert [etree.QName(c).localname for c in outer.find(qn("w:customXml"))] == [tag]
+        assert outer.find(qn("w:hyperlink"))[0].tag == qn(f"w:{tag}")
+        text = "delText" if tag == "del" else "t"
+        assert [t.text for t in outer.iter(qn(f"w:{text}"))] == [
+            "the ",
+            "client",
+            " standard",
+        ]
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "<w:sdt><w:sdtPr/><w:sdtContent>{cx}</w:sdtContent></w:sdt>",
+        "<w:smartTag w:element='place'>{cx}</w:smartTag>",
+        "<w:r><w:pict><w:txbxContent><w:p>{cx}</w:p></w:txbxContent></w:pict></w:r>",
+    ],
+    ids=["content-control", "smart-tag", "text-box"],
+)
+def test_the_writer_refuses_custom_xml_inside_what_it_wraps_whole(inner):
+    from backend.spec_doc.revision_marks import (
+        RevisionMarks,
+        UntrackableContent,
+        delete_content,
+        insert_content,
+    )
+
+    custom = "<w:customXml w:element='term'><w:r><w:t>x</w:t></w:r></w:customXml>"
+    for mark in (delete_content, insert_content):
+        paragraph = etree.fromstring(
+            f'<w:p xmlns:w="{W}">{inner.format(cx=custom)}</w:p>'
+        )
+        with pytest.raises(UntrackableContent) as caught:
+            mark(paragraph, RevisionMarks(author=AUTHOR, date=DATE))
+        assert (caught.value.reason, caught.value.tag) == ("untrackable_markup", "customXml")
+
+
+def test_the_self_check_refuses_custom_xml_inside_a_tracked_change(tmp_path, monkeypatch):
+    """Defence in depth under the writer: were custom XML ever wrapped again
+    (the pre-fix writer, reinstated here), both resolutions would still pass
+    — the markup resolves fine — so the file checks the shape itself and
+    refuses to hand over what Word will not open."""
+    from backend.spec_doc import revision_marks
+
+    monkeypatch.setattr(revision_marks, "_DESCEND", frozenset({qn("w:hyperlink")}))
+    monkeypatch.setattr(revision_marks, "_check", lambda _child: None)
+    source = _custom_xml_master()
+    imported = _parse(tmp_path, source)
+    section = _edit(
+        imported.section,
+        {"action": "delete", "target_id": _custom_xml_provision(imported.section).uid},
+    )
+    with pytest.raises(SourceRedlineError) as caught:
+        render_preserving_redline(
+            source_bytes=source,
+            format_map=imported.format_map,
+            baseline=imported.section,
+            current=section,
+            author=AUTHOR,
+            date=DATE,
+        )
+    assert caught.value.reason == "word_load_check_failed"
+    assert caught.value.reason not in STRUCTURAL_REFUSALS
+    assert caught.value.detail == {"tag": "customXml", "count": 1}
+    message = str(caught.value)
+    assert "failed its own check" in message and "Word refuses to open" in message
+    assert "extracted provisions still works" in message
 
 
 def test_spacers_travel_with_their_provision(tmp_path):

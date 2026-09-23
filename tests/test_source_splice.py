@@ -239,6 +239,27 @@ def test_unmappable_paragraphs_are_refused_by_name():
     )
 
 
+def test_custom_xml_never_reaches_the_word_level_redline():
+    """Word will not load inline custom XML inside ``w:ins``/``w:del``
+    ([MS-OI29500] §2.1.188(a)). ``render_redline`` wraps only the runs it
+    maps, so the guarantee is that it never maps one: a paragraph holding
+    custom XML — at its own level or inside a hyperlink — is refused
+    (``other_markup``), and the fallback marks it through
+    ``revision_marks``, which keeps the element outside every wrapper."""
+    for inside_link in (False, True):
+        paragraph = _paragraph()
+        paragraph.add_run("See ")
+        if inside_link:
+            _append_hyperlink(paragraph, "the client standard", "https://example.com")
+            container = paragraph._p.find(qn("w:hyperlink"))
+        else:
+            container = paragraph._p
+        custom = etree.SubElement(container, qn("w:customXml"))
+        etree.SubElement(custom, qn("w:customXmlPr"))
+        etree.SubElement(etree.SubElement(custom, qn("w:r")), qn("w:t")).text = "term"
+        assert map_paragraph(paragraph._p) == (None, "other_markup"), inside_link
+
+
 def _runs(element) -> list[tuple[bool, str]]:
     """(bold, text) per run, tabs shown as \\t."""
     runs = []

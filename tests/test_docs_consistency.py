@@ -94,6 +94,101 @@ def test_the_docs_use_the_venv_name_the_setup_creates() -> None:
         assert not hits, f"{label} invokes an undotted venv: {hits}"
 
 
+# Every place that tells someone to run a command on Windows: the five docs
+# the venv-name test reads, the two live plans and the execution record
+# whose commands are still to be run, the four profilers' usage docstrings
+# and the PyInstaller spec's build steps. The deep-dive remediation plans are
+# finished and keep their commands as written (the Batch 8 decision), and
+# CLAUDE.md is append-only history: only its Commands section is read, so a
+# note can still quote the broken form it records.
+_WINDOWS_COMMAND_DOCS = (
+    "README.md",
+    "docs/RELEASE_WINDOWS.md",
+    "docs/DOCX_FIDELITY.md",
+    "docs/DOCX_FIDELITY_CORPUS.md",
+    "docs/DOCX_RENDERER_WINDOWS.md",
+    "docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md",
+    "docs/plans/project-workspace/README.md",
+    "docs/review-results/2026-09-09/EXECUTION_RECORD.md",
+    "tools/chat_history_profile.py",
+    "tools/fetch_elision_canary.py",
+    "tools/lint_block_profile.py",
+    "tools/qc_export_cost_profile.py",
+    "packaging/windows/build-a-spec.spec",
+)
+
+# A venv path that starts a token. After a separator it is part of a longer
+# path (`.\.venv\...`, `C:\work\.venv\...`), which PowerShell runs fine.
+# `[\\/]+` also matches the doubled backslashes of a Python string.
+_BARE_VENV_PATH = re.compile(r"(?<![\\/\w])\.venv[\\/]+Scripts[\\/]")
+
+# The first word of a command line that is a relative Windows path with no
+# `.\` or `..\` in front (`dist\BuildASpec\BuildASpec.exe`).
+_BARE_RELATIVE_COMMAND = re.compile(r"^(?!\.\.?\\)[\w.-]+\\")
+
+# Code fences whose lines are Windows commands. A fence labelled for any
+# other language (`python`, `ts`, `json`, ...) is not read.
+_COMMAND_FENCES = {"", "bat", "batch", "cmd", "powershell", "pwsh", "ps1"}
+
+
+def _windows_command_sources() -> list[tuple[str, str]]:
+    sources = [
+        (label, (REPO_ROOT / label).read_text(encoding="utf-8"))
+        for label in _WINDOWS_COMMAND_DOCS
+    ]
+    claude = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    commands = re.search(r"^## Commands\n(.*?)(?=^## )", claude, re.M | re.S)
+    assert commands, "CLAUDE.md no longer has a Commands section"
+    sources.append(("CLAUDE.md (Commands)", commands.group(1)))
+    return sources
+
+
+def _fenced_command_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    fence: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            fence = line[3:].strip().lower() if fence is None else None
+            continue
+        if fence in _COMMAND_FENCES and line:
+            lines.append(line)
+    return lines
+
+
+def test_the_docs_windows_commands_run_in_powershell() -> None:
+    """PowerShell, the default Windows terminal and the owner's, does not
+    run a program from a relative path that lacks a leading `.\\`: it reads
+    `.venv` in `.venv\\Scripts\\python` as a module name and stops with
+    "The module '.venv' could not be loaded" (CouldNotAutoLoadModule).
+    `.\\.venv\\Scripts\\...` runs in both PowerShell and Command Prompt, so
+    every documented venv command carries it; a frozen-app or other
+    relative command at the start of a command-fence line does too. And no
+    example continues a line with `^`: that is Command Prompt syntax, and
+    PowerShell passes the caret on as an argument and runs the next line as
+    a command of its own."""
+    for label, text in _windows_command_sources():
+        bare_venv = [ln.strip() for ln in text.splitlines() if _BARE_VENV_PATH.search(ln)]
+        assert not bare_venv, (
+            f"{label} runs a venv command without the leading .\\ "
+            f"(PowerShell cannot run it): {bare_venv}"
+        )
+        carets = [ln.strip() for ln in text.splitlines() if re.search(r"\s\^$", ln.rstrip())]
+        assert not carets, (
+            f"{label} continues a command with ^, which only Command Prompt "
+            f"reads as a continuation — put it on one line: {carets}"
+        )
+        bare_commands = [
+            ln
+            for ln in _fenced_command_lines(text)
+            if _BARE_RELATIVE_COMMAND.match(ln.split()[0])
+        ]
+        assert not bare_commands, (
+            f"{label} starts a command with a relative path and no .\\ "
+            f"(PowerShell cannot run it): {bare_commands}"
+        )
+
+
 def test_the_release_runbook_describes_the_live_import_contract() -> None:
     """The v1.14.0 import lands detached: no permission sweep, no intent
     dialog, no "Preserve original formatting" choice. QA rows that told a

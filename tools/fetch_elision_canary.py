@@ -29,9 +29,9 @@ nothing is sent. With ``--run`` it makes ONE request on the interview model.
 more request, only worth making if the main run is rejected, to tell "the
 elided page is refused" apart from "this synthetic conversation is refused".
 
-Usage (Windows):
+Usage (Windows; runs as written in PowerShell and in Command Prompt):
 
-    .venv\\Scripts\\python tools\\fetch_elision_canary.py --run
+    .\\.venv\\Scripts\\python tools\\fetch_elision_canary.py --run
 """
 from __future__ import annotations
 

@@ -8380,7 +8380,7 @@ project-format bump (two additive `.baspec` keys).
 ## Commands
 
 ```
-.venv/bin/python -m pytest -q          # backend suite (Windows: .venv\Scripts\python)
+.venv/bin/python -m pytest -q          # backend suite (Windows: .\.venv\Scripts\python)
 .venv/bin/python -m ruff check .       # lint gate: pyflakes + bugbear + syntax (ruff.toml); CI runs it before pytest
 cd frontend && npm test                # node --test: the capability/tour contract + units
 cd frontend && npm run dev             # UI hot reload (with BUILD_A_SPEC_DEV=1 backend)

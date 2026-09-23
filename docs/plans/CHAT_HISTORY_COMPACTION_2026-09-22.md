@@ -300,7 +300,7 @@ updating that ground rule in the same change.
 
 - **Not run** as of the 1.21.0 closeout (2026-09-23). PR #183 merged
   without it, and the closeout session had no API key to run it with. The
-  command is `.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
+  command is `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one
   request, about two cents at most). It forces the trim on for its own
   request whatever the switch below says, so it tests the shape the switch
   would turn on.

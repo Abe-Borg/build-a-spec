@@ -19,6 +19,7 @@ import type {
   ProjectLink,
   ProjectLoadResult,
   OpenItem,
+  PreservedRedlineReason,
   QcApplyPreviewBasis,
   QcApplyPreviewResult,
   QcSnapshot,
@@ -266,6 +267,13 @@ export default function App() {
   // menu's primary entry for an imported document.
   const [preservedExportAvailable, setPreservedExportAvailable] =
     useState(false);
+  // Whether the redline on your original can be exported, and the server's
+  // own reason when it cannot (same derivation as the export route's
+  // default and refusal). Drives that Export menu item and its Word opener.
+  const [preservedRedlineAvailable, setPreservedRedlineAvailable] =
+    useState(false);
+  const [preservedRedlineReason, setPreservedRedlineReason] =
+    useState<PreservedRedlineReason | null>(null);
   const [sourceCapabilities, setSourceCapabilities] =
     useState<SourceCapabilitiesState | null>(null);
   const [templateOrigin, setTemplateOrigin] = useState<TemplateOrigin | null>(null);
@@ -569,6 +577,10 @@ export default function App() {
         setSourceDetached(payload.source_detached ?? false);
         setPreservationReady(payload.preservation_ready ?? false);
     setPreservedExportAvailable(payload.preserved_export_available ?? false);
+        setPreservedRedlineAvailable(
+          payload.preserved_redline_available ?? false,
+        );
+        setPreservedRedlineReason(payload.preserved_redline_reason ?? null);
         setSourceCapabilities(payload.source_capabilities ?? null);
         setTemplateOrigin(payload.template_origin ?? null);
         setFigures(payload.figures ?? []);
@@ -1099,11 +1111,16 @@ export default function App() {
    * Open the section in Word through the native shell: the export is
    * written to a temporary file and handed to the default .docx app. The
    * app cannot draw Word's layout in its panel; this is how the real
-   * formatting is seen. Resolves to the shell's result in every case — a
+   * formatting is seen. `redline` "master" opens the redline on your
+   * original instead, so its tracked changes can be reviewed in Word.
+   * Resolves to the shell's result in every case — a
    * missing bridge (plain browser) is reported, never thrown.
    */
   const onOpenInWord = useCallback(
-    async (mode: "preserved" | "normalized"): Promise<OpenInWordResult> => {
+    async (
+      mode: "preserved" | "normalized",
+      redline: "" | "master" = "",
+    ): Promise<OpenInWordResult> => {
       const api = window.pywebview?.api;
       if (!api?.open_in_word) {
         return {
@@ -1114,7 +1131,7 @@ export default function App() {
         };
       }
       try {
-        return await api.open_in_word(mode);
+        return await api.open_in_word(mode, redline);
       } catch (e) {
         return {
           ok: false,
@@ -1957,6 +1974,11 @@ export default function App() {
     setSourceAvailable(false);
     setSourceDetached(false);
     setPreservationReady(false);
+    // The outgoing document's export offers — its formatted export and the
+    // redline on its original, with the server's reason for the latter.
+    setPreservedExportAvailable(false);
+    setPreservedRedlineAvailable(false);
+    setPreservedRedlineReason(null);
     setSourceCapabilities(null);
     setTemplateOrigin(null);
     // Findings, quoted provision text and spend from the previous project.
@@ -2016,6 +2038,8 @@ export default function App() {
     source_detached?: boolean;
     preservation_ready?: boolean;
     preserved_export_available?: boolean;
+    preserved_redline_available?: boolean;
+    preserved_redline_reason?: PreservedRedlineReason | null;
     source_capabilities?: SourceCapabilitiesState | null;
     template_origin?: TemplateOrigin | null;
   }): boolean => {
@@ -2038,6 +2062,8 @@ export default function App() {
     setSourceDetached(payload.source_detached ?? false);
     setPreservationReady(payload.preservation_ready ?? false);
     setPreservedExportAvailable(payload.preserved_export_available ?? false);
+    setPreservedRedlineAvailable(payload.preserved_redline_available ?? false);
+    setPreservedRedlineReason(payload.preserved_redline_reason ?? null);
     setSourceCapabilities(payload.source_capabilities ?? null);
     setTemplateOrigin(payload.template_origin ?? null);
     setFigures(payload.figures ?? []);
@@ -2093,6 +2119,9 @@ export default function App() {
         preservation_ready: merged.preservation_ready ?? false,
         preserved_export_available:
           merged.preserved_export_available ?? false,
+        preserved_redline_available:
+          merged.preserved_redline_available ?? false,
+        preserved_redline_reason: merged.preserved_redline_reason ?? null,
         source_capabilities: merged.source_capabilities ?? null,
         template_origin: merged.template_origin ?? null,
       });
@@ -3267,6 +3296,8 @@ export default function App() {
           sourceDetached={sourceDetached}
           preservationReady={preservationReady}
           preservedExportAvailable={preservedExportAvailable}
+          preservedRedlineAvailable={preservedRedlineAvailable}
+          preservedRedlineReason={preservedRedlineReason}
           onOpenInWord={onOpenInWord}
           sourceCapabilities={sourceCapabilities}
           templateOrigin={templateOrigin}

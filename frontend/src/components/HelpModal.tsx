@@ -128,7 +128,7 @@ function Recipe({
   );
 }
 
-/** The five similar-looking, but intentionally distinct, source concepts. */
+/** The six similar-looking, but intentionally distinct, source concepts. */
 function SourceOutputGuide() {
   return (
     <div className="rounded-xl border border-edge bg-raised/40 p-4">
@@ -246,7 +246,7 @@ function HowToUse({
           },
           {
             t: "Export",
-            d: "Choose the guarantee you need: the exact original; your imported file rebuilt with the new content (headers, footers, fonts, styles and page setup kept); a Build-a-Spec styled DOCX; or a normalized redline. Open in Word writes the rebuilt file to a temporary location and opens it in Word.",
+            d: "Choose the guarantee you need: the exact original; your imported file rebuilt with the new content (headers, footers, fonts, styles and page setup kept); that same file as a redline on your original, every change since the import a Word tracked change — Accept All gives the rebuilt file, Reject All your original, and both are checked before you get it; a Build-a-Spec styled DOCX; or a normalized redline. Open in Word and Open redline in Word write the file to a temporary location and open it in Word.",
           },
           {
             t: "Save, and keep the good work",
@@ -338,7 +338,7 @@ function Workflows() {
           "Source-preserving controls are enabled per block and operation. Verified simple text edits and bounded numbered-island structure can remain available while headings, tables, fields, hyperlinks, content controls, and complex runs stay read-only; hover a disabled action for the server's reason.",
           "Review status, research provenance, standards, and project metadata remain editable when the imported Word body is pass-through-only.",
           "Send to Final QC.",
-          "Choose the exact-original download for unchanged upload bytes; Export Word (keeps your formatting) to get your file back with the new content; or intentionally choose the Build-a-Spec styled DOCX / normalized redline for the semantic view.",
+          "Choose the exact-original download for unchanged upload bytes; Export Word (keeps your formatting) to get your file back with the new content; Redline on your original to get it back with every change as a Word tracked change (see the recipe below); or intentionally choose the Build-a-Spec styled DOCX / normalized redline for the semantic view.",
         ]}
       />
       <Recipe
@@ -377,11 +377,22 @@ function Workflows() {
         ]}
       />
       <Recipe
+        title="Redline on your original"
+        tagline="Hand back your own Word file with every change tracked, then make it the master."
+        steps={[
+          "After importing an office master and working on it here, choose Export → Redline on your original (tracked changes). It is the Word file you imported with every change since the import as a Word tracked change by Build-a-Spec; every part of the file outside the document body is your upload's, byte for byte.",
+          "In Word, Accept All gives exactly what Export Word (keeps your formatting) produces and Reject All gives your original back. The app checks both on every file before it hands it over, and refuses with the reason rather than deliver one that fails.",
+          "Review the changes in Word — in the desktop app, Open redline in Word opens it there directly — accept or reject them, save, and replace your master with the saved file. Build-a-Spec's own copy of your upload is never changed.",
+          "In a master with typed letters, a provision relettered by an insert above it shows the letter change; a Word-numbered master renumbers itself. A moved provision shows as a deletion where it was and an insertion where it is. One limit: it keeps its bookmarks at its new position, so Reject All does not restore them where it was.",
+          "A master that already carries tracked changes is refused, with the fix named: accept or reject them in Word, save, and import the file again. The redline of extracted provisions still works either way.",
+        ]}
+      />
+      <Recipe
         title="Extracted-provision redline"
         tagline="Review content changes inside Build-a-Spec's normalized model."
         steps={[
           "Use Compare in the panel to diff any version against the imported extraction or a prior version.",
-          "Export “Redline of extracted provisions” for Word tracked changes over normalized provision text. It is not a redline of the uploaded DOCX and cannot restore that file with Reject All.",
+          "Export “Redline of extracted provisions” for Word tracked changes over normalized provision text. It is not a redline of the uploaded DOCX and cannot restore that file with Reject All — Redline on your original, above, is and can.",
         ]}
       />
       <Recipe
@@ -506,8 +517,8 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
             d: "Lint, version history, the diff behind Compare and the redline, the QC fix dry-run, source-preservation analysis, every export writer, and the readiness checklist are deterministic code. Same input, same answer, every time — and none of them makes a network call.",
           },
           {
-            t: "The redline scope is explicit",
-            d: "The imported redline compares Build-a-Spec's normalized provision tree with its extracted baseline. It does not compare headers, footers, styles, tables, layout, or other original DOCX package content, and Reject All does not recreate the uploaded master.",
+            t: "Each redline's scope is explicit",
+            d: "Redline on your original is your own Word file with every change since the import as a Word tracked change: Accept All gives exactly the formatted export and Reject All gives your original back, and the app checks both on every file before it hands it over — one that fails is refused with the reason, never delivered. The redline of extracted provisions compares Build-a-Spec's normalized provision tree with its extracted baseline instead; it does not compare headers, footers, styles, tables, layout, or other original DOCX package content, and its Reject All does not recreate the uploaded master.",
           },
           {
             t: "Standards carry receipts",

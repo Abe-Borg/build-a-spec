@@ -302,6 +302,10 @@ def _http_origin(url: str) -> tuple[str, str, int] | None:
 
 
 _EXPORT_MODES = frozenset({"preserved", "normalized", "source"})
+#: The redlines Open in Word can open: none (the export itself) or
+#: ``master`` — the redline on your original, the one redline the Export
+#: menu offers to open. Validated against this set before it reaches a URL.
+_OPEN_IN_WORD_REDLINES = frozenset({"", "master"})
 _OPEN_IN_WORD_FALLBACK_NAME = "Build-a-Spec export.docx"
 
 
@@ -724,7 +728,7 @@ class _CloseController:
             return self._save_result(False, error="This page cannot save.")
         return self._save_project_file(force_dialog=True)
 
-    def open_in_word(self, mode: str = "preserved") -> dict[str, Any]:
+    def open_in_word(self, mode: str = "preserved", redline: str = "") -> dict[str, Any]:
         """Export the section and open the file with the system's Word.
 
         The app cannot render Word's layout in its own panel, and a user who
@@ -734,6 +738,14 @@ class _CloseController:
         It goes through the same HTTP export route the window uses, with this
         launch's own token, so every guard the route applies (mode, detached
         state, tutorial scope) applies here too.
+
+        ``redline="master"`` opens the redline on your original instead
+        (``?redline=master&mode=preserved``), so its tracked changes can be
+        reviewed in Word straight away; its refusals — a master that already
+        carries tracked changes, a change Word cannot track, the export's own
+        self-check — come back in the server's words like any other. It pairs
+        with ``mode="preserved"`` only: any other pairing is refused rather
+        than quietly opening a different file than the one asked for.
 
         Returns ``{"ok", "error", "path", "name"}``; a failure carries the
         server's own message.
@@ -750,6 +762,16 @@ class _CloseController:
         mode = str(mode or "preserved")
         if mode not in _EXPORT_MODES:
             return {"ok": False, "error": "Unknown export mode.", "path": "", "name": ""}
+        redline = str(redline or "")
+        if redline not in _OPEN_IN_WORD_REDLINES:
+            return {"ok": False, "error": "Unknown redline.", "path": "", "name": ""}
+        if redline and mode != "preserved":
+            return {
+                "ok": False,
+                "error": "Only the redline on your original opens in Word.",
+                "path": "",
+                "name": "",
+            }
         from backend import sessions
 
         workspace = sessions.get_workspace()
@@ -760,10 +782,15 @@ class _CloseController:
                 "path": "",
                 "name": "",
             }
+        # Both values were checked against their closed sets above, so the
+        # path is built from vocabulary, never from what the page sent.
+        path = (
+            f"/api/export/docx?redline={redline}&mode={mode}"
+            if redline
+            else f"/api/export/docx?mode={mode}"
+        )
         try:
-            payload, name = _fetch_backend_bytes(
-                self._backend, f"/api/export/docx?mode={mode}"
-            )
+            payload, name = _fetch_backend_bytes(self._backend, path)
             target = _write_open_in_word_file(name, payload)
             _launch_file(target)
         except RuntimeError as exc:

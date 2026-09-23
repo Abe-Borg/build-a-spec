@@ -44,11 +44,13 @@ phase gates; start there, not here.
 **[Redline on your original](REDLINE_ON_ORIGINAL_2026-09-22.md)**: opened
 2026-09-22; all seven decisions ratified the same day (the seventh settled
 Phase 0's open question: a provision added after a section's last paragraph
-keeps landing at the top of the next section). **Phase 0 is built (PR #184)
-and Phase 1's backend PR is built; neither is released** — the owner picks
-the release. Phase 1's UI PR (the menu item, *Open redline in Word*, the
-capability, the copy) is next and not started; a fresh session starts from
-the plan's "Phase 1 (backend PR) — as built" note. The program adds a
+keeps landing at the top of the next section). **Phase 0 (PR #184) and
+Phase 1 (backend PR #187, then the UI PR — the menu item, *Open redline in
+Word*, the capability, the copy) are built; none of it is released** — the
+owner picks the release, and the real-Word QA rows are still to run. Phase 2
+(native Word "Moved" marks, real Word as the judge) is next and not started;
+a fresh session starts from the plan's two Phase 1 as-built notes. The
+program adds a
 tracked-changes copy of the Word file you imported:
 every non-body part stays byte-identical, Reject All gives back the upload,
 and Accept All gives *Export Word (keeps your formatting)*. The export checks

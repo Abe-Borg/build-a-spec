@@ -554,6 +554,7 @@ export const TOUR: readonly TourChunk[] = [
         capabilities: [
           "export.clean",
           "export.redline-source",
+          "export.redline-original",
           "export.open-in-word",
           "project.brief-export",
         ],
@@ -562,7 +563,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Choose the output guarantee deliberately",
         body:
-          "For an imported document, Export Word keeps your file's formatting and writes the new content into it, and Open in Word does the same into a temporary file and opens it. The Build-a-Spec styled DOCX uses automatic Word numbering and includes the assumption/open-item schedules. Redline compares committed semantic versions. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
+          "For an imported document, Export Word keeps your file's formatting and writes the new content into it, and Open in Word does the same into a temporary file and opens it. Redline on your original is that same file of yours with every change since the import shown as a Word tracked change: in Word, Accept All gives exactly the formatted export and Reject All gives your original back, and the app checks both before it hands the file over. A master that already carries tracked changes is refused with the fix named (accept or reject them in Word, save, and import it again). Open redline in Word writes it to a temporary file and opens it in Word to review there. The Build-a-Spec styled DOCX uses automatic Word numbering and includes the assumption/open-item schedules. The redline of extracted provisions compares committed semantic versions in Build-a-Spec's own styles. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
         details: SOURCE_OUTPUT_GUIDANCE,
         optionalReason: "The tour points at the real menu but never downloads anything.",
       },

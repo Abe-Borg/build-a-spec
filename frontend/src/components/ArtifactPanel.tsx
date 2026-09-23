@@ -33,6 +33,7 @@ import type {
   TemplateOrigin,
   UsageSummary,
   OpenInWordResult,
+  PreservedRedlineReason,
 } from "../types";
 import FollowUpsPanel from "./FollowUpsPanel";
 import ProjectFactsPanel from "./ProjectFactsPanel";
@@ -73,8 +74,21 @@ type ExportKey =
   | "normalized"
   | "clean"
   | "original"
+  | "redline-original"
   | "redline-master"
   | "redline-version";
+
+/** Which Open-in-Word request is in flight: the export itself, or the
+ *  redline on your original. */
+type OpenInWordTarget = "export" | "redline";
+
+/** Shown only if a payload says the redline on your original is unavailable
+ *  without saying why, which the server never does — it pairs a false flag
+ *  with its reason on every payload. Deliberately no reason of our own: it
+ *  says only that none was given (the SOURCE_CAPABILITIES_MISSING_MESSAGE
+ *  posture), because a client-written reason could contradict the route. */
+const REDLINE_REASON_MISSING =
+  "The redline on your original is not available for this document.";
 
 interface Props {
   doc: SpecDoc | null;
@@ -163,11 +177,21 @@ interface Props {
    *  Server-derived (DocPayload.preserved_export_available), the same
    *  derivation the export route selects its mode by. */
   preservedExportAvailable: boolean;
+  /** The redline on your original can be exported — a copy of the Word file
+   *  you imported with every change since the import as a Word tracked
+   *  change. Server-derived (DocPayload.preserved_redline_available), the
+   *  same derivation the export route's default and refusal read. */
+  preservedRedlineAvailable: boolean;
+  /** Why it cannot, when it cannot: the server's closed code and its own
+   *  sentence, shown verbatim (never client prose); null when it can. */
+  preservedRedlineReason: PreservedRedlineReason | null;
   /** Export to a temporary .docx and open it with Word through the native
    *  shell; resolves to the shell's result (never throws). Rendered only
-   *  when the bridge exists at click time. */
+   *  when the bridge exists at click time. `redline` "master" opens the
+   *  redline on your original instead. */
   onOpenInWord?: (
     mode: "preserved" | "normalized",
+    redline?: "" | "master",
   ) => Promise<OpenInWordResult>;
   sourceCapabilities: SourceCapabilitiesState | null;
   templateOrigin: TemplateOrigin | null;
@@ -416,6 +440,8 @@ export default function ArtifactPanel({
   sourceDetached,
   preservationReady,
   preservedExportAvailable,
+  preservedRedlineAvailable,
+  preservedRedlineReason,
   onOpenInWord,
   sourceCapabilities,
   templateOrigin,
@@ -488,10 +514,12 @@ export default function ArtifactPanel({
   // stays visible in the bar, so nothing is lost at a glance when collapsed.
   const [openItemsExpanded, setOpenItemsExpanded] = useState(false);
   // Open in Word: the shell writes the export to a temp file and launches
-  // Word. Busy while the export streams; a refusal is the server's own
-  // message, shown in a dismissible strip (a click that does nothing reads
-  // as a broken button).
-  const [openInWordBusy, setOpenInWordBusy] = useState(false);
+  // Word. Busy while the export streams — the TARGET in flight, so the item
+  // clicked says "Opening…" while both openers lock (the useDownloads
+  // idiom); a refusal is the server's own message, shown in a dismissible
+  // strip (a click that does nothing reads as a broken button).
+  const [openInWordBusy, setOpenInWordBusy] =
+    useState<OpenInWordTarget | null>(null);
   const [openInWordError, setOpenInWordError] = useState("");
   // The specification exports: fetch-then-save, never a bare `<a download>`
   // (which has no failure mode a user can see — in the shell a refused or
@@ -550,18 +578,23 @@ export default function ArtifactPanel({
   };
   const hasNativeBridge =
     typeof window !== "undefined" && !!window.pywebview?.api?.open_in_word;
-  const runOpenInWord = async () => {
+  const runOpenInWord = async (target: OpenInWordTarget) => {
     if (!onOpenInWord || openInWordBusy) return;
     setExportMenuOpen(false);
-    setOpenInWordBusy(true);
+    setOpenInWordBusy(target);
     setOpenInWordError("");
     try {
-      const result = await onOpenInWord(
-        preservedExportAvailable ? "preserved" : "normalized",
-      );
+      // The redline names its mode like every redline the menu requests:
+      // it is the redline on your original, never the server's fallback.
+      const result =
+        target === "redline"
+          ? await onOpenInWord("preserved", "master")
+          : await onOpenInWord(
+            preservedExportAvailable ? "preserved" : "normalized",
+          );
       if (!result.ok) setOpenInWordError(result.error || "Open in Word failed.");
     } finally {
-      setOpenInWordBusy(false);
+      setOpenInWordBusy(null);
     }
   };
   // Body blocks ahead of the section (cover page, revision history, table of
@@ -1028,9 +1061,9 @@ export default function ArtifactPanel({
                       <button
                         className="block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50"
                         onClick={() => {
-                          void runOpenInWord();
+                          void runOpenInWord("export");
                         }}
-                        disabled={openInWordBusy}
+                        disabled={openInWordBusy !== null}
                         title={
                           preservedExportAvailable
                             ? "Write the formatting-preserving export to a temporary file and open it in Word, so you see the real layout"
@@ -1038,7 +1071,63 @@ export default function ArtifactPanel({
                         }
                         data-capability="export.open-in-word"
                       >
-                        {openInWordBusy ? "Opening in Word…" : "Open in Word"}
+                        {openInWordBusy === "export"
+                          ? "Opening in Word…"
+                          : "Open in Word"}
+                      </button>
+                    )}
+                    {/* Redline on your original: the upload again, with every
+                        change since the import as a Word tracked change —
+                        Accept All is the formatted export above, Reject All
+                        the upload, and the server checks both before it
+                        hands the file over. Offered off the payload's one
+                        derivation, which the route's refusal reads too; when
+                        it cannot run, the item stays visible but disabled
+                        and the hover says why in the server's own words
+                        (Tip, because a disabled button never shows a native
+                        title). A refusal only a render can reach (a reorder
+                        that would move a section break, the self-check)
+                        comes back from the click in the export error strip,
+                        also in the server's words. */}
+                    <Tip
+                      tip={
+                        preservedRedlineAvailable
+                          ? "A copy of the Word file you imported with every change since the import as a Word tracked change by Build-a-Spec. In Word, Accept All gives exactly Export Word (keeps your formatting) and Reject All gives your original back; the file is checked for both before it is handed over."
+                          : (preservedRedlineReason?.message ??
+                            REDLINE_REASON_MISSING)
+                      }
+                      className="w-full"
+                    >
+                      <button
+                        type="button"
+                        className={`${exportItem} disabled:pointer-events-none`}
+                        onClick={() =>
+                          runExport(
+                            "redline-original",
+                            exportDocxUrl({ redline: "master", mode: "preserved" }),
+                            "specification - REDLINE.docx",
+                          )
+                        }
+                        disabled={!preservedRedlineAvailable || exportsBusy}
+                        data-capability="export.redline-original"
+                      >
+                        Redline on your original (tracked changes)
+                      </button>
+                    </Tip>
+                    {hasNativeBridge && onOpenInWord && preservedRedlineAvailable && (
+                      <button
+                        type="button"
+                        className={exportItem}
+                        onClick={() => {
+                          void runOpenInWord("redline");
+                        }}
+                        disabled={openInWordBusy !== null}
+                        title="Write the redline on your original to a temporary file and open it in Word, to review its tracked changes there"
+                        data-capability="export.redline-original"
+                      >
+                        {openInWordBusy === "redline"
+                          ? "Opening redline in Word…"
+                          : "Open redline in Word"}
                       </button>
                     )}
                     {preservationReady && (
@@ -1120,12 +1209,14 @@ export default function ArtifactPanel({
                       <button
                         className="block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50"
                         onClick={() => {
-                          void runOpenInWord();
+                          void runOpenInWord("export");
                         }}
-                        disabled={openInWordBusy}
+                        disabled={openInWordBusy !== null}
                         title="Write the clean export to a temporary file and open it in Word"
                       >
-                        {openInWordBusy ? "Opening in Word…" : "Open in Word"}
+                        {openInWordBusy === "export"
+                          ? "Opening in Word…"
+                          : "Open in Word"}
                       </button>
                     )}
                   </>
@@ -1142,7 +1233,7 @@ export default function ArtifactPanel({
                       )
                     }
                     disabled={exportsBusy}
-                    title="Tracked changes over the normalized provision text; this is not a redline of the original DOCX package"
+                    title="Tracked changes over the extracted provision text, in Build-a-Spec's own styles. It is not a redline of your Word file — Redline on your original, above, is — and it still works when that one cannot."
                   >
                     Redline of extracted provisions
                   </button>

@@ -1109,7 +1109,7 @@ function Dossier() {
               the server’s own reason rather than a guess written by the
               interface. Permission to change a review status never implies
               permission to rewrite Word body content. Exporting is an explicit
-              choice among five clearly-labelled contracts — see the list below.
+              choice among six clearly-labelled contracts — see the list below.
             </>
           }
         />
@@ -1221,8 +1221,11 @@ function Dossier() {
               is computed directly from the document each time it renders, so it
               cannot drift from what the page shows. Every change is a version;
               undo and redo walk them. Compare runs the same diff engine the
-              redline export uses, so what you read on screen and what Word shows
-              are produced by the same code.
+              redline of extracted provisions uses, so what you read on screen
+              and what Word shows in that redline are produced by the same code.
+              (The redline on your original marks its word changes inside your
+              own formatting instead, and checks itself against the formatted
+              export before you get it.)
             </>
           }
           sent="Nothing. No network call is made."
@@ -1240,6 +1243,32 @@ function Dossier() {
               explicit choice, and the options are never silently substituted for
               one another — if a source-preserving export cannot be proven safe,
               it is blocked rather than quietly downgraded to a regenerated file.
+              <p className="mt-2">
+                <b className="text-ink">Redline on your original</b> is a copy
+                of the Word file you imported in which every change since the
+                import is a native Word tracked change by Build-a-Spec, dated
+                at export; every part of the file outside the document body is
+                your upload’s, byte for byte. Before the file is handed over,
+                the app{" "}
+                <b className="text-ink">resolves it both ways itself</b> —
+                Accept All and Reject All, in code that shares nothing with the
+                code that wrote the changes — and compares, element by element,
+                Accept All’s result with <em>Export Word (keeps your
+                formatting)</em> and Reject All’s with your upload. If either
+                comparison fails, the export is refused with the reason and
+                nothing is delivered. A master that already carries tracked
+                changes is refused before that, with the fix named: accept or
+                reject them in Word, save, and import the file again.
+              </p>
+              <p className="mt-2">
+                Two exceptions, both disclosed. A provision you moved keeps its
+                bookmarks at its new position, so Reject All restores its text
+                and formatting where it was, but not its bookmarks. And because
+                Word cannot track a document’s last paragraph mark, deleting or
+                adding the last paragraph leaves one empty paragraph at the very
+                end under one of the two resolutions; the export makes it plain,
+                so it prints nothing.
+              </p>
             </>
           }
           sent="Nothing. No network call is made."
@@ -1705,8 +1734,16 @@ function Dossier() {
             <>
               The redline of extracted provisions is{" "}
               <b className="text-ink">not a redline of your Word file</b>, and
-              Reject All on it does not recreate your original upload. That is
-              what the exact-original download is for.
+              Reject All on it does not recreate your original upload — the
+              redline on your original is the one that does. That one is{" "}
+              <b className="text-ink">refused rather than approximated</b>{" "}
+              whenever it cannot keep its promise: for a master that already
+              carries tracked changes (accept or reject them in Word first),
+              and for a change Word cannot show as a tracked change, such as a
+              reorder that would move a section break. Its Reject All restores
+              a moved provision’s text and formatting where it was, but not
+              its bookmarks. The exact-original download still returns your
+              upload untouched.
             </>,
             <>
               Cost figures are estimates, and{" "}

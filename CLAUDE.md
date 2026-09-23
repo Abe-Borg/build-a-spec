@@ -12371,6 +12371,134 @@ export's QA rows) is the next PR and was deliberately not started.
   cache → 1; the event's `refusal` → 1; the filename scrub → 1; the splice's
   deleted words not emitted as their own piece → 30.
 
+## Redline on your original — implemented notes (Phase 1, UI PR)
+
+Phase 1 of `docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`, UI half: the
+backend PR's export becomes usable from the app — an Export-menu item, *Open
+redline in Word*, the capability, the copy that explains it, and the
+real-Word QA rows. The UI reads what the backend already serves: no route,
+payload key, SSE event, dependency, env knob or project-format change, and
+no VERSION bump. The plan's "Phase 1 (UI PR) — as built" note carries the
+deviations; this section is the why and the traps.
+
+- **One derivation, drawn — never re-derived.** The item is enabled off
+  `preserved_redline_available` and, when that is false, shows
+  `preserved_redline_reason.message` verbatim (the `sourceCapabilities.ts`
+  rule: no client prose on a refusal). `code` is typed
+  (`PreservedRedlineReason`) but deliberately not branched on — every code
+  means the same thing to the menu. `REDLINE_REASON_MISSING` covers a
+  payload that says "unavailable" without saying why, which the server
+  never sends; it states only that no reason was given, so it can never
+  contradict the route. A refusal only a render can reach (a reorder that
+  would move a section break, the self-check) comes back from the click as
+  the route's own `error` in the existing export error strip — nothing new
+  was needed there.
+- **Disabled, with the reason on hover, takes three things together.** A
+  disabled button never shows a native `title` (the reason `Tip` exists),
+  so the reason rides a `Tip` wrapper, and the button carries no `title` of
+  its own. The shared `exportItem` class had no
+  `disabled:pointer-events-none`, and `Tip`'s contract is an inert disabled
+  child: measured in Chromium, with the class the pointer lands on the
+  `Tip`'s span, which holds the server's sentence, and without it on the bare
+  button, which holds nothing. All three are pinned. `Tip` renders an `inline-flex` span, which
+  in a block menu shrinks to its text (258 of 286 px, measured) unless it
+  takes `w-full` — and then the button, its hover highlight and its click
+  target span the row like every other item. (`align-top` was tried and
+  measured to change nothing; an `inline-flex`'s baseline is its text's, so
+  there is no line-box gap to remove.)
+- **Every redline the app asks for names both halves of its query**, the
+  D-8 rule extended from URLs to the bridge: the item builds
+  `exportDocxUrl({redline: "master", mode: "preserved"})`, and
+  `runOpenInWord("redline")` calls `onOpenInWord("preserved", "master")`.
+  A bare `redline=master` is the server's default to change, and a control
+  that leaned on it would silently switch files.
+- **Two openers, one busy state keyed by TARGET.** `openInWordBusy` was a
+  boolean; with a second opener, one click would have relabelled both. It is
+  now `"export" | "redline" | null` — both lock while either runs, and only
+  the clicked one says "Opening…" (the `useDownloads` idiom).
+- **The shell takes a closed vocabulary and builds the path from it.**
+  `open_in_word(mode, redline="")`: `redline` must be `""` or `"master"`
+  (`_OPEN_IN_WORD_REDLINES`), `"master"` pairs with `mode="preserved"`
+  only, and both are checked before the path is formatted, so nothing the
+  page sent is ever interpolated. `open_in_word("normalized", "master")` is
+  refused rather than quietly opening the extracted-provisions redline — a
+  different file than the one asked for. The tutorial-scope refusal, the
+  `mkstemp`-unique temp file and the server-worded errors are shared by both
+  variants; the scope refusal had never been pinned for `open_in_word` at
+  all, and now is, for both.
+- **Placement: right under the formatted export's PAIR.** The plan says
+  "right under *Export Word (keeps your formatting)*"; in the desktop app
+  that export's own *Open in Word* sits directly beneath it, and wedging the
+  redline between an export and its opener would have separated them. So the
+  order is formatted export, its *Open in Word*, the redline, *Open redline
+  in Word* — each opener beside the file it opens; in a browser (no
+  openers) the redline is directly under. The pin asserts the order
+  (formatted → original → extracted), not adjacency. *Open redline in Word*
+  is offered only while the redline is available: the greyed item above it
+  already says why, and unlike the formatted export's opener there is no
+  fallback file to open.
+- **The copy is a contract, and the feature falsified some of it.** Help's
+  "The redline scope is explicit" described ONE imported redline whose
+  Reject All cannot recreate the master; the dossier's card 10 said Compare
+  shares code with "the redline export" (now true only of the
+  extracted-provisions redline — the redline on your original takes its word
+  changes from the splice); the dossier's "What this does not do" implied no
+  redline of your own file exists; the extracted-provisions tooltip said
+  "this is not a redline of the original DOCX package" as if none were. All
+  rewritten. `SOURCE_OUTPUT_GUIDANCE` gained a sixth concept rather than a
+  rewritten fifth, so the two places that counted it ("five" in Help's
+  comment and the dossier's import card) now say six, and the guidance
+  test's id list moved knowingly. "One limit" is phrased without "the only":
+  the other deviation — the untrackable last paragraph mark's empty, plain
+  leftover — is invisible, and is stated in the dossier's export card
+  rather than in every short surface.
+- **A new session also clears the formatted export's flag.**
+  `clearSessionState` never reset `preservedExportAvailable` (invisible —
+  the Export menu needs content — but it was the one payload flag left for
+  the refetch to overwrite). It clears with the two new fields now; the
+  session-bundle mapping forwards both new fields, which
+  `sessionBundle.test.ts` would have refused to let slip.
+- **Tests.** `frontend/tests/downloads.test.ts` (+3: the item's URL, key and
+  order plus the extracted-provisions tooltip; the payload wiring, the
+  server's reason, the `Tip`/pointer-events/no-title trio and the session
+  clear; the opener's gating, arguments and busy target), and
+  `sourceCapabilities.test.ts` (+1, the entry's promise, check, refusal and
+  limit; the six-concept id list updated). `tests/test_close_prompt.py`'s
+  four `open_in_word` tests were extended — the first parametrized over both
+  variants (the redline's route and its `- REDLINE` name), the second with
+  two redline opens never sharing a file, the third with the
+  pending-revisions sentence arriving verbatim and nothing written, the
+  fourth with the closed vocabulary, the pairing rule, the browser session
+  and the tutorial scope for both variants. Every mechanism was reverted in
+  place, each in an isolated copy of the tree, and its own test went red:
+  the item's mode → 1; its key shared with the extracted redline → 2; the
+  item moved below the extracted redline → 1; not disabled off the flag → 1;
+  client prose for the reason → 1; the disabled button keeping pointer
+  events → 1; a `title` on the button → 1; the extracted tooltip not
+  pointing at it → 1; the missing-reason fallback turned into a reason → 1;
+  `refreshDoc` not reading the flag → 1; `applyDocPayload` not reading the
+  reason → 1; the session clear keeping the flag → 1, and its sibling → 1;
+  the bundle dropping the fields → 1; the opener not gated on the flag → 1;
+  the runner dropping `"master"` → 1; a boolean busy state → 1; App not
+  forwarding the redline → 1; the registry, the tour step and the controls
+  each forgetting the capability → 2, 1, 1; the guidance entry removed → 2;
+  its refusal sentence removed → 1; the shell ignoring the redline in the
+  path → 2; accepting any redline value → 1; pairing it with any mode → 1;
+  forgetting the tutorial scope → 1.
+- **Checked in the built app, not only in source.** The text-level pins
+  prove the wiring exists; a headless Chromium run against the real backend
+  and the production build proved it works. On a master imported and edited
+  through the API: the item is enabled with its promise on hover, the menu
+  reads formatted export → (Open in Word) → redline → (Open redline in Word)
+  → styled → original → extracted, and clicking it saves
+  `office-master - REDLINE.docx`. With `window.pywebview.api` stubbed, the
+  two openers called the bridge with `("preserved", "master")` and
+  `("preserved", "")`. On a master carrying a pending `w:ins`: the item is
+  disabled, its hover text is byte-identical to the payload's reason, and
+  *Open redline in Word* is absent. Nothing in that run is committed — the
+  suite cannot drive a browser — and none of it replaces the real-Word QA
+  rows, which are still to run.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

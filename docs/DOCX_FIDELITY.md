@@ -395,6 +395,20 @@ master already has is cloned from kin at another depth and keeps that kin's
 Accept All reproduces by construction. The redline is master-only in this
 phase: a redline on the original against an arbitrary version is a 400.
 
+**In the app.** The Export menu of an imported document offers **Redline on
+your original (tracked changes)** right under *Export Word (keeps your
+formatting)* and its *Open in Word*, and always names both halves of the
+query (`?redline=master&mode=preserved`) — never the bare-redline default.
+The item is drawn off `preserved_redline_available`: when that is false it
+stays in the menu disabled, and its hover shows `preserved_redline_reason`'s
+message verbatim — the client adds no prose of its own to a refusal. A
+refusal only a render can reach (a 409 from the render or its self-check)
+arrives in the panel's export error strip as the route's own `error`. In the
+desktop app, **Open redline in Word** (`js_api.open_in_word("preserved",
+"master")`) writes the same export to a fresh temporary file and opens it in
+Word; it is offered only while the redline is available. *Redline of
+extracted provisions* (`?redline=master&mode=normalized`) stays below them.
+
 ## Distinct user-visible contracts
 
 | Contract | API selection | Package basis | Guarantee |
@@ -478,7 +492,11 @@ the system depends on:
 - **Open in Word** (`js_api.open_in_word(mode)`, desktop shell only) fetches
   the same export route with the launch's own token, writes the file under
   the user's temp folder and opens it with the default `.docx` application;
-  every refusal is the server's own message.
+  every refusal is the server's own message. `open_in_word("preserved",
+  "master")` is **Open redline in Word**: the same path for the redline on
+  your original (`?redline=master&mode=preserved`). The redline argument is
+  a closed vocabulary (`""` or `"master"`) and pairs with `preserved` only;
+  anything else is refused before a URL is built.
 - Project **loading** validates the retained source, its map, and the imported
   baseline exactly as before, but does not re-impose the per-version
   preservation boundary on a detached project. Exceeding that boundary is what

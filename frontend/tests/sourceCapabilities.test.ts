@@ -27,13 +27,14 @@ const headingMessage =
 const complexMessage =
   "This paragraph contains a field and cannot be patched safely.";
 
-test("source-output help distinguishes all five preservation concepts", () => {
+test("source-output help distinguishes all six preservation concepts", () => {
   assert.deepEqual(
     SOURCE_OUTPUT_GUIDANCE.map((item) => item.id),
     [
       "exact-original",
       "source-preserving",
       "normalized",
+      "redline-original",
       "normalized-redline",
       "pass-through-only",
     ],
@@ -46,6 +47,31 @@ test("source-output help distinguishes all five preservation concepts", () => {
   assert.match(descriptions, /newly generated DOCX/i);
   assert.match(descriptions, /not a redline of the uploaded Word package/i);
   assert.match(descriptions, /source-body mutations are disabled/i);
+});
+
+test("the redline on your original states its promise, its check, its refusal and its limit", () => {
+  // Help, the tour's export step and the trust dossier all render this one
+  // entry, so it is where the redline's contract is worded for users. Each
+  // clause is a claim the backend keeps (DOCX_FIDELITY.md → "Redline on your
+  // original"): Accept All == the formatted export, Reject All == the upload,
+  // both checked before hand-over, a pending-revisions master refused with
+  // its fix, and the one limit a moved provision's bookmarks leave.
+  const entry = SOURCE_OUTPUT_GUIDANCE.find((item) => item.id === "redline-original");
+  assert.ok(entry, "the redline on your original has its own guidance entry");
+  assert.equal(entry.label, "Redline on your original");
+  assert.match(
+    entry.description,
+    /Accept All gives exactly what Export Word \(keeps your formatting\) produces/,
+  );
+  assert.match(entry.description, /Reject All gives your original back/);
+  assert.match(entry.description, /checks both before it hands the file over/);
+  assert.match(entry.description, /already carries tracked changes is refused/);
+  assert.match(entry.description, /accept or reject them in Word, save, and import the file again/);
+  assert.match(entry.description, /moved keeps its bookmarks/);
+  // And the extracted-provisions redline stops claiming to be the only one.
+  const normalized = SOURCE_OUTPUT_GUIDANCE.find((item) => item.id === "normalized-redline");
+  assert.ok(normalized);
+  assert.match(normalized.description, /the redline on your original is the one that does both/);
 });
 
 test("source-output help makes server capabilities authoritative and fail closed", () => {

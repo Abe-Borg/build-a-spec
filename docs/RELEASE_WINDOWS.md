@@ -677,19 +677,21 @@ section →) is under v1.20.0 above.
       page ("1 fetched pages carrying their text"), and the saved
       `project.json` still holds the page's text.
 
-### Chat history compaction (Phase 3)
+### Chat history compaction (Phase 3; routine condensing on by default)
 
-These rows spend a little: each summary is one model call. Set the knobs in
-the shell you launch the app from, and clear them when done.
+These rows spend a little: each summary is one model call. Routine
+condensing is on by default, so these rows only lower the point where it
+starts. Set the knobs in the shell you launch the app from, and clear them
+when done.
 
-- [ ] **Routine condensing.** Launch with `BUILD_A_SPEC_CHAT_COMPACTION=1`,
+- [ ] **Routine condensing.** Launch with
       `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD=10000` and
-      `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS=1`. Hold a conversation of
-      six or so turns, stating one exact value early ("use 42 gpm for the
-      riser"). Soon after the reply that passes the threshold — without
-      sending another message — a divider appears above the last turn:
-      *Above: turns 1–N, condensed for the model · View summary*. The
-      transcript above it is all still there.
+      `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS=1` (nothing needs switching
+      on). Hold a conversation of six or so turns, stating one exact value
+      early ("use 42 gpm for the riser"). Soon after the reply that passes
+      the threshold — without sending another message — a divider appears
+      above the last turn: *Above: turns 1–N, condensed for the model ·
+      View summary*. The transcript above it is all still there.
 - [ ] **View summary** opens a sheet with the summary under its section
       headings, and says how many turns it stands in for and the token
       estimate before and after. Settings shows a **Conversation
@@ -707,7 +709,7 @@ the shell you launch the app from, and clear them when done.
       assistant to read it. Once the divider appears, remove that document
       from the panel: the divider goes with it at once (**View summary** is
       gone rather than failing).
-- [ ] **Condensing after web lookups.** With the same three knobs set,
+- [ ] **Condensing after web lookups.** With the same two knobs set,
       and the page-text trim switched off
       (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0`, so the saved replies keep
       their citations into the pages), ask the assistant to read a public
@@ -718,15 +720,22 @@ the shell you launch the app from, and clear them when done.
       pages could be refused from then on, because its later citations
       pointed at the wrong page. With the trim on (the default), the saved
       replies carry no citations into the pages, so this row needs it off.
-- [ ] **The backstop.** Clear the three knobs and launch with
-      `BUILD_A_SPEC_CONTEXT_WINDOW=60000`. Keep chatting: once a message
-      would not fit, the status line reads *Condensing earlier
-      conversation…* before the reply starts, the reply still arrives, the
-      divider appears, and the sheet adds *Condensed at the moment a message
-      would not have fit*.
-- [ ] **Never in the tour.** With the routine knobs still set, take the
-      guided tour's conversation chapter and chat in a practice copy: no
-      divider appears, and the usage table gains no condensing line.
+- [ ] **Switching it off.** With the same two knobs set, also launch with
+      `BUILD_A_SPEC_CHAT_COMPACTION=0` (PowerShell:
+      `$env:BUILD_A_SPEC_CHAT_COMPACTION = "0"`) and hold the same
+      conversation: no divider appears, and the usage table gains no
+      condensing line.
+- [ ] **The backstop.** Clear the two knobs and launch with
+      `BUILD_A_SPEC_CHAT_COMPACTION=0` and
+      `BUILD_A_SPEC_CONTEXT_WINDOW=60000`, so the backstop is the only
+      thing that condenses. Keep chatting: once a message would not fit,
+      the status line reads *Condensing earlier conversation…* before the
+      reply starts, the reply still arrives, the divider appears, and the
+      sheet adds *Condensed at the moment a message would not have fit*.
+- [ ] **Never in the tour.** Relaunch with only the two routine knobs set,
+      take the guided tour's conversation chapter and chat in a practice
+      copy: no divider appears, and the usage table gains no condensing
+      line.
 
 ### State that must recover (v1.17.0)
 

@@ -29,13 +29,14 @@ first run on 2026-09-23 was refused, the trim was reworked in PR #192, and
 the second run passed the same day, so PR #194 turned it on by default), then
 condense the conversation rarely between turns with the full transcript kept
 and recallable (Phase 3 — complete, PR #189; decisions D1–D4 made
-2026-09-22; routine condensing stays off by default until a paid recall
-check; PR #192 also repairs citations that a condensed view had left
+2026-09-22; routine condensing shipped off until a paid recall check, and
+the owner turned it on by default on 2026-09-23 without that check (D5,
+PR #196); PR #192 also repairs citations that a condensed view had left
 pointing at the wrong page). A real project the owner measured on
 2026-09-23 confirmed the stale outlines were most of what an older build
 re-sent (75.5%). The plan's
 implementation record is the only authority on where each phase stands; this
-line is a summary of it. The file is the plan, the owner decisions (D1–D4)
+line is a summary of it. The file is the plan, the owner decisions (D1–D5)
 and the implementation record; its
 "promote before prune" phase is handed to the project workspace's harvest.
 Phases 1–2 ship in the project workspace's release, 1.21.0 (same release

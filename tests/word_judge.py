@@ -36,9 +36,11 @@ import copy
 import io
 import json
 import os
+import posixpath
 import re
 import time
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -194,13 +196,16 @@ def body_difference(
     reference,
     *,
     exclude_bookmarks=frozenset(),
+    exclude_comments=frozenset(),
 ) -> Difference | None:
     """``None`` when two Word-saved bodies agree up to
     :data:`WORD_SAVE_TOLERANCES` — all four applied here, to both sides — else
     where they first disagree. The one comparison every verdict goes
-    through."""
+    through. ``exclude_comments`` names Build-a-Spec's own comments, whose
+    anchors are removed from the RESOLVED side only (see
+    :func:`strip_comment_anchors`)."""
     return first_difference(
-        strip_word_save_markup(resolved),
+        strip_comment_anchors(strip_word_save_markup(resolved), exclude_comments),
         strip_word_save_markup(reference),
         exclude_bookmarks=frozenset(exclude_bookmarks) | {GO_BACK_BOOKMARK},
     )
@@ -211,11 +216,107 @@ def word_difference(
     reference: bytes,
     *,
     exclude_bookmarks=frozenset(),
+    exclude_comments=frozenset(),
 ) -> Difference | None:
     """:func:`body_difference` of two Word-saved files."""
     return body_difference(
-        word_body(resolved), word_body(reference), exclude_bookmarks=exclude_bookmarks
+        word_body(resolved),
+        word_body(reference),
+        exclude_bookmarks=exclude_bookmarks,
+        exclude_comments=exclude_comments,
     )
+
+
+# ---------------------------------------------------------------------------
+# Build-a-Spec's comments on the changes (Phase 3)
+# ---------------------------------------------------------------------------
+#
+# The redline carries a Word comment on each change with a recorded basis.
+# The comment is the redline's own annotation, not part of either resolution:
+# the formatted export and the upload carry none. So its anchors are removed,
+# BY ID, from what Word resolved before comparing — the way a moved copy's
+# bookmarks are excluded — and never from the reference. It is not a
+# Word-save tolerance (a save does not write it), and the ids are read from
+# the resolved file's own comments part, so a Word that renumbers comments
+# on save is still judged correctly. What the judge does check about them:
+# every one Build-a-Spec wrote is still there, and still anchored, after
+# Accept All and after Reject All.
+
+_COMMENTS_REL_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
+)
+_PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
+_W_COMMENT = f"{{{_W}}}comment"
+_W_AUTHOR = f"{{{_W}}}author"
+_W_ID = f"{{{_W}}}id"
+_W_R = f"{{{_W}}}r"
+_COMMENT_ANCHORS = tuple(
+    f"{{{_W}}}{name}"
+    for name in ("commentRangeStart", "commentRangeEnd", "commentReference")
+)
+_W_COMMENT_REFERENCE = f"{{{_W}}}commentReference"
+
+
+def _comments_part(archive: zipfile.ZipFile) -> str | None:
+    """The main document's comments part, through its relationship."""
+    try:
+        rels = etree.fromstring(archive.read("word/_rels/document.xml.rels"))
+    except KeyError:
+        return None
+    for rel in rels.iter(f"{{{_PKG_REL}}}Relationship"):
+        if rel.get("Type") == _COMMENTS_REL_TYPE and rel.get("TargetMode") != "External":
+            target = rel.get("Target", "")
+            if target.startswith("/"):
+                return target.lstrip("/")
+            return posixpath.normpath(posixpath.join("word", target))
+    return None
+
+
+def our_comment_ids(payload: bytes) -> frozenset[str]:
+    """The ids of the comments :data:`JUDGE_AUTHOR` wrote, read from the
+    file's own comments part."""
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        name = _comments_part(archive)
+        if name is None or name not in archive.namelist():
+            return frozenset()
+        root = etree.fromstring(archive.read(name))
+    return frozenset(
+        comment.get(_W_ID, "")
+        for comment in root.iter(_W_COMMENT)
+        if comment.get(_W_AUTHOR) == JUDGE_AUTHOR
+    )
+
+
+def anchored_comment_ids(payload: bytes) -> frozenset[str]:
+    """Comment ids the body still references."""
+    return frozenset(
+        reference.get(_W_ID, "")
+        for reference in word_body(payload).iter(_W_COMMENT_REFERENCE)
+    )
+
+
+def strip_comment_anchors(body, comment_ids):
+    """A copy of ``body`` without the anchors of ``comment_ids``: their
+    range starts and ends and references, and a run left holding nothing
+    but its properties. Written for the judge, sharing no code with the
+    app's own pass (``backend/spec_doc/redline_comments.py``)."""
+    stripped = copy.deepcopy(body)
+    ids = frozenset(comment_ids)
+    if not ids:
+        return stripped
+    for element in list(stripped.iter(*_COMMENT_ANCHORS)):
+        if element.get(_W_ID) not in ids:
+            continue
+        run = element.getparent()
+        _remove(element)
+        if (
+            element.tag == _W_COMMENT_REFERENCE
+            and run is not None
+            and run.tag == _W_R
+            and all(child.tag == _W_RPR for child in run if isinstance(child.tag, str))
+        ):
+            _remove(run)
+    return stripped
 
 
 def render_canonical(node, *, limit: int = 60) -> str:
@@ -247,11 +348,15 @@ def describe_difference(
     difference: Difference,
     *,
     exclude_bookmarks=frozenset(),
+    exclude_comments=frozenset(),
 ) -> dict:
     """Where two Word-saved bodies disagree, with both sides rendered — the
     fixtures are placeholder text, so the report may carry it."""
     names = frozenset(exclude_bookmarks) | {GO_BACK_BOOKMARK}
-    left = canonical_body(_judged(resolved), exclude_bookmarks=names)
+    left = canonical_body(
+        strip_comment_anchors(_judged(resolved), exclude_comments),
+        exclude_bookmarks=names,
+    )
     right = canonical_body(_judged(reference), exclude_bookmarks=names)
 
     def side(nodes):
@@ -313,6 +418,8 @@ class JudgeCase:
     #: The bookmarks a moved copy carries — the one Reject-All limit (D-6).
     moved_bookmarks: frozenset[str]
     stats: dict
+    #: How many comments Build-a-Spec put on the changes (Phase 3).
+    comments: int = 0
 
 
 @dataclass(frozen=True)
@@ -360,11 +467,55 @@ def _moved_bookmarks(redline: bytes) -> frozenset[str]:
     return frozenset(names)
 
 
+def _element_uids(section) -> list[str]:
+    uids = ["sec"]
+
+    def walk(paragraphs):
+        for paragraph in paragraphs:
+            uids.append(paragraph.uid)
+            walk(paragraph.children)
+
+    for part in section.parts:
+        uids.append(part.uid)
+        for article in part.articles:
+            uids.append(article.uid)
+            walk(article.paragraphs)
+    return uids
+
+
+def judge_comment_bases(baseline, current) -> dict:
+    """A basis for every element either tree holds, so every change the
+    redline can comment IS commented: a research basis (with a link) on
+    inserted and edited provisions, a Final QC basis on everything — so
+    deletions and moves carry one too. Two of each kind, chosen by the uid,
+    so neighbours sometimes share a comment and sometimes do not. The words
+    are placeholders; what Word judges is the markup."""
+    from backend.spec_doc.redline_comments import CommentBasis, CommentLink
+
+    bases = {}
+    for uid in dict.fromkeys(_element_uids(baseline) + _element_uids(current)):
+        kind = zlib.crc32(uid.encode("utf-8")) % 2
+        bases[uid] = CommentBasis(
+            qc=(
+                (f"Changed by a Final QC fix, applied 2026-09-23: judge fix {kind}",),
+                ("Sources:",),
+                (CommentLink(f"https://example.com/qc/{kind}", f"QC source {kind}"),),
+            ),
+            research=(
+                (f"Basis: requirements research (item r-judge-{kind})",),
+                (CommentLink(f"https://example.com/research/{kind}?a=1&b=2", "Research source"),),
+            ),
+        )
+    return bases
+
+
 def build_judge_cases(group: JudgeGroup, workspace: Path) -> JudgeBatch:
     """Import the group's upload once and render every edit's redline and
     formatted export — exactly as the app does, author and all, and with the
-    switch the export route passes (``settings.REDLINE_NATIVE_MOVES``, read
-    per call): Word judges the file a user would get."""
+    switches the export route passes (``settings.REDLINE_NATIVE_MOVES`` and
+    ``settings.REDLINE_COMMENTS``, read per call; with comments on, every
+    change the redline can comment carries one — :func:`judge_comment_bases`):
+    Word judges the file a user would get."""
     from backend import settings
 
     workspace.mkdir(parents=True, exist_ok=True)
@@ -389,6 +540,11 @@ def build_judge_cases(group: JudgeGroup, workspace: Path) -> JudgeBatch:
                 # What the app captures (``import_is_unstructured``): a
                 # non-spec master exports without the importer's headings.
                 unstructured_import=not imported.spec_shape_detected,
+                comments=(
+                    judge_comment_bases(imported.section, section)
+                    if settings.REDLINE_COMMENTS
+                    else None
+                ),
             )
         except SourceRedlineError as exc:
             cases.append(RefusedCase(name, exc.reason))
@@ -411,6 +567,7 @@ def build_judge_cases(group: JudgeGroup, workspace: Path) -> JudgeBatch:
                     for key, value in stats.items()
                     if isinstance(value, (int, dict))
                 },
+                comments=len(our_comment_ids(redline)),
             )
         )
     return JudgeBatch(group=group, upload=upload, cases=tuple(cases))
@@ -494,9 +651,12 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
     marks (Phase 2, PR B): one move, a move with children, a block of
     siblings, two named moves, a move beside an edit, a move holding a
     link, a moved bookmark, a style-numbered master and a move a section
-    break forced."""
+    break forced. With ``settings.REDLINE_COMMENTS`` on, every change also
+    carries Build-a-Spec's comment (Phase 3), and one master already holds a
+    reviewer's comment."""
     from tests import test_redline_original as matrix
     from tests.test_import_office_master import _office_master
+    from tests.test_redline_comments import _commented_master
     from tests.test_preserving_export import (
         _break_master,
         _master_bytes,
@@ -938,6 +1098,17 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
             upload(matrix._custom_xml_master, numbered=True),
             (("move-holding-custom-xml", _edit(_move_provision(0, 2))),),
         ),
+        # Phase 3: a master a reviewer already commented on. Build-a-Spec's
+        # comments are appended to the upload's own comments part, which
+        # keeps the reviewer's comment, byte for byte.
+        JudgeGroup(
+            "targeted/commented-master",
+            upload(_commented_master, modern=False),
+            (
+                ("reword-beside-a-reviewer-comment", _edit(_replace(1, "Related work is elsewhere."))),
+                ("add-beside-a-reviewer-comment", _edit(_add_provision(2, "Provide snubbers."))),
+            ),
+        ),
     ]
     return tuple(groups)
 
@@ -1113,9 +1284,29 @@ def _judge_case(case: JudgeCase, upload_result, results: dict, paths: dict) -> d
         if has_revisions(_judged(payload)):
             problems.append(f"the file Word saved after '{action}' still carries revision markup")
 
-    accept_difference = word_difference(accepted_bytes, formatted_bytes)
+    # Build-a-Spec's comments: every one survives both resolutions, anchored,
+    # and is then left out of the comparison (by the ids Word saved them
+    # under).
+    ours = {"accept": our_comment_ids(accepted_bytes), "reject": our_comment_ids(rejected_bytes)}
+    entry["comments"] = case.comments
+    for action, payload in (("accept", accepted_bytes), ("reject", rejected_bytes)):
+        kept = ours[action] & anchored_comment_ids(payload)
+        if len(kept) != case.comments:
+            problems.append(
+                f"after Word's '{action}', {len(kept)} of Build-a-Spec's "
+                f"{case.comments} comment(s) were still there and anchored"
+            )
+
+    accept_difference = word_difference(
+        accepted_bytes, formatted_bytes, exclude_comments=ours["accept"]
+    )
     if accept_difference is not None:
-        entry["accept"] = describe_difference(accepted_bytes, formatted_bytes, accept_difference)
+        entry["accept"] = describe_difference(
+            accepted_bytes,
+            formatted_bytes,
+            accept_difference,
+            exclude_comments=ours["accept"],
+        )
         problems.append(
             "Accept All in Word differs from the formatted export at body child "
             f"{accept_difference.index} ({accept_difference.left or '-'} vs "
@@ -1132,11 +1323,18 @@ def _judge_case(case: JudgeCase, upload_result, results: dict, paths: dict) -> d
             f"Reject All in Word lost bookmark(s) {sorted(unexpected)} that no move carried"
         )
     reject_difference = word_difference(
-        rejected_bytes, upload_bytes, exclude_bookmarks=lost
+        rejected_bytes,
+        upload_bytes,
+        exclude_bookmarks=lost,
+        exclude_comments=ours["reject"],
     )
     if reject_difference is not None:
         entry["reject"] = describe_difference(
-            rejected_bytes, upload_bytes, reject_difference, exclude_bookmarks=lost
+            rejected_bytes,
+            upload_bytes,
+            reject_difference,
+            exclude_bookmarks=lost,
+            exclude_comments=ours["reject"],
         )
         problems.append(
             "Reject All in Word differs from the upload at body child "
@@ -1378,16 +1576,20 @@ __all__ = [
     "JudgeGroup",
     "JudgeReport",
     "RefusedCase",
+    "anchored_comment_ids",
     "bookmark_names",
     "body_difference",
     "bookmark_places",
     "build_judge_cases",
     "describe_difference",
     "judge_batch",
+    "judge_comment_bases",
     "judge_groups",
     "judge_is_configured",
     "judge_tracked_move_sample",
+    "our_comment_ids",
     "render_canonical",
+    "strip_comment_anchors",
     "strip_word_save_markup",
     "structural_refusals",
     "with_body",

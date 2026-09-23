@@ -703,6 +703,18 @@ CHAT_COMPACTION_MAX_TOKENS = 64_000
 # and a native render that fails that check is rendered again without them.
 REDLINE_NATIVE_MOVES = _bool_env("BUILD_A_SPEC_REDLINE_NATIVE_MOVES", True)
 
+# Whether the redline on your original carries Build-a-Spec's comments (redline
+# plan Phase 3): every tracked change with a recorded basis — the research
+# finding, the attached document or the Final QC fix behind it — gets a Word
+# comment saying what it rests on, with the source web links. ON by default:
+# the owner decided (2026-09-23) that every redline on the original carries
+# them, with no choice at export. This is an operator's escape hatch, not a
+# user setting: ``0`` gives the redline without comments back, byte for byte.
+# Read by the export route at call time. The comments are added only after the
+# redline has passed its own check, and a comment pass that cannot prove its
+# own output hands the redline over without comments — never a refusal.
+REDLINE_COMMENTS = _bool_env("BUILD_A_SPEC_REDLINE_COMMENTS", True)
+
 # --- Server -----------------------------------------------------------------
 
 HOST = "127.0.0.1"

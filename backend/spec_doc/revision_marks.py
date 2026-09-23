@@ -185,6 +185,15 @@ class RevisionMarks:
         self._next += 1
         return element
 
+    def take_id(self) -> int:
+        """An id from the same counter as every revision — so above
+        everything already in the package — for an annotation that is not a
+        revision (a comment on a change, Phase 3). Not counted in
+        :attr:`count`."""
+        value = self._next
+        self._next += 1
+        return value
+
     def move_name(self) -> str:
         """A move name no other move in this export carries — Word's own
         spelling, ``move`` and digits — built from the ids this export owns,

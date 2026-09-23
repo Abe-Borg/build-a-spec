@@ -256,6 +256,7 @@ def save_project(
     project_link: dict[str, Any] | None = None,
     last_harvest_bubble: int = 0,
     compaction: dict[str, Any] | None = None,
+    qc_fix_log: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -330,6 +331,16 @@ def save_project(
     # simply sends the whole history, which is still all there.
     if compaction:
         payload["compaction"] = compaction
+    # The durable record of applied Final QC fixes (Redline on your
+    # original, Phase 3). Optional the same way: a section with no applied
+    # fix writes no key, and a reader that does not know the key loses only
+    # the comments a redline would have put on those fixes.
+    if qc_fix_log:
+        from ..qc.fix_log import sanitize_fix_log
+
+        safe_log = sanitize_fix_log(qc_fix_log)
+        if safe_log:
+            payload["qc_fix_log"] = safe_log
     return payload
 
 
@@ -631,6 +642,13 @@ def load_project(data: Any, session) -> None:
             )
         session.compaction_runner = CompactionRunner()
         session.tokens_per_char = None
+    # Assigned unconditionally too: a file without the key — every file
+    # saved before Phase 3 of the redline program — has no fix record, and
+    # the OUTGOING session's must not survive into it.
+    if hasattr(session, "qc_fix_log"):
+        from ..qc.fix_log import sanitize_fix_log
+
+        session.qc_fix_log = sanitize_fix_log(data.get("qc_fix_log"))
     # Assigned unconditionally (load_project never calls reset()): a file
     # without the key starts its harvest window at the first reply.
     if hasattr(session, "last_harvest_bubble"):

@@ -132,6 +132,7 @@ from ..qc.apply import (
     stage_chat_apply,
 )
 from ..qc.context import qc_review_context_block
+from ..qc.fix_log import fix_log_entries, now_iso as fix_log_now
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import refusal_category, response_container_id
 from .citations import repair_document_citations, request_documents
@@ -454,6 +455,15 @@ class SessionState:
     # persisted in the .baspec, cleared by reset, and clamped whenever the
     # history it counts gets shorter (``delete_reference_if_idle``).
     last_harvest_bubble: int = 0
+    # The durable record of applied Final QC fixes (Redline on your
+    # original, Phase 3; ``backend/qc/fix_log.py``): one entry per finding,
+    # written beside ``QCRunner.mark_applied`` in both places it is called,
+    # holding the finding's display facts and the fix-survival evidence the
+    # apply captured. It outlives the retained QC result — the next run
+    # replaces that — so the redline on the original can still say which
+    # change a QC fix made and why. Persisted as an optional project key,
+    # cleared by reset; never in a project brief, never a QC input.
+    qc_fix_log: list[dict[str, Any]] = field(default_factory=list)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
     # Context gauge, not spend (which is why it lives here and not in the
@@ -549,6 +559,19 @@ class SessionState:
     # where it was. The one path that persists is the registry's BASENAME
     # (``section_record.file_name``), which it already did.
     project_home: dict[str, str] | None = None
+
+    def record_qc_fixes(self, entries: list[dict[str, Any]]) -> None:
+        """Append applied-fix entries (``qc.fix_log.fix_log_entries``) to
+        the durable log, keeping the newest ``MAX_FIX_LOG_ENTRIES``. The
+        caller holds ``session_state_guard`` and has just called
+        ``QCRunner.mark_applied`` for the same finding ids."""
+        from ..qc.fix_log import MAX_FIX_LOG_ENTRIES
+
+        if not entries:
+            return
+        self.qc_fix_log = (list(self.qc_fix_log) + list(entries))[
+            -MAX_FIX_LOG_ENTRIES:
+        ]
 
     def import_is_unstructured(self) -> bool:
         """True when the ACTIVE document came from an import with no
@@ -1836,6 +1859,8 @@ class SessionState:
         self.facts.reset()
         # A fresh conversation has no replies, so none have been harvested.
         self.last_harvest_bubble = 0
+        # The applied QC fixes of the document being discarded.
+        self.qc_fix_log = []
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
@@ -5330,6 +5355,18 @@ def stream_user_turn(
                             surviving_ids,
                             document_version=disposition_version,
                             document_fingerprint=disposition_fingerprint,
+                        )
+                        # The durable fix record, for exactly the findings
+                        # just marked applied — never a voided one — with the
+                        # evidence captured when the fixes applied.
+                        session.record_qc_fixes(
+                            fix_log_entries(
+                                staged_qc_apply.result_ref,
+                                surviving_ids,
+                                staged_qc_apply.evidence,
+                                staged_qc_apply.evidence_keys,
+                                applied_at=fix_log_now(),
+                            )
                         )
                     for fid, action, reason in (
                         staged_qc_apply.skipped_events + voided_events

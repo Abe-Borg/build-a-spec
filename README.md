@@ -31,7 +31,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
-| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. Export → *Redline on your original (tracked changes)* (no release entry announces it yet — see "Redline on your original" below). |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. A change with a recorded basis carries a Word comment from Build-a-Spec with the research text and source links behind it. Export → *Redline on your original (tracked changes)* (no release entry announces it yet — see "Redline on your original" below). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -650,8 +650,10 @@ sub-provision — below), and for the four things Phase 0 left behind (the
 Phase 0 follow-up, below). Phase 2 landed as two pull requests: first real
 Microsoft Word as the redline's judge (PR #197, below), then Word's own "Moved"
 marks (below) — built before anyone had run that judge on Windows, a gate the
-owner waived, so a switch turns them off. The program is still in progress
-(Phase 3 is optional).
+owner waived, so a switch turns them off. Phase 3 — Build-a-Spec's
+comments on the changes, with the research text and source links behind
+each one (below) — is built too, on `master` with no release entry yet; the
+owner declined the phase's other ideas.
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)
 
@@ -928,6 +930,43 @@ Word run should check first.
 - **Unchanged:** the one Reject-All limit (a moved provision's bookmarks stay
   with its new copy), and the refusal of a moved provision carrying a comment
   or footnote reference.
+
+### Comments on the changes (Phase 3)
+
+On `master` with no release entry yet; the plan carries the release-note
+draft. The owner asked for it on 2026-09-23: always on, with clickable
+source links. **The redline now carries research text and links to your
+sources, and it is the file you may send to a client** — read its comments
+first.
+
+- **Each change that rests on something says what.** A provision the
+  assistant wrote from a research finding carries a Word comment from
+  Build-a-Spec naming the finding — its requirement, authority and code
+  reference, dated, with links to the sources it was verified against. A
+  lead research could not verify is labelled so, and lists what it cited as
+  not verified. One written from an attached document names the document. A
+  change a Final QC fix made — an edit, a deletion, a move — names the
+  finding, its severity and lens, the issue, and its sources. A change with
+  no recorded basis (your own edit, a relettering) gets no comment.
+- **A fix is credited only while it holds.** Applying a Final QC fix now
+  writes a durable record (saved with the project) of what it changed and
+  why, so its comment survives the next Final QC run. It speaks only while
+  the provision still reads as the fix left it: edit the provision, or undo
+  the fix, and the comment goes; redo it and it comes back. Fixes applied
+  before this version have no record, so no comment.
+- **Your file stays yours.** The comments sit outside every tracked change,
+  so they stay through Accept All and Reject All; your own comments are kept,
+  and new ones are appended to your comments part. Nothing else in the file
+  changes: every other part is still your upload's, byte for byte, and the
+  export proves it — removing Build-a-Spec's comments gives back exactly the
+  checked redline. If that proof ever fails, you get the redline without
+  comments rather than a refusal.
+- **Switchable.** `BUILD_A_SPEC_REDLINE_COMMENTS=0` gives back the redline
+  without comments, byte for byte (Configuration, below).
+- **Unverified in real Word** until the owner's Windows run: the markup
+  follows ECMA-376 and Word's own files, and the real-Word judge now checks
+  that every comment survives both resolutions; the plan lists what to look
+  at first.
 
 ## Research and Final QC cost (in progress)
 
@@ -2524,6 +2563,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE` | `8` | web_fetch allowance for the code-compliance lens. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_LENS` | `4` | web_fetch allowance for the other lenses + verifiers. |
 | `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` | `1` | In the redline on your original, show a provision you moved without changing it as Word's own "Moved" marks (`w:moveFrom` where it was and `w:moveTo` where it is) instead of a deletion there and an insertion here. On by default since redline Phase 2 PR B, which was built without real Word's verdict on it (the owner waived that gate on 2026-09-23). `0` gives back the Phase 1 rendering, byte for byte — the switch to reach for if Word ever shows a native move wrongly. Either way the export checks that Accept All gives the formatted export and Reject All your original before handing the file over, and a native rendering that fails that check is rendered again without Moved marks. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_NATIVE_MOVES = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0`. |
+| `BUILD_A_SPEC_REDLINE_COMMENTS` | `1` | In the redline on your original, give each change with a recorded basis a Word comment from Build-a-Spec saying what it rests on — a research finding (with its requirement, authority, code reference and links to its sources), an attached document, or a Final QC fix (with its issue and sources). The comments travel in the file, which may go to a client. Read per export; `0` gives back the redline without comments, byte for byte. If the comments cannot be proved additive, the file goes out without them rather than being refused. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_COMMENTS = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_COMMENTS=0`. |
 | `BUILD_A_SPEC_PORT` | `8756` | Fixed loopback backend port used only in Vite development. Packaged/browser production pre-binds an exclusive OS-assigned ephemeral loopback port per launch. |
 | `BUILD_A_SPEC_DEV` | off | Point the window at the Vite dev server. |
 | `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). Traces may contain document text; treat them as sensitive project data. `0` disables. |

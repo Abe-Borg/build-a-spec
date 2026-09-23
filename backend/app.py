@@ -163,6 +163,8 @@ from .qc.engine import (
     qc_version_fingerprint,
 )
 from .qc import apply as qc_apply_module
+from .qc import fix_log as qc_fix_log
+from .redline_basis import redline_comment_basis
 from .qc.op_conflicts import (
     canonical_qc_operation,
     plan_qc_operation_batch,
@@ -1034,6 +1036,15 @@ class _ExportInputs:
     #: also needs the imported tree — ``baseline`` for the clean render,
     #: ``redline_base`` for the redline on the original).
     unstructured_import: bool = False
+    #: What the redline on the original's comments rest on (Phase 3),
+    #: captured with everything else. The research profile is never mutated
+    #: once adopted (a later round installs a new one), so the reference is
+    #: a snapshot; the attached documents' identities and the fix record are
+    #: copies. Turned into comment text outside the guard
+    #: (``redline_basis.redline_comment_basis``).
+    comment_profile: Any | None = None
+    comment_references: tuple[dict[str, str], ...] = ()
+    comment_fix_log: tuple[dict[str, Any], ...] = ()
 
 
 # The QC apply machinery moved to ``backend/qc/apply.py`` so the
@@ -5017,6 +5028,12 @@ def create_app(
                 format_map=format_map,
                 source_filename=session.source_docx_filename or "",
                 unstructured_import=session.import_is_unstructured(),
+                comment_profile=session.research.profile_result,
+                comment_references=tuple(
+                    {"rid": doc.rid, "title": doc.title, "filename": doc.filename}
+                    for doc in session.references.docs
+                ),
+                comment_fix_log=tuple(copy.deepcopy(list(session.qc_fix_log))),
             )
         if selected_mode == "preserved":
             if not preserving_available:
@@ -5136,6 +5153,20 @@ def create_app(
                 # Read per request, never bound at import (Phase 2 PR B).
                 native_moves=settings.REDLINE_NATIVE_MOVES,
                 unstructured_import=inputs.unstructured_import,
+                # Phase 3: every change with a recorded basis carries a
+                # comment saying what it rests on. Read per request; off
+                # (``BUILD_A_SPEC_REDLINE_COMMENTS=0``) passes nothing, and
+                # the redline is the one without comments byte for byte.
+                comments=(
+                    redline_comment_basis(
+                        inputs.current,
+                        profile=inputs.comment_profile,
+                        references=inputs.comment_references,
+                        fix_log=inputs.comment_fix_log,
+                    )
+                    if settings.REDLINE_COMMENTS
+                    else None
+                ),
             )
         except SourceRedlineError as exc:
             if refusal is not None:
@@ -7193,12 +7224,21 @@ def create_app(
                     )
                 session.doc.begin_turn()
                 try:
-                    session.apply_doc_edits(combined_ops)
+                    applied_echoes = session.apply_doc_edits(combined_ops)
                 except SpecEditError as exc:  # pragma: no cover — validated above
                     session.doc.rollback_turn()
                     return JSONResponse(
                         {"ok": False, "error": str(exc)}, status_code=400
                     )
+                # What each fix wrote, captured from the tree exactly as the
+                # fixes left it — the evidence the durable fix record keeps
+                # (the chat path captures the same thing at dispatch).
+                fix_evidence = qc_apply_module.capture_fix_evidence(
+                    session.doc.doc, applied_echoes
+                )
+                fix_evidence_keys = qc_apply_module.finding_evidence_keys(
+                    eligible_findings, applied_ids, combined_ops, applied_echoes
+                )
                 session.doc.commit_turn()
                 session.qc.mark_applied(
                     applied_ids,
@@ -7206,6 +7246,15 @@ def create_app(
                     document_fingerprint=qc_version_fingerprint(
                         session.doc.doc
                     ),
+                )
+                session.record_qc_fixes(
+                    qc_fix_log.fix_log_entries(
+                        result,
+                        applied_ids,
+                        fix_evidence,
+                        fix_evidence_keys,
+                        applied_at=qc_fix_log.now_iso(),
+                    )
                 )
                 # Applied findings and skipped outcomes are one disposition
                 # transaction.  Releasing the lock between these steps could

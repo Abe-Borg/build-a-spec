@@ -626,6 +626,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
             if getattr(session, "compaction", None) is not None
             else None
         ),
+        qc_fix_log=copy.deepcopy(list(getattr(session, "qc_fix_log", ()))),
     )
 
 

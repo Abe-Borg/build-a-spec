@@ -99,9 +99,20 @@ that gate on 2026-09-23 (the plan's Decision 8; waived, not passed). The
 native moves ship behind `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` (on by default,
 `0` is the Phase 1 rendering byte for byte), and "Phase 2 (PR B) — as built"
 lists what the first Word run should check. No release entry yet.
+**Phase 3 is decided and built** (Decisions 9–13, 2026-09-23): the owner
+wanted only the comments — every change with a recorded basis now carries a
+Word comment from Build-a-Spec naming the research finding, attached
+document or Final QC fix behind it, with clickable source links, always on
+behind `BUILD_A_SPEC_REDLINE_COMMENTS` (`0` is the redline byte for byte). A
+durable record of applied QC fixes makes the QC half possible; the redline
+against any version is dropped, header/footer redlining declined, and
+layering on pending revisions skipped. Built without real Word, like PR B;
+"Phase 3 (comments on changes) — as built" lists what to check first. No
+release entry yet.
 The program adds a
 tracked-changes copy of the Word file you imported: every non-body part stays
-byte-identical, Reject All gives back the upload, and Accept All gives
+byte-identical (since Phase 3, Build-a-Spec's comments aside), Reject All
+gives back the upload, and Accept All gives
 *Export Word (keeps your formatting)*. The export checks both halves itself
 and refuses when either check fails. Phase 0 fixed the four bugs found in
 today's formatted export along the way — relettered provisions lost their tab

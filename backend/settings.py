@@ -469,6 +469,17 @@ QC_CONSOLIDATION = _bool_env("BUILD_A_SPEC_QC_CONSOLIDATION", True)
 # recoverable by the strict validator.
 QC_CONSOLIDATION_MAX_BUCKET = _int_env("BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET", 25, minimum=2)
 
+# Staggered launch (Research/QC cost Tier 1, Chunk 2). When several QC calls
+# share one cached prefix — the four web-toolless lenses, or two or more
+# consolidation buckets — sending them together means every one misses the
+# cache and every one pays to write it: a cache entry becomes readable only
+# once the first response begins streaming. So one call goes first, and the
+# rest wait for its first streamed output, up to this many seconds. A
+# follower that still finds nothing readable simply writes, exactly as it
+# would have, so the wait can cost time but never correctness, and changes no
+# request byte. 0 switches staggering off: everything starts at once.
+QC_WARM_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_WARM_WAIT_SECONDS", 45, minimum=0)
+
 # Per-call web allowances (runaway guards, not budgets — env-overridable).
 # The code-compliance lens gets the big search allowance to check standards'
 # actual current content; the other lenses and verifiers get the small one.

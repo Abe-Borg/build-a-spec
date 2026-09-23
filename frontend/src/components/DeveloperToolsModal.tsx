@@ -69,9 +69,9 @@ function eventFields(event: Record<string, unknown>): string {
  *  re-reads on every turn. Sizes only (the backend never sends text), and
  *  tokens are the app's len/4 estimate. A nonzero stale-outline count
  *  means something committed without the outline trim. Fetched pages keep
- *  their text unless the page-text trim is switched on
- *  (BUILD_A_SPEC_ELIDE_FETCHED_PAGES, off by default until its live canary
- *  passes), so that count is only a canary while the trim is on. */
+ *  their text only while the page-text trim is switched off
+ *  (BUILD_A_SPEC_ELIDE_FETCHED_PAGES, on by default since its live canary
+ *  passed), so that count is only a canary while the trim is on. */
 function historyMakeup(h: HistoryComposition): string {
   const top = h.categories
     .slice(0, 4)

@@ -309,15 +309,17 @@ AUTO_DEBRIEF = _bool_env("BUILD_A_SPEC_AUTO_DEBRIEF", True)
 
 # Whether saved chat history drops the text of the web pages the chat fetched
 # (chat-history compaction Phase 2): a committed turn keeps each fetch's URL,
-# title and retrieval time and replaces the page text with a short note, and
-# a project saved earlier is trimmed the same way when it is opened. OFF by
-# default until ``tools/fetch_elision_canary.py --run`` reports that the
-# provider accepts a saved reply whose citations point into a page whose
-# text was replaced. Anthropic does not document that, and a refusal would
-# fail every later message in the affected project. The canary forces the
-# trim on for its own request, whatever this says. Flip the default only
-# with a recorded pass (the compaction plan's Phase 2 → Canary result).
-ELIDE_FETCHED_PAGE_TEXT = _bool_env("BUILD_A_SPEC_ELIDE_FETCHED_PAGES", False)
+# title and retrieval time, replaces the page text with a short note carrying
+# the passages the reply quoted, and drops the reply's citations into the
+# removed text; a project saved earlier is trimmed the same way when it is
+# opened. ON by default since ``tools/fetch_elision_canary.py --run`` passed
+# on 2026-09-23 (the compaction plan's Phase 2 → Canary result): the provider
+# accepts that saved shape. Its first run was refused on an older shape that
+# kept the citations, and a refused history fails every later message in the
+# affected project, so ``0`` keeps page text exactly as it was saved before
+# Phase 2. The canary forces the trim on for its own request, whatever this
+# says.
+ELIDE_FETCHED_PAGE_TEXT = _bool_env("BUILD_A_SPEC_ELIDE_FETCHED_PAGES", True)
 
 # --- Research (Phase 4) -----------------------------------------------------
 
@@ -633,11 +635,12 @@ CHAT_CACHE_TTL = _cache_ttl_env(
 # a background call summarizes the older turns and later requests send that
 # summary plus the newest turns instead of the whole transcript (the full
 # transcript is never deleted, and the model can read any condensed turn back
-# with ``recall_conversation``). OFF by default on purpose: the plan gates
-# turning it on for everyone on a paid recall check against real transcripts
-# (docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md, "Before it is on by
-# default"). The backstop below runs either way.
-CHAT_COMPACTION = _bool_env("BUILD_A_SPEC_CHAT_COMPACTION", False)
+# with ``recall_conversation``). ON by default since the owner decided it on
+# 2026-09-23 (decision D5 in docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md),
+# without the paid recall check that plan had named as the gate. Each summary
+# is a billed background call with no click behind it, so ``0`` switches it
+# off. The backstop below runs either way.
+CHAT_COMPACTION = _bool_env("BUILD_A_SPEC_CHAT_COMPACTION", True)
 
 # Owner decision D1 (2026-09-22): condense at 600k tokens of committed
 # conversation, keeping the last three user turns word for word. "Committed

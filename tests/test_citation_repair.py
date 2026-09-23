@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -41,6 +42,7 @@ from backend.llm.citations import (
 )
 from backend.llm.compaction import compacted_view, view_spec_for
 from backend.llm.history_hygiene import (
+    FETCHED_PAGE_CATEGORY,
     FETCHED_PAGE_NOTE,
     QUOTED_PASSAGES_HEADER,
     QUOTED_PASSAGES_MAX_CHARS,
@@ -516,6 +518,29 @@ def test_an_earlier_builds_trimmed_page_is_not_trimmed_again_and_still_sends():
     assert _cited_indices(repaired) == []
 
 
+def test_with_no_numbering_to_read_a_quote_on_two_pages_stays_where_it_is():
+    """Opening a project gives the trim no numbering it can trust: a reply
+    written after the conversation was condensed was numbered against the
+    condensed view, and nothing saved says which replies those were. So
+    when a passage fits more than one page, neither page is trimmed and the
+    citation stays. Guessing would file the quote under the wrong page's
+    address, and the next save would keep it there (Codex, PR #194)."""
+    turn = _mirror_turn(0)
+    assert elide_fetched_page_text(turn, document_offset=None) is turn
+
+
+def test_with_no_numbering_to_read_a_quote_on_one_page_still_folds():
+    """A passage only one page holds needs no index to say where it came
+    from, so without numbering the trim goes ahead exactly as with it."""
+    history = _history()
+    trimmed = elide_fetched_page_text(history, document_offset=None)
+    assert trimmed == elide_fetched_page_text(history)
+    assert _page_data(trimmed, 0) == _note(_A_URL, _A_CITED)
+    assert _page_data(trimmed, 1) == _note(_B_URL, _B_CITED)
+    assert _cited_indices(trimmed) == []
+    assert elide_fetched_page_text(trimmed, document_offset=None) is trimmed
+
+
 # ---------------------------------------------------------------------------
 # Through the chat engine and the summary call
 # ---------------------------------------------------------------------------
@@ -571,6 +596,77 @@ def test_a_committed_turn_files_its_quote_under_the_page_it_cited(monkeypatch):
     assert _page_data(committed, 0) == _note(_MIRROR_A, _A_CITED)
     assert _page_data(committed, 1) == _note(_MIRROR_B)
     assert _cited_indices(committed) == []
+
+
+def _condensed_mirror_history() -> list[dict[str, Any]]:
+    """Mirror A is read and cited in turn 1. The same page is read again
+    from mirror B and cited in turn 2, after the conversation was condensed:
+    that reply was numbered against a view that left turn 1 out, where B
+    was document 0. An unrelated page is read and cited in turn 3 (document
+    1 of that view), and turn 4 is plain."""
+    return [
+        *_fetch_turn(1, _MIRROR_A, _A_PAGE, _A_TITLE, _A_CITED, 0),
+        *_fetch_turn(2, _MIRROR_B, _A_PAGE, _A_TITLE, _A_CITED, 0),
+        *_fetch_turn(3, _B_URL, _B_PAGE, _B_TITLE, _B_CITED, 1),
+        {"role": "user", "content": [{"type": "text", "text": "Turn 4: thanks"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "You're welcome."}]},
+    ]
+
+
+def test_opening_a_condensed_project_never_files_a_quote_under_the_wrong_page(
+    monkeypatch, caplog
+):
+    """Codex, PR #194: with the trim on by default, opening a project saved
+    with it off trims every page the project holds. Read against the whole
+    history, turn 2's index names mirror A, which holds the same passage,
+    so its quote would be filed under A's address and its citation removed,
+    and the next save would keep that. Both mirrors keep their text and
+    their citations instead. The unrelated page, which its citation's
+    passage fits alone, is trimmed as usual, and the next request is still
+    one the provider accepts."""
+    monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", True)
+    session = sessions.get_session()
+    session.history[:] = _condensed_mirror_history()
+    session.compaction = _record_for(session.history, 3)
+    project = json.loads(json.dumps(sessions.project_payload(session)))
+    client = TestClient(create_app())
+    client.post("/api/session/reset")
+    with caplog.at_level(logging.INFO, logger="buildaspec.project"):
+        loaded = client.post("/api/project/load", json=project)
+    assert loaded.status_code == 200, loaded.text
+    assert "Dropped the text of 1 fetched web page(s)" in caplog.text
+
+    history = sessions.get_session().history
+    assert _page_data(history, 0) == _A_PAGE
+    assert _page_data(history, 1) == _A_PAGE
+    assert _page_data(history, 2) == _note(_B_URL, _B_CITED)
+    assert _cited_indices(history) == [0, 0]
+
+    fake = FakeClient([text_turn(["Noted."])])
+    _patch_client(monkeypatch, fake)
+    resp = client.post("/api/chat", json={"message": "What's next?"})
+    assert _parse_sse(resp.text)[-1]["type"] == "turn_complete"
+    assert _provider_rule_violations(fake.messages.requests[0]["messages"]) == []
+
+
+def test_the_profiler_leaves_the_same_pages_opening_the_project_does(
+    monkeypatch, tmp_path
+):
+    """The offline profiler reports what opening a file does, so it reads a
+    saved history's numbering the same way: the two mirrors keep their text
+    there too."""
+    from tools import chat_history_profile
+
+    monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", True)
+    session = sessions.get_session()
+    session.history[:] = _condensed_mirror_history()
+    path = tmp_path / "project.json"
+    path.write_text(json.dumps(sessions.project_payload(session)), encoding="utf-8")
+    out = tmp_path / "measurement.md"
+
+    assert chat_history_profile.main([str(path), "--out", str(out)]) == 0
+    report = out.read_text(encoding="utf-8")
+    assert FETCHED_PAGE_CATEGORY in report.split("By category, as this build sends it:")[1]
 
 
 def test_the_summary_call_repairs_its_prefix_exactly_as_the_chat_request_does():

@@ -44,8 +44,68 @@ tokens of text — edited one article batch per call, as
 Estimates: synthetic paragraph text, ~3.5 characters per token (Sonnet 5's
 tokenizer runs above the app's usual len/4). The mechanism is exact; the
 totals scale with document size and edit cadence. Phase 1's
-`tools/chat_history_profile.py` measures real `.baspec` files — run it on a
-few of yours to replace these numbers with real ones.
+`tools/chat_history_profile.py` measures real `.baspec` files. The owner ran
+it on one real project on 2026-09-23 (below); this table stays because it
+shows the mechanism.
+
+### Measured on a real project (2026-09-23)
+
+The owner's run of `tools/chat_history_profile.py` on one saved project
+(identified only by its hash, `74da7e1a3def`): 23 typed turns, 184
+messages. The token figures are the profiler's len/4 estimates, which
+overstate encrypted payloads such as web search results.
+
+| | ~tokens | Share |
+|---|---:|---:|
+| As saved: what an older build re-sent with every message | ~431,166 | |
+| Stale outlines (30 of them), which Phase 1 removes | ~325,431 | 75.5% of as saved |
+| Fetched page text, which Phase 2 removes | 0 | the project read one page, already small |
+| Now: what this build sends once the file is opened | ~105,735 | |
+| of which web search results (6 blocks, kept) | ~52,912 | 50% of now |
+
+What it shows:
+
+- **The synthetic finding holds.** Stale outlines were three quarters of
+  what this project re-sent, at about 10.8k tokens per outline. Phase 1
+  alone cuts the re-sent history to a quarter.
+- **Growth per turn fell from about 18.7k tokens to about 4.6k.** At the
+  old rate, the history alone would have reached the backstop's 85% of the
+  1M window around turn 45. At the new rate, D1's 600k trigger is about
+  130 turns in.
+- **Money (Sonnet 5 list prices, rough).** Each message now re-reads about
+  $0.02 of history instead of about $0.09 (cache reads at $0.20/M).
+  Rebuilding a lapsed 1-hour cache costs about $0.42 instead of about
+  $1.72 ($4.00/M).
+- **The harvest already reads all of this conversation.** Its transcript
+  cap (`HARVEST_MAX_TRANSCRIPT_CHARS`) is 400,000 characters, and this
+  project's typed text is about 75,000.
+- **Web search results are half of what is left**, and only condensing can
+  remove them: the API needs their encrypted content intact.
+- This is one project; the figures scale with document size and with how
+  often the model edits.
+
+**What it implies for the open items** (recommendations; the owner
+decides):
+
+- **Routine condensing:** a project like this one would reach the trigger
+  around turn 130, more than 100 turns past where this one stands. The paid
+  recall check that gates the default (Phase 3 → Before it is on by
+  default) buys little for now. Keep it off; the backstop covers the
+  ceiling. *The owner decided otherwise the same day (D5): routine
+  condensing is on by default, without the recall check.*
+- **D4's harvest wiring stays outstanding.** The owner decided D4 (yes,
+  through the harvest), and it is half built. The measurement only bears
+  on its priority: a summary exists only once a chat is condensed, and the
+  harvest already reads this whole conversation, so the wiring pays off
+  only in chats far longer than this one. It stays owed unless the owner
+  reverses D4.
+- **Phase 5** is the one open item with a measurable payoff. A full draft
+  of about 25 article-by-article edit calls writes each ~10.8k-token
+  outline once and re-reads it on every later call. That is about $0.68
+  written (25 × 10.8k at $2.50/M) plus about $0.65 read (300 × 10.8k at
+  $0.20/M), roughly $1.30 per full draft of a section this size. Returning
+  only the edited article's outline would remove most of it. It still needs
+  the paid before/after its section names.
 
 Two more growth sources, both kept forever today:
 
@@ -113,8 +173,8 @@ see Phase 5.
 |---|---|---|---|---|
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
-| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, in review) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. Stays **switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`) until the canary passes on the new shape — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, in review) | both halves; routine condensing off by default until the recall check, backstop always on. A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
+| 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`); rework `6cc34bc` (PR #192, merged `7e32d14`); default on (PR #194, merged `7634c8d`) | commit-time + load-time elision. The PR merged without its live canary; the canary's first run (2026-09-23) was **refused** — a saved citation into the trimmed text. The rework folds quoted passages into the note and drops those citations. The second run (2026-09-23) **passed** on that shape, so the trim is **on by default** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0` turns it off) — see Phase 2 → Canary result |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **complete** | `ab7e402`, `2e98b3a`, `9fa6aaf`; review fixes `48dd034`, `b7cd064`, `7545c46`, `a1ecfab`, `a609e0d` (PR #189, merged `971683f`); citation repair `6cc34bc` (PR #192, merged `7e32d14`); default on (PR #196) | both halves; backstop always on. Routine condensing shipped off until the recall check, and is **on by default** since owner decision D5 (2026-09-23), without that check (`BUILD_A_SPEC_CHAT_COMPACTION=0` turns it off). A condensed view broke citation numbering until the citation repair — see Phase 3 → As built |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
@@ -122,34 +182,44 @@ A status moves to **complete** only after the PR merges, set by the next
 session that touches this file (the project-workspace convention).
 
 **Where it stands (2026-09-23; recorded at the 1.21.0 closeout, updated
-when PR #189 merged and the Phase 2 canary's first run came back
-refused).** Phases 1–3 are on `master`. 1.21.0 was prepared to carry
+when PR #189 merged, when the Phase 2 canary's first run came back
+refused, when its second run passed, when the owner supplied a real
+measurement, and when the owner turned routine condensing on).** Phases 1–3 are on `master`. 1.21.0 was prepared to carry
 Phases 1 and 2 (the project-workspace closeout,
 `project-workspace/07_RELEASE_CLOSEOUT.md`), but it is not tagged. The owner decided D1–D4 on
-2026-09-22 (see the Decisions table). No real measurements have been
-supplied yet, so the numbers under "What actually fills the history" are
-still the synthetic ones.
+2026-09-22 (see the Decisions table). The owner supplied one real
+measurement on 2026-09-23 ("Measured on a real project", under "What
+actually fills the history"). It pointed to keeping routine condensing off
+for now; the owner decided otherwise the same day (D5: on by default,
+without the recall check). It puts a price on Phase 5. It does not change
+D4: that wiring stays decided and outstanding (below), with little payoff
+for projects this size.
 
-- **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, and
-  ships **switched off**: `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` (default `0`)
+- **Phase 2** merged in PR #183 (`7fc6e24`) without its live canary, so
+  the 1.21.0 closeout switched it off: `BUILD_A_SPEC_ELIDE_FETCHED_PAGES`
   gates both the commit-time and the load-time elision. The owner ran the
   canary on 2026-09-23 and it was **refused**: the API checks a saved
   citation against the document it lands on, and the trim had left the
   reply's citation pointing past the end of its note (see Phase 2 → Canary
-  result). The rework (PR #192) folds each quoted passage into the page's
-  note and removes the citations into the trimmed text. The trim stays off
-  until the canary passes on that shape; then turning it on is a one-line
-  change plus the Phase 2 release note.
+  result). The rework (PR #192, merged `7e32d14`) folds each quoted passage
+  into the page's note and removes the citations into the trimmed text.
+  The owner's second run, the same day, **passed** on that shape, so the
+  trim is **on by default** on `master` (PR #194); `=0` turns it off.
+  1.21.0's release notes were written while it was off, so the next release
+  cut from `master` owes Phase 2's release-note draft (below), beside
+  Phase 3's.
 - **Phase 3** merged in PR #189 (`971683f`) — before v1.21.0 was tagged, so
   `master` carries it although 1.21.0's release notes do not mention it. No
   release is planned for now (owner, 2026-09-23); whichever release next
   ships from `master` must carry Phase 3's release-note draft (below). It
   condenses with our own summarizer at D1 (600k tokens of committed
   conversation, the last 3 turns kept) and ships `recall_conversation` with
-  it. **Routine condensing is off by default**
-  (`BUILD_A_SPEC_CHAT_COMPACTION`) until the paid recall check under
-  "Before it is on by default"; the backstop, which condenses only when a
-  message would not otherwise fit, runs either way. The canary's refusal
+  it. **Routine condensing is on by default** since the owner decided it
+  on 2026-09-23 (D5), without the paid recall check under "Before it is on
+  by default"; `BUILD_A_SPEC_CHAT_COMPACTION=0` turns it off (PR #196).
+  Each routine summary is a billed background call. The backstop, which
+  condenses only when a message would not otherwise fit, runs either
+  way. The canary's refusal
   exposed a defect in it: a condensed view drops the pages its oldest turns
   fetched, which shifted every later citation's `document_index`. The
   citation repair (PR #192) fixes every outgoing request (see Phase 3 →
@@ -165,7 +235,8 @@ still the synthetic ones.
   checks and commit. That deviation was written before D1, D3 and D4 were
   decided, so it still calls them open.
 - **Phase 5** is optional and still waits on a measured before/after on
-  real full drafts.
+  real full drafts. The real measurement puts its payoff at roughly $1.30
+  per full draft of a section that size.
 
 ## Decisions (owner)
 
@@ -175,6 +246,7 @@ still the synthetic ones.
 | D2 | Drop fetched web-page text when a turn is saved, like PDFs? | Yes: the reply keeps its cited passages; the model can re-fetch | **decided 2026-09-22: yes** |
 | D3 | Our own summarizer, or Anthropic's on-demand compaction beta? | Our own (reasons under Phase 3) | **decided 2026-09-22: our own summarizer**, not the on-demand compaction beta |
 | D4 | Should flagged decisions become Project-facts suggestions? | Yes, via the harvest (Phase 4 hand-off) | **decided 2026-09-22: yes**, through the harvest (the Phase 4 hand-off) |
+| D5 | Turn routine condensing on by default before the paid recall check? | No: keep it off until the check passes ("Before it is on by default"); the real measurement put the trigger around turn 130 for a project like the one measured | **decided 2026-09-23: on by default, without the recall check.** `BUILD_A_SPEC_CHAT_COMPACTION=0` turns it off; the backstop runs either way |
 
 Phase 1 needs none of these: it removes only data that is stale by
 construction and duplicated in full by every turn's PROJECT CONTEXT.
@@ -261,7 +333,8 @@ for PDFs and no failure has been reported, but whether the API validates a
 historical citation against its (now replaced) document is not documented.
 One opt-in request settles it: a history holding an elided fetched page
 plus a citation into it, sent once. **Settled 2026-09-23: the API checks,
-and refused it** (see Canary result). Follow the `tools/qc_verifier_canary.py`
+and refused it; the reworked shape, with no citation into the trimmed text,
+passed the same day** (see Canary result). Follow the `tools/qc_verifier_canary.py`
 pattern (no request without `--run`) and record the result here; CLAUDE.md
 names that canary as the sole paid exception, so adding a second one means
 updating that ground rule in the same change.
@@ -309,6 +382,17 @@ updating that ground rule in the same change.
   left alone. A trimmed page is recognized by the note's prefix, because a
   note with quotes is longer than a bare one. The canary sends the new
   shape and refuses to send the old one.
+- **Opening a project reads no citation numbers (PR #194).** Once the
+  default was on, Codex showed that the load-time trim read each citation's
+  index against the whole saved history. A reply written after the
+  conversation was condensed was numbered against the condensed view, and
+  nothing saved says which replies those were. So, for a passage two pages
+  hold (a page read twice, or a mirror), the quote could be filed under
+  the wrong page and its citation removed, and the next save would keep
+  that. Load now passes `document_offset=None`: a passage only one page
+  holds still folds into it, and one that more than one page holds leaves
+  those pages and their citations as they are. The offline profiler does
+  the same, and a commit, whose numbering is exact, is unchanged.
 - Tests: `tests/test_fetched_page_elision.py` (6) and
   `tests/test_fetch_elision_canary.py` (6). Each mechanism was reverted in
   place to prove it load-bearing: the commit wiring → 4 red, the load wiring
@@ -338,30 +422,42 @@ updating that ground rule in the same change.
   trimmed text; the canary sends that shape, and refuses to send the old
   one. Every chat request also goes through the citation repair (Phase 3 →
   As built), which drops a citation that no longer fits its document on the
-  way out. **Run 2 is owed**, with the same command:
-  `.\.venv\Scripts\python tools\fetch_elision_canary.py --run` (one request,
-  about two cents at most). It forces the trim on for its own request
-  whatever the switch below says, so it tests the shape the switch would
-  turn on.
-- **What that decided:** 1.21.0 ships the trim **switched off**
-  (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`), so no saved history
-  takes the unverified shape. With the switch off, commit and project load
-  keep fetched page text exactly as they did before this phase. Phase 1's
-  outline trim is unaffected, and Developer tools and the offline profiler
-  still count the fetched pages that keep their text.
-- **When it passes:** paste its output here. Then flip the default in
-  `backend/settings.py` (`test_the_page_text_trim_ships_switched_off`
-  pins it and will need its expectation changed with it), add the
-  Release-note draft below to the next release, and update README.md's
-  Configuration row and "Fetched web pages" subsection.
-- **If run 2 is refused:** run it again with `--control`, record both
-  outputs here, and rework the elision again before the default changes.
-  (Run 1's refusal took the option this bullet used to name: drop the
-  citations that point into a trimmed page, keeping their quoted passages
-  in the note.)
+  way out. The canary forces the trim on for its own request whatever the
+  switch says, so it tests the shape the switch turns on.
+- **What run 1 decided:** the trim stayed **switched off**
+  (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`, default `0`, as the 1.21.0 closeout
+  had set it) until a run passed on the new shape, so no saved history took
+  an unverified shape. With the switch off, commit and project load keep
+  fetched page text exactly as they did before this phase.
+- **Run 2 — passed** (the owner's run, 2026-09-23, on the shape PR #192
+  ships: the quoted passage in the page's note, and no citation into the
+  trimmed text). Output, verbatim:
 
-**Release-note draft** (NOT in 1.21.0, which ships the trim switched
-off; it goes into the release that turns the trim on by default):
+  ```
+  Configured API key: yes (source: keyring).
+  Sending one request to claude-sonnet-5: elided page; the saved page is 292 of 2,489 characters, and the reply's citation into characters 2406-2455 of the original was replaced by that passage, kept in the page's note.
+  Fetch elision canary passed: the provider accepted a saved conversation whose fetched page text was replaced by a note carrying the passage its reply quoted (stop_reason=end_turn). Record this in the plan's Phase 2 section; the page-text trim's default can then be switched on.
+  ```
+
+  The 292 characters are the 201-character note plus the passage the reply
+  quoted, which is what the same request rebuilt offline produces.
+- **What run 2 decided: the trim is on by default** (PR #194).
+  `settings.ELIDE_FETCHED_PAGE_TEXT` defaults to `True`;
+  `BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0` keeps page text, exactly as before
+  this phase. `test_the_page_text_trim_ships_switched_on` pins the default,
+  README's Configuration row and "Fetched web pages" subsection say so, and
+  the Release-note draft below is owed to the next release cut from
+  `master`.
+- **If a later run is ever refused:** set
+  `BUILD_A_SPEC_ELIDE_FETCHED_PAGES=0`, run it again with `--control`,
+  record both outputs here, and rework the elision before the default goes
+  back on. (Run 1's refusal took the option this bullet used to name: drop
+  the citations that point into a trimmed page, keeping their quoted
+  passages in the note.)
+
+**Release-note draft** (not in 1.21.0's release notes, which were written
+while the trim was off. It is owed to the next release cut from `master`,
+where the trim is on by default since run 2 passed):
 
 > **Web pages the assistant reads stop riding along.** When the assistant
 > read a web page during a chat, the page's full text was saved into the
@@ -516,6 +612,13 @@ condense at turn K, then ask about a decision, a rejected option and an
 exact value from before K — with and without the summary, and with recall.
 The claude-api skill's `build-eval` guide is the method.
 
+**Waived (owner decision D5, 2026-09-23).** Routine condensing is on by
+default without this check. The check is still how to learn what a summary
+loses, and worth running once a real transcript passes the trigger. If it
+shows a summary losing something that matters, rework the summary
+instruction; `BUILD_A_SPEC_CHAT_COMPACTION=0` is the way to keep routine
+condensing off while that happens.
+
 ### As built, and the release-note draft
 
 **As built** (differences from the scope above, and why):
@@ -541,7 +644,8 @@ The claude-api skill's `build-eval` guide is the method.
   D1). "Before it is on by default" names the paid recall check as the
   gate; the knob is how the gate is kept. The backstop is not a knob and
   runs regardless: without it a conversation past the window fails on
-  every message and the saved project carries that.
+  every message and the saved project carries that. *Since 2026-09-23 the
+  knob defaults on (D5, PR #196); the gate was waived, not passed.*
 - **Adopted at whichever comes first, checked by content.** A finished
   background summary is adopted by the worker itself when no turn is
   streaming, when a turn ends (after `finalize_model_turn`), or at the
@@ -682,17 +786,21 @@ policy" below):
 
 > **Long conversations keep working.** A very long drafting conversation
 > used to grow until the model could no longer take it in, and from then
-> on every message failed. Now, when a message would not otherwise fit,
-> the oldest turns are condensed into a summary the model reads instead —
-> kept close to your own words: decisions and why, options ruled out,
-> exact values, your corrections, where things stand. The last three
-> turns stay word for word, and the document, research, QC and project
-> facts still arrive fresh with every message. Nothing is deleted: the
-> chat and the saved project keep every turn, a divider marks where the
-> condensed part ends, and **View summary** shows exactly what the model
-> reads. When it needs an exact detail from before the cut, the model
-> looks the turn up in your saved conversation. Condensing is its own line
-> in the usage table.
+> on every message failed. Now the oldest turns are condensed into a
+> summary the model reads instead: in the background, while you read a
+> reply, once a conversation passes about 600,000 tokens, and on the spot
+> whenever a message would not otherwise fit. The summary is kept close to
+> your own words: decisions and why, options ruled out, exact values, your
+> corrections, where things stand. The last three turns stay word for
+> word, and the document, research, QC and project facts still arrive
+> fresh with every message. Nothing is deleted: the chat and the saved
+> project keep every turn, a divider marks where the condensed part ends,
+> and **View summary** shows exactly what the model reads. When it needs
+> an exact detail from before the cut, the model looks the turn up in your
+> saved conversation. Each summary is one small billed call, with its own
+> line in the usage table. Switch the background summaries off with
+> BUILD_A_SPEC_CHAT_COMPACTION=0 if you would rather the model condense
+> only when a message would not otherwise fit.
 
 ## Phase 4 — promote before prune
 
@@ -720,8 +828,8 @@ closeout writes the real entry from the drafts. v1.20.0 was published
 step 3 names this file so the drafts are collected.
 
 **1.21.0 (2026-09-23)** is that release. It carries Phase 1 and
-Phase 2, and its entry uses Phase 1's draft. Phase 2's draft waits: the
-trim ships switched off until its canary passes, and a release note
+Phase 2, and its entry uses Phase 1's draft. Phase 2's draft waited: the
+trim shipped switched off until its canary passed, and a release note
 describing a change nobody receives would be false.
 
 Phase 3 (PR #189) is not part of 1.21.0's notes, and it merged on
@@ -730,3 +838,12 @@ planned for now (owner, 2026-09-23). Whichever release next ships from
 `master` — 1.21.0 tagged at a later commit, or a later version — must carry
 Phase 3's release-note draft. The citation repair (PR #192) is part of
 Phase 3's behaviour before any release, so it needs no note of its own.
+The draft describes routine condensing as on by default (D5, PR #196). A
+release cut from a commit that has Phase 3 but not PR #196 would ship
+routine condensing off, and its note would need to say it condenses only
+when a message would not otherwise fit.
+
+The canary passed on its second run the same day, and PR #194 turned the
+trim on by default on `master`. So that same release must carry Phase 2's
+draft too. A 1.21.0 tagged at the closeout commit (`a273ab7`) still ships
+the trim off, and its notes stay as they are.

@@ -103,7 +103,9 @@ review, so it rides along too, API-only and unannounced until its UI ships. Comp
 never run, and if the provider refuses that history shape, every later
 message in an affected project fails. So the trim stays behind
 `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` until the canary passes (the
-compaction plan's Phase 2 → Canary result). Phase 5 Part B (waiting on the
+compaction plan's Phase 2 → Canary result). The canary passed on its second
+run the same day, after PR #192 reworked the trim, and PR #194 turned the
+trim on by default on `master`. Phase 5 Part B (waiting on the
 measurement) and Phase 6 (deferred by D5) are left out. Either can ship in
 a later release of its own.
 

@@ -590,16 +590,20 @@ def load_project(data: Any, session) -> None:
     # page it ever fetched and re-sends all of them on every turn. The URL,
     # title and retrieval time stay, so the model can fetch a page again.
     # Same copy-on-write posture, same channel. The switch
-    # (settings.ELIDE_FETCHED_PAGE_TEXT) is off by default until the trim's
-    # live canary passes; with it off, a loaded history keeps its pages,
-    # exactly as commit does.
+    # (settings.ELIDE_FETCHED_PAGE_TEXT) is on by default since the trim's
+    # live canary passed; with it off, a loaded history keeps its pages,
+    # exactly as commit does. A saved history's citation numbers are not
+    # known (replies written after the conversation was condensed were
+    # numbered against the condensed view), so the trim is told so and
+    # leaves alone any page whose quoted passage another page also holds.
     if settings.ELIDE_FETCHED_PAGE_TEXT:
-        without_pages = elide_fetched_page_text(history)
+        without_pages = elide_fetched_page_text(history, document_offset=None)
         if without_pages is not history:
             _log.info(
                 "Dropped the text of %d fetched web page(s) from a loaded "
                 "project's history; the file is unchanged until the next save.",
-                count_fetched_page_texts(history),
+                count_fetched_page_texts(history)
+                - count_fetched_page_texts(without_pages),
             )
             history = without_pages
 

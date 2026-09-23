@@ -50,9 +50,9 @@ outgoing request against what the request really holds.
 Fetched PDFs are not touched here; ``research.resend_sanitizer.
 elide_all_pdf_sources`` already turns each one into a short note at commit.
 The callers apply the page trim only while ``settings.ELIDE_FETCHED_PAGE_
-TEXT`` is on, which it is not by default until the live canary
-(``tools/fetch_elision_canary.py``) passes on this shape; this module stays
-a leaf and reads no settings itself.
+TEXT`` is on, which it is by default since the live canary
+(``tools/fetch_elision_canary.py``) passed on this shape on 2026-09-23; this
+module stays a leaf and reads no settings itself.
 
 :func:`history_composition` says what a history is made of, by category,
 in sizes only — never text — for Developer tools, the support bundle and
@@ -348,7 +348,7 @@ def _page_note(url: Any, passages: list[str], page_chars: int) -> str:
 
 
 def elide_fetched_page_text(
-    messages: list[Any], *, document_offset: int = 0
+    messages: list[Any], *, document_offset: int | None = 0
 ) -> list[Any]:
     """Drop fetched web-page text from saved history (copy-on-write).
 
@@ -359,13 +359,25 @@ def elide_fetched_page_text(
 
     Which page a citation names is its ``document_index``, counted over the
     request the citation was written in. ``document_offset`` is where the
-    first document in ``messages`` sat in that request: 0 for a whole
-    history (a project being opened), and for a turn being committed, the
-    number of documents in the view its request sent ahead of it. Two pages
-    can hold the same passage under the same title (a page fetched twice, a
-    mirror), and only the index says which one the reply cited. When the
-    index does not land on a page the citation fits, the passage goes to
-    the nearest earlier page it does fit.
+    first document in ``messages`` sat in that request: for a turn being
+    committed, the number of documents in the view its request sent ahead
+    of it, and 0 for a list whose citations were all numbered against the
+    list itself. Two pages can hold the same passage under the same title
+    (a page fetched twice, a mirror), and only the index says which one the
+    reply cited. When the index does not land on a page the citation fits,
+    the passage goes to the nearest earlier page it does fit.
+
+    ``None`` says the numbering is not known, which is the case for a
+    project being opened: a reply written after the conversation was
+    condensed was numbered against the condensed view, and nothing saved
+    says which replies those were (Codex, PR #194). A passage that fits
+    exactly one page still folds into it, since no index is needed to say
+    where it came from. A passage that fits more than one page could have
+    come from either, so those pages keep their text and every citation
+    into them stays as it is; guessing would file the quote under the
+    wrong page's address, and the next save would keep it there. The
+    request repair (``citations.repair_document_citations``) keeps what is
+    sent valid either way.
 
     Returns the SAME list object when nothing needed removing; changed
     messages are rebuilt and nothing given is ever mutated. Only committed
@@ -388,8 +400,9 @@ def elide_fetched_page_text(
 
     documents = request_documents(messages)
     positions = [position for position, _document in documents]
-    passages: dict[tuple[int, int], list[str]] = {position: [] for position in pages}
-    folded: dict[tuple[int, int], set[int]] = {}
+    # Every citation into these pages, with the pages its passage fits and
+    # how many documents came before it.
+    cited: list[tuple[tuple[int, int], int, dict[str, Any], list[tuple[int, int]], int]] = []
     for message_index, message in enumerate(messages):
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
@@ -415,18 +428,42 @@ def elide_fetched_page_text(
                 # that was already broken. The request repair judges those.
                 if not fitting or any(p not in pages for p in fitting):
                     continue
-                index = citation.get("document_index")
-                named = None
-                if isinstance(index, int) and not isinstance(index, bool):
-                    local = index - document_offset
-                    if 0 <= local < before:
-                        named = documents[local][0]
-                target = named if named in fitting else fitting[-1]
-                data = pages[target]["content"]["content"]["source"]["data"]
-                passage = _quoted_passage(citation, data)
-                if passage and passage not in passages[target]:
-                    passages[target].append(passage)
-                folded.setdefault((message_index, block_index), set()).add(citation_index)
+                cited.append(
+                    ((message_index, block_index), citation_index, citation, fitting, before)
+                )
+
+    # With no numbering to read, a passage more than one page holds cannot
+    # say which one it came from: those pages keep their text.
+    held: set[tuple[int, int]] = set()
+    if document_offset is None:
+        for _where, _index, _citation, fitting, _before in cited:
+            if len(fitting) > 1:
+                held.update(fitting)
+    trimmed = {position: block for position, block in pages.items() if position not in held}
+    if not trimmed:
+        return messages
+
+    passages: dict[tuple[int, int], list[str]] = {position: [] for position in trimmed}
+    folded: dict[tuple[int, int], set[int]] = {}
+    for where, citation_index, citation, fitting, before in cited:
+        # A citation into a page that keeps its text still fits it.
+        if any(position in held for position in fitting):
+            continue
+        if document_offset is None:
+            (target,) = fitting
+        else:
+            index = citation.get("document_index")
+            named = None
+            if isinstance(index, int) and not isinstance(index, bool):
+                local = index - document_offset
+                if 0 <= local < before:
+                    named = documents[local][0]
+            target = named if named in fitting else fitting[-1]
+        data = trimmed[target]["content"]["content"]["source"]["data"]
+        passage = _quoted_passage(citation, data)
+        if passage and passage not in passages[target]:
+            passages[target].append(passage)
+        folded.setdefault(where, set()).add(citation_index)
 
     result = list(messages)
     rebuilt: dict[int, list[Any]] = {}
@@ -436,7 +473,7 @@ def elide_fetched_page_text(
             rebuilt[message_index] = list(messages[message_index]["content"])
         return rebuilt[message_index]
 
-    for (message_index, block_index), block in pages.items():
+    for (message_index, block_index), block in trimmed.items():
         result_block = block["content"]
         note = _page_note(
             result_block.get("url"),
@@ -501,9 +538,9 @@ def history_composition(messages: list[Any]) -> dict[str, Any]:
     what makes it a useful canary; ``tools/chat_history_profile.py`` uses it
     to show what the elision removes from files saved by earlier ones.
     ``fetched_page_texts`` counts fetched web pages that still carry their
-    text: the same canary while the page-text trim is switched on, and
-    simply the number of pages the history keeps while it is off (the
-    default until its live canary passes).
+    text: the same canary while the page-text trim is switched on (the
+    default since its live canary passed), and simply the number of pages
+    the history keeps while it is off.
     """
     tool_names: dict[str, str] = {}
     for message in messages:

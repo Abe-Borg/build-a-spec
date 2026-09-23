@@ -87,9 +87,10 @@ def test_the_canary_request_is_the_shape_a_commit_produces():
 
 
 def test_the_canary_forces_the_trim_on_whatever_the_switch_says(monkeypatch):
-    """1.21.0 ships the page-text trim switched off until this canary passes,
-    so the canary must test the shape turning it on would produce: the
-    switch (``settings.ELIDE_FETCHED_PAGE_TEXT``) never reaches it."""
+    """The canary tests the shape the page-text trim saves, whatever the
+    switch (``settings.ELIDE_FETCHED_PAGE_TEXT``) says: it is on by default
+    since the canary's second run passed, but a run made with it switched
+    off must still send the trimmed shape, so the switch never reaches it."""
     monkeypatch.setattr(settings, "ELIDE_FETCHED_PAGE_TEXT", False)
     built = canary.build_request(max_tokens=512)
     assert _fetch_document(built.request)["source"]["data"].startswith(

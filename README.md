@@ -440,9 +440,11 @@ after which every message fails and the saved project keeps the problem.
 The plan is [`docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`](docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md):
 first stop saving data that is already stored elsewhere, then condense the
 conversation rarely between turns, with the original transcript always
-kept and recallable. Phases 1 and 2 ship in v1.21.0, with Phase 2
-switched off until its live check passes (below). Condensing the
-conversation (Phase 3) is next, so the program is still in progress.
+kept and recallable. Phases 1 and 2 ship in v1.21.0. Phase 2's trim is on
+by default since its live check passed on 2026-09-23 (below). Condensing the
+conversation (Phase 3) is on `master` too, and routine condensing is on by
+default since 2026-09-23 (below). An optional trim within a single turn
+(Phase 5) is still to come, so the program is still in progress.
 
 ### Stale outlines stay out of the conversation (Phase 1)
 
@@ -451,7 +453,9 @@ map element ids between edits within a turn. That outline used to be saved
 into the conversation permanently, and it was most of what a long session
 re-sent: on a ~300-paragraph section, one **Draft full section** turn saved
 about 260k tokens, 85% of them these outlines, and every later one-sentence
-edit about 17k more. Now a saved turn keeps what each edit did and drops the
+edit about 17k more. On a real 23-turn project measured on 2026-09-23, the
+outlines were three quarters of the saved conversation: about 325,000 of
+431,000 estimated tokens. Now a saved turn keeps what each edit did and drops the
 outline; the model still sees it during the turn, and every turn already
 carries the full, current document with every element id. The same trim
 applies to a project saved by an earlier version as soon as it is opened
@@ -467,50 +471,56 @@ hash:
 .\.venv\Scripts\python tools\chat_history_profile.py "C:\specs\*.baspec" --out history-measurement.md
 ```
 
-### Fetched web pages stay out of the conversation (Phase 2 — ships switched off)
+### Fetched web pages stay out of the conversation (Phase 2)
 
 When the assistant reads a web page during a chat, the page's text (up to
-about 50,000 tokens a page) is saved into the conversation, so every later
-message re-sends every page the session has ever read. With this phase
-switched on, a saved turn keeps the page's address, its title and when it
-was read, plus the passages the reply quoted (written into a short note
-where the page text was), and drops the rest of the text. The reply's
+about 50,000 tokens a page) used to be saved into the conversation, so every
+later message re-sent every page the session had ever read. Now a saved
+turn keeps the page's address, its title and when it was read, plus the
+passages the reply quoted (written into a short note where the page text
+was), and drops the rest of the text. The reply's
 citations into the dropped text go too: the API checks every citation
 against the text it points into. The assistant can open the page
 again whenever it needs the exact wording, and during the turn nothing
 changes: it reads the whole page while it works. Fetched PDFs are already
 trimmed this way and keep their own note. A project saved by an earlier
 version is trimmed the same way when it is opened (the file itself changes
-at the next save). Nothing you see in the chat changes.
+at the next save), with one exception. When a reply quoted a passage that
+another page in the project also holds (a page read twice, or a mirror),
+both pages keep their text. The numbers a saved reply uses to point at a
+page can't be trusted once the conversation was condensed, so opening the
+project can't tell which page was quoted, and guessing could save the quote
+under the wrong page. Nothing you see in the chat changes.
 
-**v1.21.0 ships it switched off** (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`,
-default `0`), so saved conversations keep fetched page text exactly as they
-did before. A one-request live check decides whether it can be on by
-default, because a history the API refused would make every later message
-in the project fail. Its first run (2026-09-23) was refused: the earlier
+**It is on by default since its live check passed on 2026-09-23.** The
+1.21.0 closeout had set it off (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`), because
+a history the API refused would make every later message in the project
+fail, and nothing had yet shown that the API accepts a trimmed page. A
+one-request live check decides that. Its first run was refused: the earlier
 version of the trim kept the reply's citations pointing into the page, and
 the API checks a citation against the text it points into ("Start index
 2406 is beyond document length 257"). The trim was reworked to move the
-quoted passages into the note and remove those citations, and the check now
-has to pass on that shape. It costs about two cents at most, and without
-`--run` it sends nothing:
+quoted passages into the note and remove those citations, and the second
+run, on that shape, passed. The check costs about two cents at most, and
+without `--run` it sends nothing:
 
 ```
 .\.venv\Scripts\python tools\fetch_elision_canary.py --run
 ```
 
 The check turns the trim on for its own request, whatever the switch says.
-If it reports that the provider accepted the conversation, the default can
-be switched on. If it reports a refusal, run it once more with `--control`.
-That sends the same conversation with the page text kept, which tells a
-refused trim apart from a refused test conversation. To use the trim before
-then, set the variable to `1`. Either way, **History makeup** and the
-offline profiler count the fetched pages that still carry their text.
+If it ever reports a refusal, set the variable to `0` and run the check once
+more with `--control`. That sends the same conversation with the page text
+kept, which tells a refused trim apart from a refused test conversation.
+`0` keeps fetched page text in saved conversations exactly as earlier
+versions did. Either way, **History makeup** and the offline profiler count
+the fetched pages that still carry their text. While the trim is on, that is
+none, apart from the pages an older project kept under the exception above.
 
 ### A long conversation is condensed, never deleted (Phase 3)
 
-With the stale outlines gone (and fetched page text too, once its switch is
-on — see above), what is left is mostly conversation — and a long enough one
+With the stale outlines and the text of fetched pages gone (see above),
+what is left is mostly conversation — and a long enough one
 still grows past what the model can take in at once. Now its
 oldest turns can be **condensed**: the model writes a summary of them, kept
 close to your own words (decisions and why, options ruled out and why, exact
@@ -538,25 +548,31 @@ is sent, each citation is checked against the pages that message actually
 carries: one that no longer fits is pointed back at its page, or removed if
 its page was condensed away. The reply's words stay either way.
 
-**When it happens.** By default only when a message would not otherwise fit:
-past about 85% of the model's context window, the app condenses before
-sending (the status line says *Condensing earlier conversation…*). If a
-summary cannot be made, that one message leaves the oldest turns out, says
-so to the model, and they can still be looked up — a conversation never
-turns into one that fails on every message. **Routine condensing**
-(`BUILD_A_SPEC_CHAT_COMPACTION=1`) instead writes the summary in the
-background after a reply once the conversation passes 600,000 tokens
-(`BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD`), keeping the last three turns
-(`BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS`). It is off until a paid recall
-check on real transcripts confirms nothing important is lost; that check is
-described in the plan. Nothing is ever condensed in the guided tour.
+**When it happens.** **Routine condensing**, on by default, writes the
+summary in the background after a reply once the conversation passes 600,000
+tokens (`BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD`), keeping the last three
+turns (`BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS`). It is a billed model call
+with no click behind it, and `BUILD_A_SPEC_CHAT_COMPACTION=0` switches it
+off. It became the default on 2026-09-23 by the owner's decision, without
+the paid recall check on real transcripts that the plan had named as the
+gate. With the trims above, a conversation grows slowly: the one real project
+measured would reach 600,000 tokens around turn 130. Whether routine
+condensing is on or off, a message that would not otherwise fit (past about
+85% of the model's context window) is condensed before it is sent, and the
+status line says *Condensing earlier conversation…*. If a summary cannot be
+made, that one message leaves the oldest turns out, says so to the model,
+and they can still be looked up — a conversation never turns into one that
+fails on every message. Nothing is ever condensed in the guided tour.
 
 **What it costs.** One summary call on the chat's own model, metered as its
 own **Conversation condensing** line in Settings. It is a fork of the last
 turn's request, so it reads that turn's cache instead of paying for the
 whole conversation again, and every later message re-reads a far shorter
-conversation. **Settings → Developer tools → Session state → Condensed
-conversation** shows the record's sizes (never its text).
+conversation. At 600,000 tokens a summary costs roughly $0.25–0.50 (an
+estimate at Sonnet 5 list prices; the usage line is the real number), and
+it pays for itself within a handful of later messages. **Settings →
+Developer tools → Session state → Condensed conversation** shows the
+record's sizes (never its text).
 
 ## Redline on your original (in progress)
 
@@ -2235,7 +2251,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
 | `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the system block and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
-| `BUILD_A_SPEC_CHAT_COMPACTION` | off | Routine conversation condensing: once the committed conversation passes the threshold below, a summary of its oldest turns is written **in the background after a reply** — a real, **billed** model call with no click behind it — and every later message sends the summary instead of those turns. Off until the paid recall check the compaction plan calls for; the backstop (condense before a message that would not fit in ~85% of the context window) runs either way and is not configurable. |
+| `BUILD_A_SPEC_CHAT_COMPACTION` | `1` | Routine conversation condensing: once the committed conversation passes the threshold below, a summary of its oldest turns is written **in the background after a reply** — a real, **billed** model call with no click behind it — and every later message sends the summary instead of those turns. **On by default** since the owner decided it on 2026-09-23 (without the paid recall check the compaction plan had named as the gate); `0` switches it off. The backstop (condense before a message that would not fit in ~85% of the context window) runs either way and is not configurable. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD` | `600000` | Estimated tokens of committed conversation — the history as later requests send it, not the per-turn PROJECT CONTEXT, which condensing cannot shrink — at which routine condensing starts (owner decision D1). Floor 10,000. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS` | `3` | How many of the most recent turns stay word for word when the conversation is condensed (D1). Floor 1. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |
@@ -2243,7 +2259,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_SDK_MAX_RETRIES` | `2` | The Anthropic SDK's own request retries (429 / 5xx / connection errors, honoring `retry-after`) — the SDK's default, made explicit. Research and Final QC add their own 3-attempt policy on top, so one fan-out call is bounded by 3 × (1 + this) requests; the SDK's share is the one that behaves under rate limiting, so leave it unless real run telemetry says otherwise. Floor 0. |
 | `BUILD_A_SPEC_API_TIMEOUT_SECONDS` | `600` | Per-request read/write timeout for every model call (a streaming reply counts between chunks). The connect timeout stays the SDK's 5 s regardless. Floor 30. |
 | `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |
-| `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `0` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn then keeps each page's address and title, with the passages the reply quoted written into a note where the text was, and an older project is trimmed the same way when opened. **Off by default** until its live check (`tools\fetch_elision_canary.py --run`) passes. The check's first run was refused on an earlier version of the trim that kept citations into the dropped text; the trim now removes those citations, and a refused history would fail every later message in the affected project. `1` turns it on. |
+| `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `1` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn keeps each page's address and title, with the passages the reply quoted written into a note where the text was, and an older project is trimmed the same way when opened. **On by default** since its live check (`tools\fetch_elision_canary.py --run`) passed on 2026-09-23. The check's first run was refused on an earlier version of the trim that kept citations into the dropped text; the trim now removes those citations. `0` keeps page text in saved history, as earlier versions did. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
@@ -2321,10 +2337,10 @@ Without `--run`, the command only reports whether a key is configured.
 
 The second paid check, also opt-in and also a single low-token request,
 confirms the provider accepts a saved chat history whose fetched page text
-was trimmed while a reply still cites it (see "Fetched web pages stay out of
-the conversation" above; `--control` sends the untrimmed conversation when a
-refusal needs diagnosing). Until it passes, that trim ships switched off
-(`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
+was trimmed to a note carrying the passage a reply quoted (see "Fetched web
+pages stay out of the conversation" above; `--control` sends the untrimmed
+conversation when a refusal needs diagnosing). It passed on 2026-09-23, so
+that trim is on by default (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
 
 ```
 .\.venv\Scripts\python tools\fetch_elision_canary.py --run

@@ -124,7 +124,9 @@ the old round's status. A new round now takes its own running status from its
 first update, as Final QC's live view always has. The panel also switches to
 running the moment the server accepts the round, so a second click cannot
 send a second start. A refused start no longer hides the findings already
-there, either.
+there, either. Stopping a round and pressing Research again straight away
+works the same way: the new round gets its own live connection at once, and
+does not wait for the stopped round's connection to close.
 
 ## Current Status — SectionFormat's fifth paragraph level
 

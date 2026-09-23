@@ -16052,6 +16052,42 @@ what v1.19.0 shipped.
   round look as if research had never run (no findings, no rounds, no area
   picker) until the next poll. The `ArtifactPanel` and `ResearchDrawer`
   prop types carry the boolean.
+- **Each round gets its own follower, at once** (caught in review on PR
+  #212, Codex). Showing `running` at once removed the status change the old
+  hand-off relied on.
+  - *The failure.* The follower guard was a boolean. Research again is
+    clickable while the previous round's stream is still closing, because
+    Stop's own refresh shows the stopped state before the stream delivers
+    it. In that window the new round's follower was refused (the old one
+    still held the guard). The old follower's final refresh then found
+    `running` already on screen, so the status effect never ran again, and
+    the round ran with no follower at all.
+  - *Reproduced* on the harness by pressing Research again within about
+    50 ms of the button re-enabling after Stop. The pre-fix build failed on
+    every run with the stream's server poll slowed to 4 s, and on 3 of 4
+    runs at the normal 0.2 s, so this was never a slow-network corner. The
+    server finished the round; the drawer sat on "Researching… (0/4)" with
+    an empty board; no second stream was ever opened; and nothing moved it
+    afterwards.
+  - *The follower slot is keyed.* It is now keyed by (workspace epoch, run
+    epoch). `researchRunEpochRef` advances on every start the server
+    ACCEPTS. `onStartResearch` advances it and aborts the old stream BEFORE
+    it publishes `running`, so the `followResearch()` right after always
+    gets a follower of its own. A refused start does not advance it, so the
+    follower of a round that is still going is left alone.
+  - *A stale follower stops without merging anything.* A follower asks
+    `current()` (both epochs) after every await: first in the loop body,
+    ahead of the sentinel and the merge; after the status probe; and in the
+    reconnect condition. Merging nothing is more than tidiness. A restart
+    after a stop reuses the round number, so the stopped round's last frame
+    would pass as the new round's and hold its log's high-water mark above
+    every refetch.
+  - *It frees the slot only if the slot is still its own.* Its final
+    refresh and usage read still run, and are harmless: they carry the
+    current refresh generation.
+  - *Final QC needed no change.* A stopped QC attempt keeps its controls
+    locked until it settles, and on the next start its status really does
+    go from terminal to running, which re-runs its effect.
 - **The picker only records a choice.** Its "Research N selected areas"
   button made choosing and starting a single click. The picker now has
   *Done* (closes and keeps the choice), *Clear*, and a live line saying what
@@ -16087,6 +16123,12 @@ what v1.19.0 shipped.
   - A full round, and a round restarted after a stop, both show running.
   - A 409 injected with `page.route` keeps the findings and the choice.
   - With a failed area, Retry sits quiet beside the chosen round.
+  - Stop, then Research again the moment the button re-enables: a second
+    stream opens about 20 ms after the click, the board shows the new
+    round's progress, and the drawer settles on the finished round. That
+    held on 1 of 1 runs with the stream's server poll at 4 s and 5 of 5 at
+    the normal 0.2 s. The pre-fix build, run the same way, opened no second
+    stream on 1 of 1 and 3 of 4.
 - **Tests.**
   - `frontend/tests/researchLive.test.ts`: +5, and one test renamed to say
     "within a run". The new ones cover a new round's start frame taking
@@ -16101,9 +16143,17 @@ what v1.19.0 shipped.
     that the toggle has no `disabled=`, that the null-snapshot branch clears
     the choice, and that the handler has the guard, the running snapshot and
     the kept profile. It is registered in `package.json`.
-- **Revert matrix.** Each mechanism was reverted in place, the exact text
-  restored after, and `git status` checked clean after the run. All 18 rows
-  turn a test red:
+  - `frontend/tests/researchStream.test.ts`: +3 source pins for the hand-off,
+    because App.tsx has no DOM harness:
+    - the slot keyed by both epochs, and `current()` asking both;
+    - the check leading the loop body and following the status probe, and
+      the slot freed only when it is still the follower's own;
+    - the start moving to a new run and cutting the old stream before
+      `running` goes on screen, while a refused start moves nothing.
+- **Revert matrix.** Each mechanism was reverted in place and the exact text
+  restored after. `git status` was checked clean after the first run, and
+  App.tsx was checked byte for byte after every row of the second. All 28
+  rows turn a test red:
 
   | Mechanism reverted | Tests red |
   |---|---|
@@ -16125,6 +16175,16 @@ what v1.19.0 shipped.
   | a later-round frame keeping the old status | 1 |
   | the reset reading every frame as running | 1 |
   | the reset keeping the old error | 1 |
+  | the follower slot refusing any second follower | 1 |
+  | `current()` ignoring the run | 1 |
+  | the loop never checking it is still current | 1 |
+  | that check moved after the merge | 1 |
+  | the status probe accepted without the check | 1 |
+  | the slot released unconditionally | 1 |
+  | the start never moving to a new run | 1 |
+  | the start never cutting the old stream | 1 |
+  | the hand-off after `running` is published | 1 |
+  | a refused start moving to a new run | 1 |
 
   The first run found one row uncaught (the workspace-transition clear): a
   file-wide regex matched a `setPicked([])` in the Clear button. The test
@@ -16138,6 +16198,12 @@ what v1.19.0 shipped.
     first.
   - `BUILD_A_SPEC_AUTO_DEBRIEF=0`, or a finished round fires a chat turn
     at the fake API key.
+  - The hand-off race depends on timing. The harness wraps
+    `ResearchRunner.sse_events` so that `HARNESS_SSE_POLL=4` slows the
+    server's poll from 0.2 s to 4 s. That keeps the stopped round's stream
+    open for seconds, which makes the race happen on every run. It needs
+    no help, though: at 0.2 s it happened on 3 of 4 runs. Measure, don't
+    assume. The first draft of this note guessed the opposite.
 - **Errata** (the notes are append-only, so corrections to earlier sections
   go here):
   1. "Live research visibility" says the merge never touches

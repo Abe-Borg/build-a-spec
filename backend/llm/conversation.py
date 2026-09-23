@@ -157,8 +157,12 @@ from ..followups import (
 from ..project_facts import (
     PANEL_SUPERSEDE_REASON,
     RECORD_PROJECT_FACTS_TOOL,
+    FactSources,
     ProjectFactError,
     ProjectFactStore,
+    annotate_fact_sources,
+    reply_digests,
+    source_resolver,
     validate_record_payload,
 )
 from ..project_brief import (
@@ -399,6 +403,14 @@ class SessionState:
     # store. Distinct from OPEN ITEMS (a projection over the tree) and from
     # WAITING ON THE USER (things not yet settled).
     facts: ProjectFactStore = field(default_factory=ProjectFactStore)
+    # How many assistant replies the last COMMITTED fact harvest had read
+    # (Project workspace Phase 4) — the ``assistant_bubble_count`` ordinal.
+    # The panel's "N replies since facts were last harvested" and the next
+    # harvest's transcript window both start here. Advanced only when a
+    # harvest preview is committed (an abandoned preview harvested nothing),
+    # persisted in the .baspec, cleared by reset, and clamped whenever the
+    # history it counts gets shorter (``delete_reference_if_idle``).
+    last_harvest_bubble: int = 0
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
     # Context gauge, not spend (which is why it lives here and not in the
@@ -662,6 +674,17 @@ class SessionState:
     def _facts_stamp(self) -> tuple[str, str]:
         return (" ".join(self.doc.doc.number.split()), current_date_iso())
 
+    def facts_payload(self) -> list[dict[str, Any]]:
+        """The ledger as the panel receives it: the snapshot, with every fact
+        whose source does not resolve flagged ``unresolved_ref``.
+
+        The ONE definition every surface that hands the panel its facts goes
+        through — the document payload, the ``project_facts`` SSE event and
+        the panel routes' answers — so the flag cannot appear in one and be
+        missing from the next (it would flicker on every turn).
+        """
+        return annotate_fact_sources(self.facts.snapshot(), sources=fact_sources(self))
+
     def add_project_fact_if_idle(
         self, payload: dict[str, Any]
     ) -> tuple[str, list[dict[str, Any]]]:
@@ -676,8 +699,9 @@ class SessionState:
                 recorded_at=recorded_at,
                 default_source_kind="user",
                 discipline=effective_discipline(self),
+                resolve=source_resolver(fact_sources(self)),
             )
-            return "ok", self.facts.snapshot()
+            return "ok", self.facts_payload()
 
     def update_project_fact_if_idle(
         self, pid: str, changes: dict[str, Any]
@@ -686,11 +710,14 @@ class SessionState:
             if self.turn_active:
                 return "active", []
             outcome = self.facts.update(
-                pid, changes, discipline=effective_discipline(self)
+                pid,
+                changes,
+                discipline=effective_discipline(self),
+                resolve=source_resolver(fact_sources(self)),
             )
             if outcome == "missing":
                 return "missing", []
-            return "ok", self.facts.snapshot()
+            return "ok", self.facts_payload()
 
     def supersede_project_fact_if_idle(
         self,
@@ -712,10 +739,49 @@ class SessionState:
                 recorded_in=recorded_in,
                 recorded_at=recorded_at,
                 discipline=effective_discipline(self),
+                resolve=source_resolver(fact_sources(self)),
             )
             if outcome == "missing":
                 return "missing", []
-            return "ok", self.facts.snapshot()
+            return "ok", self.facts_payload()
+
+    def commit_harvest_if_idle(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        bubble_count: int,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Record the proposals a user accepted from a fact harvest — one
+        batch, all or nothing — and advance the harvest marker.
+
+        Refused while a turn owns the ledger, for the panel mutators' reason:
+        that turn's rollback would silently revert the harvest. Every record
+        passes the source resolver (a proposal citing a finding, document or
+        reply that does not exist is refused), through the same ``apply()``
+        the chat tool uses. The marker moves to the reply count the preview
+        READ — clamped to what the conversation holds now, and never
+        backwards. An empty ``records`` still moves it: the user reviewed
+        those replies and chose to record nothing, which is an answer too.
+        """
+        with self._turn_state_lock:
+            if self.turn_active:
+                return "active", None
+            summary: dict[str, Any] = {"active": len(self.facts.active())}
+            if records:
+                recorded_in, recorded_at = self._facts_stamp()
+                summary = self.facts.apply(
+                    {"record": list(records), "supersede": []},
+                    recorded_in=recorded_in,
+                    recorded_at=recorded_at,
+                    default_source_kind="model",
+                    discipline=effective_discipline(self),
+                    resolve=source_resolver(fact_sources(self)),
+                )
+            self.last_harvest_bubble = max(
+                self.last_harvest_bubble,
+                min(int(bubble_count), assistant_bubble_count(self.history)),
+            )
+            return "ok", summary
 
     def delete_reference_if_idle(
         self, rid: str
@@ -776,6 +842,12 @@ class SessionState:
                     if entry["role"] == "assistant"
                 )
                 del self.history[turn_start:]
+                # The harvest marker counts replies of THIS history; one that
+                # now points past its end would hide the next replies from
+                # the next harvest as "already read".
+                self.last_harvest_bubble = min(
+                    self.last_harvest_bubble, discarded_message_index
+                )
                 # Both are model-authored context from the discarded tail.
                 # Keeping either would leak reference-derived material into
                 # the UI/save payload, and stale figure message indices could
@@ -1578,6 +1650,8 @@ class SessionState:
         # Established project facts belong to the project that was open —
         # they carry through a project brief, never through a reset.
         self.facts.reset()
+        # A fresh conversation has no replies, so none have been harvested.
+        self.last_harvest_bubble = 0
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
@@ -1921,16 +1995,61 @@ def _neutralize_context_boundaries(text: str) -> str:
     )
 
 
-def _assistant_bubble_count(history: list[dict[str, Any]]) -> int:
+def assistant_bubble_count(history: list[dict[str, Any]]) -> int:
     """How many assistant bubbles the transcript already holds.
 
     The turn ordinal: figures stamp it so a reloaded project re-inlines
-    them into the right bubble, and tracked follow-ups stamp it so their
-    age renders as "raised N replies ago". One definition so the two
-    cannot drift.
+    them into the right bubble, tracked follow-ups stamp it so their age
+    renders as "raised N replies ago", and the fact harvest (Project
+    workspace Phase 4) numbers its transcript by it — ``turn:N`` is the Nth
+    of these. One definition so the three cannot drift.
     """
     return sum(
         1 for entry in chat_transcript(history) if entry["role"] == "assistant"
+    )
+
+
+def fact_sources(session: SessionState) -> FactSources:
+    """What a project fact's ``source_ref`` may name in this session.
+
+    Plain attribute reads of the stores it summarizes (the readiness and
+    ``_doc_payload`` posture — never a runner's own lock); a caller that
+    needs the answer coherent with what it is about to write holds the
+    session guard. Research ids are the profile's items; reference ids the
+    attached documents; QC ids the retained review's survivors and disputed
+    candidates (``QCResult.finding()``'s set); the turn digests one identity
+    per committed reply (so ``turn:N`` is checked against the reply a fact
+    was pinned to, not merely its number); the section numbers the project's
+    registry plus this section.
+    """
+    profile = getattr(session.research, "profile_result", None)
+    research_ids = frozenset(
+        item.item_id for item in (getattr(profile, "items", None) or []) if item.item_id
+    )
+    reference_ids = frozenset(doc.rid for doc in session.references.docs)
+    result = getattr(session.qc, "result", None)
+    qc_ids = frozenset(
+        finding.finding_id
+        for finding in (
+            *(getattr(result, "findings", None) or []),
+            *(getattr(result, "disputed", None) or []),
+        )
+        if finding.finding_id
+    )
+    link = session.project_link if isinstance(session.project_link, dict) else {}
+    numbers = {
+        " ".join(str(record.get("number", "") or "").split())
+        for record in (link.get("sections") or [])
+        if isinstance(record, dict)
+    }
+    numbers.add(" ".join(session.doc.doc.number.split()))
+    numbers.discard("")
+    return FactSources(
+        research_ids=research_ids,
+        reference_ids=reference_ids,
+        qc_ids=qc_ids,
+        turn_digests=reply_digests(chat_transcript(session.history)),
+        section_numbers=frozenset(numbers),
     )
 
 
@@ -2082,7 +2201,7 @@ def _turn_context_text(session: SessionState) -> str:
     # conflating the two would have the model filing paragraph TBDs here.
     try:
         followup_block = session.followups.context_block(
-            message_index=_assistant_bubble_count(session.history)
+            message_index=assistant_bubble_count(session.history)
         )
     except Exception:  # noqa: BLE001 - context assembly must never fail a turn
         followup_block = ""
@@ -3077,7 +3196,9 @@ def _run_record_project_facts(
     the local date — the provenance a carried fact still shows in the next
     section — and a discipline-scoped fact is bound to this session's
     discipline, which is what lets the next section tell its own
-    discipline's facts from another's.
+    discipline's facts from another's. Every ``source_ref`` must resolve
+    (``project_facts.resolve_fact_source``); the in-flight reply is not a
+    committed turn yet, so ``turn:N`` counts only the replies before it.
     """
     store = session.facts
     recorded_in = " ".join(session.doc.doc.number.split())
@@ -3088,6 +3209,10 @@ def _run_record_project_facts(
             recorded_in=recorded_in,
             recorded_at=current_date_iso(),
             discipline=effective_discipline(session),
+            # Project workspace Phase 4: every source a fact cites must
+            # exist — a ref naming nothing comes back as an is_error the
+            # model corrects, never a turn failure.
+            resolve=source_resolver(fact_sources(session)),
         )
     except ProjectFactError as exc:
         return (
@@ -3111,7 +3236,7 @@ def _run_record_project_facts(
             "tool_use_id": block.get("id"),
             "content": json.dumps(summary, ensure_ascii=False),
         },
-        [{"type": "project_facts", "project_facts": store.snapshot()}],
+        [{"type": "project_facts", "project_facts": session.facts_payload()}],
     )
 
 
@@ -3523,7 +3648,7 @@ def stream_user_turn(
     # (the transcript merges a turn's assistant text into one bubble, so all
     # of a turn's figures share this index).
     try:
-        message_index = _assistant_bubble_count(session.history)
+        message_index = assistant_bubble_count(session.history)
     except Exception as exc:  # noqa: BLE001 - startup is transactional
         session.release_model_turn(turn_token)
         yield {"type": "error", "message": f"Unexpected error: {exc}"}

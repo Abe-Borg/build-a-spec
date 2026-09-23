@@ -124,6 +124,10 @@ def _category_models() -> dict[str, str]:
         # single bucket could only ever be priced at one of the two.
         "qc_batched": settings.QC_MODEL,
         "template": settings.INTERVIEW_MODEL,
+        # The fact harvest's one call (Project workspace Phase 4). Its own
+        # bucket rather than "interview" so the Settings table says what the
+        # spend was for; same model, same rates.
+        "harvest": settings.INTERVIEW_MODEL,
     }
 
 

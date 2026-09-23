@@ -5,6 +5,9 @@ import type {
   EditOp,
   Figure,
   FileLoading,
+  HarvestCommitResult,
+  HarvestPreview,
+  HarvestStatus,
   Health,
   ImportNotice,
   ImportReport,
@@ -76,6 +79,9 @@ import {
   addProjectFact,
   updateProjectFact,
   supersedeProjectFact,
+  runFactHarvest,
+  commitFactHarvest,
+  HarvestRequestError,
   startFromProjectBrief,
   startNextSection,
   downloadProjectBrief,
@@ -90,7 +96,7 @@ import {
   streamResearch,
   undoDoc,
 } from "./lib/api";
-import type { ProjectFactInput } from "./lib/api";
+import type { HarvestCommitInput, ProjectFactInput } from "./lib/api";
 import { createLatestAnswer } from "./lib/latestAnswer";
 import {
   emptyDebriefQueue,
@@ -180,6 +186,10 @@ export default function App() {
   // persists until a fact is retired, which is the whole point of it.
   const [projectFacts, setProjectFacts] = useState<ProjectFact[]>([]);
   const [projectLink, setProjectLink] = useState<ProjectLink | null>(null);
+  // Replies since the last committed fact harvest (Project workspace
+  // Phase 4). Server-derived and never counted here: the marker is the
+  // server's, and it moves only when a harvest commits.
+  const [harvestStatus, setHarvestStatus] = useState<HarvestStatus | null>(null);
   // The project folder this section's file lives in (Project workspace
   // Phase 2). Server-owned like `saveTarget`: the doc payload carries it,
   // and a save reports the answer it just found. Never inferred here.
@@ -547,6 +557,7 @@ export default function App() {
         setFollowups(payload.followups ?? []);
         setProjectFacts(payload.project_facts ?? []);
         setProjectLink(payload.project_link ?? null);
+        setHarvestStatus(payload.harvest ?? null);
         setProjectHome(payload.project_home ?? null);
         setLintIssues(payload.lint);
         setStandards(payload.standards);
@@ -1807,6 +1818,46 @@ export default function App() {
     [projectFactMutation, currentWorkspaceLease],
   );
 
+  /** The fact harvest's one paid call (Project workspace Phase 4). Records
+   *  nothing — the dialog shows the review sheet — but it IS metered,
+   *  whatever it produced (a refused or malformed reply is still a paid
+   *  one), so the spend pill re-reads either way. */
+  const runHarvestHandler = useCallback(async (): Promise<HarvestPreview> => {
+    try {
+      return await runFactHarvest(currentWorkspaceLease());
+    } finally {
+      refreshUsage();
+    }
+  }, [currentWorkspaceLease, refreshUsage]);
+
+  /** Record what the user accepted from a harvest, then refresh readiness
+   *  AND Final QC — facts are a hashed QC input, so a retained review reads
+   *  stale the moment one is recorded (the projectFactMutation posture). A
+   *  proposal the server refuses (`invalid_fact`) leaves everything as it
+   *  was and the dialog shows why; any other refusal re-syncs the doc, since
+   *  the project moved under the preview. */
+  const commitHarvestHandler = useCallback(
+    async (input: HarvestCommitInput): Promise<HarvestCommitResult> => {
+      const epoch = workspaceEpochRef.current;
+      try {
+        const result = await commitFactHarvest(input, currentWorkspaceLease());
+        if (workspaceEpochRef.current === epoch) {
+          setProjectFacts(result.project_facts);
+          setHarvestStatus(result.harvest);
+          refreshReadiness();
+          refreshQc();
+        }
+        return result;
+      } catch (error) {
+        if (!(error instanceof HarvestRequestError && error.code === "invalid_fact")) {
+          refreshDoc();
+        }
+        throw error;
+      }
+    },
+    [currentWorkspaceLease, refreshDoc, refreshReadiness, refreshQc],
+  );
+
   /** How many assistant bubbles the transcript holds — the same turn ordinal
    *  the server stamps on a tracked item, so "raised N replies ago" agrees
    *  with what the model was told. */
@@ -1882,6 +1933,7 @@ export default function App() {
     setFollowups([]);
     setProjectFacts([]);
     setProjectLink(null);
+    setHarvestStatus(null);
     setLintIssues([]);
     setStandards([]);
     setProfileComplete(false);
@@ -1948,6 +2000,7 @@ export default function App() {
     followups: FollowUp[];
     project_facts?: ProjectFact[];
     project_link?: ProjectLink | null;
+    harvest?: HarvestStatus;
     lint: LintIssue[];
     standards: StandardInfo[];
     profile_complete: boolean;
@@ -1972,6 +2025,7 @@ export default function App() {
     setFollowups(payload.followups ?? []);
     setProjectFacts(payload.project_facts ?? []);
     setProjectLink(payload.project_link ?? null);
+    setHarvestStatus(payload.harvest ?? null);
     setLintIssues(payload.lint);
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
@@ -2014,6 +2068,9 @@ export default function App() {
         followups: merged.followups ?? [],
         project_facts: merged.project_facts ?? [],
         project_link: merged.project_link ?? null,
+        // The seeded section's own (zero) reply count: without it, a
+        // next-section or template start kept the outgoing section's hint.
+        harvest: merged.harvest,
         lint: merged.lint ?? [],
         standards: merged.standards ?? [],
         profile_complete: merged.profile_complete ?? false,
@@ -3179,6 +3236,9 @@ export default function App() {
           onUpdateProjectFact={updateProjectFactHandler}
           onSupersedeProjectFact={supersedeProjectFactHandler}
           onExportProjectBrief={saveProjectBrief}
+          harvestStatus={harvestStatus}
+          onRunHarvest={runHarvestHandler}
+          onCommitHarvest={commitHarvestHandler}
           onRefreshProjectBrief={onRefreshProjectBrief}
           onPullProject={onPullProject}
           onStartNextSection={(opts) => void requestStartNextSection(opts)}

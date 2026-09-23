@@ -395,9 +395,9 @@ def _matches_needed(total: int) -> int:
     """
     if total <= 0:
         return 0  # difflib calls two empty texts identical (ratio 1.0)
-    need = math.ceil(_DUPLICATE_RATIO * total / 2.0)
-    while need > 0 and 2.0 * (need - 1) / total >= _DUPLICATE_RATIO:
-        need -= 1
+    # Start a little below the answer and climb, so the result is the least
+    # count the float expression accepts however the product rounds.
+    need = max(0, math.floor(_DUPLICATE_RATIO * total / 2.0) - 1)
     while 2.0 * need / total < _DUPLICATE_RATIO:
         need += 1
     return need

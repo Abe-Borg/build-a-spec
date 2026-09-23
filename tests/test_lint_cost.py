@@ -573,14 +573,23 @@ def test_a_report_handed_out_is_a_copy(monkeypatch):
     session.doc.begin_turn()
     session.doc.apply_edits(_SEED[1:])  # articles without a header: one finding
     session.doc.commit_turn()
-    first = session.document_lint(session.doc.doc)
-    assert first
-    first[0]["message"] = "tampered"
-    first.append({"rule": "invented"})
-    again = session.document_lint(session.doc.doc)
-    assert again != first
-    assert all(item["rule"] != "invented" for item in again)
-    assert all(item["message"] != "tampered" for item in again)
+
+    def tamper(report):
+        report[0]["message"] = "tampered"
+        report.append({"rule": "invented", "message": "invented"})
+
+    def pristine(report):
+        return report and all(
+            item["rule"] != "invented" and item["message"] != "tampered"
+            for item in report
+        )
+
+    fresh = session.document_lint(session.doc.doc)  # linted, then remembered
+    tamper(fresh)
+    remembered = session.document_lint(session.doc.doc)  # served from the memo
+    assert pristine(remembered)
+    tamper(remembered)
+    assert pristine(session.document_lint(session.doc.doc))
 
 
 def test_each_callers_inputs_get_their_own_report_for_one_version(monkeypatch):

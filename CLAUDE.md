@@ -2304,6 +2304,8 @@ tests/
                            the batch sent only after its first output; none
                            below the minimum (19 vs 20 at the shipped values);
                            a fast-failing or raising lead still releasing it;
+                           a lead stopped before its first request priced
+                           with the unsent seats, never as a lead;
                            a retry backoff not holding it; a Stop in the wait
                            sending no batch and joining the lead; the join on
                            a refused submission, the wall-clock and the round
@@ -16100,6 +16102,17 @@ why and the traps.
   read anything that is not a finite number (a bool — `False` is 0.0 as a
   number — NaN, a string) as list price. `QcReportVerdict` gained the
   `cost_multiplier` it was already carrying on the wire.
+- **A lead that sent nothing was not streamed** (caught in review on PR #213,
+  Codex). A Stop landing after the roster but before the lead's first request
+  makes `_run_streaming_call` return cancelled with nothing sent — yet the
+  first cut keyed every picked lead as streamed, so that seat was priced at
+  1.0 beside cancelled seats at the batch rate, and both report projections
+  claimed a streamed lead the run never sent. `streamed_keys` now holds only
+  leads whose own `_CallResult` made at least one request
+  (`api_request_count > 0`, which the streamed call increments immediately
+  before `client.messages.stream`); a lead stopped first is priced with the
+  seats that were never batched. A lead that sent a request and then failed
+  is still a lead: it really went out, at list.
 - **F3.** How one seat is sent is not a review input: nothing about the lead
   reaches the input manifest, so a retained Final QC result stays current with
   the switch in either position (pinned, with the fingerprints compared).
@@ -16123,7 +16136,7 @@ why and the traps.
   the engine reads as a refused submission. (4) `_LeapClock` jumps past every
   ceiling at the first reading after it is armed — armed from inside
   `batches.results`, so that reading is the next round's deadline check.
-- **Tests: `tests/test_qc_batch_warm_lead.py` (24)**, plus a lead-frames fold
+- **Tests: `tests/test_qc_batch_warm_lead.py` (25)**, plus a lead-frames fold
   test in `frontend/tests/qcLive.test.ts` and three mirror tests in
   `frontend/tests/qcReport.test.ts`. Revert matrix — each mechanism reverted in
   place, one at a time, restored from the exact text it read, and the file
@@ -16142,6 +16155,7 @@ why and the traps.
   | a zero wait not making the switch inert | 1 |
   | the lead priced at the batch rate | 9 |
   | the outcome carrying no `streamed_keys` | 9 |
+  | a lead that sent nothing keyed as streamed (the review fix) | 1 |
   | the runtime floor of 8 not enforced | 1 |
   | the lead being the lineage's LAST seat | 13 |
   | the lineage kind ignoring the tools | 2 |

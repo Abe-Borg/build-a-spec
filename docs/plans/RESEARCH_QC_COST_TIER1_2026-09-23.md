@@ -1036,6 +1036,17 @@ rewritten:
     still said "one batch"; both now say one per round (the v1.18.0 erratum,
     applied where it had not reached).
 
+16. **Review finding (Codex, PR #213): only a lead that sent a request is
+    priced as one.** The spec says `_BatchPhaseOutcome.streamed_keys` names
+    the leads; the first cut named every PICKED lead. A Stop landing after
+    the roster but before the lead's first request leaves it cancelled with
+    nothing sent, and priced at 1.0 it made both report projections claim a
+    streamed lead the run never sent. `streamed_keys` now holds only leads
+    whose own call made at least one request; the rest are priced with the
+    seats that were never batched.
+    `test_a_lead_stopped_before_its_first_request_is_not_reported_as_streamed`
+    pins it, and fails against the first cut.
+
 Every mechanism was reverted in place; the matrix is in CLAUDE.md ("Final
 QC's batched phase can stream a lead seat first").
 

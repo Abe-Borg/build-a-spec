@@ -6002,7 +6002,17 @@ def _run_batch_calls(
                 if state.settled is not None
             },
             unassigned_results=unassigned_results,
-            streamed_keys=lead_keys,
+            # Only a lead that actually SENT a request was streamed at list
+            # price. One stopped before its first request sent nothing, like
+            # the seats that were never batched, so it is priced with them —
+            # otherwise the report would claim a lead the run never sent
+            # (Codex, PR #213).
+            streamed_keys=frozenset(
+                key
+                for key in lead_keys
+                if states[key].settled is not None
+                and states[key].settled.api_request_count > 0
+            ),
         )
 
     if leads:
@@ -6290,10 +6300,12 @@ class _BatchPhaseOutcome:
     # first. The run degrades to partial, so readiness stays blocked and
     # nothing recovered becomes actionable.
     terminated_early: bool = False
-    # Seats streamed ahead of the batch as a lineage's warm lead. They were
-    # billed at list price, so the caller records them at a multiplier of
-    # 1.0 rather than the batch rate — the one thing that distinguishes
-    # them in the record.
+    # Seats streamed ahead of the batch as a lineage's warm lead that sent at
+    # least one request. They were billed at list price, so the caller
+    # records them at a multiplier of 1.0 rather than the batch rate — the
+    # one thing that distinguishes them in the record. A lead stopped before
+    # its first request is not here: it sent nothing, like the seats that
+    # were never batched.
     streamed_keys: frozenset[str] = frozenset()
 
 

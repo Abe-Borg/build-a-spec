@@ -500,6 +500,42 @@ def test_a_stop_during_the_lead_wait_submits_no_batch_and_joins_the_lead(
     assert len(records) == 1 and "(stopped)" in records[0]
 
 
+def test_a_lead_stopped_before_its_first_request_is_not_reported_as_streamed(
+    monkeypatch,
+) -> None:
+    """A lead that never sent anything was not a streamed lead.
+
+    Stop lands after the roster (so a lead is picked) but before the lead's
+    call makes its first request: it returns cancelled with nothing sent,
+    exactly like the seats that were never batched. Priced at list and
+    counted as streamed, it made the report claim a lead the run never sent
+    (Codex, PR #213) — so only a lead that actually sent a request is priced
+    at list.
+    """
+    _minimums_at_the_floor(monkeypatch)
+    doc = _titles("Doc gap", 4)
+    stop = threading.Event()
+
+    def sink(event: dict) -> None:
+        if event["type"] == "verification_started":
+            stop.set()
+
+    client = _LeadClient(_lineage_scripts(doc=_medium(doc)))
+    result = _run(client, sink=sink, should_stop=stop.is_set)
+
+    assert client.streamed == []
+    assert client.batches.created == []
+    verdicts = _verdicts(result)
+    assert len(verdicts) == 8
+    assert all(verdict.api_request_count == 0 for verdict in verdicts.values())
+    assert all(
+        verdict.cost_multiplier == settings.BATCH_COST_MULTIPLIER
+        for verdict in verdicts.values()
+    )
+    assert qc_streamed_lead_seats(result.to_dict()) == 0
+    assert "Streamed lead seat" not in _memo_text(result)
+
+
 def test_a_lead_that_raises_is_recorded_failed_and_releases_the_batch(
     monkeypatch, caplog
 ) -> None:

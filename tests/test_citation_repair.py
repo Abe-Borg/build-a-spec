@@ -419,6 +419,30 @@ def test_the_trim_bounds_the_quotes_it_keeps_and_says_how_many_it_left_out():
     assert _cited_indices(trimmed) == []
 
 
+def test_the_trim_never_grows_a_page_even_to_keep_a_quote():
+    """A page only a little longer than the note has no room for the quote
+    as well. The trim must still only ever shrink the history, so the note
+    goes in bare: it still says to fetch the page again for its wording."""
+    bare = FETCHED_PAGE_NOTE.format(url=_A_URL)
+    cited = "Keep spare heads on site."
+    page = "x" * (len(bare) + 5 - len(cited) - 1) + "\n" + cited
+    assert len(bare) < len(page) < len(_note(_A_URL, cited))
+    history = [
+        {"role": "user", "content": [{"type": "text", "text": "Read it."}]},
+        {"role": "assistant", "content": [
+            {"type": "web_fetch_tool_result", "tool_use_id": "s1", "content": {
+                "type": "web_fetch_result", "url": _A_URL,
+                "content": _document(page, _A_TITLE)}},
+            {"type": "text", "text": "heads on site",
+             "citations": [_citation(page, cited, _A_TITLE, 0)]},
+        ]},
+    ]
+    trimmed = elide_fetched_page_text(history)
+    assert _page_data(trimmed, 0) == bare
+    assert len(_page_data(trimmed, 0)) < len(page)
+    assert _cited_indices(trimmed) == []
+
+
 def test_an_earlier_builds_trimmed_page_is_not_trimmed_again_and_still_sends():
     """What a build with the Phase 2 trim switched on saved: the bare note,
     and the reply's citation still pointing past its end. The trim leaves

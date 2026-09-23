@@ -318,6 +318,21 @@ invisible to CI and expensive to the user.
       before. Press Stop while the three are queued: they are recorded as
       cancelled, and the activity log shows one "share a cached prefix" line
       ending `(stopped)`.
+- [ ] **Streamed lead seat** (cost Tier 1, Chunk 3 — **off by default**, so
+      this row runs only when trialling it). From a source checkout, set
+      `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "1"` (Command Prompt:
+      `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=1`) and run Final QC on a section
+      big enough that one kind of finding faces at least 20 verifier seats
+      (ten or more medium findings from lenses without web tools, say). In
+      the Review Room, one seat of that group shows live activity while the
+      rest wait on the batch; the batch line counts it when it finishes. In
+      the report, that seat's usage is priced at list (the JSON export shows
+      its `cost_multiplier` as 1.0, every batched seat's as 0.5), the
+      methodology lists **Streamed lead seat**, and
+      `.\.venv\Scripts\python tools\qc_export_cost_profile.py "<the JSON export>"`
+      shows a `seat:list-price:<group>` row. With the switch off (the
+      default) none of that appears and the methodology does not mention a
+      lead.
 
 ### Redline export (v1.0.0)
 

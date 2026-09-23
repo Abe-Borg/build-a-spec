@@ -15,7 +15,7 @@ and then follows the [Session procedure](#session-procedure) step by step.
 |---|---|---|---|---|---|
 | plan | The plan and this file | **complete** | PR #205 | `3d600d9` | set by its own PR, like every row |
 | 1 | Research cost profiler | **complete** | PR #208 | `df4d55f` | M1, the optional baseline, is its first run |
-| 2 | Staggered launch for calls that share a cached prefix | **complete** | PR #210 | | ships on (`BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`, 45 s); M2 after merge measures it and gates Chunk 3 |
+| 2 | Staggered launch for calls that share a cached prefix | **complete** | PR #210 | `ed75f7a` | ships on (`BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`, 45 s); M2 after merge measures it and gates Chunk 3 |
 | 3 | Warm the batched verifier cache with a streamed lead seat | not started | | | M2 decides build or skip; ships switched off; the default flips on an M3 pass |
 | 4 | Cache `pause_turn` continuations | not started | | | ships switched off; the default flips on an M3 pass |
 | 5 | Resume, don't restart, on a transient failure | not started | | | |
@@ -222,6 +222,7 @@ Each entry is dated, and says which chunk's build it was taken on.
 | # | Date | Decision |
 |---|---|---|
 | O1 | 2026-09-23 | Build Tier 1: the four levers that change no quality, plus measurement. One chunk per session. Agents mark progress here, and give Abraham the next session's prompt after each merge. |
+| O2 | 2026-09-23 | **Chunk 3's first gate (build or skip), applied by the Chunk 3 session as the plan directs.** No M2 is recorded: the session's prompt left the measurements placeholder unfilled, which is read as "none". The plan's "No M2" branch therefore holds: **build**, with both lineage minimums at the fallback of 20 seats (`_WARM_LEAD_MIN_SEATS_WEB`, `_WARM_LEAD_MIN_SEATS_NO_WEB`), and ship **switched off**. The second gate is unchanged: the default flips only on an M3 pass of Chunk 3's own test (the plan, Chunk 3 "Flip"). |
 
 ## Done checklist (every chunk)
 

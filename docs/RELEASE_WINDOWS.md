@@ -528,6 +528,22 @@ invisible to CI and expensive to the user.
       is disabled and its tooltip says why.
 - [ ] **In the tour** the Project facts step never shows *Harvest facts…*.
 
+### See what each turn carries (Project workspace Phase 5, part A)
+
+- [ ] **The Context makeup row after one turn.** Before any message,
+      Settings → *Developer tools* → Session state shows *Context makeup*
+      as "not measured". Open a section with a research profile, send one
+      message, and press *Refresh*: the row now starts with the total and
+      the research share ("no research profile" on a section without one),
+      then the document and the other blocks largest first, and it sits
+      beside *Context gauge*. *Recent activity* filtered to `prompt_refs`
+      shows the same numbers under `context_sizes`, one event per turn.
+      *New session* and *Open project* each put the row back to "not
+      measured". The measurement that decides whether part B is built is
+      owner-run and is described in
+      `docs/plans/project-workspace/05_RELEVANCE_TRIM.md` (the gate), not
+      here — it is not a release check.
+
 ### Chat history compaction (Phases 1–2)
 
 - [ ] **The fetch elision canary passes** before any release that carries

@@ -1,9 +1,10 @@
 # Phase 5 — Later sections stay cheap: measure, then trim by relevance
 
-**Status:** not started. **Depends on:** Part A on nothing; Part B on Part
-A's measurement crossing the gate below. Do not build Part B on a modelled
-number: the last cost model in this repo (PR #166's review) turned out to
-be an artifact of a dropped term.
+**Status:** Part A in review (`ddce90c` + `df87c1a`, PR #186); Part B not
+started — waiting on the owner's gate measurement (below). **Depends on:**
+Part A on nothing; Part B on Part A's measurement crossing the gate below.
+Do not build Part B on a modelled number: the last cost model in this repo
+(PR #166's review) turned out to be an artifact of a dropped term.
 
 ## Goal
 
@@ -138,3 +139,102 @@ the numbers in "Deviations / measurements" below either way.
 
 (Record the gate measurement here with the date and the section it was
 taken on, then any as-built deviation.)
+
+### The gate measurement
+
+**Not yet taken** (owner-run; Part B stays unbuilt until it is). How to take
+it on a build that carries Part A:
+
+1. On a hyperscale project, open the researched 21 13 13 and press *Next
+   section →* for 21 30 00, so the research carries over; work the section
+   for a normal sitting.
+2. After a turn, Settings → *Developer tools* → *Refresh* → Session state →
+   *Context makeup*: the second figure is the research block's size (with
+   "N findings trimmed at the cap" when the 100k cap cut it). *Recent
+   activity* filtered to `prompt_refs` lists the latest turns'
+   `context_sizes` (it is a tail of recent events); *Open trace viewer*
+   holds every turn of the sitting.
+3. Record here: the date, the section, the research figure across the
+   sitting (typical and peak), the total beside it, and whether the section
+   plainly used only a fraction of the research. Build Part B only if the
+   research block routinely renders past ~40k estimated tokens on such a
+   section.
+
+### Part A as built, 2026-09-23
+
+1. **An `other` key.** The spec's keys do not cover the whole block — the
+   date, identity, standards and profile lines, the editing boundary, the
+   follow-ups, figure stubs, the status notes and the frame render under none
+   of them — so "the sizes sum to the total" needs a remainder:
+   `other = total − Σ named`, with `total` the estimate of the text AS SENT
+   (after the frame and the boundary escape). The remainder also absorbs
+   each block's rounding; `research_dropped_items`, a count, stays out of the
+   sum. Because the remainder makes the sum true by construction, the tests
+   hold each named block to the block the sent text contains: renderer
+   equality for research, facts, sections, references and the Final QC
+   review, and growth-only-where-expected deltas for the document, the lint
+   report and open items. Measured `other` on an empty session: ~540
+   estimated tokens (generic module) / ~630 (hyperscale_fire).
+2. **Where the reading is kept.** The spec named only
+   `session.last_context_sizes` in `/api/diagnostics`; the reading is
+   `SessionState.last_context_sizes`, written in the guarded commit block
+   beside `last_context_tokens` and under the gauge's own condition
+   (`last_round_context is not None`). The Context gauge and the new row
+   therefore always describe one turn, and a turn whose request never
+   reached the model (a stop during the first request's build) cannot
+   replace a real reading. Cleared by reset and project load, declared in
+   the wipe sweep, never persisted. The trace still records EVERY turn's
+   sizes: `prompt_refs` fires at turn start, as the prompt refs always have.
+3. **The direct test callers unpack.** `_turn_context_text` returns
+   `(text, sizes)` as specified. Nine direct callers in
+   `test_reference_docs.py`, `test_import_shape_detection.py` and
+   `test_import_responsiveness.py` unpack it now, because on a tuple
+   `"X" not in _turn_context_text(s)` is an element test and passes
+   vacuously. The two concurrency wrappers that monkeypatch the function by
+   name pass the tuple through unchanged; only their annotations moved.
+4. **The estimate is `history_hygiene.estimated_tokens`** (chars // 4) — the
+   History makeup row's, and identical to each cap's private
+   `_estimate_tokens` — rather than a new helper, so the reading, the caps
+   and the neighbouring row agree about what a number means.
+5. **The row's formatter is a lib module.** `frontend/src/lib/contextSizes.ts`
+   (`contextMakeup`, `CONTEXT_BLOCK_LABELS`) instead of an inline helper in
+   `DeveloperToolsModal.tsx` (the spec's file list), so it has a unit test
+   (`frontend/tests/contextSizes.test.ts`) and its label table is pinned
+   against `conversation.CONTEXT_SIZE_KEYS`: a block the backend adds later
+   cannot silently drop out of the row. The row is named *Context makeup*,
+   beside *Context gauge* and *History makeup*. Research is always stated
+   first, with the cap's trim count when there is one ("no research profile"
+   when there is none); the other blocks follow largest first, an empty
+   block is left out, and the remainder trails.
+6. **The test module pins the clock.** The date line changes length at
+   midnight ("9 March" → "10 March") and several tests compare sizes across
+   calls, so `test_context_sizes.py` pins `date_context_block` for the
+   module. It carries its own `trace_env` (the `test_trace_instrumentation.py`
+   precedent) and three tests beyond the spec's list: the per-block
+   attribution, the gauge's own condition, and reset/load clearing the
+   reading (with "never persisted").
+7. **Byte identity checked before landing.** The new render was compared with
+   `HEAD`'s implementation on a rich fixture and on an empty session:
+   identical. A one-off check, not a committed test; the existing context
+   tests pin the text's content.
+
+### From the Codex review of PR #186, 2026-09-23
+
+8. **A block is measured after the boundary escape, not before.** The
+   escape that makes a forged `PROJECT CONTEXT` marker inert changes its
+   length, and the first cut measured the named blocks before it while
+   `total` measured the escaped text — so the difference landed in
+   `other`. Reproduced: fifty forged closing markers in one provision
+   inflated `other` by 125 tokens, and a marker built from 2 × 5,000
+   `=` drove it to −1,925. The escape is now `_join_and_neutralize`:
+   still ONE pass over the joined text (same pattern, same replacement,
+   byte-identical output — re-checked against master with forged-marker
+   documents), recording each match so its characters come off the
+   part(s) that supplied them and its replacement is credited to the
+   part it began in; no count can go negative. Escaping each block
+   separately was rejected: it would miss a marker spanning a separator
+   and run the escape twice over the document, whose pattern is
+   quadratic on a long unfinished `=` run (a pre-existing cost, recorded
+   in CLAUDE.md as found-not-fixed). Pinned by
+   `test_a_forged_marker_is_counted_in_the_block_that_carried_it`; both
+   halves of the accounting were reverted in place, each red.

@@ -112,7 +112,9 @@ def test_stop_after_claim_is_not_cleared_by_store_startup(monkeypatch):
     release_context = threading.Event()
     real_context = conversation._turn_context_text
 
-    def blocking_context(active_session: SessionState) -> str:
+    def blocking_context(
+        active_session: SessionState,
+    ) -> tuple[str, dict[str, int]]:
         context_entered.set()
         assert release_context.wait(timeout=5)
         return real_context(active_session)
@@ -223,7 +225,9 @@ def test_reset_during_turn_context_capture_discards_startup_atomically(
     )
     real_context = conversation._turn_context_text
 
-    def reset_during_context(active_session: SessionState) -> str:
+    def reset_during_context(
+        active_session: SessionState,
+    ) -> tuple[str, dict[str, int]]:
         active_session.reset()
         return real_context(active_session)
 

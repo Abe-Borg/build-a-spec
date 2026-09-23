@@ -686,8 +686,10 @@ def load_project(data: Any, session) -> None:
     # prior session's spend lives in that session's traces, not this file).
     session.usage.reset()
     # The context gauge measured the outgoing conversation; the loaded one
-    # has no measurement until its first turn commits.
+    # has no measurement until its first turn commits — nor a breakdown of
+    # that turn's context block.
     session.last_context_tokens = None
+    session.last_context_sizes = None
     # Where the OUTGOING session had been saving itself. Assign
     # UNCONDITIONALLY (load_project does not call session.reset()): the file
     # being opened is a different project, and the next Save must ask where

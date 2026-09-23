@@ -443,7 +443,7 @@ def test_remove_forgets_the_turn_that_read_the_document_and_every_later_turn():
         {"role": "user", "content": [{"type": "text", "text": "safe"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "safe reply"}]},
     ]
-    assert "REFERENCE DOCUMENTS" not in _turn_context_text(session)
+    assert "REFERENCE DOCUMENTS" not in _turn_context_text(session)[0]
     assert BODY_MARKER not in str(session.history)
     assert session.suggested_prompts == []
     assert [figure.fid for figure in session.figures.figures] == [
@@ -663,7 +663,7 @@ def test_only_a_stub_reaches_the_per_turn_context():
     client = TestClient(create_app())
     _attach(client)
 
-    context = _turn_context_text(sessions.get_session())
+    context, _sizes = _turn_context_text(sessions.get_session())
 
     assert "REFERENCE DOCUMENTS" in context
     assert "ref-1" in context
@@ -674,7 +674,7 @@ def test_only_a_stub_reaches_the_per_turn_context():
 def test_no_reference_block_when_none_are_attached():
     assert "REFERENCE DOCUMENTS" not in _turn_context_text(
         sessions.get_session()
-    )
+    )[0]
 
 
 def test_the_tool_returns_the_full_text():
@@ -1017,7 +1017,7 @@ def test_document_text_cannot_forge_the_context_boundary():
         },
     ).status_code == 200
 
-    context = _turn_context_text(sessions.get_session())
+    context, _sizes = _turn_context_text(sessions.get_session())
 
     # Exactly one closing marker: ours, at the end.
     assert context.count("=== END PROJECT CONTEXT ===") == 1
@@ -1097,7 +1097,7 @@ def test_the_policy_is_in_the_stable_prompt_and_the_data_is_not():
     assert "acme.docx" not in stable
     assert BODY_MARKER not in stable
     # Whereas the live list does reach the model — through PROJECT CONTEXT.
-    assert "acme.docx" in _turn_context_text(session)
+    assert "acme.docx" in _turn_context_text(session)[0]
 
 
 def test_a_project_file_record_is_re_bounded_on_load():

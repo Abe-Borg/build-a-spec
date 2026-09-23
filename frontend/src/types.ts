@@ -2171,6 +2171,26 @@ export interface HistoryComposition {
   categories: HistoryCompositionCategory[];
 }
 
+/** What one turn's PROJECT CONTEXT block was made of
+ *  (``conversation.CONTEXT_SIZE_KEYS``): estimated tokens per block, by the
+ *  same len/4 estimate the History makeup row uses. The blocks partition the
+ *  context — they sum to `total` — and `other` is everything the named ones
+ *  do not cover. `research_dropped_items` is a COUNT of findings the
+ *  research block's cap left out of that turn, not tokens. */
+export interface ContextSizes {
+  research: number;
+  research_dropped_items: number;
+  facts: number;
+  sections: number;
+  references: number;
+  document: number;
+  lint: number;
+  open_items: number;
+  qc_review: number;
+  other: number;
+  total: number;
+}
+
 /** `GET /api/diagnostics` — environment + session snapshot. */
 export interface DiagnosticsSnapshot {
   ok: boolean;
@@ -2338,6 +2358,9 @@ export interface DiagnosticsSnapshot {
     turn_active: boolean;
     stop_requested: boolean;
     last_context_tokens: number | null;
+    /** The same turn's PROJECT CONTEXT block by block (Project workspace
+     *  Phase 5A) — null until a turn commits. Numbers only, never text. */
+    last_context_sizes?: ContextSizes | null;
     /** What the saved conversation the model re-reads every turn is made
      *  of: sizes by category, never text. Tokens are a len/4 estimate. */
     history_composition?: HistoryComposition;

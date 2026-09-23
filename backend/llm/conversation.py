@@ -137,6 +137,7 @@ from .history_hygiene import (
     REJECTED_BATCH_DOCUMENT_HEADER,
     elide_fetched_page_text,
     elide_stale_outlines,
+    estimated_tokens,
 )
 from .server_tool_pairing import (
     without_unpaired_server_tool_uses as _without_unpaired_server_tool_uses,
@@ -422,6 +423,15 @@ class SessionState:
     # Written only inside the generation-guarded commit block, so a zombie
     # turn can never populate a fresh session.
     last_context_tokens: int | None = None
+    # What that same turn's PROJECT CONTEXT block was made of (Project
+    # workspace Phase 5A): estimated tokens per block, frozen with the text
+    # at turn start (``_turn_context_text``). A measurement, never text —
+    # it reaches Developer tools through ``/api/diagnostics``. Written in the
+    # same place and under the same condition as the gauge above (a turn
+    # whose request never reached the model keeps the previous one), so the
+    # two always describe one turn; cleared by reset and project load; never
+    # persisted.
+    last_context_sizes: dict[str, int] | None = None
     # True while a model turn owns the document store (WI2). Manual edits are
     # rejected in this window — a mid-turn manual edit would be swept into the
     # streaming turn's commit or rollback.
@@ -1655,8 +1665,10 @@ class SessionState:
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
-        # The context gauge describes the conversation being discarded.
+        # The context gauge describes the conversation being discarded, and
+        # so does the breakdown of that turn's context block.
         self.last_context_tokens = None
+        self.last_context_sizes = None
         self._active_turn_token = None
         self.turn_active = False
         # A stop aimed at the turn being discarded must not survive into the
@@ -1987,12 +1999,46 @@ _CONTEXT_BOUNDARY_PATTERN = re.compile(
 )
 
 
-def _neutralize_context_boundaries(text: str) -> str:
-    """Make the context block's own markers inert wherever they appear."""
-    return _CONTEXT_BOUNDARY_PATTERN.sub(
-        lambda m: f"[escaped marker: {' '.join(m.group(0).strip('= ').split())}]",
-        text,
-    )
+def _escaped_marker(match: re.Match[str]) -> str:
+    return f"[escaped marker: {' '.join(match.group(0).strip('= ').split())}]"
+
+
+def _join_and_neutralize(parts: list[str]) -> tuple[str, list[int]]:
+    """Join the context's parts and make its own markers inert wherever they
+    appear — and say how many characters of the result each part supplied.
+
+    The escape runs ONCE over the joined text, as it always has: a marker
+    could in principle span a separator, and a per-part escape would miss it.
+    Escaping changes length (a forged marker in a provision or a research
+    finding grows or shrinks when made inert), so a part's raw length is not
+    what it adds to the text as sent. Each match's characters come off the
+    part(s) they were taken from, and its replacement is credited to the part
+    it began in (a match starts with ``=``, never in a separator) — so every
+    character of the result belongs to exactly one part or to a separator,
+    and no part's count can go negative.
+    """
+    joined = "\n\n".join(parts)
+    matches: list[tuple[int, int, int]] = []
+
+    def replace(match: re.Match[str]) -> str:
+        escaped = _escaped_marker(match)
+        matches.append((match.start(), match.end(), len(escaped)))
+        return escaped
+
+    text = _CONTEXT_BOUNDARY_PATTERN.sub(replace, joined)
+    supplied = [len(part) for part in parts]
+    if matches:
+        spans = []
+        offset = 0
+        for part in parts:
+            spans.append((offset, offset + len(part)))
+            offset += len(part) + 2  # the "\n\n" separator
+        for start, end, length in matches:
+            for index, (part_start, part_end) in enumerate(spans):
+                supplied[index] -= max(0, min(end, part_end) - max(start, part_start))
+                if part_start <= start < part_end:
+                    supplied[index] += length
+    return text, supplied
 
 
 def assistant_bubble_count(history: list[dict[str, Any]]) -> int:
@@ -2053,7 +2099,45 @@ def fact_sources(session: SessionState) -> FactSources:
     )
 
 
-def _turn_context_text(session: SessionState) -> str:
+# What one turn's PROJECT CONTEXT block is made of (Project workspace Phase
+# 5A — the measurement that decides whether the carried research block is
+# worth trimming by relevance). Estimated tokens per block, by the len/4
+# estimate every cap on these blocks already uses. The named blocks are the
+# ones that can grow: the research profile (capped at 100k), the full
+# document, the lint report, open items, the Final QC review (20k), the facts
+# (6k) and sections (3k) blocks, and the reference-document stubs. ``other``
+# is everything else — the date, identity, standards and profile lines, the
+# editing boundary, the follow-ups, figure stubs, the status notes and the
+# frame itself — computed as the exact remainder, so the blocks always sum to
+# ``total`` (the estimate of the text as sent; the remainder also absorbs
+# each block's rounding). Each named block is measured by what it supplied
+# to the text as sent, after the boundary escape — a forged marker in a
+# provision or a finding changes length when it is made inert, and that
+# change belongs to the block it came from, never to ``other``.
+# ``research_dropped_items`` is a COUNT, not tokens:
+# the findings the research block's cap left out of this turn's rendering.
+CONTEXT_SIZE_KEYS: tuple[str, ...] = (
+    "research",
+    "research_dropped_items",
+    "facts",
+    "sections",
+    "references",
+    "document",
+    "lint",
+    "open_items",
+    "qc_review",
+    "other",
+    "total",
+)
+# The keys that measure a slice of the block — they partition it.
+CONTEXT_SIZE_BLOCKS: tuple[str, ...] = tuple(
+    key
+    for key in CONTEXT_SIZE_KEYS
+    if key not in ("research_dropped_items", "total")
+)
+
+
+def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
     """The PROJECT CONTEXT block: everything live, rendered at turn start.
 
     Standards editions in effect, the project-profile status, the research
@@ -2062,9 +2146,20 @@ def _turn_context_text(session: SessionState) -> str:
     Spliced ahead of the user's text in the newest user message and
     stripped again at commit — each request carries exactly one, current,
     state block, never a stale one.
+
+    Returns ``(text, sizes)``: the block, and what it is made of
+    (:data:`CONTEXT_SIZE_KEYS`), measured from the very parts the text is
+    joined from, as they appear in the text SENT — after the boundary
+    escape, which changes a part's length when it carries a forged marker.
+    So the measurement is frozen with the text and cannot describe a
+    different render. Measuring changes nothing about the text.
     """
     doc = session.doc.doc
     unstructured = session.import_is_unstructured()
+    sizes: dict[str, int] = dict.fromkeys(CONTEXT_SIZE_KEYS, 0)
+    # Where each named block sits in ``parts``: it is measured at the end,
+    # by what it supplied to the text as sent (see _join_and_neutralize).
+    measured: dict[str, int] = {}
     # First, because everything below it is dated: the editions in effect,
     # the research profile's as-of stamps, and the model's own judgement
     # about which edition is current all depend on knowing what "now" is.
@@ -2111,8 +2206,10 @@ def _turn_context_text(session: SessionState) -> str:
         parts.append(source_boundary)
     research_profile = getattr(session.research, "profile_result", None)
     if research_profile is not None:
-        block, _dropped = research_context_block(research_profile)
+        block, dropped = research_context_block(research_profile)
         parts.append(block)
+        measured["research"] = len(parts) - 1
+        sizes["research_dropped_items"] = dropped
     # Established project facts sit right after the research profile — both
     # are "what is already known" — and BEFORE the document, so the model
     # reads the project's settled inputs before the provisions that should
@@ -2128,6 +2225,7 @@ def _turn_context_text(session: SessionState) -> str:
         facts_block = ""
     if facts_block:
         parts.append(facts_block)
+        measured["facts"] = len(parts) - 1
     # The other sections of this project, when the session was seeded from
     # (or exported) a project brief — titles and article names only, never
     # their provisions, so the model coordinates scope instead of copying.
@@ -2137,6 +2235,7 @@ def _turn_context_text(session: SessionState) -> str:
         sections_block = ""
     if sections_block:
         parts.append(sections_block)
+        measured["sections"] = len(parts) - 1
     # Without this the outline below reads as a spec with an unset header, and
     # the model reliably "fixes" it by inventing a section number for a file
     # that was never a spec section.
@@ -2154,11 +2253,13 @@ def _turn_context_text(session: SessionState) -> str:
             "requirements, or keep it as reference. Their original file is "
             "retained exactly and can still be downloaded unchanged."
         )
-    parts.append(
+    document_block = (
         "Current specification document (full text; element ids in "
         "[id: …], provenance chips as ◆item-id):\n"
         + outline(doc, max_text=None)
     )
+    parts.append(document_block)
+    measured["document"] = len(parts) - 1
     lint_items = lint_document(
         doc,
         session.module,
@@ -2184,7 +2285,9 @@ def _turn_context_text(session: SessionState) -> str:
                 f"- [{issue.get('rule')}] {where}: {issue.get('message')} "
                 f"(element {issue.get('element_id')})"
             )
-        parts.append("\n".join(lines))
+        lint_block = "\n".join(lines)
+        parts.append(lint_block)
+        measured["lint"] = len(parts) - 1
     open_items = open_questions(doc)
     if open_items:
         lines = ["OPEN ITEMS (resolve as answers arrive):"]
@@ -2193,7 +2296,9 @@ def _turn_context_text(session: SessionState) -> str:
                 f"- {item.get('ref')} [{item.get('kind')}] "
                 f"{item.get('label')} (element {item.get('element_id')})"
             )
-        parts.append("\n".join(lines))
+        open_items_block = "\n".join(lines)
+        parts.append(open_items_block)
+        measured["open_items"] = len(parts) - 1
     # What the model is waiting on the USER for — model-authored, and
     # deliberately rendered right after the document's own OPEN ITEMS so
     # the pair reads as "gaps in the spec, then gaps in what you have been
@@ -2255,6 +2360,7 @@ def _turn_context_text(session: SessionState) -> str:
             latest_attempt_note=attempt_note,
         )
         parts.append(qc_block)
+        measured["qc_review"] = len(parts) - 1
     figure_stubs = session.figures.context_stubs()
     if figure_stubs:
         parts.append(figure_stubs)
@@ -2263,12 +2369,24 @@ def _turn_context_text(session: SessionState) -> str:
     reference_stubs = session.references.context_stubs()
     if reference_stubs:
         parts.append(reference_stubs)
-    return (
+        measured["references"] = len(parts) - 1
+    body, supplied = _join_and_neutralize(parts)
+    text = (
         "=== PROJECT CONTEXT (current state — supersedes anything "
         "remembered from earlier turns) ===\n\n"
-        + _neutralize_context_boundaries("\n\n".join(parts))
+        + body
         + "\n\n=== END PROJECT CONTEXT ==="
     )
+    # Every size describes the text as sent: a named block by what it
+    # supplied after the escape, the total by the whole, and everything the
+    # named blocks do not cover as the remainder — so they sum to it exactly.
+    for name, index in measured.items():
+        sizes[name] = estimated_tokens(supplied[index])
+    sizes["total"] = estimated_tokens(len(text))
+    sizes["other"] = sizes["total"] - sum(
+        sizes[name] for name in CONTEXT_SIZE_BLOCKS if name != "other"
+    )
+    return text, sizes
 
 
 def _serialize(node: Any) -> Any:
@@ -3629,7 +3747,7 @@ def stream_user_turn(
     turn_token, generation = claim
 
     try:
-        context_text = _turn_context_text(session)
+        context_text, context_sizes = _turn_context_text(session)
     except Exception as exc:  # noqa: BLE001 - startup is transactional
         session.release_model_turn(turn_token)
         yield {"type": "error", "message": f"Unexpected error: {exc}"}
@@ -3672,8 +3790,10 @@ def stream_user_turn(
         )
         # Prompt material for the turn: hash-refs at the default capture
         # level (the stable system block costs one prompts.jsonl entry per
-        # app run), inline text in deep mode. Observation only — the
-        # request payload is built independently below.
+        # app run), inline text in deep mode — plus the context block's
+        # per-block sizes, which are numbers and ride the event itself.
+        # Observation only — the request payload is built independently
+        # below.
         _trace.turn_prompts(
             trace_handle,
             system_text="\n\n".join(
@@ -3682,6 +3802,7 @@ def stream_user_turn(
             ),
             context_text=context_text,
             user_text=user_text,
+            context_sizes=context_sizes,
         )
     except Exception as exc:  # noqa: BLE001 - initialization is transactional
         session.finalize_model_turn(turn_token, committed=False)
@@ -4163,6 +4284,11 @@ def stream_user_turn(
                     # request. A turn whose rounds carried no usage (many
                     # test scripts) keeps the previous measurement.
                     session.last_context_tokens = last_round_context
+                    # And what this turn's context block was made of, under
+                    # the same condition: a turn whose request never reached
+                    # the model (a stop during the first request's build)
+                    # sent no context, and must not replace a real reading.
+                    session.last_context_sizes = dict(context_sizes)
                 committed = True
                 if doc_changed:
                     # Freeze the completion payload before releasing turn

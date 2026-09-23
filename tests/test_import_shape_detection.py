@@ -336,7 +336,7 @@ def test_the_model_is_told_the_scaffolding_is_not_the_users_document():
     session = sessions.get_session()
 
     assert session.import_is_unstructured() is True
-    context = _turn_context_text(session)
+    context, _sizes = _turn_context_text(session)
     assert "IMPORTED DOCUMENT IS NOT A SPEC SECTION" in context
     # It must say what to do instead of silently inventing a header.
     assert "do not invent a section number" in context
@@ -350,7 +350,7 @@ def test_a_spec_import_carries_no_such_block():
     assert session.import_is_unstructured() is False
     assert "IMPORTED DOCUMENT IS NOT A SPEC SECTION" not in _turn_context_text(
         session
-    )
+    )[0]
 
 
 def test_a_session_with_no_import_is_never_unstructured():
@@ -394,7 +394,7 @@ def test_undoing_past_the_import_restores_the_normal_spec_presentation():
     assert RULE_MISSING_SECTION_HEADER in {i["rule"] for i in body["lint"]}
     assert "IMPORTED DOCUMENT IS NOT A SPEC SECTION" not in _turn_context_text(
         session
-    )
+    )[0]
 
 
 def test_the_framing_lives_in_project_context_not_the_cached_prompt():

@@ -637,7 +637,7 @@ def test_a_chat_turn_starts_promptly_on_a_freshly_imported_master():
         )
 
         started = time.perf_counter()
-        context = _turn_context_text(session)
+        context, _sizes = _turn_context_text(session)
         elapsed = time.perf_counter() - started
 
     assert elapsed < _RESPONSIVE_SECONDS, (

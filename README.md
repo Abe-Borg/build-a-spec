@@ -707,9 +707,10 @@ release-note draft.
   from a shallower neighbour and kept that neighbour's numbering level, so
   it printed one level up and re-imported as its parent's sibling. It now
   takes its own level in the same list: the neighbour's, offset by how much
-  deeper it sits. Only a level the master's numbering defines, and draws as
-  a provision rather than a PART or article heading, is used; otherwise it
-  keeps the neighbour's level. A master with typed letters needs none of
+  deeper it sits. Only a level the master's numbering defines with a
+  visible label, and draws as a provision rather than a PART or article
+  heading, is used; otherwise it keeps the neighbour's level (a label one
+  level up beats a provision printed with no number at all). A master with typed letters needs none of
   this. The export's diagnostics event counts both outcomes (`level_offset`,
   `level_kept`), and the redline's inserted copy is the same element, so its
   Accept All matches.

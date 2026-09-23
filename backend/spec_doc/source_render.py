@@ -814,12 +814,19 @@ class _NumberingTables:
         )
 
     def draws_a_provision(self, num_id: int, ilvl: int) -> bool:
-        """The instance defines level ``ilvl``, and not as a PART or article
-        heading (whose label grammar the importer promotes to structure)."""
+        """The instance defines level ``ilvl`` with a label Word draws — not
+        ``numFmt="none"``, not a blank ``lvlText``, either of which would
+        print the provision with no number at all — and not as a PART or
+        article heading (whose label grammar the importer promotes to
+        structure)."""
         self._load()
-        return (num_id, ilvl) in self.catalog and not _promoted_heading_kind(
-            self.catalog, num_id, ilvl
-        )
+        entry = self.catalog.get((num_id, ilvl))
+        if entry is None:
+            return False
+        num_fmt, lvl_text = entry
+        if num_fmt == "none" or not lvl_text.strip():
+            return False
+        return not _promoted_heading_kind(self.catalog, num_id, ilvl)
 
 
 class _Assembler:
@@ -1083,11 +1090,12 @@ class _Assembler:
         importer reads it (``_TreeBuilder.numbered_paragraph``) — so the
         clone's level is the kin's offset by the depth difference, in the
         kin's own numbering instance, resolved the way Word resolves it.
-        Only a level the instance defines, and draws as a provision rather
-        than a PART or article heading, is taken; otherwise the clone keeps
-        its kin's level — one level up in Word, never a number the master's
-        numbering cannot draw — and the export event counts it
-        (``level_kept``).
+        Only a level the instance defines with a visible label, and draws as
+        a provision rather than a PART or article heading, is taken
+        (:meth:`_NumberingTables.draws_a_provision`); otherwise the clone
+        keeps its kin's level — one level up in Word, but never a number the
+        master's numbering cannot draw, nor no number at all — and the
+        export event counts it (``level_kept``).
         """
         if item.kind != "paragraph" or item.template is None or item.depth is None:
             return None

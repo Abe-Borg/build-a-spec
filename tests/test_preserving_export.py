@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
 from docx import Document
 from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
@@ -1718,6 +1719,24 @@ def test_a_level_the_masters_numbering_does_not_define_keeps_its_kins(tmp_path):
     Word — never a number the master's numbering cannot draw), and the
     export's diagnostics count it."""
     source = _numbered_levels_master({1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3.")})
+    _section, _exported, stats, numbering = _add_child(tmp_path, source)
+    assert (stats["level_offset"], stats["level_kept"]) == (0, 1)
+    assert _level(numbering) == ("2", "50")
+
+
+@pytest.mark.parametrize(
+    "label",
+    [("none", "%4."), ("decimal", ""), ("decimal", "  ")],
+    ids=["numFmt-none", "empty-lvlText", "blank-lvlText"],
+)
+def test_a_level_that_draws_no_label_is_never_taken(tmp_path, label):
+    """The definition has the next level down, but it draws no label —
+    ``numFmt="none"``, or an empty ``lvlText`` — so a sub-provision given it
+    would print with no number at all. It keeps its kin's level instead: a
+    label, one level up (Codex review on PR #193)."""
+    source = _numbered_levels_master(
+        {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3."), 3: label}
+    )
     _section, _exported, stats, numbering = _add_child(tmp_path, source)
     assert (stats["level_offset"], stats["level_kept"]) == (0, 1)
     assert _level(numbering) == ("2", "50")

@@ -924,7 +924,7 @@ Tests: 13 in `tests/test_source_splice.py` (one of them a 600-edit property
 test over a paragraph holding every link shape: Accept All is the clean
 rendering, Reject All the source, the importer reads the edit, no link is
 ever split), 5 link rows and the Word-numbered re-import checks in
-`tests/test_redline_original.py`, 2 link and 7 level tests in
+`tests/test_redline_original.py`, 2 link and 8 level tests in
 `tests/test_preserving_export.py`, and 1 in `tests/test_diagnostics.py`. QA
 rows: `docs/RELEASE_WINDOWS.md` → "Links and deeper provisions (redline
 program, Phase 1 follow-up)".
@@ -964,10 +964,14 @@ Deviations from the backend note's text:
    instance explicitly even when its style names it too, so Word and the
    importer read one answer. The clone keeps the kin's paragraph style (see
    "Found, not done").
-2. **"Defines that level" is read as "defines it and draws it as a
-   provision".** A level whose label grammar the importer promotes to a PART
-   or article heading (`_promoted_heading_kind` — say `%2.%3`) is never
-   taken, or the new provision would re-import as an article.
+2. **"Defines that level" is read as "defines it with a visible label and
+   draws it as a provision".** A level whose label grammar the importer
+   promotes to a PART or article heading (`_promoted_heading_kind` — say
+   `%2.%3`) is never taken, or the new provision would re-import as an
+   article. Nor is a level that draws no label — `numFmt="none"` or a blank
+   `lvlText` — which would print the new provision with no number at all
+   (Codex review on PR #193: the first cut took any level the definition
+   had).
 3. **Only Word-numbered (AUTO) kin is renumbered.** A typed-letter kin
    carries its level in its label ("1."), which the importer reads.
 4. **`FALLBACK_HYPERLINK` now means only a link inside a link.** Anything

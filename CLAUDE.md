@@ -947,7 +947,8 @@ backend/
                            _effective_numbering / catalog / style numbering
                            over the upload, lazy, degrading to none), offset
                            by the depth difference — only a level the
-                           definition has and draws as a provision
+                           definition has with a visible label (not numFmt
+                           none, not a blank lvlText) and draws as a provision
                            (_promoted_heading_kind says no), else the kin's
                            level is kept; counted as level_offset / level_kept
   spec_doc/source_splice.py
@@ -13184,11 +13185,14 @@ deviations. This section is the why and the traps.
   with the one the re-import uses.
 - **When the level is not taken.** Only for Word-numbered (AUTO) kin — a
   typed letter carries its level, and the importer reads the letter. Only a
-  level the definition has AND draws as a provision: a level whose label
-  grammar the importer promotes to a PART or article heading
-  (`_promoted_heading_kind`, e.g. `%2.%3`) would bring the new provision
-  back as an article. Otherwise the clone keeps its kin's level (the old
-  behaviour, never a level the master's list cannot draw), and the export
+  level the definition has, with a label Word draws, AND draws as a
+  provision: `numFmt="none"` or a blank `lvlText` would print the new
+  provision with no number at all (Codex review on PR #193 — the level
+  existed, so the first cut took it), and a level whose label grammar the
+  importer promotes to a PART or article heading (`_promoted_heading_kind`,
+  e.g. `%2.%3`) would bring it back as an article. Otherwise the clone
+  keeps its kin's level (the old behaviour, a label one level up — never a
+  level the master's list cannot draw), and the export
   event's `render` block counts both outcomes, `level_offset` and
   `level_kept` — counts only, and `app.py` needed no change (the stats dict
   rides the event wholesale). The redline's inserted copy is the same
@@ -13246,7 +13250,11 @@ deviations. This section is the why and the traps.
   clone would gain a redundant `w:numPr` and count a phantom offset). The
   pin `test_a_new_sibling_of_word_numbered_kin_is_its_kins_clone_unchanged`
   was added, and the revert now turns it red (1). The link-free early return
-  in `_place_new_words` has no row, by design (above).
+  in `_place_new_words` has no row, by design (above). The visible-label
+  check, added after the matrix ran (Codex review on PR #193), was proved
+  the other way round: its three cases — `numFmt="none"`, an empty and a
+  blank `lvlText` — were written first and failed against the unfixed
+  predicate (3 red).
 - **Errata** (append-only, so recorded here): (1) the Layout index said the
   trust dossier has "fifteen runtime cards"; it has sixteen since compaction
   Phase 3 (PR #189), and the index now says so. The trust-dossier section's

@@ -95,11 +95,12 @@ package part. Inside the body:
   list), in the kin's own numbering instance, written on the clone's own
   `w:numPr` with the instance named explicitly — even when the kin's
   numbering came from its paragraph style, whose style the clone keeps. Only
-  a level the master's numbering defines, and draws as a provision rather
+  a level the master's numbering defines with a visible label (not
+  `numFmt="none"`, not an empty `lvlText`), and draws as a provision rather
   than a PART or article heading, is taken; otherwise the clone keeps its
   kin's level (Word shows it one level up — never a number the master's list
-  cannot draw) and the `export` event counts it (`render.level_kept`, beside
-  `render.level_offset`). A typed-letter clone needs none of this: its label
+  cannot draw, nor no number at all) and the `export` event counts it
+  (`render.level_kept`, beside `render.level_offset`). A typed-letter clone needs none of this: its label
   ("1.") carries its level;
 * blank spacer paragraphs travel with the provision below them, so spacing
   survives a reorder;

@@ -60,15 +60,29 @@ _SHUTDOWN_SENTINEL = object()
 
 
 class _FlushBarrier:
-    """Queue marker: set once every record enqueued before it is on disk."""
+    """Queue marker: set once every record enqueued before it is on disk.
 
-    __slots__ = ("event", "metadata_revision", "summary", "success")
+    ``summary``, ``metadata_revision`` and ``record_seq`` are captured
+    together, under the record lock, when the barrier is enqueued.
+    ``record_seq`` is the last record that summary counts: when the writer
+    reaches the barrier, it is how the writer tells whether anything was
+    enqueued behind it.
+    """
+
+    __slots__ = (
+        "event",
+        "metadata_revision",
+        "record_seq",
+        "summary",
+        "success",
+    )
 
     def __init__(
-        self, summary: dict[str, Any], metadata_revision: int
+        self, summary: dict[str, Any], metadata_revision: int, record_seq: int
     ) -> None:
         self.event = threading.Event()
         self.metadata_revision = metadata_revision
+        self.record_seq = record_seq
         self.summary = summary
         self.success = False
 
@@ -455,6 +469,12 @@ class TraceRecorder:
         the very events that explain it (they'd still be in the queue).
         Returns False on timeout or a dead writer; callers proceed either
         way (a partial record beats no record).
+
+        On True, run.json holds a checkpoint whose summary stops exactly at
+        this call's barrier, and it reports itself current
+        (``metadata_dirty`` false) unless records were enqueued behind that
+        barrier. The writer may checkpoint again at any moment afterwards,
+        so a later read can find newer metadata.
         """
         deadline = time.monotonic() + max(0.0, float(timeout))
         while True:
@@ -488,6 +508,7 @@ class TraceRecorder:
                         barrier = _FlushBarrier(
                             copy.deepcopy(self._summary),
                             self._metadata_revision,
+                            self._record_seq,
                         )
                         try:
                             self._queue.put_nowait(barrier)
@@ -841,12 +862,7 @@ class TraceRecorder:
                         # Per-line flush means everything drained before
                         # this marker is already on disk. Its immutable
                         # enqueue-time summary excludes records behind it.
-                        item.success = self._checkpoint_run_meta(
-                            summary_override=item.summary,
-                            checkpoint_revision_override=(
-                                item.metadata_revision
-                            ),
-                        )
+                        item.success = self._checkpoint_run_meta(barrier=item)
                         if item.success:
                             records_since_checkpoint = 0
                             last_checkpoint = time.monotonic()
@@ -996,15 +1012,13 @@ class TraceRecorder:
     def _checkpoint_run_meta(
         self,
         *,
-        summary_override: dict[str, Any] | None = None,
+        barrier: _FlushBarrier | None = None,
         thread_alive_override: bool | None = None,
-        checkpoint_revision_override: int | None = None,
     ) -> bool:
         try:
             self._write_run_meta_sync(
-                summary_override=summary_override,
+                barrier=barrier,
                 thread_alive_override=thread_alive_override,
-                checkpoint_revision_override=checkpoint_revision_override,
             )
         except Exception as exc:  # noqa: BLE001
             with self._record_lock:
@@ -1069,9 +1083,8 @@ class TraceRecorder:
     def _write_run_meta_sync(
         self,
         *,
-        summary_override: dict[str, Any] | None = None,
+        barrier: _FlushBarrier | None = None,
         thread_alive_override: bool | None = None,
-        checkpoint_revision_override: int | None = None,
     ) -> None:
         self._trace_dir.mkdir(parents=True, exist_ok=True)
         path = self._trace_dir / FILE_RUN_META
@@ -1083,20 +1096,34 @@ class TraceRecorder:
         with self._run_meta_write_lock:
             with self._record_lock:
                 snapshot_revision = self._metadata_revision
-                persisted_revision = (
-                    snapshot_revision
-                    if checkpoint_revision_override is None
-                    else min(
-                        snapshot_revision,
-                        max(0, int(checkpoint_revision_override)),
+                if (
+                    barrier is not None
+                    and self._record_seq != barrier.record_seq
+                ):
+                    # Records were enqueued behind this barrier, and its
+                    # summary must stop at the barrier. The file cannot
+                    # claim the summary changes those records made, so it
+                    # acknowledges only the revision the barrier was
+                    # enqueued at, and the metadata stays dirty for the next
+                    # checkpoint.
+                    summary = barrier.summary
+                    persisted_revision = min(
+                        snapshot_revision, barrier.metadata_revision
                     )
-                )
+                else:
+                    # A plain checkpoint, or a barrier with nothing enqueued
+                    # behind it, whose summary is therefore the live one.
+                    # Everything else is read live below, so the file
+                    # describes the state at snapshot_revision. That includes
+                    # the revisions the writer added draining the records
+                    # queued ahead of the barrier after flush() captured it:
+                    # capping at the barrier's revision regardless made
+                    # run.json report itself stale whenever flush() found
+                    # the writer behind, which only thread timing decided.
+                    summary = self._summary
+                    persisted_revision = snapshot_revision
                 meta = copy.deepcopy(self._run_meta)
-                meta["summary"] = copy.deepcopy(
-                    self._summary
-                    if summary_override is None
-                    else summary_override
-                )
+                meta["summary"] = copy.deepcopy(summary)
                 meta["recorder_health"] = (
                     self._writer_health_snapshot_locked(
                         thread_alive_override=thread_alive_override,

@@ -557,3 +557,70 @@ def test_semantic_redline_remains_on_its_separate_literal_label_path():
     assert paragraph.xpath(".//w:tab", namespaces=_NS)
     assert document_root.xpath(".//w:ins", namespaces=_NS)
     assert document_root.xpath(".//w:del", namespaces=_NS)
+
+
+def test_a_preserved_block_takes_no_number_and_changes_nothing_else():
+    """Phase 0 follow-up: the Build-a-Spec-styled export numbered a preserved
+    block, so Word gave a table a letter and every provision after it moved
+    down one — while the panel, which skips it, showed the provision after
+    it as B.
+
+    The block is now left out of the list — Word numbers a list by counting
+    its numbered paragraphs, so the provision after it continues from the
+    one before it — and sits where its siblings' text starts. That paragraph
+    is the ONLY difference the block makes: remove it from the export and
+    every member is what the same document without the block exports."""
+    plain = _numbered_section()
+    with_block = _numbered_section()
+    block = Paragraph(
+        uid="pt1.a1.p3",
+        text="Equipment | Deflection\nAHU-1 | 1 inch",
+        # Confirmed, so no schedule lists it and the body is the only
+        # place the two exports can differ.
+        status="confirmed",
+        locked="table",
+    )
+    # Between "Article one top alpha" (A) and "Article one top beta" (B).
+    with_block.parts[0].articles[0].paragraphs.insert(1, block)
+    with_block.parts[0].articles[0].next_seq = 4
+
+    payload = build_docx(with_block)
+    root = _xml_part(payload, "word/document.xml")
+    table_paragraph = _provision_paragraph(root, "Equipment | Deflection")
+    assert table_paragraph.find("w:pPr/w:numPr", namespaces=_NS) is None
+    indent = table_paragraph.find("w:pPr/w:ind", namespaces=_NS)
+    assert indent is not None and indent.get(f"{{{_W_NS}}}left") == str(_INDENT_DXA)
+
+    # B keeps the same list and level as A, so Word draws it "B."
+    alpha = _direct_numbering_ref(
+        _provision_paragraph(root, "Article one top alpha"), "alpha"
+    )
+    beta = _direct_numbering_ref(
+        _provision_paragraph(root, "Article one top beta"), "beta"
+    )
+    assert alpha == beta and alpha[1] == 0
+    between = root.xpath("./w:body/w:p", namespaces=_NS)
+    numbered_level0 = [
+        paragraph
+        for paragraph in between
+        if paragraph.find("w:pPr/w:numPr/w:numId", namespaces=_NS) is not None
+        and paragraph.find("w:pPr/w:numPr/w:numId", namespaces=_NS).get(_W_VAL)
+        == alpha[0]
+        and paragraph.find("w:pPr/w:numPr/w:ilvl", namespaces=_NS).get(_W_VAL)
+        == "0"
+    ]
+    assert [_paragraph_text(p) for p in numbered_level0] == [
+        "Article one top alpha",
+        "Article one top beta",
+    ]
+
+    # Nothing else moved.
+    table_paragraph.getparent().remove(table_paragraph)
+    plain_members = _member_contents(build_docx(plain))
+    block_members = _member_contents(payload)
+    assert etree.tostring(root) == etree.tostring(
+        etree.fromstring(plain_members["word/document.xml"])
+    )
+    for name, content in plain_members.items():
+        if name != "word/document.xml":
+            assert block_members[name] == content, name

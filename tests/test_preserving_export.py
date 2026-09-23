@@ -1148,67 +1148,166 @@ def test_a_deleted_auto_numbered_break_holder_leaves_no_orphan_number(tmp_path):
     assert num_id is not None and num_id.get(qn("w:val")) == "0"
 
 
+def _revision(tag: str, change_id: int):
+    """A tracked-change record by an author who is not Build-a-Spec."""
+    element = etree.Element(qn(tag))
+    element.set(qn("w:id"), str(change_id))
+    element.set(qn("w:author"), "Another Author")
+    element.set(qn("w:date"), "2026-09-01T09:00:00Z")
+    return element
+
+
+#: Every revision record a kin can carry in its paragraph properties, and
+#: where it sits (Phase 0 follow-up): the clone must drop each of them.
+_MARK_REVISION_TAGS = ("w:ins", "w:del", "w:moveFrom", "w:moveTo", "w:rPrChange")
+
+
+def _give_pending_revisions(paragraph) -> None:
+    """``w:pPrChange``; the mark's ``w:ins``/``w:del``/``w:moveFrom``/
+    ``w:moveTo``/``w:rPrChange``; ``w:numPr``'s ``w:numberingChange`` and
+    ``w:ins``; and a run's ``w:rPrChange`` — each a pending change by another
+    author, each at its schema position."""
+    properties = paragraph._p.get_or_add_pPr()
+    numbering = properties.get_or_add_numPr()
+    numbering.get_or_add_ilvl().val = 0
+    numbering.get_or_add_numId().val = 0  # "no numbering": the label stays typed
+    numbering_change = _revision("w:numberingChange", 90)
+    numbering_change.set(qn("w:original"), "%1.")
+    numbering.append(numbering_change)
+    numbering.append(_revision("w:ins", 91))
+    mark = etree.Element(qn("w:rPr"))
+    for offset, tag in enumerate(("w:ins", "w:del", "w:moveFrom", "w:moveTo")):
+        mark.append(_revision(tag, 92 + offset))
+    etree.SubElement(mark, qn("w:b"))
+    old_mark = _revision("w:rPrChange", 96)
+    etree.SubElement(old_mark, qn("w:rPr"))
+    mark.append(old_mark)
+    # The mark's w:rPr sits before w:sectPr and w:pPrChange.
+    section_break = properties.find(qn("w:sectPr"))
+    if section_break is not None:
+        section_break.addprevious(mark)
+    else:
+        properties.append(mark)
+    old_properties = _revision("w:pPrChange", 97)
+    etree.SubElement(old_properties, qn("w:pPr"))
+    properties.append(old_properties)
+    run_properties = paragraph.runs[0]._r.get_or_add_rPr()
+    old_run = _revision("w:rPrChange", 98)
+    etree.SubElement(old_run, qn("w:rPr"))
+    run_properties.append(old_run)
+
+
+def _revision_records(paragraph) -> list[str]:
+    """Where ``paragraph`` carries a revision record, as ``parent/tag``."""
+    found = []
+    properties = paragraph.find(qn("w:pPr"))
+    if properties is not None:
+        if properties.find(qn("w:pPrChange")) is not None:
+            found.append("pPr/pPrChange")
+        mark = properties.find(qn("w:rPr"))
+        for tag in _MARK_REVISION_TAGS:
+            if mark is not None and mark.find(qn(tag)) is not None:
+                found.append(f"pPr/rPr/{tag[2:]}")
+        numbering = properties.find(qn("w:numPr"))
+        for tag in ("w:numberingChange", "w:ins"):
+            if numbering is not None and numbering.find(qn(tag)) is not None:
+                found.append(f"pPr/numPr/{tag[2:]}")
+    for run in paragraph.iterchildren(qn("w:r")):
+        if run.find(f"{qn('w:rPr')}/{qn('w:rPrChange')}") is not None:
+            found.append("r/rPr/rPrChange")
+    return found
+
+
 def test_a_cloned_template_carries_no_break_identity_or_anchors(tmp_path):
     """Clone hygiene: a new provision is cloned from its kin's formatting,
     never its identity (w14 ids Word expects to be unique), its bookmarks,
-    its comment anchors, or its section break."""
-    document = Document()
-    for line in (
-        "SECTION 23 05 48",
-        "VIBRATION CONTROLS",
-        "PART 1 - GENERAL",
-        "1.1 SUMMARY",
-    ):
-        document.add_paragraph(line)
-    template = document.add_paragraph()
-    template._p.set(f"{{{_W14_NS}}}paraId", "1A2B3C4D")
-    template._p.set(f"{{{_W14_NS}}}textId", "4D3C2B1A")
-    start = etree.SubElement(template._p, qn("w:bookmarkStart"))
-    start.set(qn("w:id"), "7")
-    start.set(qn("w:name"), "_Ref7")
-    comment = etree.SubElement(template._p, qn("w:commentRangeStart"))
-    comment.set(qn("w:id"), "3")
-    template.add_run("A. Section includes vibration isolation.")
-    end = etree.SubElement(template._p, qn("w:bookmarkEnd"))
-    end.set(qn("w:id"), "7")
-    comment_end = etree.SubElement(template._p, qn("w:commentRangeEnd"))
-    comment_end.set(qn("w:id"), "3")
-    _hold_break(template, document)
-    document.add_paragraph("1.2 SCHEDULE")
-    document.add_paragraph("END OF SECTION")
-    source = _save(document)
-    imported = _parse(tmp_path, source)
-    summary = imported.section.parts[0].articles[0]
-    section, _ = apply_edits(
-        imported.section,
-        [
-            {
-                "action": "add_paragraph",
-                "target_id": summary.uid,
-                "text": "Provide seismic restraints.",
-            }
-        ],
-    )
+    its comment anchors, its section break — or its pending revisions
+    (Phase 0 follow-up): the formatted export runs on masters that still
+    carry tracked changes, and a kin's ``w:pPrChange`` or tracked paragraph
+    mark on a new provision is a change Word attributes to somebody who never
+    made it. Run twice: a kin with no pending revisions, then one with every
+    record a paragraph's properties can hold."""
+    for pending in (False, True):
+        document = Document()
+        for line in (
+            "SECTION 23 05 48",
+            "VIBRATION CONTROLS",
+            "PART 1 - GENERAL",
+            "1.1 SUMMARY",
+        ):
+            document.add_paragraph(line)
+        template = document.add_paragraph()
+        template._p.set(f"{{{_W14_NS}}}paraId", "1A2B3C4D")
+        template._p.set(f"{{{_W14_NS}}}textId", "4D3C2B1A")
+        start = etree.SubElement(template._p, qn("w:bookmarkStart"))
+        start.set(qn("w:id"), "7")
+        start.set(qn("w:name"), "_Ref7")
+        comment = etree.SubElement(template._p, qn("w:commentRangeStart"))
+        comment.set(qn("w:id"), "3")
+        template.add_run("A. Section includes vibration isolation.")
+        end = etree.SubElement(template._p, qn("w:bookmarkEnd"))
+        end.set(qn("w:id"), "7")
+        comment_end = etree.SubElement(template._p, qn("w:commentRangeEnd"))
+        comment_end.set(qn("w:id"), "3")
+        _hold_break(template, document)
+        if pending:
+            _give_pending_revisions(template)
+        document.add_paragraph("1.2 SCHEDULE")
+        document.add_paragraph("END OF SECTION")
+        source = _save(document)
+        imported = _parse(tmp_path, source, name=f"master-{pending}.docx")
+        summary = imported.section.parts[0].articles[0]
+        section, _ = apply_edits(
+            imported.section,
+            [
+                {
+                    "action": "add_paragraph",
+                    "target_id": summary.uid,
+                    "text": "Provide seismic restraints.",
+                }
+            ],
+        )
 
-    exported = _render(source, section, imported.format_map)
+        exported = _render(source, section, imported.format_map)
 
-    added = next(
-        child
-        for child in _body_children(exported)
-        if "Provide seismic restraints." in "".join(child.itertext())
-    )
-    assert added.get(f"{{{_W14_NS}}}paraId") is None
-    assert added.get(f"{{{_W14_NS}}}textId") is None
-    for tag in ("w:bookmarkStart", "w:bookmarkEnd", "w:commentRangeStart", "w:commentRangeEnd"):
-        assert added.find(f".//{qn(tag)}") is None, tag
-    assert added.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is None
-    kept = next(
-        child
-        for child in _body_children(exported)
-        if "Section includes vibration" in "".join(child.itertext())
-    )
-    assert kept.get(f"{{{_W14_NS}}}paraId") == "1A2B3C4D"
-    assert kept.find(f".//{qn('w:bookmarkStart')}") is not None
+        added = next(
+            child
+            for child in _body_children(exported)
+            if "Provide seismic restraints." in "".join(child.itertext())
+        )
+        assert added.get(f"{{{_W14_NS}}}paraId") is None
+        assert added.get(f"{{{_W14_NS}}}textId") is None
+        for tag in (
+            "w:bookmarkStart",
+            "w:bookmarkEnd",
+            "w:commentRangeStart",
+            "w:commentRangeEnd",
+        ):
+            assert added.find(f".//{qn(tag)}") is None, tag
+        assert added.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is None
+        assert _revision_records(added) == [], pending
+        kept = next(
+            child
+            for child in _body_children(exported)
+            if "Section includes vibration" in "".join(child.itertext())
+        )
+        assert kept.get(f"{{{_W14_NS}}}paraId") == "1A2B3C4D"
+        if not pending:
+            assert kept.find(f".//{qn('w:bookmarkStart')}") is not None
+            continue
+        # The formatting survives without the history: the mark stays bold.
+        assert added.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:b')}") is not None
+        # The kin is the master's own, and so is its history. (A paragraph
+        # with pending revisions is rewritten by the fallback even when
+        # untouched — Phase 0 deviation 2 — which keeps its w:pPr and first
+        # run's properties and drops the rest, its bookmark included.)
+        assert _revision_records(kept) == [
+            "pPr/pPrChange",
+            *(f"pPr/rPr/{tag[2:]}" for tag in _MARK_REVISION_TAGS),
+            "pPr/numPr/numberingChange",
+            "pPr/numPr/ins",
+            "r/rPr/rPrChange",
+        ]
 
 
 def _not_used_master() -> bytes:

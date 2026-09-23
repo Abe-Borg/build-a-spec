@@ -20,7 +20,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt
+from docx.shared import Inches, Pt, Twips
 
 from .. import settings
 from .diffing import ElementDiff, SectionDiff
@@ -264,11 +264,22 @@ def _render_clean_body(document, section: SpecSection) -> None:
                 for para in paragraphs:
                     provision = document.add_paragraph(para.text)
                     provision.paragraph_format.space_after = Pt(6)
-                    numbering.apply(
-                        provision,
-                        num_id=article_num_id,
-                        level=depth,
-                    )
+                    if para.locked:
+                        # A preserved block takes no letter (the panel's
+                        # ``labelled_paragraphs``). Word numbers a list by
+                        # counting its numbered paragraphs, so leaving this
+                        # one out of the list is all it takes for the
+                        # provision after it to follow the one before it;
+                        # it sits where its siblings' text starts.
+                        provision.paragraph_format.left_indent = Twips(
+                            numbering.text_indent_twips(depth)
+                        )
+                    else:
+                        numbering.apply(
+                            provision,
+                            num_id=article_num_id,
+                            level=depth,
+                        )
                     walk(para.children, depth + 1)
 
             walk(article.paragraphs, 0)

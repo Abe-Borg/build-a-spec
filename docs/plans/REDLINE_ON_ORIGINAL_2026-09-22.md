@@ -28,6 +28,11 @@ tracked change, which Word will not load ([MS-OI29500] §2.1.188(a)). It is
 now tracked from inside, like a hyperlink, and the self-check refuses the
 shape outright. See "Phase 1 follow-up (custom XML inside a tracked change)
 — as built". No release entry; its draft is under "Release-note drafts".
+**The four things Phase 0 left behind are fixed too** (PR #207, 2026-09-23): refs
+that counted preserved blocks, the styled export numbering one, a non-spec
+import's placeholder headings in the formatted export and the redline, and
+a template clone's pending revisions — see "Phase 0 follow-up — as built".
+No release entry; its draft is under "Release-note drafts".
 **Phase 2 lands as two PRs** — a deviation, since the plan sized it as one
 (see "Phase 2 (PR A) — as built"). **PR A, real Word as the judge, is
 built (PR #197):** a resolve mode for the hidden-Word automation, an optional Windows
@@ -394,7 +399,14 @@ extracted provisions* still works for them.
   - `w:sectPr` (finding #3);
   - `w14:paraId` and `w14:textId`, which Word expects to be unique and
     regenerates when they are absent;
-  - bookmarks and comment anchors.
+  - bookmarks and comment anchors;
+  - every revision record in its `w:pPr` (added by the Phase 0 follow-up):
+    `w:pPrChange`; the paragraph mark's `w:ins`, `w:del`, `w:moveFrom`,
+    `w:moveTo` and `w:rPrChange` in `w:pPr/w:rPr`; and `w:numPr`'s `w:ins`
+    and `w:numberingChange` — plus the `w:rPrChange` of the run its
+    formatting is copied from. The formatted export runs on masters that
+    still carry pending tracked changes, and a kin's record on a clone is a
+    change Word attributes to somebody who never made it.
 - **Identity markers on a moved provision.** A move puts two copies of one
   element in the redline, but the file must never carry two bookmarks with
   one name, and Word drops a duplicate on load.
@@ -635,6 +647,89 @@ Found, not done (outside Phase 0):
 - A template clone keeps the template's own revision marks (`w:pPrChange`,
   a tracked paragraph mark in `w:pPr/w:rPr`). Outside D-6's hygiene list;
   it matters only for masters with pending revisions.
+
+(All four fixed on 2026-09-23 — see "Phase 0 follow-up — as built" below.
+The list above is kept as the record of what Phase 0 found. One correction
+to it: the review queue agreed for provisions, but built a preserved block's
+own ref as `1.2.` — an empty label after the dot.)
+
+#### Phase 0 follow-up — as built
+
+**Built 2026-09-23.** It bumped no VERSION and added no `release_notes.py`
+entry; its draft is under "Release-note drafts" and the release is the
+owner's pick. No route, SSE event, dependency, env knob or project-format
+change. The contract is in `docs/DOCX_FIDELITY.md` (the clone-hygiene
+bullet, "A non-spec import exports as the file it was", and the normalized
+export's preserved block); the why and the traps are in `CLAUDE.md` →
+"Phase 0's four leftovers — implemented notes".
+
+1. **Refs number the way the panel does.** `model.sibling_refs` is the one
+   rule: a provision is numbered through `labelled_paragraphs`, and a
+   preserved block gets a ref of its own — `1.2 [preserved table after B]`,
+   `before A` when no provision precedes it in its list, no position when
+   its list holds no provision, and a count (`[preserved table 2 after B]`)
+   for a second block of one kind in one spot. It always holds
+   `" [preserved "`, which no provision ref can, so the two never collide.
+   The kind is the lock code with `_` read as a space (`embedded object`).
+   `iter_paragraphs` reads it, so the open items, lint, Final QC's
+   `reviewed_ref`, the Word schedules, importer warnings and the diff's
+   refs all follow; `frontend/src/lib/reviewQueue.ts` (`siblingRefs`) builds
+   the identical string from the serialized labels, and one fixture both
+   suites read (`tests/fixtures/review_queue_refs.json`) pins the two.
+   Retained Final QC results and dismissals are unaffected: `finding_id`
+   (and `origin_id`) hash `element_id` and `reviewed_text`, never
+   `reviewed_ref`; the QC input manifest carries no ref (its document
+   fingerprint is `to_dict()`, whose labels already came from
+   `labelled_paragraphs`); a saved report keeps the ref it was written
+   with.
+2. **The styled export leaves a preserved block out of the list.** No
+   `w:numPr`, and a left indent at its level's text position
+   (`SectionFormatNumbering.text_indent_twips`), so Word numbers the
+   provision after it from the one before it. A document with no preserved
+   block exports byte for byte as before: proven against the previous
+   module on 20 sections (the 18 corpus masters, the showcase, the
+   five-level fixture), and pinned in the suite by removing the block's
+   paragraph from an export and comparing every member with the same
+   document exported without it.
+3. **A non-spec import's placeholder headings are left out**, in
+   `source_render._importer_placeholders`, which `_plan_for` — the plan both
+   renderings read — applies. The condition is the panel's `bareImport`:
+   `SessionState.import_is_unstructured()` (captured as
+   `_ExportInputs.unstructured_import`) and a section with no number or
+   title (read from the captured tree). A heading is the importer's when it
+   has no origin in the upload, the imported baseline holds the same
+   element, and its title is unchanged; a PART heading also needs every
+   article under it to be the importer's. Once the section has a number or
+   a title every heading is exported again. The clean render takes the
+   imported tree as `baseline=` (captured with `_source_baseline`, only when
+   the import was unstructured); the redline already has it. The Word judge
+   passes the same flag, so it still renders exactly as the app does.
+4. **A clone drops every revision record** (the D-6 list above), in
+   `source_render._strip_revisions`, called from `render_inserted`.
+
+Deviations:
+
+1. **The run-level `w:rPrChange` is stripped too.** The ask listed the
+   paragraph-level records; `_write_paragraph_text` copies the first run's
+   `w:rPr` onto the new provision's run, and a pending formatting change
+   there is the same defect one level down. So is `w:numberingChange`, the
+   other revision record `w:numPr` can hold.
+2. **A preserved block in the styled export takes its level's text indent**
+   rather than sitting at the margin, so it reads as part of the list it
+   interrupts. The ask said only "without numbering".
+3. **`render.placeholders_omitted`** joins the export event's render counts.
+
+Found, not done:
+
+- **A paragraph with pending revisions is rebuilt by the fallback even when
+  untouched** (Phase 0 deviation 2, unchanged): its `w:pPr` and first run's
+  properties stay, the rest — its bookmarks included — goes. The clone test
+  covers a revised kin, and pins that the kin keeps its own history.
+- **The normalized export of a preserved block re-imports as text.** A
+  table was already flattened to ` | ` text there; without a number it
+  re-imports as an unlabelled paragraph instead of a lettered provision.
+  Unchanged in kind: the normalized export was never a round trip for a
+  preserved block.
 
 ### Phase 1 — Redline on your original
 
@@ -1677,6 +1772,19 @@ against the recommendation, and says so.
   file. If Word ever shows a move wrongly, setting
   BUILD_A_SPEC_REDLINE_NATIVE_MOVES to 0 brings back the old way of showing
   moves."
+- **Phase 0 follow-up:** "Four fixes to how an imported master is named
+  and exported. Every list now names a provision the way the panel does:
+  after a preserved table, the provision the panel calls B is 1.2.B in the
+  open items, the Issues list, Final QC, the Word schedules and the import
+  notes too (it used to be 1.2.C), and the table itself is named for what it
+  is and where it sits — '1.2 [preserved table after B]'. Export as
+  Build-a-Spec styled Word no longer gives a preserved table a letter. A
+  file imported without any spec structure, like a memo, exports as it was:
+  the 'PART 1 - GENERAL' and 'IMPORTED CONTENT' headings the app keeps it
+  under are no longer written into the file, or shown as changes in the
+  redline on your original, until you give the section a number or title.
+  And in a master that still carries someone's tracked changes, a provision
+  you add takes its neighbour's formatting without its pending changes."
 - **Phase 1 follow-up (links and the nesting level):** "Links and new
   sub-provisions survive *Export Word (keeps your formatting)* — and so the
   redline on your original. A provision holding a hyperlink keeps the link,

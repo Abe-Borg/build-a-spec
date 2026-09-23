@@ -569,13 +569,68 @@ def _find_paragraph_context(
     return None
 
 
+def sibling_refs(
+    paragraphs: list[Paragraph], depth: int, prefix: str
+) -> list[tuple[Paragraph, str]]:
+    """The ref of every paragraph in one sibling list, in order.
+
+    A provision's ref is ``prefix`` plus its label with the punctuation
+    stripped (``1.2.B``), numbered through :func:`labelled_paragraphs` — so
+    it is the letter the panel and both Word exports show. A preserved
+    (locked) block takes no letter, so it gets a ref of its own that says
+    what it is and where it sits: ``1.2 [preserved table after B]``, or
+    ``before A`` when no provision precedes it in its list, or no position
+    when its list holds no provision at all. Two blocks of one kind in one
+    spot are told apart by a count: ``[preserved table 2 after B]``.
+
+    A locked ref always holds ``" [preserved "``, which no provision ref
+    can (a label is letters or digits), so the two never collide.
+    ``frontend/src/lib/reviewQueue.ts`` builds the identical string from the
+    serialized labels; ``test_iter_paragraphs_document_order_is_the_review_
+    queue_contract`` and ``tests/fixtures/review_queue_refs.json`` pin both.
+    """
+    labelled = labelled_paragraphs(paragraphs)
+    labels = [
+        "" if position < 0 else _paragraph_label(depth, position).rstrip(".)")
+        for _p, position in labelled
+    ]
+    # The next provision's label at or after each index — one backwards
+    # pass, so a run of preserved blocks costs nothing extra.
+    following = [""] * (len(labels) + 1)
+    for index in range(len(labels) - 1, -1, -1):
+        following[index] = labels[index] or following[index + 1]
+    refs: list[tuple[Paragraph, str]] = []
+    preceding = ""
+    seen: dict[tuple[str, str], int] = {}
+    for index, (paragraph, _position) in enumerate(labelled):
+        label = labels[index]
+        if label:
+            preceding = label
+            refs.append((paragraph, f"{prefix}.{label}"))
+            continue
+        kind = paragraph.locked.replace("_", " ")
+        if preceding:
+            where = f" after {preceding}"
+        elif following[index]:
+            where = f" before {following[index]}"
+        else:
+            where = ""
+        count = seen.get((kind, where), 0) + 1
+        seen[(kind, where)] = count
+        ordinal = f" {count}" if count > 1 else ""
+        refs.append((paragraph, f"{prefix} [preserved {kind}{ordinal}{where}]"))
+    return refs
+
+
 def iter_paragraphs(
     section: SpecSection,
 ) -> Iterator[tuple[Part, Article, Paragraph, int, str]]:
     """Yield (part, article, paragraph, depth, ref) in document order.
 
     ``ref`` is the human numbering path, e.g. ``1.2.B.1.a`` — the article
-    number followed by each paragraph label with punctuation stripped.
+    number followed by each paragraph label with punctuation stripped —
+    numbered the way the panel numbers (:func:`sibling_refs`): a preserved
+    block takes no letter and gets a ref of its own.
     """
     for part in section.parts:
         for a_idx, article in enumerate(part.articles):
@@ -589,9 +644,7 @@ def iter_paragraphs(
                 part: Part = part,
                 article: Article = article,
             ) -> Iterator[tuple[Part, Article, Paragraph, int, str]]:
-                for i, p in enumerate(paragraphs):
-                    label = _paragraph_label(depth, i).rstrip(".)")
-                    ref = f"{prefix}.{label}"
+                for p, ref in sibling_refs(paragraphs, depth, prefix):
                     yield part, article, p, depth, ref
                     yield from walk(p.children, depth + 1, ref)
 

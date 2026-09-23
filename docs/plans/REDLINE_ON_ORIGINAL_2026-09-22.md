@@ -24,7 +24,7 @@ follow-up (links and the nesting level) — as built". No release entry
 either; its draft is under "Release-note drafts".
 **Phase 2 lands as two PRs** — a deviation, since the plan sized it as one
 (see "Phase 2 (PR A) — as built"). **PR A, real Word as the judge, is
-built:** a resolve mode for the hidden-Word automation, an optional Windows
+built (PR #197):** a resolve mode for the hidden-Word automation, an optional Windows
 suite in which real Word accepts and rejects every targeted shape and every
 corpus master under the corpus sweep's edits, and a producer recipe that
 records Word's own tracked moves. It changes nothing in the app, so it needs
@@ -1061,6 +1061,8 @@ above, plus the "Found, not done" lists — this one's and Phase 0's.
 **Size:** one medium PR.
 
 #### Phase 2 (PR A) — as built
+
+PR #197.
 
 **The split (deviation 1).** The plan sized Phase 2 as one medium PR. It
 lands as two, on the owner's instruction (2026-09-23): **PR A** makes real

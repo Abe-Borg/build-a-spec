@@ -587,7 +587,7 @@ redline in Word* are on `master`, with no release entry yet — which release
 announces the redline is the owner's pick. So are fixes for the two losses
 Phase 1 recorded in the formatted export (links, and the level of a new
 sub-provision — below). Phase 2 lands as two pull requests: first real
-Microsoft Word as the redline's judge (below), then Word's own "Moved"
+Microsoft Word as the redline's judge (PR #197, below), then Word's own "Moved"
 marks, so the program is still in progress.
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)

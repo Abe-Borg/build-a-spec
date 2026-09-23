@@ -65,7 +65,7 @@ the formatted export: a provision holding a hyperlink is spliced instead of
 rebuilt from its first run (every fallback in the corpus sweep had been a
 link — none are now), and a new sub-provision in a Word-numbered master takes
 its own numbering level. **Phase 2 lands as two PRs** (a deviation: the plan
-sized it as one). PR A makes real Word the redline's judge — an optional
+sized it as one). PR A (PR #197) makes real Word the redline's judge — an optional
 Windows suite where a hidden Word accepts and rejects every change and the
 result must match Word's own save of the formatted export or the upload —
 plus a corpus recipe that records Word's own tracked moves as evidence;

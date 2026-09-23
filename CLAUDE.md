@@ -13692,7 +13692,7 @@ and bumps no version; one knob's default moves.
 
 ## Real Word as the judge — implemented notes (Redline on your original, Phase 2, PR A)
 
-The first of Phase 2's two pull requests (a deviation: the plan sized
+The first of Phase 2's two pull requests, PR #197 (a deviation: the plan sized
 Phase 2 as one — see the plan's "Phase 2 (PR A) — as built", which carries
 the deviations and what PR B inherits). The redline on your original has
 always proven its own promise with the app's own resolver; this has real

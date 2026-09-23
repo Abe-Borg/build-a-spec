@@ -134,6 +134,7 @@ from ..qc.apply import (
 from ..qc.context import qc_review_context_block
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import refusal_category, response_container_id
+from .citations import repair_document_citations
 from .compaction import (
     MIN_CONDENSE_FRACTION,
     RECALL_CONVERSATION_TOOL,
@@ -2916,7 +2917,10 @@ def _build_chat_request(
         inputs.history, inputs.new_messages, inputs.view_spec
     )
     raw = view + turn
-    messages = sanitize_messages_for_resend(raw)
+    # Citations last: the sanitizer can turn an oversized PDF into a note,
+    # and a condensed view drops the pages its oldest turns fetched; either
+    # leaves a citation pointing at a document the request no longer holds.
+    messages = repair_document_citations(sanitize_messages_for_resend(raw))
     kwargs: dict[str, Any] = {
         "model": inputs.model,
         "max_tokens": inputs.max_tokens,
@@ -4049,7 +4053,10 @@ def _build_compaction_request(inputs: _CompactionInputs) -> dict[str, Any]:
     container: a summary never resumes server-tool work.
     """
     view, _pending = compacted_view(inputs.history, inputs.view_spec)
-    messages = sanitize_messages_for_resend(list(view))
+    # The same repair the chat request applies, so the prefix stays byte for
+    # byte the one the last turn cached (the repair only looks backwards,
+    # so the new turn the chat request carries cannot change it).
+    messages = repair_document_citations(sanitize_messages_for_resend(list(view)))
     starts = turn_starts(view)
     boundary = (
         starts[-1] - 1

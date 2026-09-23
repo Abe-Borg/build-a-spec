@@ -13,18 +13,26 @@
  *
  * Rendered whenever the ledger holds anything, or the session is linked to
  * a project (a seeded section with no facts yet still shows where it came
- * from and the Add form).
+ * from and the Add form), or — outside a tour — there is anything to
+ * harvest (Project workspace Phase 4): a reply since the last harvest, a
+ * provision, or a Final QC dismissal reason, which is the server's own
+ * check (`harvestable`). The harvest is how a section that never recorded a
+ * fact finds the ones it settled, so its door cannot hide behind an empty
+ * ledger — nor behind an empty conversation, since a draft edited by hand
+ * settles facts too. "Harvest facts…" only OPENS the dialog; the paid call
+ * runs there, when the user presses Run.
  */
 import { useEffect, useRef, useState } from "react";
 
 import type { ProjectFactInput } from "../lib/api";
+import { canHarvest, harvestHint } from "../lib/harvest";
 import {
   factCounts,
   factProvenance,
   groupProjectFacts,
   justSupersededIds,
 } from "../lib/projectFacts";
-import type { ProjectFact, ProjectLink } from "../types";
+import type { HarvestStatus, ProjectFact, ProjectLink } from "../types";
 
 type Scope = ProjectFact["scope"];
 type ActiveStatus = "confirmed" | "assumed";
@@ -192,6 +200,9 @@ export default function ProjectFactsPanel({
   currentDiscipline,
   busy,
   openNonce,
+  harvest,
+  harvestAvailable,
+  onHarvest,
   onAdd,
   onUpdate,
   onSupersede,
@@ -205,6 +216,14 @@ export default function ProjectFactsPanel({
   currentDiscipline: string;
   busy: boolean;
   openNonce?: number;
+  /** Replies since the last committed harvest, and whether there is
+   *  anything to harvest at all; null before the first payload. */
+  harvest: HarvestStatus | null;
+  /** False in a tour: the practice copy is not the user's session, and the
+   *  server refuses the call there anyway. */
+  harvestAvailable: boolean;
+  /** Open the harvest dialog. Never runs the paid call. */
+  onHarvest: () => void;
   /** Each resolves to null on success, or the server's reason to show. */
   onAdd: (fact: ProjectFactInput) => Promise<string | null>;
   onUpdate: (pid: string, changes: Partial<ProjectFactInput>) => Promise<string | null>;
@@ -268,7 +287,11 @@ export default function ProjectFactsPanel({
     if (openNonce) setExpanded(true);
   }, [openNonce]);
 
-  if (items.length === 0 && link === null) return null;
+  const hint = harvestAvailable ? harvestHint(harvest) : "";
+  // The door follows what the harvest can read, not the reply hint: a draft
+  // with no reply to read is still worth harvesting (Codex, PR #185).
+  const harvestable = harvestAvailable && canHarvest(harvest);
+  if (items.length === 0 && link === null && !harvestable) return null;
 
   const summary =
     counts.active === 0
@@ -337,6 +360,16 @@ export default function ProjectFactsPanel({
             )}
             <span className="block pl-0.5 text-[10px] text-ink-faint">
               {fact.pid} · {factProvenance(fact)}
+              {fact.unresolved_ref && (
+                <span
+                  className="ml-1 text-warn"
+                  title={`This fact cites ${fact.source_kind}${
+                    fact.source_ref ? ` ${fact.source_ref}` : ""
+                  }, which names nothing this section holds — it was recorded before sources were checked, carried in from another section, or the document, finding or reply it names has since been removed. A reply is matched to the one the fact was recorded against, not merely its number. The fact is kept exactly as recorded; retire it if it no longer holds.`}
+                >
+                  · ⚠ source not found
+                </span>
+              )}
             </span>
             {retiring === fact.pid ? (
               <form
@@ -468,6 +501,11 @@ export default function ProjectFactsPanel({
             {seededFrom.length > 0 && ` · seeded from ${seededFrom.join(", ")}`}
           </span>
         )}
+        {hint && !expanded && (
+          <span className="truncate text-ink-faint" title="Open the panel to harvest them">
+            · {hint}
+          </span>
+        )}
         <span className="ml-auto shrink-0">{expanded ? "▾" : "▸"}</span>
       </button>
 
@@ -482,7 +520,7 @@ export default function ProjectFactsPanel({
             {counts.active === 0 && !adding && (
               <p className="px-1 text-[11px] text-ink-faint">
                 Nothing recorded yet. The assistant records facts as they are settled; you can add
-                one by hand.
+                one by hand{harvestable ? ", or harvest the ones this section settled" : ""}.
               </p>
             )}
           </div>
@@ -519,6 +557,27 @@ export default function ProjectFactsPanel({
             >
               + Add a fact
             </button>
+          )}
+
+          {harvestAvailable && !adding && (
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-2 px-1 text-[10px]">
+              <button
+                className={smallBtn}
+                disabled={busy || !harvestable}
+                onClick={onHarvest}
+                data-capability="project.facts-harvest"
+                title={
+                  busy
+                    ? "The assistant is replying — try again in a moment"
+                    : !harvestable
+                      ? "Nothing to harvest yet: no reply since the last harvest, no provision in the draft, and no Final QC dismissal reason"
+                      : "Propose the facts this section settled but nobody recorded — you review every one before anything is saved. One paid call, run only when you press Run."
+                }
+              >
+                Harvest facts…
+              </button>
+              {hint && <span className="text-ink-faint">{hint}</span>}
+            </div>
           )}
 
           {error && (

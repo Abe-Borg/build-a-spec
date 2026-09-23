@@ -620,6 +620,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         template_origin=copy.deepcopy(session.template_origin),
         project_facts=session.facts.to_dict(),
         project_link=copy.deepcopy(session.project_link),
+        last_harvest_bubble=session.last_harvest_bubble,
     )
 
 

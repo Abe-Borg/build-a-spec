@@ -9,6 +9,8 @@ import type {
   EditOp,
   Figure,
   FollowUp,
+  HarvestCommitResult,
+  HarvestPreview,
   Health,
   NextSectionOptions,
   NextSectionRequest,
@@ -429,6 +431,106 @@ export async function supersedeProjectFact(
     },
   );
   return projectFactsFrom(resp, "retire fact");
+}
+
+/**
+ * A refused or failed fact-harvest request (Project workspace Phase 4),
+ * carrying the server's closed `code` — the dialog branches on it (an
+ * expired preview offers a fresh run; a stale one says the project moved) —
+ * and, for a commit, the per-proposal reasons keyed by proposal index.
+ */
+export class HarvestRequestError extends Error {
+  code: string;
+  errors: Record<string, string>;
+  constructor(message: string, code = "", errors: Record<string, string> = {}) {
+    super(message);
+    this.name = "HarvestRequestError";
+    this.code = code;
+    this.errors = errors;
+  }
+}
+
+async function harvestAnswer<T>(resp: Response, verb: string): Promise<T> {
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await resp.json()) as Record<string, unknown>;
+  } catch {
+    // A body that is not JSON still fails with the status line below.
+  }
+  if (!resp.ok || !data.ok) {
+    const errors =
+      data.errors && typeof data.errors === "object"
+        ? (data.errors as Record<string, string>)
+        : {};
+    throw new HarvestRequestError(
+      typeof data.error === "string" ? data.error : `${verb} failed (${resp.status})`,
+      typeof data.code === "string" ? data.code : "",
+      errors,
+    );
+  }
+  return data as T;
+}
+
+/**
+ * Run the fact harvest: ONE paid model call that proposes the project facts
+ * this section settled but nobody recorded. Records NOTHING — the answer is
+ * the review sheet and the single-use token its commit names. Refused in a
+ * tour, while a turn streams, with no key, and when there is nothing to read.
+ */
+export async function runFactHarvest(
+  lease: WorkspaceLeaseInput = {},
+): Promise<HarvestPreview> {
+  const resp = await fetch("/api/project/facts/harvest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
+  return harvestAnswer<HarvestPreview>(resp, "the fact harvest");
+}
+
+/** What the user decided on the review sheet: the ticked proposal indexes
+ *  (nothing else is ever recorded) and, per index, the fields they changed
+ *  — never the quoted evidence. */
+export interface HarvestCommitInput {
+  token: string;
+  accepted: number[];
+  edits: Record<string, Partial<Record<HarvestEditableField, string>>>;
+}
+
+export type HarvestEditableField =
+  | "statement"
+  | "detail"
+  | "scope"
+  | "section"
+  | "status"
+  | "source_kind"
+  | "source_ref";
+
+/**
+ * Record the accepted proposals — one batch, all or nothing. A proposal that
+ * cannot be recorded as it stands answers 400 `invalid_fact` with the reason
+ * per index (`HarvestRequestError.errors`) and the token survives, so a
+ * typo never costs another paid call.
+ */
+export async function commitFactHarvest(
+  commit: HarvestCommitInput,
+  lease: WorkspaceLeaseInput = {},
+): Promise<HarvestCommitResult> {
+  const resp = await fetch("/api/project/facts/harvest/commit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      token: commit.token,
+      accepted: commit.accepted,
+      edits: commit.edits,
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
+  return harvestAnswer<HarvestCommitResult>(resp, "recording the harvest");
 }
 
 /**

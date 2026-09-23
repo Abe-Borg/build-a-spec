@@ -27,6 +27,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   qc: "Final QC",
   qc_batched: "Final QC (batched)",
   template: "Template creation",
+  harvest: "Fact harvest",
 };
 
 /** Compact token formatting: 12345 → "12.3k". */

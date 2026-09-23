@@ -1,6 +1,6 @@
 # Phase 3 — Write-back: the brief is a living file, the merge is append-only
 
-**Status:** in review (`4176a56`, PR #179). **Depends on:** Phase 2 (complete, PR #176) for the automatic
+**Status:** complete (`4176a56` + `5cd6a8c`, PR #179, merged `5cdc83a`). **Depends on:** Phase 2 (complete, PR #176) for the automatic
 save-time trigger and the panel's affordances (`project_home`). The merge
 itself (3.1–3.4) is pure and may be built and shipped first behind the
 explicit *Update project brief* action and the export-onto-existing-file

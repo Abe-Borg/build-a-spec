@@ -118,6 +118,7 @@ from .api_key_store import (
     save_api_key,
 )
 from .llm.client import (
+    AUTH_ERROR_MESSAGE,
     MissingApiKeyError,
     build_probe_client,
     get_client,
@@ -126,6 +127,7 @@ from .llm.client import (
 from .llm.conversation import (
     SessionState,
     effective_discipline,
+    fact_sources,
     standards_payload,
     stream_user_turn,
 )
@@ -197,7 +199,17 @@ from .project_brief import (
     sections_drafted,
     write_brief_atomically,
 )
-from .project_facts import ProjectFactError
+from .project_facts import ProjectFactError, fact_match_key, reply_digests
+from .harvest import (
+    HARVEST_PREVIEWS,
+    HarvestError,
+    build_harvest_request,
+    commit_records,
+    harvest_status,
+    prepare_preview,
+    run_harvest,
+)
+from .usage_ledger import estimate_usage_cost, usage_to_dict
 from .reference_docs import ReferenceDocError, prepare_reference_text
 from .reference_extract import (
     extract_reference_document,
@@ -497,6 +509,22 @@ class ProjectFactSupersedeRequest(WorkspaceMutationRequest):
     section: str = ""
     status: str = ""
     source_ref: str = ""
+
+
+class HarvestCommitRequest(WorkspaceMutationRequest):
+    """Body for ``POST /api/project/facts/harvest/commit`` (Project workspace
+    Phase 4).
+
+    ``token`` names the preview; ``accepted`` the proposal indexes the user
+    ticked (nothing else is ever recorded); ``edits`` maps an index — a JSON
+    object key, so a string — to the fields the user changed before
+    accepting (statement, detail, scope, section, status, source_kind,
+    source_ref; never the quoted evidence).
+    """
+
+    token: str = ""
+    accepted: list[Any] = []
+    edits: dict[str, Any] = {}
 
 
 class FollowUpStatusRequest(WorkspaceMutationRequest):
@@ -1728,8 +1756,16 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         "followups": session.followups.snapshot(),
         # Established project facts (v1.17.0) and the project this section
         # belongs to. Same one-way resync posture as the two lists above.
-        "project_facts": session.facts.snapshot(),
+        # Each fact whose cited source this section does not hold carries
+        # ``unresolved_ref`` (Project workspace Phase 4) — flagged, never
+        # rewritten; ``facts_payload`` is the one place that annotates.
+        "project_facts": session.facts_payload(),
         "project_link": session.project_link,
+        # Replies since facts were last harvested (Project workspace
+        # Phase 4) — the Project facts panel's hint, and the one the
+        # Next-section dialog and the Export menu repeat. Never a trigger:
+        # nothing reads this to run anything.
+        "harvest": harvest_status(session),
         # Import honesty/recovery metadata. Native .baspec packages carry the
         # source as a separate binary member; legacy JSON remains source-less.
         "import_report": session.import_report,
@@ -3271,6 +3307,9 @@ def create_app(
             ("POST", "/api/project/brief/merge"),
             ("POST", "/api/project/brief/refresh"),
             ("POST", "/api/project/pull"),
+            # Project workspace Phase 4: one model call (seconds to minutes)
+            # between reading the session and storing its preview.
+            ("POST", "/api/project/facts/harvest"),
             ("POST", "/api/research/start"),
             ("POST", "/api/research/stop"),
             ("POST", "/api/qc/start"),
@@ -5460,6 +5499,283 @@ def create_app(
             return response
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
+
+    # --- Fact harvest (Project workspace Phase 4) ---------------------------
+    #
+    # One paid, opt-in model call proposes the project facts the
+    # conversation, the confirmed provisions and the Final QC dismissal
+    # reasons settled but nobody recorded; the user accepts or rejects each
+    # proposal before anything is saved (``backend/harvest.py``). Nothing
+    # runs it on its own: these two routes are the only way in, and the
+    # frontend reaches the first only from the Harvest dialog's Run button.
+
+    def _harvest_binding(
+        lease: sessions.WorkspaceLease, session: SessionState, *, replies: int
+    ) -> dict[str, Any]:
+        """The state a preview describes: the template binding, the ledger's
+        length (a fact recorded meanwhile, by a turn or by hand, makes the
+        preview's duplicate filtering stale), and the identity of the first
+        ``replies`` replies — the ones its ``turn:N`` sources may name. A
+        history truncation (a reference deleted) discards replies without
+        touching the generation, and the replies that follow take over their
+        numbers, so a commit would otherwise pin a proposal to a reply it
+        never read (Codex, PR #185). Replies ADDED since the preview leave the
+        binding alone: no number it used changes."""
+        digests = reply_digests(chat_transcript(session.history))
+        read = (
+            hashlib.sha256("".join(digests[:replies]).encode("ascii")).hexdigest()
+            if len(digests) >= replies
+            else None
+        )
+        return {
+            **_template_binding(lease),
+            "facts_len": len(session.facts.items),
+            "replies": read,
+        }
+
+    def _harvest_refusal(
+        code: str, message: str, *, status_code: int = 409, **extra: Any
+    ) -> JSONResponse:
+        return _coded_error_response(
+            {"ok": False, "code": code, "error": message, **extra},
+            status_code=status_code,
+        )
+
+    _HARVEST_TOUR_REFUSAL = (
+        "Harvesting project facts is not available in the guided tour — it "
+        "reads your own session and is a paid call."
+    )
+    _HARVEST_TURN_REFUSAL = (
+        "Wait for the current reply to finish, then harvest — the reply may "
+        "record facts of its own."
+    )
+
+    @app.post("/api/project/facts/harvest")
+    def project_facts_harvest(
+        body: WorkspaceMutationRequest | None = None,
+    ) -> JSONResponse:
+        """Run the harvest and answer its review sheet. Records NOTHING.
+
+        Reads the session under the guard, makes the one model call with no
+        lock held (a plain ``def`` handler: FastAPI runs it on a worker
+        thread, and the lease middleware holds the workspace for the
+        duration), meters the call whatever it produced — a refused or
+        malformed reply is still a paid one — and stores the proposals behind
+        a single-use token bound to the state they describe.
+        """
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        if lease.scope != "original":
+            return _harvest_refusal("tutorial_active", _HARVEST_TOUR_REFUSAL)
+        session = lease.session
+        try:
+            client = get_client()
+        except MissingApiKeyError as exc:
+            return _harvest_refusal("no_key", str(exc), status_code=400)
+        with session.session_state_guard():
+            if session.turn_active:
+                return _harvest_refusal("turn_active", _HARVEST_TURN_REFUSAL)
+            inputs = build_harvest_request(session)
+            binding = _harvest_binding(lease, session, replies=inputs.bubble_count)
+            generation = session.generation
+        if not inputs.has_material():
+            return _harvest_refusal(
+                "nothing_to_harvest",
+                "There is nothing to harvest yet: no replies, no provisions "
+                "and no Final QC dismissal reasons.",
+                status_code=400,
+            )
+        try:
+            result = run_harvest(
+                client,
+                inputs,
+                model=settings.INTERVIEW_MODEL,
+                effort=settings.HARVEST_EFFORT,
+            )
+        except HarvestError as exc:
+            session.add_usage_if_current(
+                generation, "harvest", exc.usage, count_turn=True
+            )
+            _trace_capture.app_event(
+                "harvest", action="preview", ok=False, error_kind=exc.code
+            )
+            return _harvest_refusal(exc.code, str(exc), status_code=502)
+        except anthropic.AuthenticationError:
+            _trace_capture.app_event(
+                "harvest", action="preview", ok=False, error_kind="auth_error"
+            )
+            return _harvest_refusal(
+                "auth_error", AUTH_ERROR_MESSAGE, status_code=502
+            )
+        except anthropic.APIError as exc:
+            _trace_capture.app_event(
+                "harvest", action="preview", ok=False, error_kind="provider_error"
+            )
+            return _harvest_refusal(
+                "provider_error",
+                f"The harvest call failed ({type(exc).__name__}). Nothing was "
+                "recorded; try again.",
+                status_code=502,
+            )
+        session.add_usage_if_current(
+            generation, "harvest", result.usage, count_turn=True
+        )
+        usage = usage_to_dict(result.usage)
+        with session.session_state_guard():
+            # Re-checked now rather than only at commit: a sheet that could
+            # never commit is worse than saying so while the user is looking.
+            if session.generation != generation or _harvest_binding(
+                lease, session, replies=inputs.bubble_count
+            ) != binding:
+                _trace_capture.app_event(
+                    "harvest", action="preview", ok=False, error_kind="harvest_stale"
+                )
+                return _harvest_refusal(
+                    "harvest_stale",
+                    "The project changed while the harvest ran, so its "
+                    "proposals no longer describe it. Nothing was recorded "
+                    "(the call is still billed). Run it again.",
+                )
+            active_keys = frozenset(
+                fact_match_key(fact.statement) for fact in session.facts.active()
+            )
+            sheet, dropped = prepare_preview(
+                result,
+                inputs,
+                sources=fact_sources(session),
+                known_fact_keys=active_keys,
+            )
+        token = HARVEST_PREVIEWS.put(
+            sheet, binding=binding, bubble_count=inputs.bubble_count
+        )
+        _trace_capture.app_event(
+            "harvest",
+            action="preview",
+            proposals=len(sheet),
+            dropped_duplicates=dropped,
+            problems=sum(1 for row in sheet if row["problem"]),
+            ok=True,
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "token": token,
+                "proposals": sheet,
+                "dropped_duplicates": dropped,
+                "transcript_truncated": inputs.transcript_truncated,
+                "turns_read": inputs.turns_read,
+                "turns_dropped": inputs.turns_dropped,
+                "first_turn": inputs.first_turn,
+                "last_turn": inputs.last_turn,
+                "replies_total": inputs.bubble_count,
+                "since_bubble": inputs.since_bubble,
+                "provisions": inputs.provisions,
+                "dismissals": len(inputs.qc_dismissals),
+                "usage": usage,
+                "estimated_cost_usd": estimate_usage_cost(
+                    settings.INTERVIEW_MODEL, usage
+                ),
+            }
+        )
+
+    @app.post("/api/project/facts/harvest/commit")
+    def project_facts_harvest_commit(body: HarvestCommitRequest) -> JSONResponse:
+        """Record the accepted proposals — one batch, all or nothing.
+
+        Every accepted proposal is re-checked after the user's edits (the
+        store's field rules and the source resolver); any failure answers
+        400 with the reason per proposal and records nothing, and the token
+        survives so the user can fix it without paying for another call. A
+        preview whose project moved on is refused and its token dropped.
+        """
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        if lease.scope != "original":
+            return _harvest_refusal("tutorial_active", _HARVEST_TOUR_REFUSAL)
+        session = lease.session
+        pending = HARVEST_PREVIEWS.get(body.token)
+        if pending is None:
+            return _harvest_refusal(
+                "harvest_expired",
+                "This harvest preview has expired or was already used. "
+                "Nothing was recorded; run the harvest again.",
+            )
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_fresh(lease)
+                    if session.turn_active:
+                        return _harvest_refusal("turn_active", _HARVEST_TURN_REFUSAL)
+                    if (
+                        _harvest_binding(
+                            lease, session, replies=pending.bubble_count
+                        )
+                        != pending.binding
+                    ):
+                        HARVEST_PREVIEWS.discard(body.token)
+                        return _harvest_refusal(
+                            "harvest_stale",
+                            "The project changed after this harvest was "
+                            "previewed — a fact was recorded, the document "
+                            "changed, replies it read were removed, or the "
+                            "session was replaced — so its proposals may no "
+                            "longer hold. Nothing was recorded; run the "
+                            "harvest again.",
+                        )
+                    records, errors = commit_records(
+                        pending.proposals,
+                        body.accepted,
+                        body.edits,
+                        sources=fact_sources(session),
+                        active_keys=frozenset(
+                            fact_match_key(fact.statement)
+                            for fact in session.facts.active()
+                        ),
+                    )
+                    if errors:
+                        return _harvest_refusal(
+                            "invalid_fact",
+                            f"{len(errors)} proposal(s) cannot be recorded as "
+                            "they stand — nothing was recorded. Correct or "
+                            "uncheck them.",
+                            status_code=400,
+                            errors=errors,
+                        )
+                    try:
+                        outcome, summary = session.commit_harvest_if_idle(
+                            records, bubble_count=pending.bubble_count
+                        )
+                    except ProjectFactError as exc:
+                        return _harvest_refusal(
+                            "invalid_fact", str(exc), status_code=400
+                        )
+                    if outcome == "active":
+                        return _harvest_refusal("turn_active", _HARVEST_TURN_REFUSAL)
+                    facts = session.facts_payload()
+                    harvest = harvest_status(session)
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+        HARVEST_PREVIEWS.discard(body.token)
+        summary = summary or {}
+        _trace_capture.app_event(
+            "harvest",
+            action="commit",
+            proposals=len(pending.proposals),
+            accepted=len(records),
+            recorded=len(summary.get("recorded", []) or []),
+            ok=True,
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "project_facts": facts,
+                "harvest": harvest,
+                "recorded": list(summary.get("recorded", []) or []),
+                "already_recorded": list(summary.get("already_recorded", []) or []),
+            }
+        )
 
     # --- Reference documents ------------------------------------------------
 

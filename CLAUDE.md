@@ -107,7 +107,10 @@ backend/
                            cache-write rates per model (cache_write = 1.25×
                            input for the 5m entry, cache_write_1h = 2.0× for
                            the 1h one) — a new model must land with both or
-                           every 1h write on it is silently underpriced
+                           every 1h write on it is silently underpriced;
+                           HARVEST_EFFORT (Project workspace Phase 4, default
+                           medium — the fact harvest extracts, it drafts
+                           nothing)
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive, gated on the
                            draft prerequisites via _draft_prerequisites —
@@ -201,7 +204,22 @@ backend/
                            short-circuited only when the file's updated_at is
                            the one the link last fully agreed with);
                            _carried_research also names the sections a pulled
-                           round's stamp records
+                           round's stamp records;
+                           Project workspace Phase 4 adds POST
+                           /api/project/facts/harvest (a plain def: the one
+                           paid call on a worker thread, in the lease
+                           middleware's list; refuses in a tour, mid-turn,
+                           with no key or nothing to read; meters "harvest"
+                           through add_usage_if_current whatever it produced;
+                           re-checks _harvest_binding — the template binding +
+                           facts_len + the identity of the replies the
+                           preview read — when the call returns) and
+                           .../harvest/commit (the token survives
+                           invalid_fact and turn_active, is dropped on a stale
+                           binding); _doc_payload gains `harvest`
+                           (harvest.harvest_status, incl. `harvestable`) and
+                           its project_facts come from
+                           SessionState.facts_payload() (unresolved_ref)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -441,7 +459,9 @@ backend/
   api_key_store.py         [PORT: Spec Critic src/core/api_key_store.py + save_api_key]
                            Batch 2 adds key_status (masked, never leaks) + delete_api_key
   usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
-                           research/audit/qc), thread-safe, cost estimate from
+                           research/audit/qc, + harvest priced on the
+                           interview model — Project workspace Phase 4),
+                           thread-safe, cost estimate from
                            settings.PRICING; not persisted (per-session meter).
                            Chunk 4.1 adds per-TTL cache-write accounting:
                            usage_to_dict flattens the provider's nested
@@ -532,7 +552,25 @@ backend/
                            links rewritten, the wider scope survives a fold,
                            a carried or merge-broken ref becomes
                            source_kind="brief", and past MAX_ACTIVE_FACTS it
-                           refuses rather than drops
+                           refuses rather than drops. Project workspace
+                           Phase 4: resolve_fact_source(kind, ref, *,
+                           sources: FactSources) — a fact's source must EXIST
+                           (research r-… in the profile, an attached ref-…, a
+                           retained QC survivor/disputed id, turn:N within the
+                           committed replies, "project brief[; …]" or a known
+                           section number for `brief`); source_resolver() is
+                           the resolve= hook record (BEFORE the duplicate
+                           check) / supersede / apply / update (only when the
+                           source changes) accept, returning a ResolvedSource
+                           (ref + the reply's digest); a turn:N ref is PINNED
+                           to the reply it named (ProjectFact.source_digest,
+                           reply_digests over chat_transcript — a reply's text
+                           and its prompt's), so a reply a truncation
+                           discarded, or another section's, never passes for
+                           whatever now holds the number; an edit that keeps
+                           naming turn:N keeps the pin; annotate_fact_sources
+                           flags an unresolvable one unresolved_ref, never
+                           rewriting it
   project_brief.py         [v1.17.0] the .basproject: ProjectBrief +
                            build_project_brief (pure read; reuses the link's
                            project_id) / brief_bytes / brief_filename /
@@ -576,6 +614,36 @@ backend/
                            shared); read_brief_file (bounded, never follows a
                            link); _now() at MICROSECOND resolution
                            (updated_at is a version identity)
+  harvest.py               [Project workspace Phase 4] the fact harvest: one
+                           opt-in paid call proposing the project facts a
+                           section settled but nobody recorded.
+                           build_harvest_request (caller holds the guard) →
+                           frozen HarvestInputs: the transcript's TEXT since
+                           last_harvest_bubble numbered [turn:N] (built on
+                           chat_transcript, oldest turns dropped past
+                           HARVEST_MAX_TRANSCRIPT_CHARS), the outline with
+                           statuses, QC dismissal REASONS, the known facts /
+                           setup / standards and the <available_sources> id
+                           list — every block framed and its frame tags made
+                           inert (neutralize_harvest_frames); run_harvest is
+                           the template-generalize idiom (adaptive thinking,
+                           HARVEST_EFFORT, the STRICT flat
+                           propose_project_facts tool, no tool_choice,
+                           refusal named, a tool-less reply refused, shape
+                           validated all-or-nothing in parse_proposals);
+                           assess_proposal is the per-proposal check the
+                           preview and the commit share; prepare_preview
+                           drops active-fact duplicates (counted) and flags
+                           evidence not found in what was read;
+                           commit_records re-checks the accepted rows after
+                           edits (never the evidence) and refuses collisions;
+                           HarvestPreviews is the template cache's shape
+                           (TTL + byte cap + a count cap); harvest_status is
+                           the payload's `harvest` (replies since the marker —
+                           the hint — and `harvestable`, has_material's
+                           question asked ahead of time: a reply, a provision
+                           or a dismissal reason, so the panel's door opens
+                           for a draft with no conversation)
   suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
                            MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
                            fold-whitespace/dedupe/cap; empty list valid) +
@@ -927,7 +995,11 @@ backend/
                            qc_result (baseline_index rides store.to_dict/load — no
                            project.py change); Batch 9 adds an optional
                            suggested_prompts key (omitted when empty;
-                           restore_prompts on load, assigned unconditionally)
+                           restore_prompts on load, assigned unconditionally);
+                           Project workspace Phase 4 adds an optional
+                           last_harvest_bubble key (omitted at 0;
+                           restore_harvest_marker clamps it to the replies the
+                           history holds, a boolean reads 0)
   spec_doc/project_package.py
                            the .baspec container: a small versioned ZIP
                            (manifest.json + project.json + the retained
@@ -1048,7 +1120,18 @@ backend/
                            Project workspace Phase 2 adds
                            SessionState.project_home (the save_target posture:
                            local-only, cleared by _reset_while_locked and
-                           load_project, never persisted)
+                           load_project, never persisted); Project workspace
+                           Phase 4 adds SessionState.last_harvest_bubble (the
+                           harvest marker: persisted, cleared on reset,
+                           clamped when a reference delete truncates history)
+                           + commit_harvest_if_idle (one apply, the marker
+                           advanced — never backwards — even for zero
+                           records) + facts_payload() (the ONE annotated
+                           ledger view) + fact_sources(session) (its
+                           turn_digests pin reply sources),
+                           assistant_bubble_count made public, and the
+                           resolver in the record_project_facts dispatch and
+                           every panel fact helper
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -1168,6 +1251,13 @@ frontend/src/
                            justResolvedIds, the snapshot DIFF that drives the
                            check-off animation for model and user resolves
                            alike (a first render reports nothing)
+  lib/harvest.ts           [Project workspace Phase 4] the fact harvest's
+                           pure rules: buildHarvestCommit (ONLY ticked rows,
+                           each once, only changed editable fields — never an
+                           unticked row's edits), initialAccepted (a row with
+                           a problem starts unchecked), harvestHint (the ONE
+                           wording the panel, Next section and the Export
+                           menu share), describeHarvestRead, commitLabel
   lib/latestAnswer.ts      createLatestAnswer<T>: newest-REQUEST-wins for
                            state two callers race to write (next/accept/
                            drop — a dropped poll claims its rank for ordering
@@ -1319,10 +1409,15 @@ frontend/src/
                            →; desktop shell or tour only; Phase 3 adds Update
                            project brief and the "changes to pull" offer with
                            Pull project changes — both need a home, both hidden
-                           in a tour, one write-back at a time) / HelpModal (the five help topics + the
+                           in a tour, one write-back at a time) /
+                           HarvestDialog (Project workspace Phase 4: intro →
+                           Run → review sheet → done; opened by the facts
+                           panel's Harvest facts…, Next section's "Harvest
+                           first" and the Export menu's hint, stacking over
+                           the opener; never runs on its own) / HelpModal (the five help topics + the
                            About footer, which states the license to every
                            user) / TrustDeepDiveModal (the "I'm not
-                           convinced" dossier — fourteen runtime cards; a
+                           convinced" dossier — fifteen runtime cards; a
                            contract, every number real) / Tip (a hover
                            tooltip that works on a DISABLED control — a
                            native title never fires on a disabled button)
@@ -1496,6 +1591,21 @@ tests/
                            the pull installing only the three assets with QC
                            reading stale), the dry-run offer, the shell's
                            save-time refresh and the in-process lock
+  test_harvest.py          [Project workspace Phase 4] what the call reads
+                           (text blocks only, known facts/setup/sources sent,
+                           the oldest turns dropped and disclosed, frame tags
+                           inert), the resolver one kind at a time and wired
+                           in three places (the tool's is_error correction
+                           through /api/chat, the panel 400, the flag on an
+                           existing fact), the preview (metered under
+                           harvest, duplicates dropped, problems shown, a
+                           refusal named, a tool-less reply refused, a
+                           malformed reply failing whole, a project changed
+                           mid-call), the commit (one batch, edits limited,
+                           collisions named, stale / expired / mid-turn
+                           refusals, the token surviving a fixable error),
+                           the marker (commit-only, persisted, clamped, zero
+                           accepts), and QC reading stale after a commit
   test_facts_agent_visibility.py
                            [v1.17.0] the reference-visibility mirror: both
                            audiences, block 0 of every dimension rendered
@@ -11562,6 +11672,199 @@ next session starts: the PR, the deviations, and what Phase 1 inherits.
   rule → 1, the text-mismatch refusal → 1, the end-of-paragraph deletion gap
   → 1, the leading-break placement → 1 (and the flush applied at every
   insertion instead → 1, on the trailing case).
+
+## Nothing settled is left in the transcript — implemented notes (Project workspace Phase 4)
+
+Phase 4 of `docs/plans/project-workspace/` (spec: `04_HARVEST.md`, decision
+D3: a paid, opt-in, preview-then-commit pass that never fires on its own). A
+project fact reached the next section only if it was RECORDED — by the model
+in the turn that settled it, or by hand in the panel — and whatever neither
+caught lived in the transcript and the document, the two things a brief never
+carries. The fact harvest is one model call that proposes the missing facts
+for the user to accept; and every recorded fact now names a source that
+exists. No release: Phases 2–6 ship together (Phase 7), so `VERSION` stays
+1.20.0 and the user-facing notes wait in the phase file. No new dep; one env
+knob (`BUILD_A_SPEC_HARVEST_EFFORT`, README row); no new SSE event; one
+additive `.baspec` key.
+
+- **The call is the template studio's AI-generalize idiom, reused.**
+  `harvest.run_harvest`: `messages.stream` on `INTERVIEW_MODEL`, adaptive
+  thinking with `HARVEST_EFFORT` (medium — it extracts, it drafts nothing),
+  one output tool, **no `tool_choice`** (a forced choice is incompatible with
+  adaptive thinking), a `stop_reason == "refusal"` branch named through
+  `refusal_category` before anything is parsed, and `extract_tool_use_block`
+  so a reply without the tool is refused rather than mined. The difference
+  from the template tool: `propose_project_facts` is FLAT, so it is
+  `strict: true` for the known models; the strict subset carries no length
+  limits, so lengths are enforced after the call.
+- **Shape fails the preview; the rest is per proposal.** `parse_proposals`
+  refuses the whole reply for a non-list, a wrong type, a value outside an
+  enum, a missing required field or more than 40 proposals — a reply that
+  broke the schema cannot be trusted in its other parts. An over-long
+  statement, an empty one or a source that names nothing is that proposal's
+  `problem` on the sheet (`assess_proposal`, shared by preview and commit),
+  so one bad line does not throw away a paid call's other proposals.
+- **What it reads, and what it never does.** `build_harvest_request` (caller
+  holds the guard; returns a frozen `HarvestInputs`, so the call runs with no
+  lock) renders the conversation's TEXT since `last_harvest_bubble` through
+  `chat_transcript` — the same reduction `assistant_bubble_count` counts, so
+  tool payloads, thinking, server-tool blocks and elided PDFs are gone by
+  construction and `[turn:N]` is the Nth assistant bubble everywhere — plus
+  the full outline with statuses, the retained QC review's DISMISSAL REASONS
+  (the one QC input), and the known facts / setup / standards so nothing is
+  re-proposed. Figures, follow-ups and the QC report body are out. Over
+  `HARVEST_MAX_TRANSCRIPT_CHARS` the OLDEST turns go first (the newest are the
+  unread ones), a single over-long turn keeps its END, and the sheet says so.
+- **Frame tags are inert inside what they frame — and our own prose must not
+  name one.** Every block is framed (`<transcript>`, `<specification>`, …),
+  the system prompt classifies them all as data, and `neutralize_harvest_
+  frames` escapes the tags wherever they appear in session text. The first
+  cut neutralized WHOLE source lines, and the framing prose on the first line
+  said "the [turn:N] markers in <transcript>" — so the harvest escaped its
+  own sentence into "[escaped tag: transcript]". A test caught it; the prose
+  now says "the transcript below", and the test asserts nothing in the
+  sources block was escaped. Any future framing prose inside a neutralized
+  string has the same trap.
+- **The resolver is wired in three places, and one is a behaviour change.**
+  `project_facts.resolve_fact_source(kind, ref, *, sources)` over the frozen
+  `FactSources` that `conversation.fact_sources(session)` builds (the same id
+  sets render the prompt's `<available_sources>`, so the prompt cannot offer
+  an id the commit refuses). It runs on the harvest commit, on the panel's
+  add/update/supersede (a 400 with the reason), and in the
+  `record_project_facts` dispatch — where a ref naming nothing is now an
+  `is_error` result the model corrects, never a turn failure. `turn:N`
+  counts COMMITTED replies only: the in-flight reply is not one yet.
+  `record()` resolves BEFORE its duplicate check (every ref a caller sends
+  must resolve); `update()` only when the source changes, so a legacy fact
+  can still be edited or retired.
+- **Flag, never rewrite — on every surface at once.** A fact recorded
+  before the check, carried in from a brief, or whose document was removed
+  keeps exactly what it was recorded with; `annotate_fact_sources` adds
+  `unresolved_ref: true` per read (it clears when the source returns), and
+  `SessionState.facts_payload()` is the ONE ledger view the doc payload, the
+  `project_facts` SSE event, the panel routes and the harvest commit return —
+  a flag present on one surface and absent on the next would flicker every
+  turn. `brief` resolves to the merge's own provenance (`"project brief"`,
+  `"project brief; …"`) and the known section numbers, and stays
+  unrecordable.
+- **Preview → commit, bound like a template preview.** The preview stores
+  its sheet in `HARVEST_PREVIEWS` behind a single-use token bound to
+  `_harvest_binding` (`_template_binding` + `facts_len`), with the template
+  cache's TTL and byte cap plus a count cap. The binding is re-checked when
+  the call RETURNS (a project that moved mid-call answers `harvest_stale` at
+  once, still metered) and again at commit. The token is consumed by a
+  successful commit or a stale binding, but survives `invalid_fact` (reasons
+  per proposal index) and `turn_active`: the preview was a paid call, and a
+  typo must not cost another one. A commit also refuses an edit that
+  collides with an active fact or another accepted row, rather than a silent
+  no-op.
+- **The marker.** `SessionState.last_harvest_bubble` moves only on commit —
+  to the reply count the preview READ, clamped to the history, never
+  backwards — and moves even for zero accepted rows (reviewing and choosing
+  none is an answer; Cancel is how to leave it). It is persisted (optional
+  key, omitted at 0), cleared on reset (declared in the wipe sweep), clamped
+  on load (`restore_harvest_marker`; a boolean reads 0) and clamped again
+  when a reference delete truncates the history.
+- **Metered like the fan-outs, not like a turn.** `add_usage_if_current`
+  under a new `harvest` ledger category priced on the interview model, and
+  every error after a response carries its usage — a declined or malformed
+  reply is still a paid one. Settings shows it as "Fact harvest"
+  (`CATEGORY_LABEL`; the generic fallback would have shown the raw key).
+- **Offered, never forced — three doors that only OPEN.** The Project facts
+  panel's *Harvest facts…* (the panel now also renders when replies are
+  waiting, outside a tour — otherwise the door hid behind an empty ledger),
+  Next section's *Harvest first* line, and a line under *Export project brief*
+  in the Export menu (PR #178 removed the brief confirm the spec pointed at).
+  `ArtifactPanel` hosts `HarvestDialog`, rendered AFTER `NextSectionDialog`
+  so it stacks above it; `useDialogFocus`'s stack routes Escape to the top
+  only, and closing returns the user to whatever opened it (Next section
+  re-reads its receipt via `refreshKey`, keeping the user's choice). The
+  dialog's intro says what will be read and that it is a paid call; only
+  *Run the harvest* spends. Hidden in a tour; `project.facts-harvest` rides
+  the existing `project-facts` step, so no `TOUR_VERSION` bump.
+- **The frontend rule that matters is a function.** `lib/harvest.
+  buildHarvestCommit` sends only ticked rows, each once, in sheet order, and
+  only the editable fields that changed — an unticked row's edits never ride
+  along — and `initialAccepted` leaves a row with a problem unchecked.
+  `App.commitHarvestHandler` adopts the ledger and refreshes readiness AND
+  Final QC (facts are a hashed QC input, so a retained review reads stale);
+  `runHarvestHandler` re-reads the meter in a `finally`. The
+  `sessionBundle.test.ts` contract caught `applySessionBundle` dropping the
+  new `harvest` field — a Next-section start would have kept the outgoing
+  section's hint.
+- **A reply is named by position, so a reply source is PINNED** (caught in
+  review on PR #185, Codex). `turn:N` is the Nth assistant bubble, and
+  `delete_reference_if_idle` truncates history without touching the
+  generation: the replies that follow take over the discarded numbers. A
+  range-only check therefore let a fact citing a discarded `turn:3` read as
+  resolved again the moment an unrelated reply 3 existed — its provenance
+  silently changed and its flag cleared. The same held for a fact carried
+  in from another section, whose `turn:N` names THAT conversation's reply.
+  `project_facts.reply_digests(chat_transcript(history))` gives every
+  committed reply an identity (its text plus its prompt's — neither changes
+  once committed; every later history rewrite touches tool payloads, never
+  text); `FactSources.turn_digests` carries them (`turn_count` is now its
+  length); the store's resolver hook returns a `ResolvedSource` (ref +
+  digest) and `record` / `update` stamp `ProjectFact.source_digest`
+  (serialized only when set, dropped on load from anything but a reply
+  source); `annotate_fact_sources` checks a recorded fact against the digest
+  it was pinned with, so a fact with none (recorded before this) cannot be
+  matched to a reply and is flagged. An edit that keeps naming `turn:N`
+  KEEPS its pin: re-sending the same ref is no change at all (`update()` now
+  re-checks a source only when the kind or ref really differs — what its
+  docstring always promised, so a fact whose reply is gone can still be
+  reworded), and a kind change alone keeps it too — re-pinning there would
+  let an edit quietly point a flagged fact at whatever reply now holds the
+  number. A merged edit carries its pin with it. The harvest binding gained the
+  identity of the replies the preview could cite (the first `bubble_count`
+  digests, hashed), so a commit after a truncation is `harvest_stale` rather
+  than pinning a proposal to a reply it never read; replies ADDED after the
+  preview change no number it used and leave the binding alone.
+- **The panel's door follows `harvestable`, not the reply hint** (same
+  review). The first cut rendered the panel for facts, a link, or the
+  reply-count hint, so an unlinked section with no facts and no reply — an
+  imported master edited by hand — hid the only unconditional door while
+  `HarvestInputs.has_material()` would have run a call on its provisions or
+  its QC dismissal reasons. `harvest_status` moved from `conversation.py` to
+  `harvest.py`, beside `has_material`, and asks the same question ahead of
+  time (`harvestable`: a reply since the marker, a provision, or a dismissal
+  reason); `lib/harvest.canHarvest` reads it, the panel renders on it and
+  disables *Harvest facts…* (saying why) without it. The Next section and
+  Export nudges stay reply-based: they count what is unread, and a draft's
+  provisions have no marker to be "read" against, so a provisions-based
+  nudge could never be dismissed.
+- **One-time cache consequence.** The `record_project_facts` tool
+  description and `_PROJECT_FACTS_POLICY` both changed, and tools render
+  ahead of the system prompt, so every chat session's cached prefix is
+  written once more. Research and QC request bytes are unchanged.
+- **Deliberately not done:** supersede proposals (the harvest ADDS;
+  retiring stays with the model's in-turn tool and the panel), any automatic
+  harvest (export, save, Next section), and figures / follow-ups / the QC
+  report body as inputs. A harvest from another section's brief is not a
+  thing — facts travel by the brief already. The chat-history compaction
+  plan (PR #182) hands this harvest its "promote before prune" phase: the
+  condensed-conversation summary's "decisions the ledgers are missing" list
+  is to become one more candidate source. That summary does not exist yet
+  (compaction Phase 3 is unstarted; D1/D3/D4 open), so nothing is wired;
+  when it lands it is one more framed, neutralized block in
+  `HarvestInputs` feeding the same sheet and commit — never a second path
+  into the facts store. The harvest already reads `session.history`, the
+  full record, never a compacted view, as that plan's standing rule
+  requires.
+- **Tests**: `tests/test_harvest.py` (49) and `frontend/tests/harvest.test.ts`
+  (12, registered in `package.json`), plus the wipe-sweep probe. Eleven
+  backend mechanisms were reverted in place, each turning its own test red
+  (the tool-dispatch resolver, the panel resolver, transcript frame
+  neutralization, the reference-delete clamp, the commit-time marker, the
+  duplicate drop, the post-call binding re-check, metering a failed call, the
+  payload flag, the transcript cap, the token surviving a fixable error), and
+  four frontend ones (unticked edits riding along, the QC refresh, problem
+  rows pre-ticked, the session bundle dropping the hint). The review fixes
+  added eight more backend ones (the digest compare, the annotator passing
+  the pin, an edit keeping it, the resolver hook stamping it, the load
+  keeping it, a merged edit carrying it, the binding's reply identity, the
+  `harvestable` flag) and two frontend ones (the panel rendering on the
+  hint, `canHarvest` counting replies).
 
 ## Redline on your original — implemented notes (Phase 1, backend PR)
 

@@ -311,14 +311,14 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "project-facts",
-        capabilities: ["project.facts"],
+        capabilities: ["project.facts", "project.facts-harvest"],
         mode: "explanatory",
         anchor: "project-facts",
         drawer: "projectFacts",
         placement: "top",
         title: "What the project has settled travels to its next section",
         body:
-          "Each section of a project is its own session, and the next one starts without this conversation. Facts the project has established — the edition the authority confirmed, an owner standard, the water-supply basis, what another section specifies — are recorded here the moment they are settled, grouped by how far they reach: project-wide, discipline-wide, or one section's coordination fact. The assistant reads them every turn, the research and Final QC teams are briefed with them, and a project brief carries them into the next section. Retiring one keeps it in the record with its reason; a fact the user contradicts is superseded in the same reply, never drafted around.",
+          "Each section of a project is its own session, and the next one starts without this conversation. Facts the project has established — the edition the authority confirmed, an owner standard, the water-supply basis, what another section specifies — are recorded here the moment they are settled, grouped by how far they reach: project-wide, discipline-wide, or one section's coordination fact. The assistant reads them every turn, the research and Final QC teams are briefed with them, and a project brief carries them into the next section. Retiring one keeps it in the record with its reason; a fact the user contradicts is superseded in the same reply, never drafted around. Every fact names a source that must exist — a reply, a research finding, an attached document or a Final QC finding — and one whose source is gone is flagged rather than rewritten. In your own project, Harvest facts… reviews what a section settled but nobody recorded: one paid call, run only when pressed, that reads the conversation, the confirmed provisions and your Final QC dismissal reasons and proposes facts with the line each rests on — nothing is recorded until you accept it. The practice copy does not offer it.",
       },
       {
         id: "project-panel",

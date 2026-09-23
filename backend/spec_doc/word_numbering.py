@@ -118,6 +118,15 @@ class SectionFormatNumbering:
         return int(instance.get(qn("w:numId")))
 
     @staticmethod
+    def text_indent_twips(level: int) -> int:
+        """Where a level-``level`` provision's TEXT starts (its ``w:ind``
+        left), for a paragraph that sits among provisions without being one —
+        a preserved block, which takes no number."""
+        if not 0 <= level < len(_LEVELS):
+            raise ValueError(f"SectionFormat numbering level out of range: {level}")
+        return _INDENT_DXA * (level + 1)
+
+    @staticmethod
     def apply(paragraph: DocxParagraph, *, num_id: int, level: int) -> None:
         """Attach direct numbering; the run remains semantic text only."""
         if not 0 <= level < len(_LEVELS):

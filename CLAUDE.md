@@ -14344,7 +14344,8 @@ checkpoint" right after the flush its own snapshot takes.
   2); the live revision despite records behind → 1 red (the first
   checkpoint claims it is current); the hold removed on the old recorder →
   red in 1 of 10 runs, kept → 10 of 10. Full backend suite: 2,499 passed
-  and 56 skipped in each of three runs on the final tree.
+  and 56 skipped in each of three runs on this change, and 2,507 passed
+  and 56 skipped once #201 and #202 were merged in.
 - **Load has to share the test's session.** This container runs with
   `kernel.sched_autogroup_enabled` on, which gives each session its own
   share of the CPU. So a CPU burner started under `setsid` loads nothing the

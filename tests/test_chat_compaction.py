@@ -518,17 +518,20 @@ def test_a_search_match_in_a_long_turn_says_where_to_read_from():
 
 def test_offset_mistakes_are_corrections_not_failures():
     history, _ = _long_turn_history(25_000)
-    for bad in (
-        {"turns": [2], "offset": -1},
-        {"turns": [2], "offset": True},
-        {"turns": [2], "offset": "60000"},
-        {"turns": [1, 2], "offset": 60_000},  # a range cannot page
-        {"query": "turn", "offset": 60_000},  # neither can a search
-        {"turns": [2], "offset": 10_000_000},  # past the end of the turn
+    # Each mistake is refused by its OWN rule: the long turn leads the range,
+    # so the range rule — not the past-the-end one — is what refuses it (a
+    # range would otherwise read from the top and silently drop the offset).
+    for bad, reason in (
+        ({"turns": [2], "offset": -1}, "whole number"),
+        ({"turns": [2], "offset": True}, "whole number"),
+        ({"turns": [2], "offset": "60000"}, "whole number"),
+        ({"turns": [2, 3], "offset": 10}, "single turn"),
+        ({"query": "turn", "offset": 60_000}, "not with `query`"),
+        ({"turns": [2], "offset": 10_000_000}, "must be below"),
     ):
         text, is_error = recall_result(history, 3, bad)
         assert is_error, (bad, text)
-        assert "offset" in text
+        assert reason in text, (bad, text)
     # Zero is the start of the turn, wherever it is passed.
     for fine in ({"turns": [2], "offset": 0}, {"query": "turn", "offset": 0}):
         _text, is_error = recall_result(history, 3, fine)

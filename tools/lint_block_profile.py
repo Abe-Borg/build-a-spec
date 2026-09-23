@@ -19,13 +19,12 @@ excerpts, element references or filenames into the pasteable output.
 Rule names, counts and character totals are all that travel; the local
 console names the file so you can tell your own inputs apart.
 
-Usage (Windows):
+Usage (Windows; each command is one line and runs as written in
+PowerShell and in Command Prompt):
 
-    .venv\\Scripts\\python tools\\lint_block_profile.py ^
-        "C:\\path\\some-project.baspec"
+    .\\.venv\\Scripts\\python tools\\lint_block_profile.py "C:\\path\\some-project.baspec"
 
-    .venv\\Scripts\\python tools\\lint_block_profile.py ^
-        "C:\\specs\\*.baspec" --out lint-measurement.md
+    .\\.venv\\Scripts\\python tools\\lint_block_profile.py "C:\\specs\\*.baspec" --out lint-measurement.md
 
 Paste the block it prints into
 ``docs/review-results/<date>/measurements.md``.

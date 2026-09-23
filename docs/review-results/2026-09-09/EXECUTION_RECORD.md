@@ -237,7 +237,7 @@ is worth more asserted mechanically than promised in a docstring.
 **Step 2 — `tools/qc_export_cost_profile.py`**
 
 ```
-.venv\Scripts\python tools\qc_export_cost_profile.py "C:\path\FINAL QC REPORT *.json"
+.\.venv\Scripts\python tools\qc_export_cost_profile.py "C:\path\FINAL QC REPORT *.json"
 ```
 
 Takes `GET /api/qc/export.json` downloads, `.baspec` packages and legacy
@@ -257,7 +257,7 @@ file locally so the owner can tell inputs apart.
 **Step 4 — `tools/lint_block_profile.py`**
 
 ```
-.venv\Scripts\python tools\lint_block_profile.py "C:\specs\*.baspec"
+.\.venv\Scripts\python tools\lint_block_profile.py "C:\specs\*.baspec"
 ```
 
 Loads each project, runs the real `lint_document` with the same

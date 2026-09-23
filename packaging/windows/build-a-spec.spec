@@ -5,12 +5,20 @@ Cloned from Claude-Spec-Critic ``packaging/windows/spec-critic.spec`` and
 repointed at this app's stack (FastAPI + pywebview instead of
 customtkinter; the built React frontend bundled as data).
 
-Build (on Windows, from the repo root):
+Build (on Windows, from the repo root — the same steps as the Build section
+of ``docs/RELEASE_WINDOWS.md``). One command per line, so they run as
+written in PowerShell and in Command Prompt; Windows PowerShell 5.1 has no
+``&&``, and PowerShell needs the leading ``.\\`` to run the activation
+script:
 
-    python -m venv .venv && .venv\\Scripts\\activate
+    python -m venv .venv
+    .\\.venv\\Scripts\\activate
     pip install -r requirements.txt
-    pip install pyinstaller
-    cd frontend && npm install && npm run build && cd ..
+    pip install pythonnet pyinstaller
+    cd frontend
+    npm ci
+    npm run build
+    cd ..
     pyinstaller packaging/windows/build-a-spec.spec --noconfirm --clean
 
 Output: ``dist/BuildASpec/`` (folder with ``BuildASpec.exe`` + bundled

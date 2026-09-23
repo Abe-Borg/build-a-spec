@@ -114,7 +114,7 @@ see Phase 5.
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
 | 2 | Fetched web-page text out of saved history | **complete** | `a6e5fea` (PR #183, merged `7fc6e24`) | commit-time + load-time elision; live canary built. PR #183 merged before the canary was run, so its result is still **pending** — see Phase 2 → Canary result |
-| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **in review** | `ab7e402`, `2e98b3a` (PR pending) | both halves; routine condensing off by default until the recall check, backstop always on — see Phase 3 → As built |
+| 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | **in review** | `ab7e402`, `2e98b3a`, `9fa6aaf` (PR #189) | both halves; routine condensing off by default until the recall check, backstop always on — see Phase 3 → As built |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |
 
@@ -132,10 +132,10 @@ ones.
   citing a page whose text was trimmed is still unconfirmed. Run it before
   the release ships (Phase 2 → Canary result); if it reports a refusal,
   the page-text trim has to come back out before anyone gets it.
-- **Phase 3** is built and in review. It condenses with our own summarizer
-  at D1 (600k tokens of committed conversation, the last 3 turns kept) and
-  ships `recall_conversation` with it. **Routine condensing is off by
-  default** (`BUILD_A_SPEC_CHAT_COMPACTION`) until the paid recall check
+- **Phase 3** is built and in review in PR #189. It condenses with our own
+  summarizer at D1 (600k tokens of committed conversation, the last 3 turns
+  kept) and ships `recall_conversation` with it. **Routine condensing is off
+  by default** (`BUILD_A_SPEC_CHAT_COMPACTION`) until the paid recall check
   under "Before it is on by default"; the backstop, which condenses only
   when a message would not otherwise fit, runs either way.
 - **D4 is yes, and half of it is in.** Phase 3's summary lists the

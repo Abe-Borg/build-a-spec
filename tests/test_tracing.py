@@ -1126,59 +1126,207 @@ def test_active_run_byte_cap_drops_records_but_barriers_still_progress(tmp_path)
         rec.stop()
 
 
+# A safety net for the ordered barrier tests below, never a pacing mechanism:
+# every wait in them is released by the test's own ordering, or by its
+# ``finally``, so this only bounds how long a broken build can hang.
+_ORDERING_TIMEOUT = 10.0
+
+
+def _on_barrier_enqueued(rec, callback):
+    """Call ``callback(n)`` as ``rec`` enqueues its n-th flush barrier.
+
+    It runs inside ``flush()``, after the barrier has captured its summary
+    and metadata revision and before the writer can reach it, so a test can
+    order the writer's work against a barrier exactly instead of racing it.
+    ``flush()`` holds the record lock there, so ``callback`` may only set
+    events.
+    """
+    real_put = rec._queue.put_nowait
+    barriers = []
+
+    def put_nowait(item):
+        real_put(item)
+        if isinstance(item, recorder_module._FlushBarrier):
+            barriers.append(item)
+            callback(len(barriers))
+
+    rec._queue.put_nowait = put_nowait
+
+
+def _hold_writer_on_event(rec, phase, release):
+    """Hold ``rec``'s writer once it takes the event whose ``phase`` matches.
+
+    The writer is held after the queue hands the record over and before it
+    accounts for or writes it, the point where a descheduled writer leaves
+    ``flush()`` to enqueue a barrier behind a record it still owes.
+    """
+    real_get = rec._queue.get
+
+    def get(*args, **kwargs):
+        item = real_get(*args, **kwargs)
+        if (
+            isinstance(item, tuple)
+            and json.loads(item[1]).get("phase") == phase
+        ):
+            release.wait(timeout=_ORDERING_TIMEOUT)
+        return item
+
+    rec._queue.get = get
+
+
 def test_flush_metadata_summary_stops_exactly_at_its_barrier(tmp_path):
-    gate = threading.Event()
+    """Each flush's run.json summary stops at its own barrier.
+
+    The first barrier has a record enqueued behind it, so its checkpoint
+    counts one record and says a later one is pending. The second has
+    nothing behind it, so its checkpoint is current. The second flush is
+    enqueued while the writer still owes the record queued ahead of it, the
+    interleaving that made this test fail under load: draining that record
+    advances the metadata revision after the barrier captured it, and the
+    barrier's checkpoint must still say it is current, since it reads that
+    work live.
+
+    Events order every step, never timing. The writer starts only once the
+    first barrier and the record behind it are queued, and it is held on
+    that record until the second barrier is enqueued, so no later checkpoint
+    can replace the first one before the test reads it.
+    """
+    run_dir = tmp_path / "barrier-summary"
     rec = TraceRecorder(
         run_id="run-barrier-summary",
-        trace_dir=tmp_path / "barrier-summary",
+        trace_dir=run_dir,
         capture_level="default",
     )
+    writer_may_start = threading.Event()
+    first_barrier_enqueued = threading.Event()
+    after_may_drain = threading.Event()
     real_writer_loop = rec._writer_loop
 
     def blocked_writer() -> None:
-        gate.wait(timeout=2.0)
+        writer_may_start.wait(timeout=_ORDERING_TIMEOUT)
         real_writer_loop()
 
+    def on_barrier(count: int) -> None:
+        if count == 1:
+            first_barrier_enqueued.set()
+        else:
+            after_may_drain.set()
+
     rec._writer_loop = blocked_writer
+    _on_barrier_enqueued(rec, on_barrier)
+    _hold_writer_on_event(rec, "after", after_may_drain)
     rec.start()
     try:
         rec.add_event(None, "note", phase="before")
         result: dict[str, bool] = {}
         flush_thread = threading.Thread(
-            target=lambda: result.setdefault("ok", rec.flush(timeout=2.0))
+            target=lambda: result.setdefault(
+                "ok", rec.flush(timeout=_ORDERING_TIMEOUT)
+            )
         )
         flush_thread.start()
-        deadline = time.monotonic() + 1.0
-        while rec._outstanding_barrier is None and time.monotonic() < deadline:
-            time.sleep(0.005)
-        assert rec._outstanding_barrier is not None
+        assert first_barrier_enqueued.wait(timeout=_ORDERING_TIMEOUT)
         rec.add_event(None, "note", phase="after")
-        gate.set()
-        flush_thread.join(timeout=2.0)
+        writer_may_start.set()
+        flush_thread.join(timeout=_ORDERING_TIMEOUT)
         assert result == {"ok": True}
 
-        first_meta = _read_meta(tmp_path / "barrier-summary" / "run.json")
+        # The writer is held on "after", so run.json is still the first
+        # barrier's checkpoint: nothing can have replaced it.
+        first_meta = _read_meta(run_dir / "run.json")
         assert first_meta["summary"]["records_enqueued"] == 1
         assert first_meta["summary"]["events_total"] == 1
         first_health = first_meta["recorder_health"]
+        assert first_health["records_written"] == 1
         assert first_health["metadata_dirty"] is True
         assert (
             first_health["metadata_checkpointed_revision"]
             < first_health["metadata_revision"]
         )
 
-        assert rec.flush(timeout=2.0) is True
-        second_meta = _read_meta(tmp_path / "barrier-summary" / "run.json")
+        # Enqueuing the second barrier releases the writer, which accounts
+        # for and writes "after" only then, ahead of that barrier.
+        assert rec.flush(timeout=_ORDERING_TIMEOUT) is True
+        second_meta = _read_meta(run_dir / "run.json")
         assert second_meta["summary"]["records_enqueued"] == 2
         assert second_meta["summary"]["events_total"] == 2
         second_health = second_meta["recorder_health"]
+        assert second_health["records_written"] == 2
+        assert second_health["queue_depth"] == 0
         assert second_health["metadata_dirty"] is False
         assert (
             second_health["metadata_checkpointed_revision"]
             == second_health["metadata_revision"]
         )
     finally:
-        gate.set()
+        writer_may_start.set()
+        after_may_drain.set()
+        rec.stop()
+
+
+def test_a_flush_checkpoint_is_current_when_nothing_is_enqueued_behind_it(
+    tmp_path,
+):
+    """A barrier's checkpoint reads the writer's progress and health live.
+
+    ``flush()`` captures the metadata revision when it enqueues its barrier.
+    The writer then drains the records queued ahead of the barrier, which
+    advances the revision, and other threads can change recorder health in
+    the meantime (here, a span opens). None of that enqueues a record behind
+    the barrier, and the checkpoint reads all of it live, so run.json must
+    say it is current, and so must memory, or the writer rewrites run.json
+    two seconds later for nothing.
+    """
+    run_dir = tmp_path / "barrier-current"
+    rec = TraceRecorder(
+        run_id="run-barrier-current",
+        trace_dir=run_dir,
+        capture_level="default",
+    )
+    writer_may_start = threading.Event()
+    barrier_enqueued = threading.Event()
+    real_writer_loop = rec._writer_loop
+
+    def blocked_writer() -> None:
+        writer_may_start.wait(timeout=_ORDERING_TIMEOUT)
+        real_writer_loop()
+
+    rec._writer_loop = blocked_writer
+    _on_barrier_enqueued(rec, lambda count: barrier_enqueued.set())
+    rec.start()
+    handle = None
+    try:
+        rec.add_event(None, "note", phase="ahead-of-the-barrier")
+        result: dict[str, bool] = {}
+        flush_thread = threading.Thread(
+            target=lambda: result.setdefault(
+                "ok", rec.flush(timeout=_ORDERING_TIMEOUT)
+            )
+        )
+        flush_thread.start()
+        assert barrier_enqueued.wait(timeout=_ORDERING_TIMEOUT)
+        # Behind the barrier, but a change to health, not a record.
+        handle = rec.open_span("turn", "opened while the flush waits")
+        writer_may_start.set()
+        flush_thread.join(timeout=_ORDERING_TIMEOUT)
+        assert result == {"ok": True}
+
+        meta = _read_meta(run_dir / "run.json")
+        assert meta["summary"]["records_enqueued"] == 1
+        health = meta["recorder_health"]
+        assert health["records_written"] == 1
+        assert health["queue_depth"] == 0
+        assert health["open_spans"] == 1
+        assert health["metadata_dirty"] is False
+        assert (
+            health["metadata_checkpointed_revision"]
+            == health["metadata_revision"]
+        )
+        assert rec.writer_health()["metadata_dirty"] is False
+    finally:
+        writer_may_start.set()
+        if handle is not None:
+            rec.close_span(handle)
         rec.stop()
 
 

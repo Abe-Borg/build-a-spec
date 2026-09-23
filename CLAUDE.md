@@ -14272,6 +14272,90 @@ finding the doc payload always had.
   number left behind in a preserved header, footer or cover page no longer
   drops out of the issues list each time the assistant edits the document."
 
+## A flush checkpoint is current when nothing is behind it — implemented notes
+
+`tests/test_tracing.py::test_flush_metadata_summary_stops_exactly_at_its_barrier`
+failed once in three full backend runs on 2026-09-23, on
+`second_health["metadata_dirty"] is False`, and passed on its own. The
+recorder was at fault; the test also had a second, latent timing
+assumption of its own. No route, SSE event, dep, env knob, project-format
+change or version bump. No release-note item: the one visible effect is
+Developer tools' "Health checkpoint" row, which no longer says "pending
+checkpoint" right after the flush its own snapshot takes.
+
+- **The race.** `flush()` enqueues a `_FlushBarrier` carrying the metadata
+  revision at that moment. The writer keeps advancing the revision while it
+  drains the records queued AHEAD of the barrier, two bumps per record
+  (dequeued, then written). At the barrier, the checkpoint capped its
+  persisted revision at the enqueue-time value. So whenever `flush()` found
+  the writer still owing a record, run.json said `metadata_dirty: true`,
+  although the health it wrote was read live and already counted that
+  record; and memory stayed dirty, so the idle checkpoint rewrote run.json
+  two seconds later for nothing. Only thread timing decided which, and a
+  loaded machine finds the writer behind. Instrumented, the failing
+  interleaving showed the barrier at revision 6 and the writer thread
+  bumping it to 7 and 8 while draining the record ahead of it.
+- **Not what it looked like.** The checkpoint is written before
+  `barrier.event.set()`, so `flush()` never returns ahead of it. And an idle
+  checkpoint overtaking it cannot produce this failure: it is a plain
+  checkpoint, and a plain checkpoint always writes `metadata_dirty: false`,
+  so it can only make the file more current.
+- **Fixed where the persisted revision is chosen.** The barrier also
+  captures `record_seq`, the last record its summary counts, under the lock
+  that captures its summary and revision. At the barrier, the writer
+  compares it with the live `_record_seq` under the lock it snapshots with.
+  Records enqueued behind the barrier: unchanged — the barrier's summary and
+  its enqueue-time revision, so the file stays dirty, since the summary must
+  stop at the barrier. Nothing behind it: the barrier's summary is the live
+  one and everything else is read live, so it persists the live revision
+  like a plain checkpoint. `summary_override` and
+  `checkpoint_revision_override` became one `barrier=` argument: they were
+  only ever passed together, and the decision needs all three values the
+  barrier captured together.
+- **The test's latent assumption.** Its first read took run.json to still
+  be the first barrier's checkpoint. `flush()` never promised that: the
+  writer goes on to drain the record behind the barrier, and checkpoints
+  again after two quiet seconds, or when it writes a record two seconds
+  after the last checkpoint. Stalling the test thread 2.3 s made the first
+  read count 2 records, not 1. `flush()`'s docstring now states the
+  promise: the summary stops at this call's barrier, the checkpoint is
+  current unless records are behind it, and a later read can find newer
+  metadata.
+- **Ordered by events, never timing.** `_on_barrier_enqueued` fires inside
+  `flush()` after the barrier captured its values; `_hold_writer_on_event`
+  holds the writer on a named record after the queue hands it over and
+  before the writer accounts for it. The rewritten test starts the writer
+  only once the first barrier and the record behind it are queued, holds it
+  on that record through the first read, and releases it by enqueuing the
+  second barrier — the interleaving that failed, on every run.
+  `_ORDERING_TIMEOUT` (10 s) bounds only a broken build: the test or its
+  `finally` releases every wait.
+- **Tests.** The rewritten test, which now also checks `records_written`
+  and `queue_depth`, and
+  `test_a_flush_checkpoint_is_current_when_nothing_is_enqueued_behind_it`:
+  a record owed ahead of the barrier and a span opened behind it (a
+  health-only change), where the file is current and shows the span, and
+  memory agrees. Both fail 10 of 10 on the old recorder, at the dirty
+  assertion. Under 8 CPU burners on 4 cores, the old code failed the
+  original test 2 of 30 loops; the fixed recorder passed the two tests 40
+  of 40, and the ORIGINAL, unmodified test body 40 of 40, which is what
+  places the fault in the recorder. Reverted in a scratch copy: capping
+  every barrier → 2 red; never capping → 1 red (the first summary counts
+  2); the live revision despite records behind → 1 red (the first
+  checkpoint claims it is current); the hold removed on the old recorder →
+  red in 1 of 10 runs, kept → 10 of 10. Full backend suite: 2,499 passed
+  and 56 skipped in each of three runs on this change, and 2,507 passed
+  and 56 skipped once #201 and #202 were merged in.
+- **Load has to share the test's session.** This container runs with
+  `kernel.sched_autogroup_enabled` on, which gives each session its own
+  share of the CPU. So a CPU burner started under `setsid` loads nothing the
+  test feels: one loop "under load" ran at exactly the unloaded speed.
+  Start burners from the test's own shell, and before trusting a loaded
+  run, check that it is actually slower (about 2.3× here).
+- **Erratum** (append-only): "A live run.json read can be refused on
+  Windows" counts 18 reads of a recorder's `run.json` through `_read_meta`.
+  There are 19 now, all through it.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

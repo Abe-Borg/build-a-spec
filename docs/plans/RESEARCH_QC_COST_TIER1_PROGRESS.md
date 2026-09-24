@@ -23,7 +23,7 @@ made `BUILD_A_SPEC_CONTINUATION_CACHE` default on, so where this file says
 two switches ship off, only Chunk 3's (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`)
 still does, until that program's WL-2.
 
-**Chunk 3's switch is on too (2026-09-24).** That program's WL-2 (PR #WL2PR)
+**Chunk 3's switch is on too (2026-09-24).** That program's WL-2 (PR #228)
 made `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` default on, so neither switch this
 file says ships off still does. Neither flip waited on M3: each rests on that
 program's runtime self-checks, which can only switch a saving off (O7).

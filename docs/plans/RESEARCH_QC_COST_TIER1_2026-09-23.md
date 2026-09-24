@@ -1738,7 +1738,7 @@ developer tool and has no note.
 - **Which items.** All four go in any such release: Chunk 2's staggered
   launch is on by default, Chunk 5 has no switch, Chunk 4's continuation
   tail has defaulted on since the Tier 1 finish program's CT-3 (PR #226),
-  and Chunk 3's warm lead since its WL-2 (PR #WL2PR). At the closeout both
+  and Chunk 3's warm lead since its WL-2 (PR #228). At the closeout both
   switches were off, each flip owed after an M3 pass of that chunk's own
   test. The Tier 1 finish program (O7) replaced that gate with runtime
   self-checks, then turned both switches on

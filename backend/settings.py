@@ -510,13 +510,22 @@ QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", False)
 # the batched verifier transport never carries it (its rounds are minutes
 # apart, so the entries a tail would read have expired).
 #
-# OFF by default, deliberately: the shape is allowed by the documented rules,
-# but a provider rejection would fail every paused research area and
-# compliance lens with a 400, so it is proven live first. The default flips
-# only on a recorded M3 pass (the cost plan's Chunk 4 "Flip") — compaction
-# Phase 2's precedent. Not in the QC input manifest: it changes how a
-# continuation is cached, never what any call is asked (the plan's F3).
-CONTINUATION_CACHE = _bool_env("BUILD_A_SPEC_CONTINUATION_CACHE", False)
+# ON by default since the Tier 1 finish program's CT-3, without the measured
+# trial the flip once waited on: decision FD1 (docs/plans/tier1-finish/)
+# replaced that trial with runtime self-checks (backend/cost_checks.py) that
+# watch the runs the app makes anyway and can only switch the tail OFF, one
+# engine at a time, until the app restarts. If the provider ever refuses a
+# continuation that carries it, the same request goes out once more without
+# it and that engine's tail switches off (CT-1): one extra request per engine
+# per app session, never a failed research area or review. Where the usage
+# the provider reports can prove what the tail saved, six or more measured
+# continuations that together cost more than they saved switch it off too
+# (CT-2). What the checks cannot see is bounded: at worst a continuation
+# pays the 5-minute write premium on the turn it re-sends (+25% on that
+# part) instead of reading it. 0 switches it off. Not in the QC input
+# manifest: it changes how a continuation is cached, never what any call is
+# asked (the plan's F3).
+CONTINUATION_CACHE = _bool_env("BUILD_A_SPEC_CONTINUATION_CACHE", True)
 
 # Per-call web allowances (runaway guards, not budgets — env-overridable).
 # The code-compliance lens gets the big search allowance to check standards'

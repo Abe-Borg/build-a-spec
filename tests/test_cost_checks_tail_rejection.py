@@ -1,8 +1,8 @@
 """The continuation tail survives a refusal (Tier 1 finish, CT-1).
 
 The continuation tail is a top-level ``cache_control`` on a streamed request
-that resumes a ``pause_turn`` (``settings.CONTINUATION_CACHE``, still off by
-default). If the provider refuses a continuation that carries it, with a 400
+that resumes a ``pause_turn`` (``settings.CONTINUATION_CACHE``, on by default
+since CT-3). If the provider refuses a continuation that carries it, with a 400
 when the stream opens, the engine sends the same request once more without
 it and switches that engine's tail off until the app restarts
 (``backend.cost_checks``). A refusal therefore costs one request per engine

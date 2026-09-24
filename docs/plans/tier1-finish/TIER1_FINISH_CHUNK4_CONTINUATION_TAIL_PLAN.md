@@ -1516,10 +1516,301 @@ a default-on switch, as FD1 amends it.
 
 ### As built
 
-*Not started.*
+*Built on 2026-09-24; the record follows the paragraph below.*
 
 When you build this session, append here what CT-1's As built lists, plus
 the flip-readiness counts.
+
+#### CT-3 as built (2026-09-24)
+
+Built from `master` at `66c10d8` (CT-2's merge), on branch
+`claude/relaxed-pasteur-o7k36u`. **Merging it turns the continuation tail
+on for everyone running from `master`.** `BUILD_A_SPEC_CONTINUATION_CACHE=0`
+switches it off (PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`;
+Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`). The reconcile step
+filled in CT-2's merge commit, `66c10d8`.
+
+**Flip readiness (CT-3.1).** Before the flip, the whole backend suite ran on
+`66c10d8` (plus only the reconcile edit) with
+`BUILD_A_SPEC_CONTINUATION_CACHE=1` in the environment:
+**1 failed, 2943 passed, 64 skipped** (410.78 s).
+
+- `test_continuation_cache_ships_switched_off` **passed**. The spec allowed
+  for it to fail, but it reads the default from the source with `ast`, so
+  no environment can reach it, in either direction.
+- The one failure was a test that depended on the default:
+  `tests/test_qc_verifier_v3.py::test_output_and_ordinary_call_failures_do_not_trip_shared_breaker`.
+  It predates this program. It scripts one verifier seat as a pause, then a
+  400 on the continuation, then the verdict meant for the finding's second
+  seat. With the tail on, the continuation carried it, so CT-1's guard sent
+  the same request again without it. The resend took the second seat's
+  verdict, succeeded, and latched Final QC's tail `rejected`: 10 verifier
+  requests instead of the 9 the test asserts, and the latch set. No other
+  test depended on the default.
+- **The fix is the spec's**: the file's `_run` helper takes
+  `continuation_cache: bool = False` and passes it to `run_final_qc`
+  explicitly (it used to leave it `None`, which reads the setting). With
+  the tail off the test pins exactly what it always pinned, and its
+  assertions are unchanged.
+- The same suite was not re-run with the environment variable after the
+  fix, because the default is now on: the "Verification" run below is the
+  same thing, and it passes.
+
+**What was built**
+
+- **`backend/settings.py`**: `CONTINUATION_CACHE = _bool_env("BUILD_A_SPEC_CONTINUATION_CACHE", True)`.
+  The comment's first paragraph (what the tail does) is unchanged. The
+  paragraph that said "OFF by default, deliberately … The default flips
+  only on a recorded M3 pass" is replaced. It now says:
+  - the tail is on since CT-3, under FD1, without the measured trial the
+    flip once waited on, and the self-checks in `backend/cost_checks.py`
+    can only switch it off, one engine at a time, until the app restarts;
+  - a refused tail costs one resend and switches that engine's tail off
+    (CT-1): one extra request per engine per app session, never a failed
+    research area or review;
+  - six or more measured continuations that together cost more than they
+    saved switch it off too (CT-2);
+  - what the checks cannot see is bounded (+25% on the re-sent turn);
+  - `0` switches it off;
+  - it stays out of the QC input manifest (F3).
+
+  The warm lead's comment just above it is WL-2's, and unchanged.
+- **`tests/test_continuation_cache.py`**: `test_continuation_cache_ships_switched_on`
+  replaces `test_continuation_cache_ships_switched_off`. It is the same
+  `ast` walk over `backend/settings.py`, now expecting
+  `["BUILD_A_SPEC_CONTINUATION_CACHE", True]`, and its docstring says why
+  the default moved and how an operator switches the tail off.
+- **`tests/test_qc_verifier_v3.py`**: `_run(client, *, continuation_cache=False)`,
+  passed explicitly, with a comment saying why it never reads the setting;
+  and one new test (below).
+- **Copy (R9)**, everything outside the root files that the flip made
+  false:
+  - `docs/RELEASE_WINDOWS.md`: the section is now "A paused call reads its
+    own cache (cost Tier 1, Chunk 4 — on by default)". Its rows run on an
+    ordinary build. The research row says what a refusal looks like (the
+    step is sent once more, and one `Cost self-check: the continuation
+    tail is switched off for research` WARNING appears); the comparisons
+    are made against a run with the switch off. Two rows are new: **The
+    Cost self-checks row** (both engines `on`, what was measured, and never
+    `off for this session` without the WARNING that switched it off), and
+    **Switching it off** (`"0"` before start; the row then reads
+    `Continuation tail: switched off in settings`, and nothing carries the
+    breakpoint). "Off is unchanged" went; the new last row covers it.
+  - The trust dossier (`frontend/src/components/TrustDeepDiveModal.tsx`):
+    the Research card's "AI involved" row says that when the API pauses a
+    conversation, the next step reads what it re-sends from the cache; that
+    a refusal is sent once more without it; and that after a refusal, or
+    once the reuse has measurably cost more than it saved, the app stops
+    until a restart, with Developer tools → Cost self-checks showing what
+    it measured. The Final QC card's "AI involved" row says the compliance
+    lens does the same under the same self-checks, and why batched seats
+    never do. The warm lead's "off by default" sentence is WL-2's, and
+    unchanged.
+  - Both engines' tail comments (`research/engine.py` and `qc/engine.py`,
+    above `_CONTINUATION_CACHE_CONTROL`): "MEASURED BY M3 … M3's flip rule
+    catches it" is replaced by what now watches the tail (CT-1's resend and
+    CT-2's value check), and CT-2's correction that a continuation that ran
+    a server tool gains even when the entries do not match.
+  - The two latch notes CT-2 left naming only a refusal:
+    `run_requirements_research`'s docstring and `run_final_qc`'s pin
+    comment now say the latch also fires once the tail "has provably cost
+    more than it saved".
+  - `backend/cost_checks.py`'s module docstring: the savings "shipped off",
+    and with the checks in place the tail defaults on (CT-3).
+  - Test comments: `tests/test_qc_live_events.py`'s `_run_client` and
+    `tests/test_cost_checks_tail_rejection.py`'s module docstring no longer
+    call the default off.
+  - This program's own tense: the tracker's "built two savings that still
+    ship **off**" and the plans index's "that still ship off" now say
+    "shipped off" (true of when the program opened, and after it).
+  - The Tier 1 progress file gains a dated note at its top: Chunk 4's
+    switch is on since this PR, so where that file says two switches ship
+    off, only Chunk 3's still does, until WL-2. Its closeout text is left
+    as the record it is.
+  - The engine docstrings that say "off, the default for a direct caller"
+    are unchanged, as the spec says: they describe the function
+    parameter's default, which did not move.
+- **The release-note draft** (`docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md`
+  §7, CT-3.5). Item 4 lost its conditional marker and gained one sentence:
+  "If the service ever refuses this, or it turns out to cost more than it
+  saves, the app stops doing it by itself until you restart it." The
+  "Which items" bullet says items 1, 2 and 4 always ship and item 3 is
+  conditional on `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` until WL-2. No version
+  bump, no `backend/release_notes.py` entry, no tag (F7).
+
+**Deviations from the spec, and why**
+
+1. **The ships-off pin passed the flip-readiness run.** The spec allowed it
+   to fail ("Only `test_continuation_cache_ships_switched_off` may fail").
+   It passed, as an `ast` pin must: the environment cannot reach it.
+   Nothing to fix, and the flip replaced it anyway.
+2. **A tail-on twin beside the fixed test.** The spec's fix is only to pass
+   the switch explicitly. Pinning the tail off alone would leave the
+   breaker's behaviour under the new default untested, so
+   `test_a_400_that_outlives_the_tail_still_spares_the_shared_breaker` runs
+   the same post-response 400 with the tail on. It pins that CT-1 sends the
+   refused continuation once more without the tail, that the resend's 400
+   latches nothing (it was not the tail's), that the seat fails as before
+   one counted request later (`api_request_count` 3, one response), and
+   that the shared-failure breaker stays closed (the seat had a response,
+   so it is no shared failure) and the later candidate is verified. It
+   runs with one worker: the fake routes scripts by title, so a finding's
+   two seats share one queue.
+3. **The copy sweep went past the spec's list.** The spec names the
+   release checklist, the dossier and "any comment or docstring the grep
+   found". The grep also found the engines' M3 comments, the two latch
+   notes CT-2 left incomplete, `cost_checks.py`'s docstring, two test
+   comments, and "still ship off" in the tracker, the plans index and the
+   Tier 1 progress file. Each is a claim R9 says must be true at this
+   merge; every change is listed above.
+4. **§7 changed in three more places than item 4 and its bullet.** The
+   summary sentence now covers three items, because item 4 now always
+   ships and a summary that mentions the program should say so. The
+   block's intro, which said the wording is "the chunks' own, unchanged",
+   names what CT-3 added. "Where it goes" says "a conditional item", since
+   only one is left.
+5. **The dossier now describes a resume's cost.** Tier 1 Chunk 4's As
+   built (item 13) left it unchanged because it described the shipped
+   defaults and "makes no claim about what a resume costs". With the tail
+   on by default, a research conversation and the compliance lens behave
+   differently on every pause, so each card names it, with the self-checks
+   that can switch it off. That is the re-read item 13 asked the flip
+   session for.
+
+**Knowing changes to existing tests**
+
+- `test_continuation_cache_ships_switched_off` → `test_continuation_cache_ships_switched_on`
+  (the spec's CT-3.3).
+- `tests/test_qc_verifier_v3.py`'s `_run` passes `continuation_cache`
+  explicitly (default `False`). Every test in the file that runs the engine
+  goes through it; only
+  `test_output_and_ordinary_call_failures_do_not_trip_shared_breaker` was
+  affected, and its assertions are unchanged.
+- Comment and docstring only: `tests/test_qc_live_events.py` and
+  `tests/test_cost_checks_tail_rejection.py`.
+
+**The tests.** One new test:
+`tests/test_qc_verifier_v3.py::test_a_400_that_outlives_the_tail_still_spares_the_shared_breaker`
+(deviation 2). It passes `continuation_cache=True`, per R7.
+
+**Verification** (Linux container, from the repository root)
+
+- `.venv/bin/python -m ruff check .`: all checks passed.
+- `.venv/bin/python -m pytest -q` with the new default (no environment
+  variable): 2945 passed, 64 skipped (6 min 46 s). CT-2 ended at 2944;
+  the one new test is the twin.
+- The same suite with `BUILD_A_SPEC_CONTINUATION_CACHE=0`, to show no test
+  depends on the tail being on: 2945 passed, 64 skipped (6 min 36 s).
+  The same count, because every test of the tail passes the switch
+  explicitly (R7), and the pin reads the source.
+- `npm test` (in `frontend/`): 430 passed, 0 failed.
+- `npm run build`: built; the only warning is the existing chunk-size one.
+- `tests/test_tier1_finish_tracker.py` and `tests/test_docs_consistency.py`
+  pass with this As built and the ticks in place (18 passed).
+- `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md`
+  prints nothing.
+
+**Revert matrix.** Each mechanism was reverted in place, one at a time, by
+a script: it replaced one exact snippet, ran the suites, restored the exact
+text read, and checked the file byte-identical. Every row ran
+`tests/test_continuation_cache.py`, `tests/test_qc_verifier_v3.py` and
+`tests/test_cost_checks_tail_rejection.py`. "Red" counts failing tests.
+
+5 rows, 5 red. The three suites' baseline passed 56 of 56, and after the
+last row the pin passed again on its own.
+
+| Mechanism reverted | Red |
+|---|---|
+| the default back to `False` | 1 (`test_continuation_cache_ships_switched_on`) |
+| `test_qc_verifier_v3.py`'s `_run` leaves the switch to the setting | 1 (`test_output_and_ordinary_call_failures_do_not_trip_shared_breaker`) |
+| `_run` ignores its argument (the tail always off) | 1 (the twin) |
+| QC: a resend refused too still latches (CT-1's rule reverted) | 2 (the twin, and CT-1's `test_a_resend_refused_too_fails_as_before_and_latches_nothing[qc]`) |
+| QC: the tail never sent | 16 (the twin, 6 in `test_continuation_cache.py` and 9 in `test_cost_checks_tail_rejection.py`) |
+
+The second row is the flip-readiness failure itself: with the default on,
+the helper must pass the switch, or the older test meets CT-1's guard
+again. The last two show that the twin really runs with the tail on and
+through CT-1's guard.
+
+**For FIN-1**
+
+CT-1's and CT-2's For FIN-1 lists still stand; this adds what the flip
+itself changes.
+
+- **README** (`README.md`), in "## Research and Final QC cost (Tier 1)":
+  - The paragraph "Chunks 3 and 4 are built but ship switched off …"
+    (about line 1076): Chunk 4 has been on by default since CT-3, without
+    the measured run, under the Tier 1 finish program's self-checks. Only
+    Chunk 3 waits, until WL-2. "Neither is planned … so both stay off" is
+    no longer true.
+  - The heading "### A paused call reads its own cache (Chunk 4, switched
+    off)" (about line 1214): "on by default".
+  - Its bullet "**Off by default, deliberately.** … `=1` switches it on for
+    a trial" (about lines 1224–1232): on by default; a refusal is sent once
+    more without the tail and switches that engine's tail off until a
+    restart (CT-1); a proven loss does the same (CT-2); `=0` switches it
+    off, with the PowerShell and Command Prompt forms of `"0"`.
+  - Its bullet "What it saves", "which is exactly what the trial checks
+    for" (about line 1251): what CT-2's value check measures, on the
+    continuations it can measure.
+  - Its bullet "Measured, not modelled" (about lines 1252–1257): "after a
+    Research round with the switch on … than a round without it" becomes a
+    comparison with a round made with the switch off. "There is no
+    activity-log line for it" is false since CT-1: a latch writes one
+    WARNING, and Developer tools has the "Cost self-checks" row (CT-2).
+  - The Configuration row for `BUILD_A_SPEC_CONTINUATION_CACHE` (about
+    line 2820): default `1`; drop "**off** until a measured run shows the
+    provider accepts it and it pays"; say what `0` does; the examples set
+    `"0"`.
+- **CLAUDE.md implemented notes**: a section "The continuation tail is on
+  by default — implemented notes (Tier 1 finish, CT-3)", in CLAUDE.md's
+  own style (FIN-1 may fold it into its one consolidated section). The why
+  and the traps:
+  - *Why it could flip without M3* (FD1): CT-1 removed the one unbounded
+    failure (a refusal is one resend per engine per app session), CT-2
+    switches the tail off on a proven loss where the usage shows it, and
+    the rest is bounded at +25% on the re-sent turn. Merging this PR was
+    Abraham's approval.
+  - *The pin reads the source.* The flip-readiness run with `=1` passed
+    the old ships-off pin, because an `ast` pin cannot be reached by the
+    environment. That is the point of it, and why the new pin is the same
+    walk.
+  - *A test that scripts a 400 right after a pause must say which regime
+    it pins.* With the tail on, CT-1's guard meets any 400 on a
+    tail-bearing continuation: the resend takes the next scripted item. A
+    script meant for "the call fails" then succeeds and latches the tail
+    instead. `test_qc_verifier_v3.py` pins the switch off for that
+    contract, and a twin pins the tail-on behaviour.
+  - *Fakes route by title.* `SequencedFakeClient` gives a finding's seats
+    one shared queue, so a test that scripts one seat's resend runs with
+    `QC_MAX_WORKERS=1`.
+- **Layout**: the `settings.py` entry's
+  "CONTINUATION_CACHE (BUILD_A_SPEC_CONTINUATION_CACHE, default OFF — cost
+  Tier 1 Chunk 4's continuation tail, research and QC alike; flips on only
+  on a recorded M3 pass; …)" becomes "default ON since the Tier 1 finish
+  program's CT-3; the cost self-checks can only remove it, per engine,
+  until a restart; 0 switches it off", beside CT-1's "(the self-check
+  latch can only remove the tail)" edit.
+- **Errata** for earlier CLAUDE.md sections:
+  - "A paused call reads its own cache — implemented notes (Research/QC
+    cost Tier 1, Chunk 4)" says "**It ships switched off.**" It has been
+    on by default since CT-3. (CT-2's For FIN-1 already corrects the same
+    section's M3 bullet.)
+  - "Final QC phase 2 is batched" says `tests/test_qc_verifier_v3.py` pins
+    `batch_verification=False`. It now also pins `continuation_cache=False`
+    for its post-response-400 contract, with a tail-on twin.
+  - "Research and Final QC cost, Tier 1, as shipped — implemented notes
+    (closeout)":
+    - "Chunk 4 … It ships off (`BUILD_A_SPEC_CONTINUATION_CACHE`)": on by
+      default since CT-3.
+    - "**Two switches ship off, for different reasons.**" and "Each
+      default flips only on an M3 pass": only Chunk 3's is off, until
+      WL-2, and neither flip waits on M3 any more (FD1).
+    - "Everything else passes either way, so a flip is still one commit
+      per chunk": stopped holding at CT-1, whose guard met one older
+      test's scripted 400. CT-3 made that test pass the switch explicitly.
+    - "items 3 and 4 only if their switch defaults on in the release":
+      item 4 always ships since CT-3.
 
 ---
 

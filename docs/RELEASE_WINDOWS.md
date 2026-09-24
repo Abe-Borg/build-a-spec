@@ -334,27 +334,44 @@ invisible to CI and expensive to the user.
       default) none of that appears and the methodology does not mention a
       lead.
 
-### A paused call reads its own cache (cost Tier 1, Chunk 4 — off by default)
+### A paused call reads its own cache (cost Tier 1, Chunk 4 — on by default)
 
-These rows run only when trialling the switch (the plan's M3), from a source
-checkout, with `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "1"` (Command Prompt:
-`set BUILD_A_SPEC_CONTINUATION_CACHE=1`) set before `.\.venv\Scripts\python main.py`.
+The switch (`BUILD_A_SPEC_CONTINUATION_CACHE`) has been on by default since
+the Tier 1 finish program's CT-3, so these rows run on an ordinary build;
+the last one switches it off. Two runtime self-checks watch it (CT-1 and
+CT-2, `docs/plans/tier1-finish/`). They can only switch it off, one engine
+at a time, until the app restarts, and Settings → Developer tools shows what
+they decided.
 
 - [ ] **A research round completes.** Run Research on a project whose areas
       search a lot (a new jurisdiction, say): every area completes, and none
-      fails with `invalid_request_error` — a provider that refused the
-      resumed request's automatic breakpoint would fail every area that
-      paused, which is why the switch ships off. Save the project, then
+      fails with `invalid_request_error`. Should the provider ever refuse
+      the resumed request's automatic breakpoint, the app sends that step
+      once more without it and the round still completes; the activity log
+      then holds one `Cost self-check: the continuation tail is switched off
+      for research` WARNING, and the self-check row below says so. Save the
+      project, then
       `.\.venv\Scripts\python tools\research_cost_profile.py "<the saved .baspec>"`
       shows cache reads on the areas that ran longest, and a lower uncached
-      share than a comparable round made without the switch.
-- [ ] **Final QC completes.** With the switch still on, run Final QC: the
-      code-compliance lens completes, with no `invalid_request_error`.
-      Compared with a Final QC made without the switch,
+      share than a comparable round made with the switch off (the last row).
+- [ ] **Final QC completes.** Run Final QC: the code-compliance lens
+      completes, with no `invalid_request_error`. Compared with a Final QC
+      made with the switch off,
       `.\.venv\Scripts\python tools\qc_export_cost_profile.py "<the JSON export>"`
       shows that lens's cache reads rising and its uncached input falling.
-- [ ] **Off is unchanged.** With the switch unset (the default), both runs
-      behave exactly as before: nothing in either profiler moves.
+- [ ] **The Cost self-checks row.** After the research round, Settings →
+      Developer tools → Environment shows a **Cost self-checks** row, one
+      line per engine: `Continuation tail, research: on · …`, with how many
+      resumed requests it measured and their estimated saving (or `nothing
+      measured yet`), then `Continuation tail, Final QC: on · …`. Neither
+      line reads `off for this session` unless the activity log also holds
+      the WARNING that switched it off.
+- [ ] **Switching it off.** Set `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`
+      (Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`) before you
+      start the app: the Cost self-checks row reads `Continuation tail:
+      switched off in settings`, and a research round and a Final QC behave
+      exactly as they did before Chunk 4 — no resumed request carries the
+      breakpoint, and neither profiler shows the cache reads above.
 
 ### Redline export (v1.0.0)
 

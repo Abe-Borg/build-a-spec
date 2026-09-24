@@ -880,7 +880,18 @@ function Dossier() {
               at the jurisdiction, not at your text.
             </>
           }
-          model="Claude Sonnet 5, effort “high” — four concurrent long-running conversations."
+          model={
+            <>
+              Claude Sonnet 5, effort “high” — four concurrent long-running
+              conversations. When the API pauses one, the next step asks it to
+              read what the conversation re-sends from its cache instead of
+              paying full price for it again. If the service ever refuses
+              that, the step is sent once more without it; after a refusal, or
+              once the reuse has measurably cost more than it saved, the app
+              stops asking until you restart it (Settings → Developer tools →
+              Cost self-checks shows what it measured).
+            </>
+          }
           bounds={
             <>
               Per-dimension search budgets (up to 40 searches and 12 fetches for
@@ -998,7 +1009,11 @@ function Dossier() {
               is cached by the API, and a call that finds it cached reads it at
               a twentieth of the price. Calls whose tools differ cannot share a
               copy, so the compliance lens, and the verifier seats checking its
-              findings, keep one of their own.
+              findings, keep one of their own. When the compliance lens pauses
+              mid-search, its next step reads what it re-sends from the cache
+              the way research does, under the same self-checks; batched
+              verifier seats never do, because a batch round comes minutes
+              later, when that copy has usually expired.
             </>
           }
           bounds={

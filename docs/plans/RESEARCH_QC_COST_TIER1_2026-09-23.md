@@ -1725,22 +1725,28 @@ under the next heading, which it supersedes. **This is the block a release
 lifts.** It is one `ReleaseSection` for `backend/release_notes.py`: the
 section title, then one `ReleaseItem` per numbered entry, the bold line as
 its `title` and the paragraph under it as its `body`. The wording is the
-chunks' own, unchanged. Chunk 1 is a developer tool and has no note.
+chunks' own, apart from what the Tier 1 finish program's flip sessions added
+(CT-3: item 4's last sentence, and item 4 in the summary sentence). Chunk 1
+is a developer tool and has no note.
 
 - **Which release owes it.** Whichever release next ships from `master`.
   None of this program is in a 1.21.0 tagged at the project-workspace
   closeout commit (`a273ab7`), so that release needs none of it. A release
   cut from `master` at or after `02b2985` (Chunk 5's merge) carries all of
   it.
-- **Which items.** Items 1 and 2 go in any such release: Chunk 2's
-  staggered launch is on by default, and Chunk 5 has no switch. Items 3 and
-  4 are *(conditional)*. Include each only if its switch defaults on in the
-  `backend/settings.py` being released. At the closeout both are off, and
-  each flip is owed after an M3 pass of that chunk's own test (the progress
-  file's "After the program").
+- **Which items.** Items 1, 2 and 4 go in any such release: Chunk 2's
+  staggered launch is on by default, Chunk 5 has no switch, and Chunk 4's
+  continuation tail has defaulted on since the Tier 1 finish program's CT-3
+  (PR #226). Item 3 is *(conditional)*: include it only if
+  `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` defaults on in the `backend/settings.py`
+  being released. At the closeout both switches were off, each flip owed
+  after an M3 pass of that chunk's own test. The Tier 1 finish program (O7)
+  replaced that gate with runtime self-checks; its WL-2 is the session that
+  turns Chunk 3 on
+  ([`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md)).
 - **Where it goes.** If the release's entry already has a section on cost
   (1.21.0's has "What a review costs"), the items can join it instead.
-  Keep them in this order either way, so leaving out the conditional ones
+  Keep them in this order either way, so leaving out a conditional item
   leaves a clean list.
 
 **Section title:** What research and Final QC cost
@@ -1771,20 +1777,21 @@ chunks' own, unchanged. Chunk 1 is a developer tool and has no note.
    the batch can read its copy instead of each storing their own. The report
    lists that reviewer at full price, so the cost it shows stays exact.
 
-4. **Long research stops paying twice for what it already read** —
-   *(conditional: only if `BUILD_A_SPEC_CONTINUATION_CACHE` defaults on in
-   the released build)*
+4. **Long research stops paying twice for what it already read**
 
    A research area that searches the web in several steps used to pay full
    price, at every step, to re-send everything it had already found. It now
    reuses its own cached copy. The code-compliance review gets the same
-   benefit. The findings, sources and limits are unchanged.
+   benefit. The findings, sources and limits are unchanged. If the service
+   ever refuses this, or it turns out to cost more than it saves, the app
+   stops doing it by itself until you restart it.
 
 **For the release's summary paragraph**, if it mentions this program, one
-sentence covers the two unconditional items: "Research and Final QC pay less
-for the same work: four of Final QC's reviewers now share one stored copy of
-your section instead of each paying for its own, and a dropped connection no
-longer starts a research area over."
+sentence covers the three unconditional items: "Research and Final QC pay
+less for the same work: four of Final QC's reviewers now share one stored
+copy of your section instead of each paying for its own, a long research
+area reuses what it already read instead of paying for it again, and a
+dropped connection no longer starts a research area over."
 
 ### The per-chunk drafts
 

@@ -21,7 +21,7 @@ from backend.qc.schema import (
     normalize_verdict,
     submit_qc_verdict_tool,
 )
-from backend import settings
+from backend import cost_checks, settings
 from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
 from tests.fakes import (
@@ -100,7 +100,7 @@ def _scripts(findings: list[dict]) -> dict[str, list]:
     return scripts
 
 
-def _run(client: object) -> QCResult:
+def _run(client: object, *, continuation_cache: bool = False) -> QCResult:
     store = _store()
     return run_final_qc(
         store.doc,
@@ -119,6 +119,11 @@ def _run(client: object) -> QCResult:
         # there is nothing left to decline; its (equally safe, differently
         # shaped) behaviour is pinned in tests/test_qc_batch_verification.py.
         batch_verification=False,
+        # Explicit, never the setting: the continuation tail defaults on
+        # (Tier 1 finish, CT-3), and a 400 scripted on a paused seat's
+        # continuation would then meet CT-1's refusal guard instead of the
+        # contract this file pins. The tail-on case has its own test below.
+        continuation_cache=continuation_cache,
     )
 
 
@@ -405,6 +410,67 @@ def test_output_and_ordinary_call_failures_do_not_trip_shared_breaker() -> None:
         "Post-response invalid request",
     }
     assert [finding.title for finding in result.findings] == ["Later candidate"]
+
+
+def test_a_400_that_outlives_the_tail_still_spares_the_shared_breaker(
+    monkeypatch,
+) -> None:
+    """The post-response 400 above, with the continuation tail on (its
+    default since Tier 1 finish CT-3).
+
+    A 400 that is not the tail's comes back on the tail-free resend CT-1's
+    guard sends, so nothing latches and the seat fails as it did with the
+    tail off, one counted request later. It had a response before it failed,
+    so it is still no shared failure: the breaker stays closed and the later
+    candidate is verified. One worker, so the two seats of a finding cannot
+    race for the one script queue their title shares.
+    """
+    monkeypatch.setattr(settings, "QC_MAX_WORKERS", 1)
+    findings = [
+        _finding("Post-response invalid request"),
+        _finding("Later candidate"),
+    ]
+    scripts = _scripts(findings)
+    scripts["Post-response invalid request"] = [
+        qc_verdict_response(True, stop_reason="pause_turn"),
+        _bad_request_error(),  # the continuation, carrying the tail
+        _bad_request_error(),  # the same request resent without it
+        qc_verdict_response(True),  # the finding's second seat
+    ]
+    scripts["Later candidate"] = [
+        qc_verdict_response(True),
+        qc_verdict_response(True),
+    ]
+    client = SequencedFakeClient(scripts)
+
+    result = _run(client, continuation_cache=True)
+
+    seat_requests = [
+        request
+        for request in client.requests
+        if "[[QC-VERIFY:" in user_text(request["messages"])
+        and "Post-response invalid request" in user_text(request["messages"])
+    ]
+    assert ["cache_control" in request for request in seat_requests] == [
+        False,  # the opening request
+        True,  # its continuation, refused
+        False,  # the resend, refused too: the 400 was not the tail's
+        False,  # the second seat's opening request
+    ]
+    assert cost_checks.continuation_tail_enabled(cost_checks.ENGINE_QC)
+    assert {finding.title for finding in result.inconclusive} == {
+        "Post-response invalid request"
+    }
+    assert [finding.title for finding in result.findings] == ["Later candidate"]
+    failed = [
+        verdict
+        for verdict in result.inconclusive[0].verdicts
+        if verdict.status == "failed"
+    ]
+    assert len(failed) == 1
+    assert failed[0].api_request_count == 3
+    assert failed[0].model_response_count == 1
+    assert "Invalid verifier output schema" in failed[0].error
 
 
 def test_v3_semantic_fields_round_trip_and_v2_remains_readable() -> None:

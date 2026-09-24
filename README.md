@@ -1077,9 +1077,11 @@ Chunks 3 and 4 are built but ship switched off. Each rests on provider
 behaviour that only a real run can confirm: whether a batch can read a copy
 a separately streamed request stored (Chunk 3), and whether a resumed
 request's automatic cache breakpoint is accepted and read (Chunk 4). Each
-turns on only when a measured run (the plan's M3) passes its own test, and
-until then changes nothing. The progress file's "After the program" section
-says how.
+turns on only when a measured run (the plan's M3) passes its own test, or
+when the owner waives that run for it, and until then changes nothing.
+Neither is planned (the progress file's O6, 2026-09-24), so both stay off.
+The progress file's "After the program" section says how either would
+happen.
 
 ### Measure what research costs (Chunk 1)
 

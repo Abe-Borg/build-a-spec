@@ -10,12 +10,13 @@ A new session starts from [How to start a session](#how-to-start-a-session)
 and then follows the [Session procedure](#session-procedure) step by step.
 
 **The program is complete** (Chunk 6, the closeout, 2026-09-24). Every
-chunk's code is on `master`. Two switches still ship off. Each flips only
-after a measured run passes its test, and Abraham will not run one (O6), so
-both flips are **shelved**: no session is waiting on anything. The release
-notes are owed to the next release. [After the program](#after-the-program)
-says what is left and how to do it. A session that applies a flip starts
-there, not from the Session procedure.
+chunk's code is on `master`. Two switches still ship off. Each flips after
+a measured run passes its test, or on Abraham's waiver of that run. He will
+not run one and has waived neither (O6), so both flips are **shelved**: no
+session is waiting on anything. The release notes are owed to the next
+release. [After the program](#after-the-program) says what is left and how
+to do it. A session that applies a flip starts there, not from the Session
+procedure.
 
 ## Status
 
@@ -68,8 +69,9 @@ only record that it decided nothing (O4, O5). Only the release notes are
 still owed. Either switch can still turn on, in one of two ways:
 - A measured run arrives after all. The steps below then apply as written.
 - Abraham waives the M3 gate for a chunk, as he waived the condensing
-  plan's paid recall check (D5). A session then applies that chunk's flip as
-  step 5 describes, and records the waiver in place of the numbers.
+  plan's paid recall check (D5). A flip session given that waiver
+  ([Starting a flip session](#starting-a-flip-session) says how) records it
+  as step 4 says, and flips the chunk by step 5.
 
 **Two free baselines make M3's verdict sharper, and both read files you
 already have.**
@@ -94,8 +96,11 @@ plan's Chunk 6, step 3).
 ### Starting a flip session
 
 Once M3 has been run, give a new session this prompt, with the
-measurements filled in. Run M3 first: a flip session given no measurements
-can decide nothing, and only records that it could not (O4, O5).
+measurements filled in. To turn a chunk on without M3 instead, put
+Abraham's waiver where the measurements go, naming the chunk, for example:
+`Owner waiver: flip Chunk 4 without M3.` Step 4 says what a waiver
+changes. A flip session given neither can decide nothing, and only records
+that it could not (O4, O5).
 
 ```text
 Apply the owed flips of the "Research and Final QC cost, Tier 1" program in
@@ -133,8 +138,13 @@ have them; the error text of anything that failed):
    If the prompt carries no M3, or a chunk's half of it is missing (Chunk
    3's needs a `seat:list-price` row), change nothing for that chunk, and say
    which run is still needed.
-5. **Flip each chunk that passed, as its own commit.** Its "Flip" section
-   lists the parts. In full:
+   - **An owner waiver is the one exception.** If the prompt says Abraham
+     waives the M3 gate for a chunk, that waiver is the chunk's decision.
+     Record it as the chunk's row, saying the switch turns on unmeasured (a
+     waiver, not a pass), and flip the chunk by step 5. A chunk the waiver
+     does not name is decided as above.
+5. **Flip each chunk that passed or was waived, as its own commit.** Its
+   "Flip" section lists the parts. In full:
    - its default in `backend/settings.py`;
    - `test_..._ships_switched_off` replaced by `..._ships_switched_on`, still
      read from the source with `ast`;

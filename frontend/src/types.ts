@@ -2354,10 +2354,48 @@ export interface ContinuationTailCheck {
   last_observed_at?: number | null;
 }
 
+/** One lineage the warm lead's last check judged (Tier 1 finish, WL-1):
+ *  a group of Final QC's batched verifier seats that share one cached
+ *  prefix, one of which was streamed first as the lead. */
+export interface WarmLeadLineageCheck {
+  /** "no-web" or "web-tooled". */
+  kind: string;
+  /** n: the lineage's seats, the lead among them. */
+  seats: number;
+  /** Batched seats whose first response's first iteration could be read. */
+  measured: number;
+  unmeasured: number;
+  /** h₁: the share of measured seats that read the shared prefix, to four
+   *  places (null below eight measured seats). */
+  read_share: number | null;
+  /** p: the median prefix, in cached input tokens (null likewise). */
+  prefix_tokens: number | null;
+  /** C: what the lead cost at list price (an estimate). */
+  lead_cost_usd: number;
+  /** h₀*: the lead paid for itself if the batch alone would have read less
+   *  than this share (null when it could not be computed). */
+  break_even_read_share: number | null;
+  /** kept | too_few | not_warm | not_read | unprofitable */
+  verdict: string;
+}
+
+/** The warm lead's latch and last check (Tier 1 finish, WL-1). */
+export interface WarmLeadCheck {
+  setting_on: boolean;
+  enabled: boolean;
+  /** Why the check switched it off ("" while it has not). */
+  reason: string;
+  detail: string;
+  since: number | null;
+  /** The last batched phase the check judged, or null before the first. */
+  last_check: { at: number; lineages: WarmLeadLineageCheck[] } | null;
+}
+
 /** `cost_checks` in the diagnostics snapshot: what the runtime cost
  *  self-checks have decided, by behavior, then by engine. */
 export interface CostChecksSnapshot {
   continuation_tail?: Record<string, ContinuationTailCheck>;
+  warm_lead?: WarmLeadCheck;
 }
 
 /** `GET /api/diagnostics` — environment + session snapshot. */

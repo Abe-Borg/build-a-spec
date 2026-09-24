@@ -5966,7 +5966,13 @@ def _sleep_interruptibly(
 # rate accounting has handled since v1.12.0; what it costs is its own batch
 # discount. Whether a batch request can read an entry a streamed request wrote
 # is not documented, which is why the switch (settings.QC_BATCH_WARM_LEAD)
-# ships off and flips only on a measured pass (the cost plan's M3).
+# ships off. No measured trial will settle it (the Tier 1 finish program's
+# FD1); the warm lead's self-check does instead (``cost_checks``, WL-1): after
+# a phase that ends normally and sent a lead, ``check_leads`` hands each such
+# lineage's usage to ``cost_checks.check_warm_leads``, which switches the lead
+# off for the rest of the app session when the batch did not read its copy or
+# it cost more than it could have saved, and ``_run_batch_calls`` picks no
+# lead once it has.
 
 LINEAGE_WEB_TOOLED = "web-tooled"
 LINEAGE_NO_WEB = "no-web"
@@ -5989,11 +5995,16 @@ _WARM_LEAD_SEAT_FLOOR = 8
 
 @dataclass(frozen=True)
 class _WarmLead:
-    """One lineage's streamed lead seat, and what it is warming."""
+    """One lineage's streamed lead seat, and what it is warming.
+
+    ``members`` is every key of the lineage in specs order, the lead first:
+    the seats the warm lead's self-check reads back (``cost_checks``, WL-1).
+    """
 
     key: str
     kind: str
     lineage_size: int
+    members: tuple[str, ...] = ()
 
 
 def _spec_lineage_key(spec: _CallSpec) -> str:
@@ -6048,7 +6059,12 @@ def _pick_warm_leads(specs: dict[str, _CallSpec]) -> list[_WarmLead]:
         kind = _spec_lineage_kind(specs[members[0]])
         if len(members) >= _warm_lead_minimum(kind):
             leads.append(
-                _WarmLead(key=members[0], kind=kind, lineage_size=len(members))
+                _WarmLead(
+                    key=members[0],
+                    kind=kind,
+                    lineage_size=len(members),
+                    members=tuple(members),
+                )
             )
     return leads
 
@@ -6125,10 +6141,21 @@ def _run_batch_calls(
         state.messages = state.initial_messages()
     if not states:
         return _BatchPhaseOutcome({})
+    # The warm lead's self-check (Tier 1 finish, WL-1) can only take the lead
+    # away: once a phase proved the batch does not read the lead's copy, or
+    # that the lead cost more than it could have saved, no later phase in
+    # this app session picks one. Read once per phase, after the switch.
     leads = (
-        _pick_warm_leads(specs) if warm_leads and warm_wait_seconds > 0 else []
+        _pick_warm_leads(specs)
+        if warm_leads
+        and warm_wait_seconds > 0
+        and cost_checks.warm_lead_enabled()
+        else []
     )
     lead_keys = frozenset(lead.key for lead in leads)
+    # How each lead's wait ended (``_await_leaders``' outcome), for the
+    # self-check: a lead the batch did not wait for says nothing about it.
+    release_outcomes: dict[str, str] = {}
     # Written and read on THIS thread only: a lead's own thread runs its
     # streamed call and returns a _CallResult, and nothing else.
     lead_futures: dict[str, Future] = {}
@@ -6319,6 +6346,22 @@ def _run_batch_calls(
             uncollected=len(uncollected),
         )
 
+    def streamed_leads() -> frozenset[str]:
+        """The leads that actually SENT a request, once they are joined.
+
+        Only these were streamed at list price. One stopped before its first
+        request sent nothing, like the seats that were never batched, so it
+        is priced with them — otherwise the report would claim a lead the
+        run never sent (Codex, PR #213) — and the self-check has nothing of
+        it to judge.
+        """
+        return frozenset(
+            key
+            for key in lead_keys
+            if states[key].settled is not None
+            and states[key].settled.api_request_count > 0
+        )
+
     def results() -> _BatchPhaseOutcome:
         # The backstop: no outcome is ever built while a lead is still out,
         # whichever path asked for it.
@@ -6330,18 +6373,61 @@ def _run_batch_calls(
                 if state.settled is not None
             },
             unassigned_results=unassigned_results,
-            # Only a lead that actually SENT a request was streamed at list
-            # price. One stopped before its first request sent nothing, like
-            # the seats that were never batched, so it is priced with them —
-            # otherwise the report would claim a lead the run never sent
-            # (Codex, PR #213).
-            streamed_keys=frozenset(
-                key
-                for key in lead_keys
-                if states[key].settled is not None
-                and states[key].settled.api_request_count > 0
-            ),
+            streamed_keys=streamed_leads(),
         )
+
+    def check_leads() -> None:
+        """Hand each lineage whose lead sent a request to the self-check.
+
+        The warm lead's check (Tier 1 finish, WL-1;
+        ``cost_checks.check_warm_leads``), called on the NORMAL end only,
+        after the leads are joined: a Stop, the wall-clock ceiling, a
+        refused or id-less submission, a failed results read and the
+        settlement window each end a phase nobody finished, whose seats are
+        an incomplete sample. Each batched seat is read from its FIRST
+        billed response — its request in the first round it rode, submitted
+        after the lead's release — so a seat the round ceiling settled as a
+        failure still counts if it has one. The lineage is ``warm`` only when
+        the lead's wait ended on its first output and none of its requests
+        failed: a lead that timed out, or whose first request failed fast
+        (its ``finally`` releases the wait too), had no copy the batch could
+        read. Arithmetic on objects the phase already holds, read-only; the
+        check never raises, and nor does gathering for it.
+        """
+        try:
+            streamed = streamed_leads()
+            lineages: list[cost_checks.WarmLeadLineage] = []
+            for lead in leads:
+                if lead.key not in streamed:
+                    continue
+                result = states[lead.key].settled
+                batched_first = []
+                for key in lead.members:
+                    if key == lead.key:
+                        continue
+                    settled = states[key].settled
+                    batched_first.append(
+                        settled.billed[0]
+                        if settled is not None and settled.billed
+                        else None
+                    )
+                lineages.append(
+                    cost_checks.WarmLeadLineage(
+                        kind=lead.kind,
+                        seats=lead.lineage_size,
+                        model=states[lead.key].spec.model,
+                        lead_usage=_sum_billed(result.billed),
+                        batched_first=tuple(batched_first),
+                        warm=(
+                            release_outcomes.get(lead.key) == WARM_OUTCOME_WARM
+                            and result.api_request_count == len(result.billed)
+                        ),
+                    )
+                )
+            if lineages:
+                cost_checks.check_warm_leads(lineages)
+        except Exception:  # noqa: BLE001 — a check never fails the phase
+            _log.debug("could not gather the warm lead check", exc_info=True)
 
     if leads:
         # Each lead streams on its own worker; the wait is Chunk 2's, on
@@ -6379,6 +6465,7 @@ def _run_batch_calls(
             waiting.append((lead, released))
 
         def release(lead: _WarmLead, outcome: str, waited_ms: int) -> None:
+            release_outcomes[lead.key] = outcome
             _log.info(
                 "Final QC verification: %d %s seats share a cached prefix; "
                 "one streamed first, and the wait for its first output "
@@ -6606,6 +6693,10 @@ def _run_batch_calls(
         "Batched verification did not settle within the round ceiling.",
         FailureClass.UNKNOWN.value,
     )
+    # The normal end — the only one the warm lead's self-check reads, and
+    # only once every lead is joined (finish() joining again is harmless).
+    fold_leads(wait=True)
+    check_leads()
     return finish("ended")
 
 

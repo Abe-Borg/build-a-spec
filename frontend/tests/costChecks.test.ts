@@ -1,22 +1,29 @@
 /**
- * Developer tools' "Cost self-checks" row (Tier 1 finish, CT-2): what the
- * runtime cost checks decided about the continuation tail, per engine.
+ * Developer tools' "Cost self-checks" row (Tier 1 finish, CT-2 and WL-1):
+ * what the runtime cost checks decided about the continuation tail, per
+ * engine, and about the warm lead.
  *
- * The formatter is tested directly, state by state. Its reason vocabulary
- * and its engines are pinned against `backend/cost_checks.py`, read from the
- * file (the contextSizes.test.ts idiom), so a reason or an engine added on
- * one side cannot silently drop out of the other. That Developer tools
- * renders the row through the helper is pinned at the source level (the
- * modal has no DOM harness — the chatPerf.test.ts idiom).
+ * The formatter is tested directly, state by state. Its reason vocabulary,
+ * its engines and the warm lead's verdicts are pinned against
+ * `backend/cost_checks.py`, read from the file (the contextSizes.test.ts
+ * idiom), so one added on one side cannot silently drop out of the other.
+ * That Developer tools renders the row through the helper is pinned at the
+ * source level (the modal has no DOM harness — the chatPerf.test.ts idiom).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import type { ContinuationTailCheck, CostChecksSnapshot } from "../src/types.ts";
+import type {
+  ContinuationTailCheck,
+  CostChecksSnapshot,
+  WarmLeadCheck,
+  WarmLeadLineageCheck,
+} from "../src/types.ts";
 import {
   CHECK_REASON_TEXT,
   TAIL_ENGINE_LABELS,
+  WARM_LEAD_VERDICT_TEXT,
   costCheckLines,
 } from "../src/lib/costChecks.ts";
 
@@ -177,4 +184,186 @@ test("Developer tools renders the row through the helper", () => {
   assert.match(modal, /from "\.\.\/lib\/costChecks"/);
   assert.match(modal, /costCheckLines\(snapshot\.cost_checks\)/);
   assert.match(modal, /name=\{index === 0 \? "Cost self-checks" : ""\}/);
+});
+
+// ---------------------------------------------------------------------------
+// The warm lead (WL-1)
+// ---------------------------------------------------------------------------
+
+const TAIL_LINES = [
+  "Continuation tail, research: on · nothing measured yet",
+  "Continuation tail, Final QC: on · nothing measured yet",
+];
+
+function lineage(overrides: Partial<WarmLeadLineageCheck> = {}): WarmLeadLineageCheck {
+  return {
+    kind: "no-web",
+    seats: 24,
+    measured: 22,
+    unmeasured: 1,
+    read_share: 1,
+    prefix_tokens: 40000,
+    lead_cost_usd: 0.40028,
+    break_even_read_share: 0.7118,
+    verdict: "kept",
+    ...overrides,
+  };
+}
+
+function warmLead(overrides: Partial<WarmLeadCheck> = {}): WarmLeadCheck {
+  return {
+    setting_on: true,
+    enabled: true,
+    reason: "",
+    detail: "",
+    since: null,
+    last_check: null,
+    ...overrides,
+  };
+}
+
+function withWarmLead(overrides: Partial<WarmLeadCheck> = {}): CostChecksSnapshot {
+  return { ...checks(), warm_lead: warmLead(overrides) };
+}
+
+function warmLine(overrides: Partial<WarmLeadCheck> = {}): string {
+  const lines = costCheckLines(withWarmLead(overrides));
+  assert.deepEqual(lines.slice(0, 2), TAIL_LINES);
+  assert.equal(lines.length, 3);
+  return lines[2];
+}
+
+test("the warm lead switched off in settings is said once, after the tail", () => {
+  assert.equal(warmLine({ setting_on: false }), "Warm lead: switched off in settings");
+});
+
+test("the warm lead on, before any phase was checked", () => {
+  assert.equal(warmLine(), "Warm lead (Final QC): on · nothing checked yet");
+});
+
+test("the warm lead on, with the last check's numbers in plain words", () => {
+  assert.equal(
+    warmLine({ last_check: { at: 1, lineages: [lineage()] } }),
+    "Warm lead (Final QC): on · last check: 24 no-web seats, 22 measured, 100% read the shared copy; the lead pays when the batch alone would read under 71%",
+  );
+});
+
+test("each group the last check judged, in its own words", () => {
+  const line = warmLine({
+    last_check: {
+      at: 1,
+      lineages: [
+        lineage({ kind: "web-tooled", seats: 10, measured: 0, unmeasured: 9, verdict: "too_few", read_share: null, break_even_read_share: null }),
+        lineage({ seats: 12, verdict: "not_warm", read_share: 0 }),
+        lineage({ seats: 30, measured: 29, read_share: 0.9655, break_even_read_share: null }),
+      ],
+    },
+  });
+  assert.equal(
+    line,
+    "Warm lead (Final QC): on · last check: " +
+      "10 web-tooled seats, 0 measured — too few to judge · " +
+      "12 no-web seats — not judged: the batch went out before the lead's copy was ready · " +
+      "30 no-web seats, 29 measured, 97% read the shared copy",
+  );
+});
+
+test("the batch did not read the lead's copy: off, with the share that proved it", () => {
+  assert.equal(
+    warmLine({
+      enabled: false,
+      reason: "not_read",
+      detail: "The batch read the shared prefix on 3 of 25 …",
+      since: 1,
+      last_check: {
+        at: 1,
+        lineages: [lineage({ verdict: "not_read", read_share: 0.12, break_even_read_share: -0.05 })],
+      },
+    }),
+    "Warm lead (Final QC): off for this session — the batch did not read the lead's copy (12%)",
+  );
+});
+
+test("an unprofitable lead: off, with what it cost", () => {
+  assert.equal(
+    warmLine({
+      enabled: false,
+      reason: "unprofitable",
+      since: 1,
+      last_check: {
+        at: 1,
+        lineages: [
+          lineage({ verdict: "kept" }),
+          lineage({ verdict: "unprofitable", lead_cost_usd: 1.45628, break_even_read_share: -0.1224 }),
+        ],
+      },
+    }),
+    "Warm lead (Final QC): off for this session — it had cost more than it saved (lead cost $1.4563)",
+  );
+  // Switched off with no check to show for it (the latch set directly, or a
+  // later check that no longer names the group): the reason alone.
+  assert.equal(
+    warmLine({ enabled: false, reason: "not_read", last_check: null }),
+    "Warm lead (Final QC): off for this session — the batch did not read the lead's copy",
+  );
+});
+
+test("a warm-lead block that is malformed, or from an older backend, never throws", () => {
+  // No block at all (CT-2's backend): no warm-lead line.
+  assert.deepEqual(costCheckLines(checks()), TAIL_LINES);
+  assert.deepEqual(costCheckLines({ ...checks(), warm_lead: "garbage" } as unknown as CostChecksSnapshot), [
+    ...TAIL_LINES,
+    "Warm lead: not reported",
+  ]);
+  assert.equal(
+    warmLine({ last_check: { at: 1, lineages: [] } }),
+    "Warm lead (Final QC): on · last check not reported",
+  );
+  assert.equal(
+    warmLine({ last_check: "garbage" as unknown as WarmLeadCheck["last_check"] }),
+    "Warm lead (Final QC): on · last check not reported",
+  );
+  assert.equal(
+    warmLine({
+      last_check: {
+        at: 1,
+        lineages: ["garbage", lineage({ verdict: "a_new_verdict" })] as unknown as WarmLeadLineageCheck[],
+      },
+    }),
+    "Warm lead (Final QC): on · last check: not reported · 24 no-web seats, 22 measured, 100% read the shared copy — a_new_verdict",
+  );
+  assert.equal(
+    warmLine({ enabled: false, reason: "a_new_reason" }),
+    "Warm lead (Final QC): off for this session — switched off (a_new_reason)",
+  );
+  // A backend that reports the warm lead but no continuation tail.
+  assert.deepEqual(costCheckLines({ warm_lead: warmLead() }), [
+    "Continuation tail: not reported",
+    "Warm lead (Final QC): on · nothing checked yet",
+  ]);
+});
+
+test("every verdict the warm lead's check can reach has words here, and no other", () => {
+  const constants = new Map(
+    [...backend.matchAll(/^((?:VERDICT|REASON)_[A-Z_]+) = "([a-z_]+)"/gm)].map((m) => [m[1], m[2]]),
+  );
+  const tuple = backend.match(/^WARM_LEAD_VERDICTS = \(([^)]*)\)/m);
+  assert.ok(tuple, "WARM_LEAD_VERDICTS not found in backend/cost_checks.py");
+  const verdicts = tuple[1]
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .map((name) => constants.get(name));
+  assert.ok(verdicts.length > 0 && verdicts.every(Boolean), `unresolved verdicts: ${tuple[1]}`);
+  // Each has words: its own phrase, or the reason it switches the lead off.
+  for (const verdict of verdicts) {
+    assert.ok(
+      verdict! in WARM_LEAD_VERDICT_TEXT || verdict! in CHECK_REASON_TEXT,
+      `no words for the verdict ${verdict}`,
+    );
+  }
+  // And no phrase here names a verdict the backend cannot reach.
+  for (const verdict of Object.keys(WARM_LEAD_VERDICT_TEXT)) {
+    assert.ok(verdicts.includes(verdict), `${verdict} is not a backend verdict`);
+  }
 });

@@ -28,6 +28,32 @@ zero, its tail switches off (``unprofitable``). Every measured term is the
 request's exact saving or an upper bound on it, so the rule latches only on
 a proven loss.
 
+The third is the **warm lead's check** (session WL-1). The warm lead streams
+one seat of a large cache lineage of Final QC's batched verifier seats FIRST,
+at list price, and submits the batch only after that seat's first output, so
+the batch can read the 1-hour entry the lead wrote instead of each seat
+writing its own (``settings.QC_BATCH_WARM_LEAD``). Whether a batch request
+can read an entry a streamed request wrote is undocumented. So after every
+batched phase that ends normally and sent a lead, the engine hands each such
+lineage to :func:`check_warm_leads`, which reads the usage the batch already
+reported (the Chunk 3 plan's Appendix B): h₁, the share of the measured
+batched seats whose first iteration read the shared prefix; p, the prefix;
+C, what the lead cost; and h₀*, the break-even — the lead paid for itself if
+and only if the batch, without it, would have read less than h₀* of the
+prefix. Two rules can switch the lead off for the rest of the app session:
+``not_read`` when h₁ is below one half (a lead the batch reads lifts h₁ close
+to 1, because every seat was submitted after the lead's entry was readable),
+and ``unprofitable`` when h₀* is at most zero (the lead cost more than it
+could have saved even if the batch alone would have read nothing).
+
+There is deliberately **no rule on h₀* above zero.** h₀ — what the batch
+would have read without the lead — is never observed: every run that sends a
+lead measures only h₁, the read share WITH it, and batch cache hits are
+best-effort. A lead that is read but was not needed (the batch would have
+read the prefix anyway) is therefore kept; it costs its own batch discount
+per large lineage per run, which is the price of not measuring h₀ (the
+plan's §2 and B.6). Any rule on h₀* > 0 would have to guess h₀.
+
 Rules, all binding (the tracker's R5, R6, R8, R10):
 
 - **Nothing here sends a request.** A check reads only what the app was
@@ -50,8 +76,9 @@ Rules, all binding (the tracker's R5, R6, R8, R10):
 
 One WARNING on ``buildaspec.cost_checks`` (the activity log) the first time a
 latch is set, naming the behavior, the engine and the reason. Nothing is
-logged per request. :func:`snapshot` is what Settings → Developer tools and a
-support bundle read, through ``diagnostics.snapshot()``'s top-level
+logged per request; the warm lead's check writes one INFO line per lineage
+it judges, numbers only. :func:`snapshot` is what Settings → Developer tools
+and a support bundle read, through ``diagnostics.snapshot()``'s top-level
 ``cost_checks`` block.
 """
 from __future__ import annotations
@@ -60,9 +87,9 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from decimal import ROUND_UP, Decimal
+from decimal import ROUND_HALF_EVEN, ROUND_UP, Decimal
 from typing import Any
 
 import anthropic
@@ -82,7 +109,9 @@ TAIL_ENGINES = (ENGINE_RESEARCH, ENGINE_QC)
 # block reports verbatim. Each check adds the reason it sets.
 REASON_REJECTED = "rejected"  # the provider refused a request carrying it
 REASON_UNPROFITABLE = "unprofitable"  # measured, it cost more than it saved
+REASON_NOT_READ = "not_read"  # the batch did not read the warm lead's copy
 _TAIL_REASONS = frozenset({REASON_REJECTED, REASON_UNPROFITABLE})
+_WARM_LEAD_REASONS = frozenset({REASON_NOT_READ, REASON_UNPROFITABLE})
 
 # The value check latches only on at least this many measured observations:
 # one odd request cannot decide it, and a losing tail is still caught within
@@ -200,7 +229,15 @@ def _latch_locked(engine: str, reason: str, detail: str) -> bool:
 
     True when this call set it. The first latch wins, whatever its reason.
     """
-    latch = _tail_latches[engine]
+    return _set_locked(_tail_latches[engine], reason, detail)
+
+
+def _set_locked(latch: _Latch, reason: str, detail: str) -> bool:
+    """Set ``latch`` unless it is set; the caller holds ``_lock``.
+
+    True when this call set it. Every latch in this module goes through
+    here, so "the first latch wins, whatever its reason" is one rule.
+    """
     if latch.reason:
         return False
     latch.reason = reason
@@ -568,6 +605,365 @@ def _usd(amount: Decimal) -> float:
     return float(amount.quantize(_USD_PLACES, rounding=ROUND_UP)) + 0.0
 
 
+# ---------------------------------------------------------------------------
+# The warm lead's check (WL-1)
+# ---------------------------------------------------------------------------
+
+# What the check concluded about one lineage: the diagnostics block's
+# ``verdict``, a closed vocabulary. The two that switch the lead off are the
+# reasons above; the other three leave it on.
+VERDICT_KEPT = "kept"  # judged, and neither rule applies
+VERDICT_TOO_FEW = "too_few"  # too few batched seats measured to judge
+VERDICT_NOT_WARM = "not_warm"  # the batch went out before the lead's copy was ready
+WARM_LEAD_VERDICTS = (
+    VERDICT_KEPT,
+    VERDICT_TOO_FEW,
+    VERDICT_NOT_WARM,
+    REASON_NOT_READ,
+    REASON_UNPROFITABLE,
+)
+
+# A batched seat read the shared prefix when at least this share of its first
+# iteration's cached input was read rather than written (Appendix B.2). The
+# slack covers a small inner breakpoint (tools, system) written while the
+# prefix's own block hit.
+_WARM_LEAD_SEAT_READ_SHARE = Decimal("0.95")
+# A lineage is judged only on at least this many measured batched seats: a
+# handful of seats cannot tell a batch that does not read the lead's copy
+# from one that was scheduled unluckily.
+_WARM_LEAD_MIN_MEASURED = 8
+# Below this share of measured seats reading the prefix, the batch is not
+# reading the lead's copy (Appendix B.5): every seat was submitted after the
+# lead's entry was readable, so a batch that can read it sits near 1.
+_WARM_LEAD_MIN_READ_SHARE = Decimal("0.5")
+
+_SHARE_PLACES = Decimal("0.0001")
+
+
+@dataclass(frozen=True)
+class WarmLeadLineage:
+    """One cache lineage of a batched phase that ended normally with its lead.
+
+    - ``kind`` — ``web-tooled`` or ``no-web`` (the engine's lineage kinds);
+    - ``seats`` — n, the lineage's seats, the lead among them;
+    - ``model`` — the model its seats were sent to;
+    - ``lead_usage`` — every billed response of the lead, summed
+      (``usage_ledger.usage_to_dict``'s keys); billed at list price;
+    - ``batched_first`` — each OTHER seat's first billed response (its
+      request in the phase's first round, submitted after the lead's
+      release), or ``None`` for a seat that has none;
+    - ``warm`` — whether the batch went out after the lead's entry was
+      readable: the lead's first output arrived before the wait ended and
+      none of its requests failed. When it did not, the batch had no copy of
+      the lead's to read, and the lineage says nothing about the lead.
+    """
+
+    kind: str
+    seats: int
+    model: str
+    lead_usage: Mapping[str, int]
+    batched_first: tuple[Any, ...]
+    warm: bool = True
+
+
+@dataclass
+class _WarmLeadState:
+    """The warm lead's latch, and the last check, for diagnostics."""
+
+    latch: _Latch = field(default_factory=_Latch)
+    last_check: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _LineageJudgment:
+    """What :func:`_judge_lineage` found. The numbers are ``None`` below
+    :data:`_WARM_LEAD_MIN_MEASURED` measured seats (``break_even`` also when
+    the rates leave nothing to divide by); ``lead_cost`` is always known."""
+
+    kind: str
+    seats: int
+    measured: int
+    unmeasured: int
+    reads: int
+    read_share: Decimal | None
+    prefix: Decimal | None
+    lead_cost: Decimal
+    break_even: Decimal | None
+    verdict: str
+
+
+_warm_lead = _WarmLeadState()
+
+
+def warm_lead_enabled() -> bool:
+    """False once a check has switched the warm lead off.
+
+    Read once per batched verifier phase, after the switch
+    (``settings.QC_BATCH_WARM_LEAD``, pinned per Final QC run): the switch
+    decides whether a lead is wanted, and this can only take it away, from
+    the next phase on. Never raises; if the check itself fails it answers
+    ``True``, which leaves the lead exactly as the switch set it.
+    """
+    try:
+        with _lock:
+            return not _warm_lead.latch.reason
+    except Exception:  # noqa: BLE001 — a check never fails a request
+        _log.debug("warm lead check failed", exc_info=True)
+        return True
+
+
+def disable_warm_lead(*, reason: str, detail: str = "") -> None:
+    """Switch the warm lead off until the app restarts.
+
+    ``reason`` is ``not_read`` or ``unprofitable``. The first latch wins: a
+    later call changes nothing and logs nothing. ``detail`` is clipped to
+    :data:`DETAIL_MAX_CHARS` and reaches diagnostics (which scrub it), never
+    a record. Never raises: a malformed call is logged at DEBUG and ignored.
+    """
+    try:
+        if reason not in _WARM_LEAD_REASONS:
+            raise ValueError(f"not a warm-lead reason: {reason!r}")
+        clipped = _clip(detail)
+        with _lock:
+            latched = _set_locked(_warm_lead.latch, reason, clipped)
+        if latched:
+            _warn_warm_lead_latched(reason, clipped)
+    except Exception:  # noqa: BLE001 — a check never fails a request
+        _log.debug("could not switch the warm lead off", exc_info=True)
+
+
+def _warn_warm_lead_latched(reason: str, detail: str) -> None:
+    """The one WARNING the warm lead's latch writes, outside the lock."""
+    _log.warning(
+        "Cost self-check: the warm lead is switched off until the app "
+        "restarts (%s). %s",
+        reason,
+        detail or "No detail.",
+    )
+
+
+def _seat_prefix(response: Any) -> tuple[int, int] | None:
+    """A batched seat's first iteration, as ``(read, write)`` cached tokens.
+
+    ``None`` — the seat is unmeasured, counted and never guessed — when the
+    seat has no billed response, its first iteration cannot be read (a
+    web-tooled seat that searched, with no ``usage.iterations`` reported), or
+    it read and wrote nothing.
+    """
+    counts = first_iteration_usage(response)
+    if counts is None:
+        return None
+    read = counts["cache_read_input_tokens"]
+    write = counts["cache_creation_input_tokens"]
+    if read + write == 0:
+        return None
+    return read, write
+
+
+def _median(values: list[int]) -> Decimal:
+    """The median, exact: the mean of the middle two for an even count."""
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return Decimal(ordered[middle])
+    return (Decimal(ordered[middle - 1]) + Decimal(ordered[middle])) / 2
+
+
+def _judge_lineage(lineage: WarmLeadLineage) -> _LineageJudgment:
+    """Appendix B for one lineage: h₁, p, C, h₀* and the verdict.
+
+    With w₁ and r the model's 1-hour cache-write and cache-read rates, b the
+    batch multiplier and Δ = w₁ − r, the lead paid if and only if h₀ < h₀*,
+
+        h₀* = [(n − 1)·b·h₁·Δ·p − (1 − b)·C] / (n·b·Δ·p).
+
+    The verdicts, in order: ``not_warm`` when the batch went out before the
+    lead's copy was ready (the lineage says nothing about the lead);
+    ``too_few`` below :data:`_WARM_LEAD_MIN_MEASURED` measured seats;
+    ``not_read`` when h₁ < :data:`_WARM_LEAD_MIN_READ_SHARE`; ``unprofitable``
+    when h₀* ≤ 0 — the numerator at most zero, which says the same whatever
+    the denominator's sign; otherwise ``kept``.
+    """
+    measured: list[int] = []
+    reads = 0
+    unmeasured = 0
+    for response in lineage.batched_first:
+        prefix = _seat_prefix(response)
+        if prefix is None:
+            unmeasured += 1
+            continue
+        read, write = prefix
+        measured.append(read + write)
+        if read >= _WARM_LEAD_SEAT_READ_SHARE * (read + write):
+            reads += 1
+
+    rates = usage_ledger.model_rates(lineage.model)
+    one_hour = "cache_write_1h" if "cache_write_1h" in rates else "cache_write"
+    delta = _rate(rates, one_hour) - _rate(rates, "cache_read")
+    batch = Decimal(format(float(settings.BATCH_COST_MULTIPLIER), ".12g"))
+    lead_cost = Decimal(
+        str(usage_ledger.estimate_usage_cost(lineage.model, dict(lineage.lead_usage)))
+    )
+    seats = int(lineage.seats)
+
+    read_share = prefix = break_even = numerator = None
+    if len(measured) >= _WARM_LEAD_MIN_MEASURED:
+        read_share = Decimal(reads) / Decimal(len(measured))
+        prefix = _median(measured)
+        numerator = (seats - 1) * batch * read_share * delta * prefix - (
+            1 - batch
+        ) * lead_cost
+        denominator = seats * batch * delta * prefix
+        if denominator > 0:
+            break_even = numerator / denominator
+
+    if not lineage.warm:
+        verdict = VERDICT_NOT_WARM
+    elif read_share is None or numerator is None:
+        verdict = VERDICT_TOO_FEW
+    elif read_share < _WARM_LEAD_MIN_READ_SHARE:
+        verdict = REASON_NOT_READ
+    elif numerator <= 0:
+        verdict = REASON_UNPROFITABLE
+    else:
+        verdict = VERDICT_KEPT
+    return _LineageJudgment(
+        kind=str(lineage.kind),
+        seats=seats,
+        measured=len(measured),
+        unmeasured=unmeasured,
+        reads=reads,
+        read_share=read_share,
+        prefix=prefix,
+        lead_cost=lead_cost,
+        break_even=break_even,
+        verdict=verdict,
+    )
+
+
+def _share(value: Decimal | None, *, rounding: str) -> float | None:
+    """A share rounded to four places, never ``-0.0``."""
+    if value is None:
+        return None
+    return float(value.quantize(_SHARE_PLACES, rounding=rounding)) + 0.0
+
+
+def _lineage_record(judged: _LineageJudgment) -> dict[str, Any]:
+    """One lineage of the diagnostics block's ``last_check``: scalars only.
+
+    ``read_share`` rounds half-even; ``break_even_read_share`` rounds away
+    from zero, so a break-even a hair above zero never reads as ``0.0`` beside
+    a ``kept`` verdict (nor one a hair below as a positive).
+    """
+    prefix = judged.prefix
+    return {
+        "kind": judged.kind,
+        "seats": judged.seats,
+        "measured": judged.measured,
+        "unmeasured": judged.unmeasured,
+        "read_share": _share(judged.read_share, rounding=ROUND_HALF_EVEN),
+        "prefix_tokens": (
+            None
+            if prefix is None
+            else int(prefix)
+            if prefix == prefix.to_integral_value()
+            else float(prefix)
+        ),
+        "lead_cost_usd": _usd(judged.lead_cost),
+        "break_even_read_share": _share(judged.break_even, rounding=ROUND_UP),
+        "verdict": judged.verdict,
+    }
+
+
+def _warm_lead_detail(judged: _LineageJudgment) -> str:
+    """Why the check switched the lead off, in one line."""
+    record = _lineage_record(judged)
+    if judged.verdict == REASON_NOT_READ:
+        return (
+            f"The batch read the shared prefix on {judged.reads} of "
+            f"{judged.measured} measured {judged.kind} seats "
+            f"({record['read_share']:.0%}); a batch that reads the lead's "
+            "copy reads it on nearly all of them."
+        )
+    return (
+        f"The lead cost an estimated ${record['lead_cost_usd']:.6f}, more than "
+        f"it could have saved on its {judged.seats}-seat {judged.kind} lineage "
+        "even if the batch alone had read nothing (break-even read share "
+        f"{record['break_even_read_share']})."
+    )
+
+
+def _log_judgment(judged: _LineageJudgment) -> None:
+    """The one INFO line per lineage: numbers only, never finding text."""
+    record = _lineage_record(judged)
+    _log.info(
+        "Warm lead check: %d %s seats (the lead among them), %d measured, "
+        "%d unmeasured; read share %s, break-even read share %s, lead cost "
+        "$%.6f: %s.",
+        judged.seats,
+        judged.kind,
+        judged.measured,
+        judged.unmeasured,
+        "n/a" if record["read_share"] is None else f"{record['read_share']:.4f}",
+        "n/a"
+        if record["break_even_read_share"] is None
+        else f"{record['break_even_read_share']:.4f}",
+        record["lead_cost_usd"],
+        judged.verdict,
+    )
+
+
+def check_warm_leads(lineages: Sequence[WarmLeadLineage]) -> None:
+    """Judge the lineages whose lead one batched phase streamed.
+
+    The engine calls this once per batched verifier phase, when the phase
+    ended normally, after the leads were joined, with one entry per lineage
+    whose lead sent a request. Each lineage is judged (:func:`_judge_lineage`)
+    and logged in one INFO line; the phase's judgments replace the last
+    check in diagnostics; and the first lineage judged ``not_read`` or
+    ``unprofitable`` switches the lead off for the rest of the app session,
+    with one WARNING. Recording and latching are one lock acquisition, so a
+    reader never sees a check without the latch it earned.
+
+    Reads the responses and never changes them; touches no request, record,
+    usage total, meter or manifest. Never raises: a failure is logged at
+    DEBUG and records nothing.
+    """
+    try:
+        judged = [_judge_lineage(lineage) for lineage in lineages]
+        if not judged:
+            return
+        record = {
+            "at": time.time(),
+            "lineages": [_lineage_record(judgment) for judgment in judged],
+        }
+        losing = next(
+            (j for j in judged if j.verdict in _WARM_LEAD_REASONS), None
+        )
+        detail = _clip(_warm_lead_detail(losing)) if losing is not None else ""
+        with _lock:
+            _warm_lead.last_check = record
+            latched = losing is not None and _set_locked(
+                _warm_lead.latch, losing.verdict, detail
+            )
+        for judgment in judged:
+            _log_judgment(judgment)
+        if latched:
+            _warn_warm_lead_latched(losing.verdict, detail)
+    except Exception:  # noqa: BLE001 — a check never fails a request
+        _log.debug("could not check the warm lead", exc_info=True)
+
+
+def _copy_check(check: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The last check, copied, so a reader can never edit the module's."""
+    if check is None:
+        return None
+    return {
+        "at": check["at"],
+        "lineages": [dict(lineage) for lineage in check["lineages"]],
+    }
+
+
 def snapshot() -> dict[str, Any]:
     """What the checks have decided, for diagnostics. Never raises.
 
@@ -582,9 +978,21 @@ def snapshot() -> dict[str, Any]:
     :func:`_usd`), and ``last_observed_at`` when a response to a request
     carrying the tail was last observed. Grouped by behavior, so a later
     check's block sits beside this one rather than among the engine names.
+
+    ``"warm_lead": {setting_on, enabled, reason, detail, since,
+    last_check}`` sits beside it (WL-1): the same five keys for the warm
+    lead's one latch, and ``last_check`` — ``None`` until a phase is
+    checked, then ``{at, lineages}``, one entry per lineage the last checked
+    phase judged, each ``{kind, seats, measured, unmeasured, read_share,
+    prefix_tokens, lead_cost_usd, break_even_read_share, verdict}``
+    (:func:`_lineage_record`). Every value in a lineage is a scalar: the
+    support bundle scrubs this block six levels down, and a lineage's values
+    sit at the sixth. Both blocks are read in one lock acquisition, so they
+    describe one moment.
     """
     try:
         setting_on = bool(settings.CONTINUATION_CACHE)
+        warm_setting_on = bool(settings.QC_BATCH_WARM_LEAD)
         with _lock:
             tail = {
                 engine: {
@@ -602,16 +1010,26 @@ def snapshot() -> dict[str, Any]:
                 }
                 for engine, latch in _tail_latches.items()
             }
-        return {"continuation_tail": tail}
+            warm = {
+                "setting_on": warm_setting_on,
+                "enabled": not _warm_lead.latch.reason,
+                "reason": _warm_lead.latch.reason,
+                "detail": _warm_lead.latch.detail,
+                "since": _warm_lead.latch.since,
+                "last_check": _copy_check(_warm_lead.last_check),
+            }
+        return {"continuation_tail": tail, "warm_lead": warm}
     except Exception:  # noqa: BLE001 — diagnostics must not fail on a check
         _log.debug("could not snapshot the cost self-checks", exc_info=True)
         return {}
 
 
 def reset_for_tests() -> None:
-    """Clear every latch and observation (the conftest calls this around
-    every test)."""
+    """Clear every latch, observation and check (the conftest calls this
+    around every test)."""
     with _lock:
         for engine in TAIL_ENGINES:
             _tail_latches[engine] = _Latch()
             _tail_values[engine] = _TailValue()
+        _warm_lead.latch = _Latch()
+        _warm_lead.last_check = None

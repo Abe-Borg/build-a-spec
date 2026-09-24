@@ -13,6 +13,7 @@ import {
   getDiagnosticsTraces,
 } from "../lib/api";
 import { contextMakeup } from "../lib/contextSizes";
+import { costCheckLines } from "../lib/costChecks";
 import { describeCompaction } from "../lib/compaction";
 import { useDialogFocus } from "../lib/dialogFocus";
 
@@ -268,6 +269,11 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                 <Row name="App" value={`${app.name} ${app.version}${app.frozen ? " (packaged)" : ""}${app.dev_mode ? " (dev mode)" : ""}`} />
                 <Row name="Platform" value={`${app.platform} · Python ${app.python} · port ${app.port}`} />
                 <Row name="Models" value={`interview ${app.models.interview} · research ${app.models.research} · QC ${app.models.qc}`} />
+                {/* One line per engine: what the cost self-checks decided
+                    about the continuation tail (Tier 1 finish). */}
+                {costCheckLines(snapshot.cost_checks).map((line, index) => (
+                  <Row key={index} name={index === 0 ? "Cost self-checks" : ""} value={line} />
+                ))}
                 {process && (
                   <Row
                     name="Process"

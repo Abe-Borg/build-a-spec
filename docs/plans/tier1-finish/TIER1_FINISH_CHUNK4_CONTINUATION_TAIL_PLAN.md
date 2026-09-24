@@ -911,11 +911,517 @@ as long as nobody looks. A default-on switch should notice its own loss.
 
 ### As built
 
-*Not started.*
+*Built on 2026-09-24; the record follows the paragraph below.*
 
 When you build this session, append here what CT-1's As built lists, plus
 what you found about `usage.iterations` (the SDK version, the GA and beta
 types, and the API reference, with the date).
+
+#### CT-2 as built (2026-09-24)
+
+Built from `master` at `cd3ce86` (CT-1's merge), on branch
+`claude/vigilant-euler-xs9aab`. The switch still ships off:
+`backend/settings.py` is untouched, and
+`test_continuation_cache_ships_switched_off` is unchanged and green.
+
+**What was built**
+
+- **`backend/usage_ledger.py`**: `model_rates(model)`, the public rate
+  accessor. It returns `dict(_rates(model))`: the ledger's own lookup,
+  unknown-model fallback included, as a copy, so a caller cannot edit
+  `settings.PRICING`.
+- **`backend/cost_checks.py`**, the value check:
+  - `REASON_UNPROFITABLE = "unprofitable"` joins `_TAIL_REASONS`, and
+    `_TAIL_MIN_OBSERVATIONS = 6`.
+  - `first_iteration_usage(response)` returns the first model iteration's
+    `input_tokens`, `output_tokens`, `cache_read_input_tokens` and
+    `cache_creation_input_tokens`, or `None`. It tries, in order:
+    - the first `message` entry of `usage.iterations`, read whether it is
+      a dict or an object;
+    - the top-level usage, but only when the response provably ran one
+      model iteration (`_single_iteration`);
+    - otherwise `None`.
+  - `observe_continuation(engine, *, model, opening, response)` classifies
+    one observation (`_tail_saving`, below) and records it. It keeps a
+    per-engine `_TailValue`: `exact`, `bound`, `unmeasured`, a `Decimal`
+    `saving` and `last_observed_at`. After recording, if the engine has at
+    least six measured observations summing below zero, it latches
+    `unprofitable` with one WARNING. It reads the responses and never
+    changes them. It never raises: a failure is logged at DEBUG, and
+    records nothing.
+  - `_tail_saving(model, opening, response)` is Appendix A, with the
+    refinements the deviations below describe.
+    - **exact**: the continuation ran one model iteration, and the opening
+      response's first iteration is known. S = R·(u − r) − W·(w − u), with
+      R, `missed` and W exactly as in A.3.
+    - **bound**: the continuation ran one model iteration and read
+      something, but the opening's first iteration is unknown.
+      S_max = read·(u − r) − write·(w − u).
+    - **unmeasured**: anything else.
+  - `disable_continuation_tail` and `observe_continuation` share
+    `_latch_locked` (set the latch under the lock the caller holds; the
+    first latch wins) and `_warn_latched` (the one WARNING, logged outside
+    the lock).
+  - `snapshot()`: each engine's entry gains `measured` (`exact` +
+    `bound`), `exact`, `bound`, `unmeasured`, `saving_usd` (the signed
+    sum, rounded to six places away from zero, never `-0.0`) and
+    `last_observed_at`.
+  - `reset_for_tests()` clears the observations with the latches, in the
+    same lock acquisition.
+- **The hooks.** In `_run_dimension` and `_run_streaming_call`, right after
+  `all_responses.append(response)`, a response to a request that carried
+  the tail is observed:
+  `if carried_tail: cost_checks.observe_continuation(_TAIL_ENGINE, model=model, opening=all_responses[0], response=response)`.
+  `carried_tail` is what CT-1's `_open_stream` yields: `False` after a
+  resend without the tail, so the resend is never observed. An opening
+  request never carries the tail, so its response is never observed.
+- **Developer tools.**
+  - `frontend/src/types.ts` gains `ContinuationTailCheck` and
+    `CostChecksSnapshot`, and `DiagnosticsSnapshot.cost_checks`.
+  - `frontend/src/lib/costChecks.ts` (new) has `costCheckLines(checks)`,
+    `CHECK_REASON_TEXT` and `TAIL_ENGINE_LABELS`.
+  - `DeveloperToolsModal`'s Environment section renders one `Row` per
+    line after "Models". The first row is named "Cost self-checks".
+- **`tests/fakes.py`**: `usage(..., iterations=)` attaches
+  `usage.iterations` only when supplied, entries as given (dicts or
+  objects). Every existing fixture stays byte-identical.
+
+**Deviations from the spec, and why**
+
+1. **An exact observation needs ONE model iteration in the continuation.**
+   The spec's exact path uses the first `message` iteration of any
+   continuation that reports iterations. A continuation that ran two or
+   more iterations (a server tool ran inside it) is now unmeasured,
+   because its first iteration does not bound what the tail saved on it.
+
+   The provider puts an automatic breakpoint after each server tool's
+   result, and a later iteration reads the entry the tail wrote. Take P0
+   as the explicit prefix. T follows it: R of T is readable from earlier
+   entries, and W is not. O1 is the first iteration's output, and X1 the
+   first tool result.
+   - Without the tail: iteration 1 reads P0 and pays T at the input rate.
+     Iteration 2's breakpoint at X1 reads P0 + R, and writes W + O1 + X1.
+   - With the tail: iteration 1 reads P0 + R and writes W. Iteration 2
+     reads P0 + T, and writes O1 + X1.
+
+   So the tail saves R·(u − r) − W·(w − u) on iteration 1, the Appendix A
+   term, and W·(w − r) more on iteration 2. The total is
+   (R + W)·(u − r) ≥ 0, and iterations after the second are the same
+   either way. The first-iteration figure understates such a request by
+   W·(w − r), so it is not the upper bound A.5 needs. Summing it could
+   latch a tail that was saving money, which is the one outcome the rule
+   exists to avoid.
+
+   `_one_model_iteration` requires, with `usage.iterations` reported,
+   exactly one entry, a `message`. Without it, the response must provably
+   be a single iteration.
+2. **A continuation that answers a pending server tool call is unmeasured.**
+   The provider runs the pending tool first, so the first iteration's input
+   is the request plus that tool's result, behind the provider's own
+   automatic breakpoint. The tail is redundant there, and the write the
+   usage reports includes the new result: a 30,000-token fetched page
+   would be charged to the tail as a loss it never caused.
+
+   `_answers_pending_tool` detects it from the response itself: a
+   `*_tool_result` block whose `tool_use_id` names no `server_tool_use`
+   or `mcp_tool_use` block earlier in the same response. The server tools
+   page says a resumed response begins with such a block. Unreadable
+   content counts as pending: never measure what cannot be read.
+3. **The single-iteration fallback is an allowlist.** The spec says: no
+   `server_tool_use` block, and no web search or fetch requests in the
+   usage. The code requires:
+   - content made only of `text`, `thinking`, `redacted_thinking` and
+     `tool_use` blocks;
+   - no `*_requests` count above zero in `usage.server_tool_use`. That
+     means the two web tools, plus any other such count the record
+     carries, whether a declared field or a pydantic extra from a newer
+     provider.
+
+   A pending resume (a result block with no use block) and any block type
+   this code has never seen are then excluded too. The direction is safe:
+   more unmeasured, never a false single iteration.
+4. **The arithmetic is in `Decimal`, with rates to twelve significant
+   digits** (`_rate`: `Decimal(format(float(rate), ".12g"))`).
+   `settings.PRICING` divides per-million prices by a million in floats,
+   so Sonnet 5's and Opus 5.5's cache read is `2.0000000000000002e-07`.
+   With that noise kept, an observation that exactly breaks even (read 5,
+   write 18 on Sonnet 5) sums to a hair below zero, and twelve of them
+   latch. Twelve digits strip the noise and touch no real price (checked
+   for every row of `PRICING`). Pinned by
+   `test_a_sum_at_or_above_zero_never_latches`.
+
+   The dollar figures the check reports (`saving_usd`, and the latch's
+   detail) round to six places **away from zero** (`_usd`), not half-even.
+   The rule reads the exact sum, so a sum a tenth of a millionth of a
+   dollar below zero latches. Rounded half-even it would then read as a
+   saving of `0.0` beside the reason `unprofitable`. Pinned by
+   `test_a_loss_under_a_millionth_of_a_dollar_still_reads_as_a_loss`.
+5. **What counts as a count.** `input_tokens` and `output_tokens` must be
+   non-negative ints (a bool is not one: `isinstance(True, int)` is true).
+   A cache count may be `None`, which the GA `Usage` types allow and which
+   means zero. Anything else makes the iteration unreadable, so the
+   observation is unmeasured. A record that is not a usage record never
+   reads as a zero observation that would count toward the six.
+6. **One lock acquisition per observation, latch included.** A reader
+   never sees a count without the latch it earned. The WARNING is logged
+   outside the lock. The first latch wins, whatever its reason: a tail
+   refused (CT-1) and later measured at a loss stays `rejected`.
+
+   Observing carries on after a latch, as step 4 asks. In practice only
+   requests already in flight when it latched still report back, since no
+   later request carries the tail. So the running sum can move a little
+   after the latch, even back above zero.
+7. **`last_observed_at` covers every observation**, measured or not. It
+   says when a response to a tail-bearing request was last seen.
+8. **The frontend.**
+   - The row is one `Row` per line: the first named "Cost self-checks",
+     the rest with an empty name. `Row` renders a single value line.
+   - The switch off in settings is said once, for both engines.
+   - Money is shown to four places ("est. saving $0.0860", "est. loss
+     $0.2892"), not the example's two: a continuation saves fractions of a
+     cent.
+   - The latch's detail stays out of the row, which is plain words. It is
+     in Copy snapshot JSON and in the activity log's WARNING.
+   - The `unprofitable` reason reads "it had cost more than it saved",
+     past tense, because the counts beside it keep running (deviation 6).
+     The frontend test pins that line beside a later saving.
+   - Beyond the spec's reason pin, the test also pins the engines, in
+     `TAIL_ENGINES` order.
+   - A CT-1-era backend (no counts) renders "measurement not reported". An
+     unknown reason renders "switched off (<reason>)". An unknown engine
+     renders under its own id.
+9. **Comments made true (R9).**
+   - The tail condition's comment in both engines said a refusal was "the
+     one way it can change mid-round" (mid-run for Final QC). It now names
+     both ways: a refusal (`_open_stream`), or a proven loss
+     (`cost_checks.observe_continuation`).
+   - `cost_checks`'s module docstring said "The one check so far is the
+     continuation tail's guard". It now says "The first check is", and
+     describes the second.
+
+**Knowing changes to existing tests**
+
+- `test_diagnostics_report_the_latch_and_survive_the_scrub`: the clear
+  per-engine entry gains the six new keys, at zero or `None`.
+- `test_a_malformed_call_never_raises_and_switches_nothing_off` used
+  `reason="unprofitable"` as a reason outside the vocabulary. CT-2 made it
+  a real reason, so the test now uses `"not_a_reason"`, which never will
+  be. WL-1's `not_read` would have broken it again.
+- Fixtures: `tests/fakes.py`'s `usage(iterations=)`, attached only when
+  supplied.
+
+**The tests** — `tests/test_cost_checks_tail_value.py`, 29 tests (32
+counting parametrized cases). Every engine run passes
+`continuation_cache=True`; the runners take it as a required keyword. An
+autouse fixture first checks the rates the hand-computed savings assume
+(Sonnet 5 2.00/0.20/2.50 and Opus 5.5 4.00/0.20/5.00 per million), so a
+price change fails there, under its own name.
+
+- The arithmetic:
+  - `test_an_exact_observation_measures_what_the_tail_read_and_wrote`:
+    $0.068.
+  - `test_an_expired_opening_entry_is_not_charged_to_the_tail`: the
+    `missed` term, −$0.015 two ways.
+  - `test_a_bound_credits_every_read_and_charges_every_write`: $0.086, and
+    bound − exact = P0·(u − r).
+  - `test_final_qc_is_priced_on_its_own_model`: Opus 5.5, $0.182.
+  - `test_a_response_that_ran_server_tools_without_iterations_is_unmeasured`
+  - `test_a_bound_with_nothing_read_is_skipped`
+  - `test_iterations_are_read_as_dicts_and_as_objects`: a leading
+    `compaction` entry skipped, and exact end to end from object entries.
+  - `test_a_continuation_that_ran_more_than_one_iteration_is_unmeasured`
+    (deviation 1)
+  - `test_a_continuation_that_answers_a_pending_call_is_unmeasured`
+    (deviation 2), with a control that is measured.
+  - `test_the_top_level_usage_stands_in_only_when_no_server_tool_ran`
+    (deviation 3)
+  - `test_malformed_usage_raises_nothing_and_measures_nothing`: fourteen
+    malformed shapes, each against three openings, seven times; the
+    responses unchanged; a failure inside the check logged at DEBUG,
+    recording nothing; an unknown engine.
+- The latch:
+  - `test_five_losing_observations_do_not_latch_and_the_sixth_does`: the
+    exact detail, one WARNING, the other engine untouched.
+  - `test_unmeasured_observations_never_count_toward_the_six`
+  - `test_a_sum_at_or_above_zero_never_latches`: twelve exact break-evens
+    (deviation 4), and a win that outweighs ten losses.
+  - `test_a_loss_under_a_millionth_of_a_dollar_still_reads_as_a_loss`:
+    −$0.0000001 latches and reads as −$0.000001 (deviation 4).
+  - `test_the_latch_persists_however_many_winning_observations_follow`
+  - `test_a_refused_tail_is_never_relabelled_unprofitable`
+  - `test_an_observation_takes_the_one_lock_once`: CT-1's counting lock.
+  - `test_many_threads_observe_without_losing_a_count`
+- The hooks, end to end:
+  - `test_a_paused_research_dimension_observes_each_continuation`: an
+    opening, a continuation that searched (unmeasured) and a closing one
+    (bound). Only the two tail-bearing requests' responses are observed,
+    each with the opening response, by identity (`is`: the fake hands
+    back the scripted object, and SimpleNamespace compares by value).
+  - `test_reported_iterations_make_a_research_observation_exact`
+  - `test_a_paused_compliance_lens_observes_its_continuations`
+  - `test_a_streamed_web_tooled_seat_observes_its_continuation`
+  - `test_a_tail_free_resend_is_never_observed` (both engines)
+  - `test_an_opening_response_is_never_observed` (both engines): a call
+    that completes on its first request, and a paused call with the switch
+    off.
+  - `test_an_unprofitable_latch_takes_the_tail_off_the_next_request` (both
+    engines)
+- `test_the_measurement_is_invisible` (F3, F4, R6). Both engines run twice,
+  measuring and with `observe_continuation` a no-op. Everything is
+  identical: requests, records, `usage_total()`,
+  `usage_by_meter_category()`, the input manifest and the fingerprint.
+  The only exceptions are the fields no two runs share, `round_id` and
+  QC's wall-clock `duration_ms`. The manifest names none of the check.
+- `test_diagnostics_report_the_counts_and_survive_the_scrub`
+- `test_the_rates_come_from_the_ledger`: `model_rates` equals `_rates` for
+  every priced model and an unknown one, and returns a copy. The check's
+  source reads no price table. Doubling what `_rates` returns doubles the
+  saving.
+
+`frontend/tests/costChecks.test.ts` (9 tests, registered in
+`frontend/package.json`):
+- each state's line: switched off in settings, on with nothing measured,
+  on and measured, rejected, unprofitable (with its loss, and beside a
+  later saving);
+- the reason vocabulary and the engines, pinned against
+  `backend/cost_checks.py`;
+- a missing, older or malformed snapshot renders "not reported", or a
+  per-engine line, and never throws;
+- the modal renders the row through the helper.
+
+**What the SDK and the API reference say about `usage.iterations`**
+(checked 2026-09-24; no request was made, R5)
+
+- **The SDK.** `anthropic` 1.8.0 is installed; `requirements.txt` allows
+  `>=1.0,<2`.
+  - The GA `anthropic.types.Usage` has no `iterations` field. Its fields
+    are `cache_creation`, `cache_creation_input_tokens`,
+    `cache_read_input_tokens`, `inference_geo`, `input_tokens`,
+    `output_tokens`, `output_tokens_details`, `server_tool_use` and
+    `service_tier`. It allows extra fields: a GA response carrying
+    `iterations` keeps it as a list of plain dicts (checked locally with
+    `construct_type(Message, …)`).
+  - The GA `ServerToolUsage` has `web_fetch_requests` and
+    `web_search_requests`.
+  - The beta `BetaUsage.iterations` is `Optional[BetaIterationsUsage]`: a
+    list discriminated on `type`. Its members are
+    `BetaMessageIterationUsage` (`type: "message"`, with `input_tokens`,
+    `output_tokens`, `cache_read_input_tokens` and
+    `cache_creation_input_tokens` as required ints, plus optional
+    `cache_creation` and `model`), `BetaCompactionIterationUsage`,
+    `BetaAdvisorMessageIterationUsage` and
+    `BetaFallbackMessageIterationUsage`. Its docstring calls message
+    entries "model sampling iterations, such as the turns of a server-side
+    tool use loop", for understanding "token accumulation across
+    server-side tool use loops".
+- **The API reference.**
+  - The Messages API reference (GA and beta) did not render its response
+    schema when fetched, so it says nothing either way.
+  - The web search tool page's usage examples, for the GA endpoint, carry
+    no `iterations`.
+  - The tool-use documentation says that with prompt caching on, "the API
+    automatically places a cache breakpoint on the server tool result
+    before running the next iteration of the agentic loop", with the
+    default 5-minute TTL, and only when the request already has a
+    `cache_control` marker. That is the entry a later iteration reads in
+    deviation 1.
+  - The server tools page says a paused turn's pending tool runs at the
+    start of the next request, and that the next response begins with that
+    tool's result block. That is deviation 2.
+  - The only other documentation found that names `usage.iterations` is
+    for server-side fallbacks (beta), where top-level usage covers only the
+    attempt that produced the message.
+  - No page says the GA endpoint returns `usage.iterations` for a
+    server-tool loop.
+- **What that means.** The exact path is ready, and pinned, for a response
+  that carries `iterations` in either shape. On the GA endpoint the app
+  calls today, it should rarely if ever fire, so the bound path carries
+  the check.
+
+**What the check cannot see — for CT-3, and for Abraham**
+
+On the GA endpoint, a continuation whose request ran a server tool reports
+no per-iteration usage, so it is unmeasured. The measured continuations
+are then only the ones that ran no server tool: in practice, each paused
+conversation's closing request (research's findings, a lens's findings, a
+seat's verdict). Deviation 1 shows those are the only continuations on
+which the tail can lose; one that ran a server tool never loses under the
+documented cache model. So the latch's sum is a proven loss on the requests
+it measures, exactly as A.5 says, but not across all continuations.
+
+In §2's bad case (entries that do not match what is re-sent), a paused
+area's closing continuation loses T·(w − u), while each earlier continuation
+that searched gains T·(u − r). On Sonnet 5 that is 3.6 times as much per
+token. So the check could switch off a tail that is saving money overall.
+That is the safe direction for spend, because a latch can only remove a
+saving, and it is what the spec specifies. It is not a CT-2 decision, but
+CT-3 and Abraham should know it before the flip.
+
+For the same reason, §2's row "each continuation pays the 5-minute write
+premium on the turn it re-sends" holds only for a continuation that runs no
+server tool. The spec text stays as written; this is the correction.
+
+**Verification** (Linux container, from the repository root)
+
+- `.venv/bin/python -m ruff check .`: all checks passed.
+- `.venv/bin/python -m pytest -q` on the finished code: 2944 passed,
+  64 skipped (7 min 37 s). CT-1 ended at 2912; the 32 new are this file's
+  cases. An earlier run, before the rounding change and its test: 2943
+  passed, 64 skipped. The revert matrix's baseline passed 250 of 250
+  across its eight suites.
+- `npm test` (in `frontend/`): 430 passed, 0 failed (CT-1: 421).
+- `npm run build`: built; the only warning is the existing chunk-size one.
+- `tests/test_tier1_finish_tracker.py` and `tests/test_docs_consistency.py`
+  pass with this As built and the ticks in place.
+- `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md`
+  prints nothing.
+
+**Revert matrix.** Each mechanism was reverted in place, one at a time, in
+the working tree, by a script: it replaced one exact snippet, ran the
+suites, restored the exact text read, and checked it byte-identical. The
+backend rows ran the new file plus `test_cost_checks_tail_rejection.py`,
+`test_continuation_cache.py`, `test_research_engine.py`,
+`test_qc_live_events.py`, `test_retry_resume.py`, `test_usage.py` and
+`test_diagnostics.py`. The frontend rows ran `frontend/tests/costChecks.test.ts`.
+The whole tree's hash was unchanged at the end. "Red" counts failing tests.
+
+49 rows, 49 red.
+
+| Mechanism reverted | Red |
+|---|---|
+| `observe_continuation` records nothing | 24 |
+| no six-observation floor (a first loss latches) | 2 |
+| a sum of exactly zero latches (`<= 0`) | 1 |
+| unmeasured observations count toward the six | 1 |
+| a later latch overwrites the first | 2 |
+| an unprofitable latch writes no WARNING | 2 |
+| the latch taken in a second lock acquisition | 1 |
+| the observation's time not recorded | 2 |
+| exact: the `missed` term dropped (every write charged) | 1 |
+| exact: every read credited (the prefix not subtracted) | 5 |
+| exact: the write charged at w − r, not w − u | 5 |
+| exact path gone (a known opening measured as a bound) | 7 |
+| bound path gone (an unknown opening unmeasured) | 18 |
+| bound with nothing read not skipped | 1 |
+| rates read as their float repr (the noise kept) | 5 |
+| the snapshot's saving can read `-0.0` | 1 |
+| dollars rounded half-even (a tiny loss reads as a saving of 0.0) | 1 |
+| a multi-iteration continuation measured from its first iteration | 1 |
+| a continuation answering a pending call measured | 1 |
+| single iteration: only a `server_tool_use` block excluded (the spec's rule) | 1 |
+| single iteration: the usage's request counts ignored | 2 |
+| single iteration: only the two web-tool counts read | 1 |
+| reported iterations never read | 9 |
+| iterations read only as objects (a dict entry missed) | 8 |
+| iterations read only as dicts (an object entry missed) | 26 (the fakes' responses and usage records are objects too, so nothing is read) |
+| the first entry read whatever its type | 1 |
+| a bool accepted as a count | 1 |
+| a negative count accepted | 1 |
+| a missing cache count malformed (not zero) | 1 |
+| a missing required count read as zero | 1 |
+| the check reads the price table itself | 2 |
+| `model_rates` hands out the table itself (no copy) | 7 |
+| the snapshot without the counts | 25 |
+| reset clears the latches but not the observations | 28 (observations carry into every later test) |
+| research: no hook | 4 |
+| research: every response observed (not only tail-bearing ones) | 7 |
+| research: the previous response passed as the opening | 2 |
+| QC: no hook | 3 |
+| QC: every response observed (not only tail-bearing ones) | 6 |
+| QC: the previous response passed as the opening | 1 |
+| fakes: `iterations` never attached | 8 |
+| frontend: no words for unprofitable | 2 |
+| frontend: the unprofitable reason in the present tense | 1 |
+| frontend: the engines in another order | 6 |
+| frontend: the switch off said per engine | 1 |
+| frontend: a loss shown as a saving | 1 |
+| frontend: an older backend's missing counts read as zero | 1 |
+| frontend: a missing snapshot renders nothing | 1 |
+| frontend: the modal renders its own text, not the helper's | 1 |
+
+The first run found one row green: "unmeasured observations count toward
+the six". Its test observed five losses and then twenty unmeasured
+observations, and the rule is consulted only when an observation is
+measured, so a rule that counted the unmeasured ones never got to act. The
+test now observes the unmeasured ones first; that row went red, and the
+whole matrix was run again on the final code, with the result above.
+
+**For FIN-1**
+
+- **CLAUDE.md implemented notes** — a section "The continuation tail
+  measures what it saves — implemented notes (Tier 1 finish, CT-2)", in
+  CLAUDE.md's own style. The why and the traps:
+  - *Why measure.* The tail's bad case (§2) is bounded but is a loss on
+    every continuation for as long as nobody looks, and a default-on switch
+    should notice its own loss. The check reads only responses the app
+    already receives (R5).
+  - *What is measured* (Appendix A): exact from both first iterations,
+    bound on a single iteration with a read, and anything else counted,
+    never guessed. It latches `unprofitable` on six or more measured
+    observations summing below zero, and keeps observing afterwards.
+  - *What the plan's formula cannot see* (deviations 1 and 2). A
+    continuation that ran a server tool saves at least (R + W)·(u − r),
+    because a later iteration reads the tail's entry. A continuation that
+    resumes a pending tool has its first iteration behind the provider's
+    own breakpoint. Both are unmeasured.
+  - *GA reports no per-iteration usage today*, so the closing continuation
+    carries the check. The latch sums only the continuations that can
+    lose (the section above).
+  - *Traps.*
+    - `PRICING`'s float division (`0.20 / 1_000_000` is
+      `2.0000000000000002e-07`) makes a break-even observation a hair
+      negative. The fix is `Decimal` at twelve significant digits.
+    - The dollar figures round away from zero, so a proven loss a
+      fraction of a millionth of a dollar never reads as a saving of 0.0.
+    - A bool is an int.
+    - The hook reads CT-1's `carried_tail`, never
+      `"cache_control" in stream_kwargs`: the resend drops the tail.
+    - A test pins "the conversation's opening response" by identity,
+      because the fake returns the scripted object and SimpleNamespace
+      compares by value.
+    - Comparing two runs' records needs `round_id` (uuid4) and QC's
+      `duration_ms` set aside, and the same scripted objects reused,
+      because a fake mints its ids per build.
+    - One lock acquisition per observation, latch included.
+- **Layout.** Change `backend/cost_checks.py`'s entry, as CT-1's For FIN-1
+  worded it, to add:
+  - "the continuation tail's value check: `first_iteration_usage` and
+    `observe_continuation` (exact, bound or unmeasured per Appendix A;
+    `unprofitable` after six measured observations summing below zero),
+    the snapshot's counts and saving".
+
+  Add:
+  - `usage_ledger.py`: `model_rates(model)`, the public accessor that
+    `cost_checks` reads.
+  - `frontend/src/lib/costChecks.ts`: Developer tools' "Cost self-checks"
+    row, with the reason and engine vocabularies pinned against
+    `backend/cost_checks.py`.
+  - `tests/test_cost_checks_tail_value.py` and
+    `frontend/tests/costChecks.test.ts`.
+
+  Change:
+  - the two engines' entries: the observation hook after the append,
+    when `carried_tail`;
+  - the DeveloperToolsModal component entry: the Cost self-checks row;
+  - `tests/fakes.py`'s `usage(iterations=)`.
+- **Errata** for earlier CLAUDE.md sections:
+  - "A paused call reads its own cache (Research/QC cost Tier 1, Chunk 4)"
+    says the worst case "costs each continuation the 5-minute write
+    premium on its re-sent turn". That holds only for a continuation that
+    runs no server tool; one that does gains even then (deviation 1).
+  - The same section says "M3 would show cache writes rising while reads
+    do not, and the flip rule catches exactly that". Since CT-2, the
+    runtime check catches it on the continuations it can measure, with no
+    M3.
+  - CT-1's For FIN-1 README note, "CT-2 adds the Developer tools line", is
+    done.
+- **README** — in the continuation-tail material and the
+  `BUILD_A_SPEC_CONTINUATION_CACHE` Configuration row: the app measures
+  what the tail saves wherever the provider's usage shows it. After six
+  measured continuations that together cost more than they saved, the tail
+  switches off for that engine until the app restarts. Settings →
+  Developer tools → "Cost self-checks" shows what was measured, and the
+  estimated saving.
 
 ---
 

@@ -3879,10 +3879,12 @@ def _run_streaming_call(
                         # request resumed after a failure is built here from
                         # the same messages, so it carries the tail exactly as
                         # the request that failed did. The latch is read after
-                        # the switch on every request: once a refusal has
-                        # switched Final QC's tail off (``_open_stream``), no
-                        # request carries it, in any thread, until the app
-                        # restarts — the one way it can change mid-run.
+                        # the switch on every request: once a refusal
+                        # (``_open_stream``) or a proven loss
+                        # (``cost_checks.observe_continuation``) has switched
+                        # Final QC's tail off, no request carries it, in any
+                        # thread, until the app restarts — the two ways it
+                        # can change mid-run.
                         stream_kwargs["cache_control"] = dict(
                             _CONTINUATION_CACHE_CONTROL
                         )
@@ -3893,7 +3895,7 @@ def _run_streaming_call(
                             messages=messages,
                             stream_kwargs=stream_kwargs,
                             count_request=count_request,
-                        ) as (stream, _carried_tail):
+                        ) as (stream, carried_tail):
                             _relay_stream_activity(
                                 stream,
                                 event_prefix=event_prefix,
@@ -3911,6 +3913,19 @@ def _run_streaming_call(
                             first_output.set()
                     in_request = False
                     all_responses.append(response)
+                    if carried_tail:
+                        # The tail's value check (Tier 1 finish CT-2): what
+                        # this continuation's usage proves the tail saved,
+                        # against the conversation's opening response. Only a
+                        # request that actually carried it — never the resend
+                        # without it — and read-only: it never raises and
+                        # changes nothing here.
+                        cost_checks.observe_continuation(
+                            _TAIL_ENGINE,
+                            model=model,
+                            opening=all_responses[0],
+                            response=response,
+                        )
                     # Latest nonblank wins: a continuation that omits the field
                     # has not revoked the container.
                     container_id = response_container_id(response) or container_id

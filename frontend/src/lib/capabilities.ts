@@ -37,6 +37,7 @@ export const END_USER_CAPABILITIES = [
   "document.detach-source",
   "document.open-items",
   "document.lint",
+  "document.panels",
   "followups.track",
   "project.facts",
   "project.facts-harvest",

@@ -65,6 +65,47 @@ See [DOCX fidelity and compatibility](docs/DOCX_FIDELITY.md) for the complete
 export, API payload, blocker-code, persistence, diagnostics, and test-fixture
 contracts.
 
+## Current Status — room for the paper (the panel tray)
+
+No release entry yet: which release carries it is the owner's call, and the
+release-note draft is in CLAUDE.md ("Room for the paper").
+
+**The panels under the paper no longer crowd it out.** Review, Research,
+Final QC, Issues, Open items, Waiting on you, Project, Project facts,
+Standards and Documents are stacked under the specification. Ten collapsed
+bars take about 360px, and two panels open on their own the first time
+something lands in them. At the app's default window size (1440×900), with
+a project that had all of them, the specification had **48px** of the
+panel.
+
+- **One bar folds them all away.** The tray has its own **Panels** bar.
+  **Hide** folds every panel away and gives the height back to the
+  specification: 750px of it in the same window. The folded bar still counts
+  what needs you, for example "13 to review · 7 issues · 4 open items · 2
+  waiting on you". **Show** brings the tray back exactly as it was. Panels
+  that were open stay open, and nothing inside a panel is lost: a review
+  walk in progress, a half-typed standard or a Final QC selection survives
+  the fold.
+- **Leave out the panels you do not use.** **Choose…** has a checkbox for
+  each panel. A panel left out does not appear in the tray, and **Show all
+  panels** puts every one back. Folding and choosing are separate, so
+  showing the tray again never undoes your choices.
+- **An open tray takes at most half the panel.** Past that, the tray scrolls
+  on its own, so opening Final QC or two long lists no longer pushes the
+  specification off the screen. In that 1440×900 window the specification
+  keeps 358px however much the panels hold.
+- **The layout is remembered between launches.** It lives in
+  `ui_preferences.json` in the app config folder, beside the API key file and
+  the update state. The packaged app's WebView keeps no browser storage
+  between launches: pywebview runs it in private mode on a new port each
+  time. The file holds a boolean and a list of panel names, nothing about
+  any project, and a missing or damaged file just means every panel is
+  shown. `GET` and `PUT /api/ui/preferences` read and write it.
+- **The guided tour keeps every panel open.** Its steps point at panels, so
+  while it runs the tray ignores your layout and disables both controls. Your
+  layout comes back when the tour ends. The paper chapter now ends with a
+  step on the tray.
+
 ## Current Status — direct structural editing
 
 The paper is now a practical outline editor as well as a model-authored
@@ -2311,6 +2352,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          POST /api/project/facts/harvest (+ commit) (the
                          fact harvest, Phase 4),
                          /api/release-notes (+ seen),
+                         /api/ui/preferences (GET / PUT: the panel tray's
+                         remembered layout),
                          /api/session/unsaved|bundle, /api/usage,
                          /api/update/check|install,
                          /api/trace/viewer, /api/project/save + load/load-file
@@ -2348,6 +2391,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          locale, fingerprint                     [ported from Spec Critic]
   api_key_store.py       key resolution: env -> keyring -> file   [ported from Spec Critic]
   app_paths.py           platformdirs config locations            [ported from Spec Critic]
+  ui_preferences.py      the panel tray's layout on disk (ui_preferences.json
+                         in the config dir): lenient read, strict atomic write
   diagnostics.py         always-on rotating activity log + crash capture
                          (faulthandler, exception hooks, unclean-shutdown
                          marker) + the /api/diagnostics* snapshot/tail/
@@ -2487,6 +2532,8 @@ frontend/                Vite + React + TypeScript + Tailwind v4
   src/lib/useOnboarding.ts  tutorial lifecycle: showcase workspace start,
                          scenario swap, chapter jump, restore, resume persistence
   src/lib/onboardingStorage.ts  "tour completed" flag + the resume record
+  src/lib/panelTray.ts   the panel tray's vocabulary and pure rules: fold,
+                         leave out, the tour's lock, the folded bar's counts
   src/components/        Chat (starter chips), MessageBubble (markdown),
                          Composer (ask-model prefill),
                          OnboardingOverlay (spotlight + step cards + finish
@@ -2494,6 +2541,8 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          Header (spend ticker + update pill), ApiKeyBanner,
                          ArtifactPanel (stepper, Compare toggle + base picker,
                          export menu, import, "Draft full section", open items),
+                         PanelTray (every panel under the paper behind one
+                         bar: Hide / Show, Choose…, capped at half the panel),
                          ReviewDrawer (keyboard review walk),
                          IssuesDrawer (lint + standards strip),
                          ResearchDrawer (profile + research),

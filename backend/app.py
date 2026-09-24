@@ -92,7 +92,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
+from typing import Annotated, Any, Callable, Iterator, Literal, Mapping, Sequence
 from urllib.parse import quote
 
 import anthropic
@@ -106,11 +106,11 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictBool, StringConstraints
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from . import diagnostics, settings, sessions
+from . import diagnostics, settings, sessions, ui_preferences
 from .api_key_store import (
     delete_api_key,
     key_status,
@@ -687,6 +687,24 @@ class UpdateInstallRequest(BaseModel):
     """Body of ``POST /api/update/install``; a bodyless POST reads as all-default."""
 
     acknowledge_unsaved: bool = False
+
+
+class UiPreferencesRequest(BaseModel):
+    """Body of ``PUT /api/ui/preferences``: the panel tray's whole layout.
+
+    Strict where the file reader is lenient. The reader forgives a file that
+    was hand-edited or written by another build; this body only ever comes
+    from the app's own frontend, so a string where a boolean belongs, or an
+    id that is not an id, is a bug to refuse rather than a value to guess at.
+    """
+
+    panels_folded: StrictBool = False
+    hidden_panels: list[
+        Annotated[
+            str,
+            StringConstraints(pattern=ui_preferences.PANEL_ID_PATTERN.pattern),
+        ]
+    ] = Field(default_factory=list, max_length=ui_preferences.MAX_HIDDEN_PANELS)
 
 
 class NextSectionRequest(BaseModel):
@@ -8892,6 +8910,59 @@ def create_app(
             "release_notes", action="seen", version=settings.VERSION
         )
         return {"ok": True, "last_seen": settings.VERSION}
+
+    # --- UI preferences (the document panel's panel tray) -----------------
+
+    @app.get("/api/ui/preferences")
+    def ui_preferences_get() -> dict:
+        """The panel tray's saved layout; the defaults when none is saved.
+
+        Kept on disk rather than in browser storage because the packaged
+        app's WebView forgets its storage between launches (see
+        ``backend/ui_preferences.py``). A plain ``def``, like every file read
+        here, so it runs on a worker thread and never on the event loop.
+        """
+        preferences = ui_preferences.load_preferences()
+        return {"ok": True, **preferences.to_dict()}
+
+    @app.put("/api/ui/preferences")
+    def ui_preferences_put(body: UiPreferencesRequest) -> Any:
+        """Remember the panel tray's layout for the next launch.
+
+        Not session state: it survives New session and Open project, needs no
+        workspace lease, and is answered whatever a turn is doing. A write
+        that fails says so; the frontend keeps the layout for this launch
+        either way.
+        """
+        preferences = ui_preferences.UiPreferences(
+            panels_folded=body.panels_folded,
+            hidden_panels=ui_preferences.sanitize_hidden_panels(
+                body.hidden_panels
+            ),
+        )
+        try:
+            ui_preferences.save_preferences(preferences)
+        except OSError:
+            _api_log.warning(
+                "Could not write the UI preferences file", exc_info=True
+            )
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "error": (
+                        "The panel layout could not be saved, so it will not "
+                        "be remembered the next time the app opens."
+                    ),
+                    "code": "write_failed",
+                },
+                status_code=500,
+            )
+        _trace_capture.app_event(
+            "ui_preferences",
+            panels_folded=preferences.panels_folded,
+            hidden_panels=len(preferences.hidden_panels),
+        )
+        return {"ok": True, **preferences.to_dict()}
 
     # --- Self-update (Phase 5) ----------------------------------------------
 

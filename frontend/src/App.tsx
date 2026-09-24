@@ -45,7 +45,9 @@ import {
   checkUnsaved,
   checkUpdate,
   getReleaseNotes,
+  getUiPreferences,
   markReleaseNotesSeen,
+  saveUiPreferences,
   previewQcApply,
   deleteFigure,
   dismissQc,
@@ -101,6 +103,12 @@ import {
 } from "./lib/api";
 import type { HarvestCommitInput, ProjectFactInput } from "./lib/api";
 import { createLatestAnswer } from "./lib/latestAnswer";
+import {
+  DEFAULT_PANEL_TRAY,
+  panelTrayFromApi,
+  panelTrayToApi,
+  type PanelTrayPrefs,
+} from "./lib/panelTray";
 import { followCompactionStatus } from "./lib/compaction";
 import {
   emptyDebriefQueue,
@@ -312,6 +320,40 @@ export default function App() {
     projectFacts: 0,
     projectPanel: 0,
   });
+  // The document panel's panel tray layout: folded away, and which panels
+  // are left out (lib/panelTray.ts). App owns it for the same reason as the
+  // notice below — the panel remounts on every new session, and a layout is
+  // the user's, not the session's. Null until the saved one has been read
+  // (the server keeps it on disk: the packaged app's WebView forgets its
+  // browser storage between launches), so a folded tray never flashes open.
+  const [panelTray, setPanelTray] = useState<PanelTrayPrefs | null>(null);
+  // Saves go out one at a time, in click order, so the file ends up holding
+  // the last choice even when two clicks' requests would otherwise race.
+  const panelTraySaves = useRef<Promise<void>>(Promise.resolve());
+  useEffect(() => {
+    let cancelled = false;
+    getUiPreferences()
+      .then((saved) => {
+        if (!cancelled) setPanelTray(panelTrayFromApi(saved));
+      })
+      .catch(() => {
+        if (!cancelled) setPanelTray(DEFAULT_PANEL_TRAY);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const changePanelTray = useCallback((next: PanelTrayPrefs) => {
+    setPanelTray(next);
+    panelTraySaves.current = panelTraySaves.current.then(() =>
+      saveUiPreferences(panelTrayToApi(next)).catch((error: unknown) => {
+        // A layout that is not remembered costs one click at the next launch
+        // and nothing now. console.debug, not error: clientLog ships errors
+        // to diagnostics as faults, and this is not one.
+        console.debug("The panel layout could not be saved", error);
+      }),
+    );
+  }, []);
   // Consumed once per app launch, and owned here rather than in Chat because
   // the chat pane remounts on a new session (see sessionNonce below) — read
   // there, starting a session would quietly retire the notice.
@@ -3472,6 +3514,11 @@ export default function App() {
           onDraftAdapt={onDraftAdapt}
           onAskModel={onAskModel}
           onFetchDiff={getDocDiff}
+          panelTray={panelTray}
+          panelTrayLocked={
+            onboarding.phase.kind !== "idle" || inProtectedWorkspace
+          }
+          onChangePanelTray={changePanelTray}
           drawerNonces={drawerNonces}
         />
       </main>

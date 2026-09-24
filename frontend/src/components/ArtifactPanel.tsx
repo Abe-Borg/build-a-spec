@@ -36,6 +36,7 @@ import type {
   PreservedRedlineReason,
 } from "../types";
 import FollowUpsPanel from "./FollowUpsPanel";
+import PanelTray from "./PanelTray";
 import ProjectFactsPanel from "./ProjectFactsPanel";
 import ProjectPanel from "./ProjectPanel";
 import {
@@ -65,6 +66,13 @@ import {
   sourceCapabilitiesPending,
 } from "../lib/sourceCapabilities";
 import { reviewCounts } from "../lib/reviewQueue";
+import {
+  effectivePanelTray,
+  setPanelHidden,
+  setTrayFolded,
+  showEveryPanel,
+  type PanelTrayPrefs,
+} from "../lib/panelTray";
 import Tip from "./Tip";
 
 /** The Export menu's downloads, keyed for the busy state. */
@@ -253,6 +261,13 @@ interface Props {
   onDraftAdapt: () => void;
   onAskModel: (text: string) => void;
   onFetchDiff: (base: number, cur?: number) => Promise<SectionDiffPayload>;
+  /** The panel tray's layout — folded away, and which panels are left out.
+   *  Null until the saved layout has been read. App owns it, above the
+   *  remount a new session does, and the server remembers it. */
+  panelTray: PanelTrayPrefs | null;
+  /** The guided tour owns the layout: every panel shown, controls disabled. */
+  panelTrayLocked: boolean;
+  onChangePanelTray: (next: PanelTrayPrefs) => void;
   /** Guided-tour "ensure open" nonces (Batch 6), one per drawer. */
   drawerNonces?: {
     review: number;
@@ -479,6 +494,9 @@ export default function ArtifactPanel({
   onDraftAdapt,
   onAskModel,
   onFetchDiff,
+  panelTray,
+  panelTrayLocked,
+  onChangePanelTray,
   drawerNonces,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -748,10 +766,8 @@ export default function ArtifactPanel({
   // pass that fits is gap-and-adapt, and until this button it had no
   // one-click form at all: the model walked the starter only as fast as the
   // user thought to ask.
-  const importedOutstanding = useMemo(
-    () => reviewCounts(doc).imported,
-    [doc],
-  );
+  const reviewTally = useMemo(() => reviewCounts(doc), [doc]);
+  const importedOutstanding = reviewTally.imported;
   const adaptTip = busy
     ? "Finish the current turn first."
     : draftNeeds.length > 0
@@ -868,6 +884,19 @@ export default function ArtifactPanel({
     document
       .getElementById(`el-${elementId}`)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  // The panel tray (lib/panelTray.ts). The handlers act only on a layout
+  // that has been read and is not the tour's to keep open.
+  const tray = effectivePanelTray(panelTray, panelTrayLocked);
+  const changeTray = (next: (prefs: PanelTrayPrefs) => PanelTrayPrefs) => {
+    if (panelTray && !panelTrayLocked) onChangePanelTray(next(panelTray));
+  };
+  const trayAttention = {
+    review: reviewTally.total,
+    openItems: openItems.length,
+    waiting: followups.filter((item) => item.status === "open").length,
+    issues: lintIssues.length,
   };
 
   const actionButton =
@@ -1787,135 +1816,169 @@ export default function ArtifactPanel({
         )}
       </div>
 
-      <ReviewDrawer
-        doc={doc}
-        sourceLookup={sourceLookup}
-        busy={busy}
-        sourceExpected={activeSourceExpected}
-        sourceCapabilities={sourceCapabilities}
-        onEditDoc={onEditDoc}
-        onAskModel={onAskModel}
-        onJump={scrollToElement}
-        openNonce={drawerNonces?.review}
-      />
-
-      <ResearchDrawer
-        doc={doc}
-        profileComplete={profileComplete}
-        research={research}
-        referenceDocCount={referenceDocs.length}
-        busy={busy}
-        onStart={onStartResearch}
-        onStop={onStopResearch}
-        onEditDoc={onEditDoc}
-        openNonce={drawerNonces?.research}
-      />
-
-      <QCDrawer
-        qc={qc}
-        readiness={readiness}
-        doc={doc}
-        profileComplete={profileComplete}
-        referenceDocCount={referenceDocs.length}
-        busy={busy}
-        sourceExpected={activeSourceExpected}
-        sourceCapabilities={sourceCapabilities}
-        usage={usage}
-        onStart={onStartQc}
-        onStop={onStopQc}
-        onPreview={onPreviewQc}
-        onApply={onApplyQc}
-        onDismiss={onDismissQc}
-        onAskModel={onAskModel}
-        onJump={scrollToElement}
-        openNonce={drawerNonces?.qc}
-        qcModel={qcModel}
-      />
-
-      <IssuesDrawer issues={lintIssues} onJump={scrollToElement} />
-
-      {openItems.length > 0 && (
-        <div
-          className="border-t border-edge bg-bg/70 px-5 py-2"
-          data-tour="open-items"
-          data-capability="document.open-items"
-        >
-          <button
-            className="flex w-full items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
-            onClick={() => setOpenItemsExpanded((v) => !v)}
-            title="Unresolved provisions — [TBD] markers and needs-input blocks"
-          >
-            <span className="shrink-0 font-medium tracking-wide uppercase">
-              Open items
-            </span>
-            <span className="truncate">
-              {openItems.length} unresolved
-            </span>
-            <span className="ml-auto shrink-0">
-              {openItemsExpanded ? "▾" : "▸"}
-            </span>
-          </button>
-          {openItemsExpanded && (
-            <ul className="mt-1.5 max-h-44 space-y-1 overflow-y-auto">
-              {openItems.map((item) => (
-                <li key={item.id}>
-                  <button
-                    className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
-                    onClick={() => scrollToElement(item.element_id)}
-                    title="Jump to this provision"
-                  >
-                    <span
-                      className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${kindDot[item.kind]}`}
-                    />
-                    <span className="shrink-0 font-medium text-ink tabular-nums">
-                      {item.ref}
-                    </span>
-                    <span className="truncate">
-                      {item.kind === "needs_input" ? "needs input — " : "TBD — "}
-                      {item.label}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      <FollowUpsPanel
-        items={followups}
-        currentTurn={followupTurn}
-        busy={busy}
-        openNonce={drawerNonces?.followups}
-        onSetStatus={onSetFollowupStatus}
-        onJump={scrollToElement}
-      />
-      <ProjectPanel
-        link={projectLink}
-        home={projectHome}
-        currentNumber={doc?.section.number ?? ""}
-        busy={busy || !!fileLoading}
-        tutorialActive={tutorialActive}
-        refreshNonce={projectSectionsNonce}
-        openNonce={drawerNonces?.projectPanel}
-        onOpenSection={onOpenSection}
-        onNextSection={() => setNextSectionOpen(true)}
-        onRefreshBrief={onRefreshProjectBrief}
-        onPull={onPullProject}
-      />
-      <ProjectFactsPanel
-        items={projectFacts}
-        link={projectLink}
-        currentSection={doc?.section.number ?? ""}
-        currentDiscipline={doc?.project_identity?.discipline ?? ""}
-        busy={busy}
-        openNonce={drawerNonces?.projectFacts}
-        harvest={harvestStatus}
-        harvestAvailable={!tutorialActive}
-        onHarvest={() => setHarvestOpen(true)}
-        onAdd={onAddProjectFact}
-        onUpdate={onUpdateProjectFact}
-        onSupersede={onSupersedeProjectFact}
+      {/* Every panel under the paper, behind one bar: Hide folds them all
+          away, Choose… leaves out the ones not used, and the tray never
+          takes more than half the panel's height (components/PanelTray.tsx).
+          A Record keyed by panel id, so no panel can be left out of it. */}
+      <PanelTray
+        tray={tray}
+        attention={trayAttention}
+        onFold={(folded) => changeTray((prefs) => setTrayFolded(prefs, folded))}
+        onSetHidden={(id, hidden) =>
+          changeTray((prefs) => setPanelHidden(prefs, id, hidden))
+        }
+        onShowAll={() => changeTray(showEveryPanel)}
+        panels={{
+          review: (
+            <ReviewDrawer
+              doc={doc}
+              sourceLookup={sourceLookup}
+              busy={busy}
+              sourceExpected={activeSourceExpected}
+              sourceCapabilities={sourceCapabilities}
+              onEditDoc={onEditDoc}
+              onAskModel={onAskModel}
+              onJump={scrollToElement}
+              openNonce={drawerNonces?.review}
+            />
+          ),
+          research: (
+            <ResearchDrawer
+              doc={doc}
+              profileComplete={profileComplete}
+              research={research}
+              referenceDocCount={referenceDocs.length}
+              busy={busy}
+              onStart={onStartResearch}
+              onStop={onStopResearch}
+              onEditDoc={onEditDoc}
+              openNonce={drawerNonces?.research}
+            />
+          ),
+          qc: (
+            <QCDrawer
+              qc={qc}
+              readiness={readiness}
+              doc={doc}
+              profileComplete={profileComplete}
+              referenceDocCount={referenceDocs.length}
+              busy={busy}
+              sourceExpected={activeSourceExpected}
+              sourceCapabilities={sourceCapabilities}
+              usage={usage}
+              onStart={onStartQc}
+              onStop={onStopQc}
+              onPreview={onPreviewQc}
+              onApply={onApplyQc}
+              onDismiss={onDismissQc}
+              onAskModel={onAskModel}
+              onJump={scrollToElement}
+              openNonce={drawerNonces?.qc}
+              qcModel={qcModel}
+            />
+          ),
+          issues: (
+            <IssuesDrawer issues={lintIssues} onJump={scrollToElement} />
+          ),
+          "open-items": openItems.length > 0 && (
+            <div
+              className="border-t border-edge bg-bg/70 px-5 py-2"
+              data-tour="open-items"
+              data-capability="document.open-items"
+            >
+              <button
+                className="flex w-full items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
+                onClick={() => setOpenItemsExpanded((v) => !v)}
+                title="Unresolved provisions — [TBD] markers and needs-input blocks"
+              >
+                <span className="shrink-0 font-medium tracking-wide uppercase">
+                  Open items
+                </span>
+                <span className="truncate">
+                  {openItems.length} unresolved
+                </span>
+                <span className="ml-auto shrink-0">
+                  {openItemsExpanded ? "▾" : "▸"}
+                </span>
+              </button>
+              {openItemsExpanded && (
+                <ul className="mt-1.5 max-h-44 space-y-1 overflow-y-auto">
+                  {openItems.map((item) => (
+                    <li key={item.id}>
+                      <button
+                        className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
+                        onClick={() => scrollToElement(item.element_id)}
+                        title="Jump to this provision"
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${kindDot[item.kind]}`}
+                        />
+                        <span className="shrink-0 font-medium text-ink tabular-nums">
+                          {item.ref}
+                        </span>
+                        <span className="truncate">
+                          {item.kind === "needs_input" ? "needs input — " : "TBD — "}
+                          {item.label}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ),
+          followups: (
+            <FollowUpsPanel
+              items={followups}
+              currentTurn={followupTurn}
+              busy={busy}
+              openNonce={drawerNonces?.followups}
+              onSetStatus={onSetFollowupStatus}
+              onJump={scrollToElement}
+            />
+          ),
+          project: (
+            <ProjectPanel
+              link={projectLink}
+              home={projectHome}
+              currentNumber={doc?.section.number ?? ""}
+              busy={busy || !!fileLoading}
+              tutorialActive={tutorialActive}
+              refreshNonce={projectSectionsNonce}
+              openNonce={drawerNonces?.projectPanel}
+              onOpenSection={onOpenSection}
+              onNextSection={() => setNextSectionOpen(true)}
+              onRefreshBrief={onRefreshProjectBrief}
+              onPull={onPullProject}
+            />
+          ),
+          "project-facts": (
+            <ProjectFactsPanel
+              items={projectFacts}
+              link={projectLink}
+              currentSection={doc?.section.number ?? ""}
+              currentDiscipline={doc?.project_identity?.discipline ?? ""}
+              busy={busy}
+              openNonce={drawerNonces?.projectFacts}
+              harvest={harvestStatus}
+              harvestAvailable={!tutorialActive}
+              onHarvest={() => setHarvestOpen(true)}
+              onAdd={onAddProjectFact}
+              onUpdate={onUpdateProjectFact}
+              onSupersede={onSupersedeProjectFact}
+            />
+          ),
+          standards: (
+            <StandardsStrip standards={standards} onEditDoc={onEditDoc} busy={busy} />
+          ),
+          documents: (
+            <ReferenceDocumentsStrip
+              documents={referenceDocs}
+              busy={referenceBusy}
+              onRemove={onRemoveReference}
+            />
+          ),
+        }}
       />
       {nextSectionOpen && (
         <NextSectionDialog
@@ -1939,13 +2002,6 @@ export default function ArtifactPanel({
           onClose={() => setHarvestOpen(false)}
         />
       )}
-
-      <StandardsStrip standards={standards} onEditDoc={onEditDoc} busy={busy} />
-      <ReferenceDocumentsStrip
-        documents={referenceDocs}
-        busy={referenceBusy}
-        onRemove={onRemoveReference}
-      />
     </aside>
   );
 }
@@ -1968,7 +2024,7 @@ function ReferenceDocumentsStrip({
   const totalTokens = documents.reduce((sum, doc) => sum + doc.token_count, 0);
   return (
     <div
-      className="border-t border-line bg-surface-2/40 px-5 py-2.5"
+      className="border-t border-edge bg-bg/70 px-5 py-2"
       data-capability="reference.use"
     >
       <button

@@ -900,7 +900,7 @@ export default function ArtifactPanel({
   };
 
   const actionButton =
-    "rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
+    "whitespace-nowrap rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
 
   // The ONE "Edit freely" affordance, rendered on every source-attached
   // strip — frozen/blocked, pending, and the ordinary settled master. The
@@ -934,11 +934,25 @@ export default function ArtifactPanel({
       data-tour="doc-panel"
       data-capability="document.structure"
     >
-      <div className="flex items-center justify-between gap-3 border-b border-edge px-5 py-2.5">
-        <div className="flex min-w-0 items-center gap-2.5">
+      {/* The action bar. It holds more than one row's worth of controls on
+          the narrow pane (the chat and this panel each keep 420px), so it
+          is four groups that each stay on ONE line — the draft action, the
+          version history, the outputs, the files — and the bar wraps
+          BETWEEN them. Before, nothing here was nowrap and the draft
+          button's group could shrink below its content: labels broke onto
+          two or three lines and the draft button slid under the version
+          stepper. `mr-auto` keeps the draft action at the left and the
+          groups beside it at the right; `justify-end` right-aligns a
+          wrapped line. Every data-tour / data-capability stays on the
+          control it names. */}
+      <div
+        className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-b border-edge px-5 py-2.5"
+        data-testid="doc-action-bar"
+      >
+        <div className="mr-auto flex shrink-0 items-center gap-2.5">
           {lintIssues.length > 0 && (
             <span
-              className="rounded-full border border-warn/50 bg-warn/15 px-1.5 py-px text-[10px] font-semibold text-warn normal-case"
+              className="whitespace-nowrap rounded-full border border-warn/50 bg-warn/15 px-1.5 py-px text-[10px] font-semibold text-warn normal-case"
               title="Advisory lint issues — see the Issues drawer below"
             >
               ⚠ {lintIssues.length}
@@ -947,7 +961,7 @@ export default function ArtifactPanel({
           {importedOutstanding > 0 ? (
             <Tip tip={adaptTip} className="shrink-0">
               <button
-                className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
+                className="whitespace-nowrap rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
                 onClick={onDraftAdapt}
                 disabled={busy}
                 data-tour="draft-full"
@@ -959,7 +973,7 @@ export default function ArtifactPanel({
           ) : (
             <Tip tip={draftTip} className="shrink-0">
               <button
-                className={`rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
+                className={`whitespace-nowrap rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
                   draftPulse ? "draft-pulse" : ""
                 }`}
                 onClick={onDraftFull}
@@ -972,7 +986,7 @@ export default function ArtifactPanel({
             </Tip>
           )}
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           <span
             className="flex items-center gap-1.5"
             data-tour="version-stepper"
@@ -1021,7 +1035,8 @@ export default function ArtifactPanel({
               {compareMode ? "Exit compare" : "Compare"}
             </button>
           </Tip>
-          <span className="mx-1 h-4 w-px bg-edge" />
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
           {/* Export menu (Batch 5): generated DOCX, or tracked changes over
               the normalized provision tree / a chosen version. Downloads are disabled
               while a turn streams — mid-turn the live doc holds provisional
@@ -1353,6 +1368,8 @@ export default function ArtifactPanel({
               Next section →
             </button>
           )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
           {/* Save asks where exactly once per session, then overwrites that
               file the way a save button is expected to. The dialog does not
               disappear with it — it moves behind the caret as Save as…, which

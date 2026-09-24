@@ -6,7 +6,7 @@ Tier 1 progress file's O6). The Tier 1 finish program (decision FD1,
 ``docs/plans/tier1-finish/``) replaces the trial with checks that watch the
 runs the app makes anyway, and this module holds their state.
 
-The one check so far is the **continuation tail's guard** (session CT-1). The
+The first check is the **continuation tail's guard** (session CT-1). The
 tail is a top-level ``cache_control`` on a streamed request that resumes a
 ``pause_turn`` (``settings.CONTINUATION_CACHE``). If the provider ever
 refuses a continuation that carries it, with a 400 when the stream opens, the
@@ -15,7 +15,17 @@ switch that engine's tail off for the rest of the app session. That turns the
 tail's one unbounded failure (every paused research area and compliance
 review failing, on every run) into one extra request per engine per app
 session. The resend itself is engine code (``_open_stream`` in each engine,
-copied rather than shared); this module holds only the latch.
+copied rather than shared); this module holds only its latch.
+
+The second is the **continuation tail's value check** (session CT-2). Each
+engine hands every response to a request that carried the tail, with its
+conversation's opening response, to :func:`observe_continuation`, which
+measures what the tail saved where the reported usage can prove it (the
+Chunk 4 plan's Appendix A) and counts the rest as unmeasured. Once an
+engine has six or more measured observations whose summed saving is below
+zero, its tail switches off (``unprofitable``). Every measured term is the
+request's exact saving or an upper bound on it, so the rule latches only on
+a proven loss.
 
 Rules, all binding (the tracker's R5, R6, R8, R10):
 
@@ -49,12 +59,14 @@ import logging
 import re
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from decimal import ROUND_UP, Decimal
 from typing import Any
 
 import anthropic
 
-from . import settings
+from . import settings, usage_ledger
 
 _log = logging.getLogger("buildaspec.cost_checks")
 
@@ -68,9 +80,36 @@ TAIL_ENGINES = (ENGINE_RESEARCH, ENGINE_QC)
 # Why a saving was switched off: a closed vocabulary, which the diagnostics
 # block reports verbatim. Each check adds the reason it sets.
 REASON_REJECTED = "rejected"  # the provider refused a request carrying it
-_TAIL_REASONS = frozenset({REASON_REJECTED})
+REASON_UNPROFITABLE = "unprofitable"  # measured, it cost more than it saved
+_TAIL_REASONS = frozenset({REASON_REJECTED, REASON_UNPROFITABLE})
 
-# The detail a latch keeps: the error type and the start of its message.
+# The value check latches only on at least this many measured observations:
+# one odd request cannot decide it, and a losing tail is still caught within
+# about one research round (four areas, each pausing a few times).
+_TAIL_MIN_OBSERVATIONS = 6
+
+# The token counts one model iteration reports. ``input_tokens`` and
+# ``output_tokens`` are always there; a cache count the provider leaves out
+# (``None``) was zero.
+_REQUIRED_COUNTS = ("input_tokens", "output_tokens")
+_CACHE_COUNTS = ("cache_read_input_tokens", "cache_creation_input_tokens")
+
+# The content blocks a response made in ONE model iteration can hold. Any
+# other block — a server tool's use or result (``server_tool_use``,
+# ``web_search_tool_result`` …), or a block type this code has never seen —
+# means a server tool may have run inside the request, so its top-level
+# usage may sum several iterations.
+_SINGLE_ITERATION_BLOCKS = frozenset(
+    {"text", "thinking", "redacted_thinking", "tool_use"}
+)
+# A server tool's call, which a ``*_tool_result`` block in the same response
+# answers.
+_SERVER_TOOL_CALLS = frozenset({"server_tool_use", "mcp_tool_use"})
+
+_USD_PLACES = Decimal("0.000001")
+
+# The detail a latch keeps: for a refusal, the error type and the start of
+# its message; for a loss, the measurement that proved it.
 DETAIL_MAX_CHARS = 200
 
 # A continuation that is too long fails the same way with or without the
@@ -88,8 +127,32 @@ class _Latch:
     since: float | None = None
 
 
+@dataclass
+class _TailValue:
+    """What the value check has seen for one engine since the process began.
+
+    ``saving`` is the signed sum of every measured term, in dollars, kept as a
+    ``Decimal`` so a sum of exactly zero never reads as a loss through float
+    rounding. ``last_observed_at`` is when a response to a request carrying
+    the tail was last observed, measured or not.
+    """
+
+    exact: int = 0
+    bound: int = 0
+    unmeasured: int = 0
+    saving: Decimal = field(default_factory=Decimal)
+    last_observed_at: float | None = None
+
+    @property
+    def measured(self) -> int:
+        return self.exact + self.bound
+
+
 _lock = threading.Lock()
 _tail_latches: dict[str, _Latch] = {engine: _Latch() for engine in TAIL_ENGINES}
+_tail_values: dict[str, _TailValue] = {
+    engine: _TailValue() for engine in TAIL_ENGINES
+}
 
 
 def continuation_tail_enabled(engine: str) -> bool:
@@ -122,23 +185,38 @@ def disable_continuation_tail(engine: str, *, reason: str, detail: str = "") -> 
             raise ValueError(f"not a continuation-tail reason: {reason!r}")
         clipped = _clip(detail)
         with _lock:
-            latch = _tail_latches[engine]
-            if latch.reason:
-                return
-            latch.reason = reason
-            latch.detail = clipped
-            latch.since = time.time()
-        _log.warning(
-            "Cost self-check: the continuation tail is switched off for %s "
-            "until the app restarts (%s). %s",
-            engine,
-            reason,
-            clipped or "No detail.",
-        )
+            latched = _latch_locked(engine, reason, clipped)
+        if latched:
+            _warn_latched(engine, reason, clipped)
     except Exception:  # noqa: BLE001 — a check never fails a request
         _log.debug(
             "could not switch the continuation tail off for %r", engine, exc_info=True
         )
+
+
+def _latch_locked(engine: str, reason: str, detail: str) -> bool:
+    """Set ``engine``'s latch unless one is set; the caller holds ``_lock``.
+
+    True when this call set it. The first latch wins, whatever its reason.
+    """
+    latch = _tail_latches[engine]
+    if latch.reason:
+        return False
+    latch.reason = reason
+    latch.detail = detail
+    latch.since = time.time()
+    return True
+
+
+def _warn_latched(engine: str, reason: str, detail: str) -> None:
+    """The one WARNING a latch writes, outside the lock."""
+    _log.warning(
+        "Cost self-check: the continuation tail is switched off for %s "
+        "until the app restarts (%s). %s",
+        engine,
+        reason,
+        detail or "No detail.",
+    )
 
 
 def is_tail_rejection(exc: BaseException) -> bool:
@@ -173,14 +251,335 @@ def _clip(text: str) -> str:
     return " ".join(str(text).split())[:DETAIL_MAX_CHARS]
 
 
+# ---------------------------------------------------------------------------
+# The continuation tail's value check (CT-2)
+# ---------------------------------------------------------------------------
+
+
+def _field(source: Any, name: str) -> Any:
+    """``source[name]`` for a mapping, else its attribute; ``None`` if absent.
+
+    Usage arrives as SDK models, as the plain dicts an extra field is kept as
+    (``Usage`` allows extras, so ``iterations`` on a GA response would be a
+    list of dicts), and as the test fakes' namespaces.
+    """
+    if isinstance(source, Mapping):
+        return source.get(name)
+    return getattr(source, name, None)
+
+
+def _count(value: Any, *, required: bool) -> int | None:
+    """A reported token count, or ``None`` when it is not one.
+
+    A bool is not a count (``isinstance(True, int)`` is true). A missing
+    cache count (``None``) was zero; a missing required count is malformed.
+    """
+    if value is None:
+        return None if required else 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _iteration_counts(source: Any) -> dict[str, int] | None:
+    """One iteration's four token counts, or ``None`` if any is malformed."""
+    counts: dict[str, int] = {}
+    for name in _REQUIRED_COUNTS + _CACHE_COUNTS:
+        value = _count(_field(source, name), required=name in _REQUIRED_COUNTS)
+        if value is None:
+            return None
+        counts[name] = value
+    return counts
+
+
+def _reported_iterations(usage: Any) -> list[Any] | None:
+    """``usage.iterations`` as a list, or ``None`` when it was not reported.
+
+    Anything reported that is not a list is treated as not reported: the
+    caller then falls back to what the response itself proves.
+    """
+    iterations = _field(usage, "iterations")
+    if isinstance(iterations, (list, tuple)):
+        return list(iterations)
+    return None
+
+
+def _requested_server_tools(usage: Any) -> bool | None:
+    """Whether the usage records a server-tool request of any kind.
+
+    ``None`` when the record is malformed (a count that is not a count), so
+    the caller can refuse to guess.
+    """
+    record = _field(usage, "server_tool_use")
+    if record is None:
+        return False
+    # The two web tools the app uses, and any other ``*_requests`` count the
+    # record carries — a declared field, or an extra a newer provider sent.
+    names = {"web_search_requests", "web_fetch_requests"}
+    sources = (
+        (record,)
+        if isinstance(record, Mapping)
+        else (
+            getattr(record, "__dict__", None),
+            getattr(record, "__pydantic_extra__", None),
+        )
+    )
+    for source in sources:
+        if isinstance(source, Mapping):
+            names.update(
+                name
+                for name in source
+                if isinstance(name, str) and name.endswith("_requests")
+            )
+    for name in names:
+        value = _count(_field(record, name), required=False)
+        if value is None:
+            return None
+        if value:
+            return True
+    return False
+
+
+def _single_iteration(response: Any, usage: Any) -> bool:
+    """Whether the response provably ran ONE model iteration.
+
+    Its content holds only the blocks one iteration can produce (text,
+    thinking, client tool calls) — no server tool's use or result — and its
+    usage records no server-tool request. Then its top-level usage is that
+    iteration's. Anything unreadable answers ``False``.
+    """
+    content = _field(response, "content")
+    if not isinstance(content, (list, tuple)):
+        return False
+    for block in content:
+        if _field(block, "type") not in _SINGLE_ITERATION_BLOCKS:
+            return False
+    return _requested_server_tools(usage) is False
+
+
+def first_iteration_usage(response: Any) -> dict[str, int] | None:
+    """The token counts of ``response``'s first model iteration, or ``None``.
+
+    In order (the Chunk 4 plan's CT-2 design, item 2):
+
+    - **Reported.** ``response.usage.iterations`` is a list: the first entry
+      whose ``type`` is ``message``, read whether it is a dict (an extra
+      field on the GA ``Usage``) or an object (the beta ``BetaUsage``).
+    - **Single iteration.** Nothing reported, but the response provably ran
+      one model iteration (:func:`_single_iteration`): its top-level usage.
+    - **Otherwise** ``None``: the top-level usage of a request that ran a
+      server-side tool loop sums every iteration, and every later iteration
+      re-reads the whole prefix, so it cannot say what the first one did.
+
+    Returns ``input_tokens``, ``output_tokens``, ``cache_read_input_tokens``
+    and ``cache_creation_input_tokens``, or ``None`` when any is malformed.
+    Reads the response and never changes it. Never raises.
+    """
+    try:
+        usage = _field(response, "usage")
+        if usage is None:
+            return None
+        iterations = _reported_iterations(usage)
+        if iterations is not None:
+            for entry in iterations:
+                if _field(entry, "type") == "message":
+                    return _iteration_counts(entry)
+            return None
+        if not _single_iteration(response, usage):
+            return None
+        return _iteration_counts(usage)
+    except Exception:  # noqa: BLE001 — a check never fails a request
+        _log.debug("could not read a response's first iteration", exc_info=True)
+        return None
+
+
+def _one_model_iteration(response: Any) -> bool:
+    """Whether nothing after the first iteration could read the tail's entry.
+
+    With ``usage.iterations`` reported, exactly one entry, a ``message``. A
+    second iteration (after a server tool ran) reads the entry the tail
+    wrote, which the first iteration's usage cannot show: its saving on that
+    request is then larger than the first iteration's alone, so the first
+    iteration no longer bounds the request's. Without iterations, the
+    response must provably be a single iteration.
+    """
+    usage = _field(response, "usage")
+    iterations = _reported_iterations(usage)
+    if iterations is not None:
+        return len(iterations) == 1 and _field(iterations[0], "type") == "message"
+    return _single_iteration(response, usage)
+
+
+def _answers_pending_tool(response: Any) -> bool:
+    """Whether the response answers a server tool call made BEFORE it.
+
+    A continuation that resumes a pending server tool runs the tool first,
+    and its first iteration's input is the request plus that tool's result,
+    behind an automatic cache breakpoint of the provider's own — so the
+    breakpoint the tail adds is not what its reads and writes show. Such a
+    response begins with a ``*_tool_result`` block that no server tool call
+    in the same response made. Unreadable content answers ``True``: never
+    measure what cannot be read.
+    """
+    content = _field(response, "content")
+    if not isinstance(content, (list, tuple)):
+        return True
+    called: set[str] = set()
+    for block in content:
+        kind = _field(block, "type")
+        if kind in _SERVER_TOOL_CALLS:
+            use_id = _field(block, "id")
+            if isinstance(use_id, str):
+                called.add(use_id)
+        elif isinstance(kind, str) and kind.endswith("_tool_result"):
+            if _field(block, "tool_use_id") not in called:
+                return True
+    return False
+
+
+def _rate(rates: Mapping[str, Any], name: str) -> Decimal:
+    """A per-token rate as a ``Decimal``, to twelve significant digits.
+
+    ``settings.PRICING`` divides per-million prices by a million in floats,
+    which leaves noise (0.20 / 1_000_000 is 2.0000000000000002e-07); twelve
+    digits strips it and touches no real price. Without that, a term whose
+    read and write exactly balance could sum to a hair below zero and count
+    as a loss.
+    """
+    return Decimal(format(float(rates[name]), ".12g"))
+
+
+def _tail_saving(
+    model: str, opening: Any, response: Any
+) -> tuple[str, Decimal | None]:
+    """Classify one observation: ``("exact" | "bound" | "unmeasured", saving)``.
+
+    The Chunk 4 plan's Appendix A, with u, r and w the model's input,
+    cache-read and 5-minute cache-write rates (the tail's own entries are
+    5-minute ones, even after a verifier seat's 1-hour markers):
+
+    - **exact** — the continuation ran one model iteration and its opening
+      response's first iteration is known. With ``base`` the opening's read
+      plus write (the explicit prefix), R = max(0, read − base) is what the
+      tail let it read, ``missed`` = max(0, base − read) the explicit prefix
+      written again because its entry expired (with or without the tail, so
+      not the tail's), and W = max(0, write − missed) what the tail wrote.
+      S = R·(u − r) − W·(w − u).
+    - **bound** — the continuation ran one model iteration and read something,
+      but the opening's first iteration is unknown: credit every read to the
+      tail and charge every write to it. S_max = read·(u − r) − write·(w − u)
+      is an upper bound on S while the explicit prefix's entry is alive.
+    - **unmeasured** — anything else: a continuation that answers a pending
+      server tool call, one that ran more than one iteration (a later one
+      reads the tail's entry, so it saves at least what its first iteration
+      shows), a usage record that cannot be read, or a bound with nothing
+      read.
+    """
+    if _answers_pending_tool(response) or not _one_model_iteration(response):
+        return "unmeasured", None
+    continuation = first_iteration_usage(response)
+    if continuation is None:
+        return "unmeasured", None
+    rates = usage_ledger.model_rates(model)
+    u = _rate(rates, "input")
+    r = _rate(rates, "cache_read")
+    w = _rate(rates, "cache_write")
+    read = continuation["cache_read_input_tokens"]
+    write = continuation["cache_creation_input_tokens"]
+    opened = first_iteration_usage(opening)
+    if opened is not None:
+        base = opened["cache_read_input_tokens"] + opened["cache_creation_input_tokens"]
+        reused = max(0, read - base)
+        missed = max(0, base - read)
+        written = max(0, write - missed)
+        return "exact", reused * (u - r) - written * (w - u)
+    if read > 0:
+        return "bound", read * (u - r) - write * (w - u)
+    return "unmeasured", None
+
+
+def observe_continuation(
+    engine: str, *, model: str, opening: Any, response: Any
+) -> None:
+    """Record what the continuation tail saved on one request.
+
+    ``response`` answered a request that carried the tail (a tail-free resend
+    is never passed); ``opening`` is its conversation's opening response;
+    ``model`` is the model both were sent to. The observation is exact, a
+    bound, or unmeasured (:func:`_tail_saving`). Once ``engine`` has at least
+    :data:`_TAIL_MIN_OBSERVATIONS` measured observations whose summed saving
+    is below zero, its tail switches off (``unprofitable``) with one WARNING.
+    Every measured term is exact or an upper bound, so the sum bounds what the
+    tail saved on those requests: the rule latches only on a proven loss.
+    Observing carries on after a latch, for diagnostics.
+
+    Reads the two responses and never changes them; touches no request,
+    record, usage total, meter or manifest. Never raises: a failure is
+    logged at DEBUG and records nothing.
+    """
+    try:
+        kind, saving = _tail_saving(model, opening, response)
+        now = time.time()
+        latched = False
+        detail = ""
+        with _lock:
+            value = _tail_values[engine]
+            value.last_observed_at = now
+            if saving is None:
+                value.unmeasured += 1
+            else:
+                if kind == "exact":
+                    value.exact += 1
+                else:
+                    value.bound += 1
+                value.saving += saving
+                if (
+                    value.measured >= _TAIL_MIN_OBSERVATIONS
+                    and value.saving < 0
+                    and not _tail_latches[engine].reason
+                ):
+                    detail = _clip(_unprofitable_detail(value))
+                    latched = _latch_locked(engine, REASON_UNPROFITABLE, detail)
+        if latched:
+            _warn_latched(engine, REASON_UNPROFITABLE, detail)
+    except Exception:  # noqa: BLE001 — a check never fails a request
+        _log.debug(
+            "could not observe a continuation for %r", engine, exc_info=True
+        )
+
+
+def _unprofitable_detail(value: _TailValue) -> str:
+    """Why the value check switched the tail off, in one line."""
+    return (
+        f"{value.measured} measured continuations ({value.exact} exact, "
+        f"{value.bound} bound) cost an estimated ${_usd(-value.saving):.6f} "
+        "more than they saved, even on the most generous reading."
+    )
+
+
+def _usd(amount: Decimal) -> float:
+    """A dollar amount rounded to six places, away from zero, never ``-0.0``.
+
+    Away from zero so the sign survives: a sum can sit a fraction of a
+    millionth of a dollar below zero, latch, and would otherwise read as a
+    saving of ``0.0``. A sum of exactly zero stays ``0.0``.
+    """
+    return float(amount.quantize(_USD_PLACES, rounding=ROUND_UP)) + 0.0
+
+
 def snapshot() -> dict[str, Any]:
     """What the checks have decided, for diagnostics. Never raises.
 
     ``{"continuation_tail": {engine: {setting_on, enabled, reason, detail,
-    since}}}``. ``setting_on`` is the live switch; ``enabled`` is the checks'
-    verdict alone (``False`` once switched off), so the tail is sent only
-    when both are true. ``since`` is when the latch was set, in seconds since
-    the epoch (``None`` while it is not). Grouped by behavior, so a later
+    since, measured, exact, bound, unmeasured, saving_usd,
+    last_observed_at}}}``. ``setting_on`` is the live switch; ``enabled`` is
+    the checks' verdict alone (``False`` once switched off), so the tail is
+    sent only when both are true. ``since`` is when the latch was set, in
+    seconds since the epoch (``None`` while it is not). The value check's
+    counts follow: ``measured`` is ``exact`` plus ``bound``, ``saving_usd``
+    the signed sum of their savings rounded to six places (away from zero,
+    :func:`_usd`), and ``last_observed_at`` when a response to a request
+    carrying the tail was last observed. Grouped by behavior, so a later
     check's block sits beside this one rather than among the engine names.
     """
     try:
@@ -193,6 +592,12 @@ def snapshot() -> dict[str, Any]:
                     "reason": latch.reason,
                     "detail": latch.detail,
                     "since": latch.since,
+                    "measured": _tail_values[engine].measured,
+                    "exact": _tail_values[engine].exact,
+                    "bound": _tail_values[engine].bound,
+                    "unmeasured": _tail_values[engine].unmeasured,
+                    "saving_usd": _usd(_tail_values[engine].saving),
+                    "last_observed_at": _tail_values[engine].last_observed_at,
                 }
                 for engine, latch in _tail_latches.items()
             }
@@ -203,7 +608,9 @@ def snapshot() -> dict[str, Any]:
 
 
 def reset_for_tests() -> None:
-    """Clear every latch (the conftest calls this around every test)."""
+    """Clear every latch and observation (the conftest calls this around
+    every test)."""
     with _lock:
         for engine in TAIL_ENGINES:
             _tail_latches[engine] = _Latch()
+            _tail_values[engine] = _TailValue()

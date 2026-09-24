@@ -2332,6 +2332,34 @@ export interface ContextSizes {
   total: number;
 }
 
+/** One engine's continuation tail, as the cost self-checks see it (Tier 1
+ *  finish: CT-1's refusal guard, CT-2's value check). `setting_on` is the
+ *  switch (BUILD_A_SPEC_CONTINUATION_CACHE); `enabled` is the checks' own
+ *  verdict, so the tail is sent only while both are true. The counts are
+ *  optional because a backend from before CT-2 does not report them. */
+export interface ContinuationTailCheck {
+  setting_on: boolean;
+  enabled: boolean;
+  /** Why the checks switched it off ("" while they have not). */
+  reason: string;
+  detail: string;
+  since: number | null;
+  /** exact + bound: the observations the latch rule sums. */
+  measured?: number;
+  exact?: number;
+  bound?: number;
+  unmeasured?: number;
+  /** The signed sum of the measured savings, in dollars (an estimate). */
+  saving_usd?: number;
+  last_observed_at?: number | null;
+}
+
+/** `cost_checks` in the diagnostics snapshot: what the runtime cost
+ *  self-checks have decided, by behavior, then by engine. */
+export interface CostChecksSnapshot {
+  continuation_tail?: Record<string, ContinuationTailCheck>;
+}
+
 /** `GET /api/diagnostics` — environment + session snapshot. */
 export interface DiagnosticsSnapshot {
   ok: boolean;
@@ -2585,6 +2613,9 @@ export interface DiagnosticsSnapshot {
     };
   };
   usage: UsageSummary;
+  /** The cost self-checks (Tier 1 finish). Absent from a backend older than
+   *  CT-1; `{}` when the backend could not read them. */
+  cost_checks?: CostChecksSnapshot;
 }
 
 /** `GET /api/diagnostics/log` — activity-log tail. */

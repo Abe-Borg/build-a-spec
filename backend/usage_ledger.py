@@ -146,6 +146,19 @@ def _rates(model: str) -> dict[str, float]:
     return settings.PRICING.get(model, settings.PRICING[settings.MODEL_SONNET_5])
 
 
+def model_rates(model: str) -> dict[str, float]:
+    """Per-token list rates for ``model``: ``input``, ``output``,
+    ``cache_read``, ``cache_write`` (the 5-minute entry) and
+    ``cache_write_1h``.
+
+    The same lookup the ledger prices with, unknown-model fallback included,
+    handed out as a copy so a caller cannot edit ``settings.PRICING``. The
+    cost self-checks read it (``cost_checks.observe_continuation``) rather
+    than keeping a table of their own that could drift from this one.
+    """
+    return dict(_rates(model))
+
+
 def cache_write_split(usage: Mapping[str, Any]) -> tuple[int, int]:
     """Split cache-creation tokens into (5-minute, 1-hour) disjoint slices.
 

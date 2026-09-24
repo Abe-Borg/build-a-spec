@@ -764,6 +764,13 @@ def test_diagnostics_report_the_latch_and_survive_the_scrub(monkeypatch) -> None
             "reason": "",
             "detail": "",
             "since": None,
+            # The value check's counts (CT-2), nothing observed yet.
+            "measured": 0,
+            "exact": 0,
+            "bound": 0,
+            "unmeasured": 0,
+            "saving_usd": 0.0,
+            "last_observed_at": None,
         }
 
     before = time.time()
@@ -849,7 +856,9 @@ def test_the_detail_is_one_line_and_clipped() -> None:
 
 def test_a_malformed_call_never_raises_and_switches_nothing_off(caplog) -> None:
     caplog.set_level(logging.DEBUG, logger="buildaspec.cost_checks")
-    cost_checks.disable_continuation_tail("research", reason="unprofitable")
+    # A reason outside the closed vocabulary (CT-1 used ``unprofitable``
+    # here, which CT-2 made a real reason; this one never will be).
+    cost_checks.disable_continuation_tail("research", reason="not_a_reason")
     cost_checks.disable_continuation_tail("research", reason="")
     cost_checks.disable_continuation_tail("chat", reason="rejected")
     assert all(

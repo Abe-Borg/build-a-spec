@@ -812,12 +812,19 @@ def usage(
     cache_read: int = 0,
     cache_write: int = 0,
     cache_write_1h: int | None = None,
+    iterations: list[Any] | None = None,
 ) -> SimpleNamespace:
     """Research/QC billed usage. ``cache_write`` is the TTL-wide total.
 
     ``cache_write_1h`` is the one-hour subtotal within it; supplying it
     attaches the nested ``cache_creation`` object the SDK sends on a
     request that carries a one-hour breakpoint (Final QC's verifier seats).
+
+    ``iterations`` attaches ``usage.iterations`` — the per-iteration usage
+    the beta ``BetaUsage`` types, and a GA response would carry as an extra
+    field (a list of plain dicts). Entries go in as given, dicts or objects,
+    because the continuation tail's value check reads both (Tier 1 finish
+    CT-2). Only when supplied, so every existing fixture stays byte-identical.
     """
     record = SimpleNamespace(
         input_tokens=input,
@@ -833,6 +840,8 @@ def usage(
             ephemeral_5m_input_tokens=max(0, cache_write - cache_write_1h),
             ephemeral_1h_input_tokens=cache_write_1h,
         )
+    if iterations is not None:
+        record.iterations = list(iterations)
     return record
 
 

@@ -2,7 +2,7 @@
 
 <!-- TIER1-FINISH-STATUS: IN PROGRESS -->
 
-**Next session:** CT-2 — Measure what the continuation tail saves
+**Next session:** CT-3 — Turn the continuation tail on
 
 Owner: Abraham. Opened 2026-09-24.
 
@@ -51,8 +51,8 @@ saving on, one pull request per session:
 
 | ID | Plan | Title | Status | PR | Merge commit |
 |---|---|---|---|---|---|
-| CT-1 | Chunk 4 | Survive a rejected continuation tail | done | PR #224 | — |
-| CT-2 | Chunk 4 | Measure what the continuation tail saves | not started | — | — |
+| CT-1 | Chunk 4 | Survive a rejected continuation tail | done | PR #224 | `cd3ce86` |
+| CT-2 | Chunk 4 | Measure what the continuation tail saves | done | PR #225 | — |
 | CT-3 | Chunk 4 | Turn the continuation tail on | not started | — | — |
 | WL-1 | Chunk 3 | Check that the batch reads the warm lead | not started | — | — |
 | WL-2 | Chunk 3 | Turn the warm lead on | not started | — | — |
@@ -107,18 +107,18 @@ Each item mirrors the acceptance criterion with the same ID in its plan
 
 ### CT-2 — Measure what the continuation tail saves
 
-- [ ] CT-2.1 — a public rate accessor in the ledger, and an observer that never raises
-- [ ] CT-2.2 — first-iteration usage: `usage.iterations`, a single iteration, or none
-- [ ] CT-2.3 — exact, bound and unmeasured observations as in Appendix A
-- [ ] CT-2.4 — latch `unprofitable` after six or more observations summing below zero
-- [ ] CT-2.5 — both engines observe exactly the responses to tail-bearing requests
-- [ ] CT-2.6 — the measurement changes nothing and raises nothing
-- [ ] CT-2.7 — diagnostics counts, and the Developer tools "Cost self-checks" row
-- [ ] CT-2.8 — the backend and frontend tests, registered
-- [ ] CT-2.9 — the switch still ships off
-- [ ] CT-2.10 — verified: ruff, pytest, npm test, npm run build
-- [ ] CT-2.11 — revert matrix recorded
-- [ ] CT-2.12 — As built with For FIN-1 and the `usage.iterations` findings; root files untouched
+- [x] CT-2.1 — a public rate accessor in the ledger, and an observer that never raises — evidence: `usage_ledger.model_rates`; `test_the_rates_come_from_the_ledger`, `test_malformed_usage_raises_nothing_and_measures_nothing`
+- [x] CT-2.2 — first-iteration usage: `usage.iterations`, a single iteration, or none — evidence: `test_iterations_are_read_as_dicts_and_as_objects`, `test_the_top_level_usage_stands_in_only_when_no_server_tool_ran`, `test_a_response_that_ran_server_tools_without_iterations_is_unmeasured`
+- [x] CT-2.3 — exact, bound and unmeasured observations as in Appendix A — evidence: `test_an_exact_observation_measures_what_the_tail_read_and_wrote`, `test_an_expired_opening_entry_is_not_charged_to_the_tail`, `test_a_bound_credits_every_read_and_charges_every_write`, `test_final_qc_is_priced_on_its_own_model`, `test_a_bound_with_nothing_read_is_skipped`; the plan's CT-2 As built, deviations 1 to 5
+- [x] CT-2.4 — latch `unprofitable` after six or more observations summing below zero — evidence: `test_five_losing_observations_do_not_latch_and_the_sixth_does`, `test_unmeasured_observations_never_count_toward_the_six`, `test_a_sum_at_or_above_zero_never_latches`, `test_the_latch_persists_however_many_winning_observations_follow`
+- [x] CT-2.5 — both engines observe exactly the responses to tail-bearing requests — evidence: `test_a_paused_research_dimension_observes_each_continuation`, `test_a_paused_compliance_lens_observes_its_continuations`, `test_a_streamed_web_tooled_seat_observes_its_continuation`, `test_a_tail_free_resend_is_never_observed` and `test_an_opening_response_is_never_observed` (both engines)
+- [x] CT-2.6 — the measurement changes nothing and raises nothing — evidence: `test_the_measurement_is_invisible`, `test_malformed_usage_raises_nothing_and_measures_nothing`
+- [x] CT-2.7 — diagnostics counts, and the Developer tools "Cost self-checks" row — evidence: `test_diagnostics_report_the_counts_and_survive_the_scrub`; `frontend/src/lib/costChecks.ts` and `frontend/tests/costChecks.test.ts`
+- [x] CT-2.8 — the backend and frontend tests, registered — evidence: `tests/test_cost_checks_tail_value.py` (29 tests, 32 with parametrized cases); `frontend/tests/costChecks.test.ts` (9 tests), in `frontend/package.json`'s test script
+- [x] CT-2.9 — the switch still ships off — evidence: `backend/settings.py` untouched; `test_continuation_cache_ships_switched_off` unchanged and green
+- [x] CT-2.10 — verified: ruff, pytest, npm test, npm run build — evidence: the plan's CT-2 As built, "Verification"
+- [x] CT-2.11 — revert matrix recorded — evidence: the plan's CT-2 As built, "Revert matrix"
+- [x] CT-2.12 — As built with For FIN-1 and the `usage.iterations` findings; root files untouched — evidence: the plan's CT-2 As built, its `usage.iterations` findings and its For FIN-1 list; `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md` prints nothing
 
 ### CT-3 — Turn the continuation tail on
 

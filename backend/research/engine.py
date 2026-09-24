@@ -2462,17 +2462,19 @@ def _run_dimension(
                     # A request resumed after a failure is built here from
                     # the same messages, so it carries the tail exactly as
                     # the request that failed did. The latch is read after
-                    # the switch on every request: once a refusal has
-                    # switched research's tail off (``_open_stream``), no
-                    # request carries it, in any thread, until the app
-                    # restarts — the one way it can change mid-round.
+                    # the switch on every request: once a refusal
+                    # (``_open_stream``) or a proven loss
+                    # (``cost_checks.observe_continuation``) has switched
+                    # research's tail off, no request carries it, in any
+                    # thread, until the app restarts — the two ways it can
+                    # change mid-round.
                     stream_kwargs["cache_control"] = dict(
                         _CONTINUATION_CACHE_CONTROL
                     )
                 in_request = True
                 with _open_stream(
                     client, messages=messages, stream_kwargs=stream_kwargs
-                ) as (stream, _carried_tail):
+                ) as (stream, carried_tail):
                     # Live activity rides the raw events; the SDK keeps
                     # accumulating, so get_final_message() afterwards
                     # returns the same fully-drained message as before
@@ -2486,6 +2488,18 @@ def _run_dimension(
                     response = stream.get_final_message()
                 in_request = False
                 all_responses.append(response)
+                if carried_tail:
+                    # The tail's value check (Tier 1 finish CT-2): what this
+                    # continuation's usage proves the tail saved, against the
+                    # conversation's opening response. Only a request that
+                    # actually carried it — never the resend without it — and
+                    # read-only: it never raises and changes nothing here.
+                    cost_checks.observe_continuation(
+                        _TAIL_ENGINE,
+                        model=model,
+                        opening=all_responses[0],
+                        response=response,
+                    )
                 # Keep the latest nonblank id: a continuation that omits the
                 # field has not revoked the container, it just didn't repeat
                 # itself.

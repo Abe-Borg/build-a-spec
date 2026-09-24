@@ -26,7 +26,7 @@ Session procedure.
 | 3 | Warm the batched verifier cache with a streamed lead seat | **complete** | PR #213 | `d6f2c32` | built at the gate's fallback minimums of 20 (no M2; O2); ships switched off (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`); the default flips on an M3 pass |
 | 4 | Cache `pause_turn` continuations | **complete** | PR #215 | `f3aaf88` | ships switched off (`BUILD_A_SPEC_CONTINUATION_CACHE`); every streamed research and Final QC call that resumes a pause carries the tail, batches never; the default flips on an M3 pass |
 | 5 | Resume, don't restart, on a transient failure | **complete** | PR #219 | `02b2985` | no switch (F5's exception): the first retry resumes a conversation that has a completed response, the final attempt always restarts; research, streamed and batched Final QC read one rule (`retry_mode`); M3 is still owed for Chunks 3 and 4 |
-| 6 | Closeout | not started | | | |
+| 6 | Closeout | **complete** | PR #220 | | no flip applied (no M3; O3): Chunks 3 and 4 ship off, each flip owed after an M3 pass of its own test ([After the program](#after-the-program)); the release-note draft is consolidated in the plan's §7; no later chunk session exists to fill this row's merge commit, so the flip session's step 2 does |
 
 ### What each status means
 

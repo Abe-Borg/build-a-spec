@@ -238,9 +238,14 @@ interface Props {
    *  assigns a zero-parameter function here, so the scope reached
    *  `startResearch` only because JS ignores the declaration. The day
    *  someone wraps this (`onStart={() => onStartResearch()}`) the scope
-   *  AND the selection are dropped silently — the user clicks "Research
-   *  1 selected area" and pays for four. */
-  onStartResearch: (scope?: ResearchScope, dimensionIds?: string[]) => void;
+   *  AND the selection are dropped silently — the user presses Research
+   *  again with one area chosen and pays for four. Resolves true when the
+   *  server accepted the round: the drawer clears the chosen areas only
+   *  then, so a refused start keeps the user's choice. */
+  onStartResearch: (
+    scope?: ResearchScope,
+    dimensionIds?: string[],
+  ) => Promise<boolean>;
   onStopResearch: () => void;
   onStartQc: (acknowledgeScopeMismatch?: boolean) => void;
   onStopQc: () => void;

@@ -131,6 +131,44 @@ full provision subtree.
   the byte-exact export promise for one document and restores the ordinary
   editor; see below.
 
+## Current Status — choose research areas, then press Research again
+
+In the unreleased 1.21.0 entry, the same commit as the fix, so any 1.21.0
+tag that includes one includes the other. The engineering notes are in
+CLAUDE.md ("Choosing research areas registers; Research again runs them").
+
+**Choosing areas no longer starts a round.** The Research panel's
+*Choose areas…* list had its own "Research N selected areas" button, so
+choosing and starting were a single click. The list now only records the
+choice:
+
+- **Tick the areas, then Done.** *Done* closes the list and keeps the
+  choice; *Clear* empties it. Choosing is never disabled, because it starts
+  nothing, so it works while a chat reply is still streaming.
+- **The choice stays on screen.** The button reads "2 of 4 areas chosen", a
+  "Next round: …" line names the areas, and the main button says what it
+  will run: "Research again: 2 areas (round 3)".
+- **Research again runs exactly those areas.** Choosing every area is simply
+  a full round. The choice is cleared once the server accepts the round, and
+  kept if the start is refused, so it is there for the retry.
+
+**A second research round shows its progress.** Every round after the first
+used to look finished while it ran. The panel said "complete", showed none of
+the agents at work, and left Research again clickable until the round ended.
+That happened for every kind of repeat round (a full round, a retry of the
+incomplete areas, chosen areas) and for a round restarted after a stop. The
+cause was in the frontend. The new round's first live update replaced the
+event log but kept the previous round's "complete". The status refresh that
+update triggered usually reached exactly as far as the live log, and at that
+point the rule that a finished status never goes back to "running" protected
+the old round's status. A new round now takes its own running status from its
+first update, as Final QC's live view always has. The panel also switches to
+running the moment the server accepts the round, so a second click cannot
+send a second start. A refused start no longer hides the findings already
+there, either. Stopping a round and pressing Research again straight away
+works the same way: the new round gets its own live connection at once, and
+does not wait for the stopped round's connection to close.
+
 ## Current Status — SectionFormat's fifth paragraph level
 
 PR #199, with no release entry yet: which release carries it is the
@@ -1905,8 +1943,10 @@ actions.
   module declares has actually completed — a run that finished with some
   areas failed blocks readiness and names which ones, because absent findings
   are not the same as an area that was checked and found nothing. Pressing
-  Research again re-runs every area and appends what it finds, so a retry
-  costs a full round but never loses what earlier rounds already established. Freshness and audit sufficiency are shown as
+  Research again re-runs every area — or only the areas chosen with
+  *Choose areas…* — and appends what it finds, so a round never loses what
+  earlier rounds already established; *Retry N incomplete areas* runs just
+  the ones that never completed. Freshness and audit sufficiency are shown as
   separate checks: users can tell whether a failure means stale inputs, a
   failed/latest attempt, legacy data, incomplete lens/verifier coverage, or an
   unresolved critical. Any lens failure or missing or failed verifier seat

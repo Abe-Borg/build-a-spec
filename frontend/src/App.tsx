@@ -414,7 +414,27 @@ export default function App() {
   const fileLoadingRef = useRef(false);
   const busyRef = useRef(false);
   const manualEditBusyRef = useRef(false);
-  const researchFollowRef = useRef(false);
+  // The research follower that owns the live stream, named by the workspace
+  // and research run it was started for. There is one follower per pair,
+  // and a round the user starts gets its own at once. A boolean here left a
+  // round started while the previous round's stream was still closing with
+  // no follower at all. That is easy to do: Stop's own refresh shows the
+  // stopped state before the stream delivers it. The new follower was
+  // refused, and the old one's final refresh found `running` already on
+  // screen, so the status effect never ran again. The board then sat on
+  // "Researching… (0/4)" through the whole round and after it.
+  const researchFollowRef = useRef<{ workspace: number; run: number } | null>(
+    null,
+  );
+  // Advanced by every research start the server accepts. With the workspace
+  // epoch it names the run a follower serves; a follower whose pair is no
+  // longer current stops at once and puts nothing on screen.
+  const researchRunEpochRef = useRef(0);
+  // One research start at a time. The drawer's buttons disable once the
+  // snapshot says running, and the start request is in flight before then:
+  // a second click there sent a second start, whose "already running" 409
+  // then marked the round that WAS running as failed.
+  const researchStartingRef = useRef(false);
   const qcFollowRef = useRef(false);
   // Dedup for the gentle auth-error modal (chat, research, QC): a failed
   // snapshot fires it once, not once per poll tick. Checked and cleared
@@ -1420,25 +1440,48 @@ export default function App() {
    *  events and when the stream ends. If transport closes before the run
    *  settles, reconnect to the replayable log — the same loop `followQc`
    *  runs, and the reason a 30-minute run used to freeze mid-board with no
-   *  way back short of a reload. */
+   *  way back short of a reload.
+   *
+   *  A follower serves one (workspace, run) pair — see `researchFollowRef`.
+   *  A second call for the same pair returns at once; a call after
+   *  `onStartResearch` has moved to a new run starts a new follower, even
+   *  while the old one is still unwinding. */
   const followResearch = useCallback(async () => {
-    if (researchFollowRef.current) return;
-    researchFollowRef.current = true;
-    const epoch = workspaceEpochRef.current;
+    const key = {
+      workspace: workspaceEpochRef.current,
+      run: researchRunEpochRef.current,
+    };
+    const active = researchFollowRef.current;
+    if (active && active.workspace === key.workspace && active.run === key.run) {
+      return;
+    }
+    researchFollowRef.current = key;
+    // Is this follower's stream still the one on screen? Asked after every
+    // await, because a new round or a new workspace can take over during any
+    // of them.
+    const current = () =>
+      workspaceEpochRef.current === key.workspace &&
+      researchRunEpochRef.current === key.run;
     const controller = new AbortController();
     researchStreamRef.current = controller;
     try {
       let reconnect = true;
-      while (reconnect && workspaceEpochRef.current === epoch) {
+      while (reconnect && current()) {
         reconnect = false;
         let outcome: ResearchStreamOutcome = "interrupted";
         try {
           for await (const evt of streamResearch(controller.signal)) {
+            // Checked before anything else, the sentinel included. Once a
+            // newer round owns the screen, nothing from this stream may be
+            // merged into it, not even the stopped round's last frame. A
+            // restart often reuses the round number, so that frame would
+            // pass as part of the new round and hold its log's high-water
+            // mark above every refetch.
+            if (!current()) break;
             if (evt.type === "stream_end") {
               outcome = classifyResearchStreamEnd(evt.status);
               continue;
             }
-            if (workspaceEpochRef.current !== epoch) break;
             // A `research_started` for a different round is a new world:
             // invalidate any refresh still in flight for the old one before
             // this frame's own milestone refetch goes out. (A restart of the
@@ -1471,7 +1514,7 @@ export default function App() {
         }
 
         if (
-          workspaceEpochRef.current !== epoch ||
+          !current() ||
           controller.signal.aborted ||
           outcome === "terminal" ||
           outcome === "superseded"
@@ -1481,7 +1524,7 @@ export default function App() {
         try {
           const requestGeneration = researchRefreshGenerationRef.current;
           const latest = await getResearchStatus();
-          if (workspaceEpochRef.current !== epoch) break;
+          if (!current()) break;
           const accepted = acceptResearchSnapshot(latest, requestGeneration);
           reconnect = isResearchActiveSnapshot(
             accepted ?? researchSnapshotRef.current,
@@ -1500,7 +1543,11 @@ export default function App() {
       if (researchStreamRef.current === controller) {
         researchStreamRef.current = null;
       }
-      researchFollowRef.current = false;
+      // Release the slot only if it is still ours. A follower superseded by a
+      // new round must not free the new round's follower slot.
+      if (researchFollowRef.current === key) {
+        researchFollowRef.current = null;
+      }
       refreshResearch();
       refreshUsage();
     }
@@ -1512,10 +1559,22 @@ export default function App() {
     replaceResearchSnapshot,
   ]);
 
+  /** Start a research round. Resolves true when the server accepted it —
+   *  the drawer clears the areas the user chose only then, so a refused
+   *  start keeps their choice for the retry. Never rejects. */
   const onStartResearch = useCallback(
-    async (scope: ResearchScope = "all", dimensionIds?: string[]) => {
+    async (
+      scope: ResearchScope = "all",
+      dimensionIds?: string[],
+    ): Promise<boolean> => {
+    if (researchStartingRef.current) return false;
+    researchStartingRef.current = true;
+    const epoch = workspaceEpochRef.current;
     try {
       await startResearch(currentWorkspaceLease(), scope, dimensionIds);
+      // A new session or project replaced this one while the start was in
+      // flight: nothing below describes what is on screen now.
+      if (workspaceEpochRef.current !== epoch) return false;
       // Clear the auth-modal dedup ref for this fresh attempt — see
       // researchAuthHandledRef's declaration comment: refreshResearch (not
       // an effect) is what actually reopens the modal.
@@ -1526,28 +1585,61 @@ export default function App() {
       // (it numbers from profile_result.round_count, and a discarded round
       // never advances it) — so round identity alone cannot see it.
       researchRefreshGenerationRef.current += 1;
+      // This round gets its own follower, now. The previous round's stream
+      // may still be closing, since Stop's own refresh can show the stopped
+      // state before the stream delivers it. Its follower must not take up
+      // this round's slot, and it must not merge its last frames into this
+      // round's fresh log. So it is superseded and its stream cut first,
+      // BEFORE `running` goes on screen: nothing must wait for the old
+      // follower to exit and hand over.
+      researchRunEpochRef.current += 1;
+      researchStreamRef.current?.abort();
+      // The server set the run going before it answered, so say so NOW
+      // instead of when the stream's first frame lands: the buttons lock at
+      // once and the board opens on "Starting research…". The event log
+      // starts empty — the last round's frames would fold into finished
+      // cards under a running header — and the profile and coverage stay,
+      // because rounds accumulate and the server keeps both through this
+      // one. The follower's first frame then resets onto this round's log.
+      const previous = researchSnapshotRef.current;
+      replaceResearchSnapshot({
+        status: "running",
+        error: "",
+        error_kind: "",
+        events: [],
+        profile: previous?.profile,
+        coverage: previous?.coverage,
+      });
       // Open the drawer onto the live agent board — the run is the show.
       bumpDrawer("research");
       addNote(
         scope === "gaps"
           ? "Retrying the incomplete research areas — progress in the Research panel."
           : scope === "selected"
-            ? `Researching ${dimensionIds?.length ?? 0} selected area${
+            ? `Researching the ${dimensionIds?.length ?? 0} area${
                 (dimensionIds?.length ?? 0) === 1 ? "" : "s"
-              } — progress in the Research panel.`
+              } you chose — progress in the Research panel.`
             : "Started requirements research — progress in the Research panel.",
       );
       void followResearch();
+      return true;
     } catch (e) {
+      if (workspaceEpochRef.current !== epoch) return false;
       replaceResearchSnapshot({
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
         events: researchSnapshotRef.current?.events ?? [],
-        // Coverage is what the drawer's retry control is built from; a
-        // refused start has not changed it, so carry it rather than
-        // dropping the control until the next successful poll.
+        // A refused start has changed neither the findings nor the
+        // coverage the retry and area controls are built from, so both
+        // are carried. Dropping the profile here made a refused repeat
+        // round look like research had never run at all — no findings,
+        // no rounds, no area picker — until the next poll.
+        profile: researchSnapshotRef.current?.profile,
         coverage: researchSnapshotRef.current?.coverage,
       });
+      return false;
+    } finally {
+      researchStartingRef.current = false;
     }
     },
     [

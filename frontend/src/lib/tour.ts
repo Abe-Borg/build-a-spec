@@ -402,7 +402,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Systematic four-dimension research",
         body:
-          "A deliberate run covers governing codes, AHJ requirements, owner/client/insurer standards, and site/environment conditions. Progress streams live, and clicking any agent's card opens its full activity log — every query, every source read, and any retries. Running it again appends a round rather than replacing anything. Stop, behind a confirmation, discards only the round in flight — every earlier round's findings stay in use, and the spend already committed is still metered.",
+          "A deliberate run covers governing codes, AHJ requirements, owner/client/insurer standards, and site/environment conditions. Progress streams live, and clicking any agent's card opens its full activity log — every query, every source read, and any retries. Running it again appends a round rather than replacing anything. After the first round, Choose areas… records which areas the next round covers; choosing starts nothing, and that round runs only when Research again is pressed. Stop, behind a confirmation, discards only the round in flight — every earlier round's findings stay in use, and the spend already committed is still metered.",
         optionalReason: "A live run takes several minutes and uses real API and web-search spend.",
       },
       {

@@ -826,12 +826,17 @@ function Dossier() {
           title="Research"
           trigger={
             <>
-              Press <b className="text-ink">Start research</b>. The button is
-              unavailable until city, state/province, country and client are
-              recorded — the search results are worthless without them. Once a
-              round has run, a second button appears offering to{" "}
+              Press <b className="text-ink">Research requirements</b>. The
+              button is unavailable until city, state/province, country and
+              client are recorded — the search results are worthless without
+              them. Once a round has run it becomes{" "}
+              <b className="text-ink">Research again</b>, and two more
+              controls appear: one offering to{" "}
               <b className="text-ink">retry only the areas that never
-              completed</b>; the full re-run stays available beside it.
+              completed</b>, and <b className="text-ink">Choose areas…</b>,
+              which records which areas the next round should research.
+              Choosing starts nothing — that round runs, over only the areas
+              you chose, when you press Research again.
             </>
           }
           runs={
@@ -842,8 +847,8 @@ function Dossier() {
               requirements</b>, <b className="text-ink">owner/client and insurer
               standards</b>, and{" "}
               <b className="text-ink">site and environmental factors</b> — or
-              only the subset you asked to retry, in which case the others are
-              not researched again at all. Each is
+              only the areas you chose or asked to retry, in which case the
+              others are not researched again at all. Each is
               a separate conversation with server-side web search and fetch
               enabled and your project’s own location attached to the search
               tool, so results are local rather than generic. Each must finish by

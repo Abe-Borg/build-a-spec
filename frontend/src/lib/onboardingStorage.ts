@@ -1,11 +1,15 @@
 /**
- * Completion and resumable tutorial progress. Completion is cosmetic; the
- * versioned progress record only reconnects to a server-confirmed protected
- * workspace. Both are wrapped because a WebView origin may restrict storage.
+ * The guided tour's resumable progress record. It only has to survive a
+ * reload within one launch — the tutorial workspace it reconnects to lives in
+ * server memory, so it cannot outlive the launch anyway — which is exactly
+ * what browser storage can do in the packaged app (pywebview's private mode,
+ * a fresh port per launch). Wrapped because a WebView origin may restrict
+ * storage.
+ *
+ * Completion is NOT here: it has to outlive the launch, so the server keeps
+ * it (lib/onboardingCompletion.ts, backend/onboarding_state.py).
  */
-const COMPLETED_KEY = "build-a-spec:onboarding-completed";
 const PROGRESS_KEY = "build-a-spec:onboarding-progress";
-export const ONBOARDING_COMPLETION_VERSION = 2;
 
 export interface StoredOnboardingProgress {
   version: number;
@@ -14,40 +18,6 @@ export interface StoredOnboardingProgress {
   generation: number;
   chunk: number;
   step: number;
-}
-
-export function hasCompletedOnboarding(): boolean {
-  try {
-    return (
-      localStorage.getItem(COMPLETED_KEY) ===
-      String(ONBOARDING_COMPLETION_VERSION)
-    );
-  } catch {
-    return false;
-  }
-}
-
-export function markOnboardingCompleted(): void {
-  try {
-    localStorage.setItem(COMPLETED_KEY, String(ONBOARDING_COMPLETION_VERSION));
-  } catch {
-    // Storage unavailable — cosmetic only, nothing to recover.
-  }
-}
-
-/**
- * Completion version 1 represented the former shortened tour. Surface one
- * invitation to the restored full tutorial, then remember that it was shown
- * without falsely marking the new tutorial complete.
- */
-export function consumeTutorialUpdateInvitation(): boolean {
-  try {
-    if (localStorage.getItem(COMPLETED_KEY) !== "1") return false;
-    localStorage.setItem(COMPLETED_KEY, "legacy-invitation-shown");
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function loadOnboardingProgress(

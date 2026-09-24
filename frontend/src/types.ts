@@ -2072,6 +2072,16 @@ export interface UiPreferencesPayload {
   hidden_panels: string[];
 }
 
+/**
+ * The guided tour's remembered completion (`GET` / `PUT /api/ui/onboarding`,
+ * backend/onboarding_state.py): the tour version this install last finished,
+ * null when it never has. lib/onboardingCompletion.ts owns what a version
+ * means.
+ */
+export interface OnboardingCompletionPayload {
+  completed_version: number | null;
+}
+
 export interface ProjectLoadResult extends DocPayload {
   chat: { role: Role; text: string }[];
   /** `POST /api/project/open-section` only: the section number opened. */

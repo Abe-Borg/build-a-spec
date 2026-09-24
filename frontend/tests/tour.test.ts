@@ -166,7 +166,7 @@ test("the tour launcher cannot restart the tour from inside the tour", () => {
   assert.match(chat, /disabled=\{busy \|\| tourActive\}/);
   assert.match(app, /tourActive=\{onboarding\.phase\.kind !== "idle"\}/);
   // A disabled control must not keep inviting the click it will refuse.
-  assert.match(chat, /tourActive \|\| \(toured && !tutorialUpdated\)/);
+  assert.match(chat, /tourActive \|\| toured \|\| !tourKnown \? "" : "chip-pulse"/);
 });
 
 test("the starter chips send nothing while the tutorial is running", () => {
@@ -211,9 +211,10 @@ test("tutorial is versioned, resumable, and document-aware", () => {
   assert.match(storage, /generation:\s*number/);
   assert.match(hook, /status\.workspace_id !== stored\.workspaceId/);
   assert.match(hook, /status\.generation !== stored\.generation/);
-  assert.match(storage, /ONBOARDING_COMPLETION_VERSION\s*=\s*2/);
-  assert.match(storage, /consumeTutorialUpdateInvitation/);
-  assert.match(chat, /Full tutorial updated/);
+  // Completion moved to the server (lib/onboardingCompletion.ts): browser
+  // storage does not survive a relaunch of the packaged app. The one-shot
+  // v1 invitation that read it is retired (onboardingCompletion.test.ts).
+  assert.doesNotMatch(storage, /onboarding-completed|COMPLETED_KEY/);
   assert.doesNotMatch(chat, /passive|3-minute|~3 minutes/i);
 });
 

@@ -442,7 +442,21 @@ backend/
                            through project_brief.write_brief_atomically. The ids
                            are opaque here — lib/panelTray.ts owns them.
                            Routes: GET / PUT /api/ui/preferences (plain def,
-                           not session state, strict body → 422)
+                           not session state, strict body → 422). The PUT is
+                           a FULL replacement, which is why the tour's
+                           completion is a file of its own (below)
+  onboarding_state.py      the finished tour's version on disk
+                           (onboarding_state.json in app_config_dir, beside
+                           ui_preferences.json and never inside it — that
+                           file is replaced whole on every layout save).
+                           OnboardingState {completed_version: int | None};
+                           lenient read (missing / corrupt / oversized / BOM /
+                           a bool, a float, a string or out of range → None),
+                           atomic write through write_brief_atomically. The
+                           version is opaque here — lib/onboardingCompletion.ts
+                           owns what it means. Routes: GET / PUT
+                           /api/ui/onboarding (plain def, not session state,
+                           StrictInt 1..1,000,000 → else 422)
   compliance/checker.py    [PORT: Spec Critic src/compliance/compliance_checker.py]
                            controlling = grounded spec_requirements only;
                            coverage matrix (represented/missing/contradicted/
@@ -1673,12 +1687,31 @@ frontend/src/
                            backdrop) behind an end-or-continue confirmation —
                            orthogonal to phase, so "Continue" restores the popup
                            untouched and abort/start clear it
-  lib/onboardingStorage.ts [Batch 6] "tour completed" flag — the codebase's first
-                           localStorage use; try/caught, cosmetic only. In the
-                           packaged app it lasts one launch: pywebview runs the
-                           WebView in private mode (webview.start's default) on
-                           an ephemeral port, so localStorage starts empty every
-                           time (why the panel tray's layout is server-side)
+  lib/onboardingStorage.ts [Batch 6] the tour's resume record (PROGRESS_KEY) —
+                           the codebase's first localStorage use; try/caught.
+                           In the packaged app it lasts one launch: pywebview
+                           runs the WebView in private mode (webview.start's
+                           default) on an ephemeral port, so localStorage
+                           starts empty every time — fine for a record that
+                           reconnects to a tutorial workspace held in server
+                           memory. Completion moved to the server
+                           (lib/onboardingCompletion.ts); the v1 invitation
+                           that read the old key is retired
+  lib/onboardingCompletion.ts
+                           whether the tour was finished, kept by the server
+                           (GET / PUT /api/ui/onboarding) because it must
+                           outlive the launch. ONBOARDING_COMPLETION_VERSION
+                           (2), completedFromApi (strict: that number only),
+                           createOnboardingCompletionStore (null until read,
+                           one read per launch, a failed read → false, a read
+                           landing after the tour finished never undoes it,
+                           markCompleted = true at once + a save whose failure
+                           is console.debug, returning a promise that settles
+                           with the save or after COMPLETION_SAVE_WAIT_MS, 5 s)
+                           and the app's one instance, read by App through
+                           useSyncExternalStore. useOnboarding's runRestore
+                           starts the save before the restore request and
+                           awaits it before every settle
   lib/panelTray.ts         the panel tray's vocabulary + pure rules: PANEL_IDS
                            (stacking order) + PANEL_LABELS, {folded, hidden}
                            kept SEPARATE (a fold never rewrites the per-panel
@@ -2478,6 +2511,22 @@ tests/
                            final-attempt restart; and end to end, the mode in
                            a round's log and a resumed run's retained result
                            staying current (F3)
+  test_onboarding_state.py the finished tour remembered: nothing saved reads
+                           as never completed (a read creates no file), a
+                           completion read back by a NEW app, not session
+                           state (reset + mid-turn), the panel layout and the
+                           completion never erasing each other in either
+                           order, strict 422s leaving the file untouched, a
+                           failed write's 500 with the old file whole, the
+                           lenient reader's matrix, the size bound, and the
+                           launch token in front of both routes
+  frontend/tests/onboardingCompletion.test.ts
+                           the store's rules (strict version, one read, a
+                           failed read is "not completed", a late read not
+                           undoing a finish, the save and its quiet failure),
+                           the API client, and the wiring pinned at the
+                           source: App's one read, the chip holding still
+                           while unknown, the retired v1 invitation
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -17245,6 +17294,166 @@ event, dependency, env knob, project-format change or VERSION bump.
   notes (the panel tray)" lists under "Found, not done" that the action bar
   wraps its labels at 1440 and overlaps its left-hand controls at 1100. Both
   are fixed here.
+
+## Finishing the tour is remembered between launches — implemented notes
+
+Reported (the panel tray's "Found, not done", PR #214): the guided tour's
+"completed" flag lived in `localStorage`, which the packaged app loses on
+every launch — pywebview's private mode (`webview.start`'s default, which
+`main.py` keeps) on a fresh loopback port, so every launch is a new origin.
+`hasCompletedOnboarding()` was therefore always false at launch, and the
+empty chat's tutorial chip pulsed and read "Full interactive tutorial · uses
+an actual spec" for someone who had finished the tour the day before. It
+worked in a browser dev session, which is how it slipped through. One new
+backend module and route pair, one new frontend module; no dependency, env
+knob, SSE event, project-format change or VERSION bump. Which release carries
+it is the owner's call; the draft is below.
+
+- **Its own file, not a key in the panel layout's — decided, and why.**
+  `PUT /api/ui/preferences` REPLACES `ui_preferences.json`, and App sends it
+  through an ordered save chain. A shared file needs a read-merge-write under
+  a lock on both routes, and a change to the layout's body (or its lenient
+  reader dropping an unknown key) could still drop the completion. Two files
+  have two writers and nothing to merge: `backend/onboarding_state.py`
+  writes `onboarding_state.json` in `app_config_dir()`, beside the layout's.
+  `test_the_panel_layout_and_the_completion_never_erase_each_other` saves
+  both in both orders and checks the layout's file never carries the
+  completion; pointing the new file at the layout's name turns it red.
+- **The same posture as the layout's store.** Lenient read: a missing,
+  unreadable, oversized (16 KB) or malformed file, or a `completed_version`
+  that is a bool (`True` is an `int`), a float, a string, 0, negative or past
+  the ceiling, is "not completed", never an error; a BOM is tolerated and
+  unknown keys ignored. Strict write: `StrictInt` in 1..1,000,000, else the
+  422 idiom. Atomic write through `write_brief_atomically` (prefix
+  `.buildaspec-onboarding-`), a failed one a 500 `write_failed` with the old
+  file whole. Not session state: no lease, answered mid-turn, untouched by
+  New session and Open project. Routes: `GET` / `PUT /api/ui/onboarding`
+  (`{completed_version: int | null}`), grouped under `/api/ui/` with the
+  layout's; the security middleware covers both like every other route.
+- **The server stores the integer; the frontend owns what it means.**
+  `ONBOARDING_COMPLETION_VERSION` (2) moved from `onboardingStorage.ts` to
+  `lib/onboardingCompletion.ts`, and `completedFromApi` counts only that
+  number, as a real number, as finished — so bumping it re-invites everyone,
+  as it did in storage.
+- **A store, because two places touch it.** App reads it (the chip is in the
+  chat pane, which remounts per session — the reason App owned the panel
+  layout and the v1 invitation too) and useOnboarding's one ending writes
+  it. `createOnboardingCompletionStore` is a factory so its rules run in
+  tests without a network; the app uses one instance, read in App through
+  `useSyncExternalStore` and loaded once from a mount effect, and
+  `markOnboardingCompleted()` stays the one call site in the hook (the
+  tour test still counts it).
+  - `null` until read. A failed read is `false`: an extra invitation costs
+    nothing, a stuck unknown would hide the chip's line for the launch.
+  - `load()` reads once and reuses the promise.
+  - `markCompleted()` sets `true` at once (the chip changes as the tour
+    hands the project back, as it did with storage) and saves; a failed save
+    is `console.debug`, not `console.error` — clientLog ships errors to
+    diagnostics as faults, and this is not one.
+  - A read that resolves after the tour finished never undoes the finish:
+    the read began before it and describes the old file.
+- **The ending waits for the save** (review finding on PR #218, Codex).
+  The first cut sent the save and moved on, so closing the window right after
+  *Finish* could end the process — and the request with it — before the file
+  was written, and the next launch offered the tour as new. `markCompleted()`
+  now returns a promise that settles with the save (success or failure) or
+  after `COMPLETION_SAVE_WAIT_MS` (5 s), and never rejects. `runRestore` starts
+  it BEFORE the restore request, so the two run in parallel and it rarely
+  adds any wait, then awaits it before each of its three `settle` calls: the
+  finishing card stays up until the file is written, and the bound means a
+  hung request can never strand it. Persisting completion inside the
+  server's restore transaction was the alternative, and was not taken: it
+  would give `/api/tutorial/restore` a second job and a frontend-owned
+  version to carry, for a window the await already closes.
+- **No flicker.** While the answer is `null` the chip has no pulse and its
+  subtitle keeps its line but is `invisible`, so the chip's height never
+  moves and neither a first-timer nor a returning user sees text change
+  under them. The read is one loopback request; the chip settles on its
+  real state a moment after the page draws.
+- **The v1 invitation is retired, not kept.** `consumeTutorialUpdateInvitation`
+  offered one "Full tutorial updated — see every feature" line to someone
+  whose storage said `"1"` (the former shortened tour). In the packaged app
+  it could never fire (storage never survives a launch), and the only place
+  it could — a browser dev session that finished a tour from before Batch 6's
+  replacement — is not a user. It is gone with its `tutorialUpdated` prop
+  and its copy. `onboardingStorage.ts` now holds only the resume record.
+  Nothing migrates a browser's old `"2"` to the server: that, too, only a
+  dev browser could hold, and the cost is one pulsing chip.
+- **The resume record stays in `localStorage`, deliberately.** It only has
+  to survive a reload within one launch, and the tutorial workspace it
+  reconnects to lives in server memory, so it cannot outlive the launch
+  anyway.
+- **Checked end to end in the built app**, not only in source: a scratch
+  harness (not committed) served the production build with the real backend
+  and throwaway XDG folders, and headless Chromium walked the whole tour —
+  every Continue to *Finish and return to my project* — at 1440×900. Before:
+  pulse, first-timer text. After the tour: no pulse, "again", and the file
+  held `completed_version: 2`. Then a NEW server on a new port and a fresh
+  browser context (a relaunch): no pulse, "Take the full interactive
+  tutorial again" — the task's done-when. Harness traps: the step card sits
+  outside a 1280×720 viewport, so Playwright's `click()` times out; the
+  harness clicks through `element.click()` and a 1440×900 context.
+- **Tests.** `tests/test_onboarding_state.py` (28 cases, parametrized
+  included) and `frontend/tests/onboardingCompletion.test.ts` (12), registered
+  in `package.json`. Two tour-test assertions changed knowingly: the
+  storage module no longer carries the completion key or the invitation,
+  and the chip's pulse condition is the new one.
+- **Revert matrix** (each mechanism reverted in place, one at a time, the
+  exact text restored after, `git status` checked unchanged at the end; the
+  backend rows run this file and `test_ui_preferences.py`):
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the reader accepting a bool | 1 |
+  | the reader's range floor | 1 |
+  | the BOM tolerance | 1 |
+  | the size bound | 1 |
+  | the atomic write (a direct write) | 1 |
+  | the completion sharing the layout's file | 2 |
+  | the body a lax `int` | 2 |
+  | the body's bounds | 3 |
+  | the write failure uncaught | 1 |
+  | FE: any number counting as finished | 1 |
+  | FE: a read on every call | 1 |
+  | FE: a failed read left unknown | 1 |
+  | FE: a late read undoing the finish | 1 |
+  | FE: the finish not saved | 2 |
+  | FE: a failed save logged as an error | 1 |
+  | FE: the finish not shown at once | 3 |
+  | FE: App never loading it | 1 |
+  | FE: the chip pulsing while unknown | 2 |
+  | FE: the subtitle shown while unknown | 1 |
+  | FE: the save not waited on (review fix) | 1 |
+  | FE: no bound on the wait | 1 |
+  | FE: the no-workspace ending not waiting | 1 |
+  | FE: the already-restored ending not waiting | 1 |
+  | FE: the ordinary ending not waiting | 1 |
+  | FE: the save started only after the restore | 1 |
+
+  The bound's test races the store against a timer of its own: without it,
+  a promise that never settles is only cancelled by the runner, not failed,
+  and the first revert of the bound stayed green for exactly that reason.
+
+- **Release-note draft** (a "Tutorial" section, for whichever release
+  carries it):
+
+  > **Finishing the tutorial is remembered.** Once you have taken the guided
+  > tutorial to the end, the chip that offers it in an empty chat stops
+  > pulsing and offers to take it again — including after you close and
+  > reopen the app. Until now the app forgot, and invited you as if you had
+  > never taken it.
+
+- **Errata** (the notes are append-only, so corrections to earlier sections
+  go here):
+  1. "Room for the paper (the panel tray)" lists, under "Found, not done",
+     that `onboardingStorage`'s tour-completed flag has a one-launch lifetime.
+     Fixed here; the flag is on the server.
+  2. "Batch 6" says the completion flag "is cosmetic localStorage", and the
+     guided-tutorial section says `lib/onboardingStorage.ts` holds the resume
+     record keyed on `TOUR_VERSION`. The second still holds; the first moved
+     to `lib/onboardingCompletion.ts` and the server.
+  3. The Batch 6 era's one-shot "tutorial updated" invitation
+     (`consumeTutorialUpdateInvitation`) is retired.
 
 ## Research and Final QC cost, Tier 1, as shipped — implemented notes (closeout)
 

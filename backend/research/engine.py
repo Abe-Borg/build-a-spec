@@ -33,19 +33,22 @@ What is preserved exactly, because it is the hard-won part:
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
 import re
 import time
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Callable
 
-from .. import settings
+import anthropic
+
+from .. import cost_checks, settings
 from ..llm.client import AUTH_ERROR_MESSAGE, is_authentication_error
 from ..project_facts import ProjectFact, project_facts_block
 from ..project_profile import ProjectProfile
@@ -1912,6 +1915,77 @@ def _is_continuation(messages: list) -> bool:
     return role == "assistant"
 
 
+# The continuation tail's guard (Tier 1 finish, CT-1). Copied into
+# ``qc.engine`` rather than imported, like the constant above; only the latch
+# is shared, in ``backend.cost_checks`` (one per process, one per engine).
+_TAIL_ENGINE = cost_checks.ENGINE_RESEARCH
+
+
+@contextlib.contextmanager
+def _open_stream(
+    client: Any, *, messages: list, stream_kwargs: dict[str, Any]
+) -> Iterator[tuple[Any, bool]]:
+    """Open one request's stream: yields ``(stream, carried_tail)``.
+
+    ``carried_tail`` says whether the request that actually opened carried
+    the continuation tail — ``False`` after the resend below — so nothing
+    downstream ever credits the tail with a request that went without it.
+
+    If a request carrying the tail is refused with a 400 as its stream opens
+    (:func:`backend.cost_checks.is_tail_rejection`), the same request goes
+    once more without it: the same messages and every other argument, the
+    container included. At once, with no backoff — it is the same request
+    minus an optional feature, not a retry of a transient failure — and with
+    nothing appended for the refused one, which returned no response and
+    billed nothing. Research's tail then switches off for the rest of the app
+    session, UNLESS the resend is itself refused with a 400: a 400 that
+    survives removing the tail was not the tail's, and switching it off then
+    would cost a saving for nothing. A resend that fails any other way (a
+    rate limit, a dropped connection) still switches it off — the 400 went
+    away when the tail did — and then takes the ordinary retry path, where a
+    resume sends the continuation again, now without the tail.
+
+    Only the OPEN is guarded. The SDK sends the request when the stream
+    context is entered (the test fakes raise from ``stream(...)`` itself), so
+    both sit in the one ``try``. Anything raised after the stream opened —
+    relaying its events, or in ``get_final_message()`` — is not a verdict on
+    the request's shape and reaches the caller untouched, exactly as every
+    other failure to open does.
+    """
+    carried = "cache_control" in stream_kwargs
+    with contextlib.ExitStack() as stack:
+        try:
+            stream = stack.enter_context(
+                client.messages.stream(messages=messages, **stream_kwargs)
+            )
+        except Exception as rejection:
+            if not carried or not cost_checks.is_tail_rejection(rejection):
+                raise
+            without_tail = {
+                key: value
+                for key, value in stream_kwargs.items()
+                if key != "cache_control"
+            }
+            detail = cost_checks.exception_detail(rejection)
+            try:
+                stream = stack.enter_context(
+                    client.messages.stream(messages=messages, **without_tail)
+                )
+            except anthropic.BadRequestError:
+                # Refused without the tail too: not the tail's 400.
+                raise
+            except Exception:
+                cost_checks.disable_continuation_tail(
+                    _TAIL_ENGINE, reason=cost_checks.REASON_REJECTED, detail=detail
+                )
+                raise
+            cost_checks.disable_continuation_tail(
+                _TAIL_ENGINE, reason=cost_checks.REASON_REJECTED, detail=detail
+            )
+            carried = False
+        yield stream, carried
+
+
 # ---------------------------------------------------------------------------
 # Per-dimension call (streaming + pause_turn continuation)
 # ---------------------------------------------------------------------------
@@ -2203,7 +2277,11 @@ def _run_dimension(
     by the caller) adds the continuation tail
     (:data:`_CONTINUATION_CACHE_CONTROL`) to every request that resumes a
     paused turn, and to nothing else. Off — the default for a direct caller
-    — every request is exactly what it always was.
+    — every request is exactly what it always was. A continuation the
+    provider refuses because of the tail is sent again without it, once, and
+    research's tail switches off until the app restarts (:func:`_open_stream`,
+    Tier 1 finish CT-1), so a refusal costs one request instead of the
+    dimension.
 
     A transient failure RESUMES the conversation rather than starting it over
     (cost Tier 1, Chunk 5; :func:`retry_mode`): when the request that failed
@@ -2374,19 +2452,27 @@ def _run_dimension(
                 stream_kwargs = dict(request_kwargs)
                 if container_id:
                     stream_kwargs["container"] = container_id
-                if continuation_cache and _is_continuation(messages):
+                if (
+                    continuation_cache
+                    and cost_checks.continuation_tail_enabled(_TAIL_ENGINE)
+                    and _is_continuation(messages)
+                ):
                     # The continuation tail: beside the container, never in
                     # a block, and only on a resume (the constant says why).
                     # A request resumed after a failure is built here from
                     # the same messages, so it carries the tail exactly as
-                    # the request that failed did.
+                    # the request that failed did. The latch is read after
+                    # the switch on every request: once a refusal has
+                    # switched research's tail off (``_open_stream``), no
+                    # request carries it, in any thread, until the app
+                    # restarts — the one way it can change mid-round.
                     stream_kwargs["cache_control"] = dict(
                         _CONTINUATION_CACHE_CONTROL
                     )
                 in_request = True
-                with client.messages.stream(
-                    messages=messages, **stream_kwargs
-                ) as stream:
+                with _open_stream(
+                    client, messages=messages, stream_kwargs=stream_kwargs
+                ) as (stream, _carried_tail):
                     # Live activity rides the raw events; the SDK keeps
                     # accumulating, so get_final_message() afterwards
                     # returns the same fully-drained message as before
@@ -2654,7 +2740,10 @@ def run_requirements_research(
     continuations a top-level automatic cache breakpoint (the plan's Chunk 4;
     :data:`_CONTINUATION_CACHE_CONTROL` says why). ``None`` reads
     ``settings.CONTINUATION_CACHE``, pinned ONCE for the round so every
-    dimension resumes the same way whatever the environment does mid-run. It
+    dimension resumes the same way whatever the environment does mid-run —
+    with one deliberate exception: the cost self-check's latch
+    (``backend.cost_checks``), read on every request, can only REMOVE the
+    tail, from the next request on, once the provider has refused it. It
     changes how a resume is cached, never what any dimension is asked.
 
     ``event_sink`` receives progress dicts: ``research_started`` (with the
@@ -2689,7 +2778,9 @@ def run_requirements_research(
     stamped_at = current_datetime()
     today_block = date_context_block(stamped_at)
     research_date = current_date_iso(stamped_at)
-    # Pinned beside the clock, and for the same reason: one round, one answer.
+    # Pinned beside the clock, and for the same reason: one round, one answer
+    # (the self-check's latch, which can only remove the tail, is the one
+    # deliberate exception; ``_open_stream`` says why).
     continuation_cache = (
         settings.CONTINUATION_CACHE
         if continuation_cache is None

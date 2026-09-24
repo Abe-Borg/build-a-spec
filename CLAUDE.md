@@ -2387,6 +2387,12 @@ tests/
                            pinned at the source: the half-height cap, hidden
                            not unmounted, every drawer inside the tray and the
                            two modals outside it, App's ordered saves and lock
+  frontend/tests/themeTokens.test.ts
+                           every Tailwind colour utility in src/**/*.tsx names
+                           an index.css --color-* token, a default-palette
+                           colour at a shade the installed theme.css defines,
+                           or a built-in keyword (string literals and their
+                           ${…} interpolations, prose left alone)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -16626,6 +16632,76 @@ the draft is below.
   > half the panel, so opening a long panel scrolls inside it instead of
   > squeezing the specification off the screen. Your layout is remembered
   > the next time you open the app.
+
+## Undefined colour tokens are caught — implemented notes
+
+Three classes named colours the theme does not define, and Tailwind v4
+generates no CSS for those, silently. The `@theme` in
+`frontend/src/index.css` adds the app's tokens to Tailwind's default palette
+without resetting it, so `amber-500` is a real colour and `danger` is not.
+Frontend only: no route, SSE event, dependency, env knob, project-format
+change or version bump, and no release-note item (the draft line is below).
+
+- **The three.** Final QC's batch line (`QCDrawer.tsx`, `QcBatchLine`) used
+  `border-line bg-paper-2`. The undefined border colour fell back to
+  `currentColor` and drew a bright line, the same defect PR #214 fixed on the
+  Documents strip. It now uses that strip's `border-edge bg-bg/70`, and keeps
+  `text-ink-dim`. Help's "Update failed" line (`HelpModal.tsx`, About) used
+  `text-danger`, so a failed update rendered in the ordinary text colour. The
+  Documents strip's ✕ used `hover:text-danger`, so its hover did nothing.
+  Both now use the house error colour `text-err`.
+- **`frontend/tests/themeTokens.test.ts` keeps it fixed.** It reads every
+  string literal in `src/**/*.tsx`, not only `className=`, because class
+  lists also live in constants and lookup tables (`AgentActivityModal`'s
+  `PILLS`). A string is read as a class list only when every token has a
+  class's shape. Its colour-utility tokens (text, bg, border and its side
+  forms, ring, ring-offset, outline, divide, fill, stroke, the gradient stops,
+  caret, decoration, placeholder) must name one of three things: an
+  `index.css` `--color-*` token, a default colour at a shade the palette
+  defines, or `white` / `black` / `transparent` / `current` / `inherit`.
+  Variants, `!` and opacity suffixes are stripped first. Each prefix's
+  non-colour values (`text-sm`, `border-2`, `border-t`, `bg-clip-text`,
+  numbers and percentages, arbitrary `[…]`/`(…)`) are skipped.
+- **The default palette is read from the installed
+  `node_modules/tailwindcss/theme.css`,** not hard-coded. It is the palette
+  the build actually has (4.3.3 here, which adds `mauve`, `mist`, `olive` and
+  `taupe`), so an upgrade cannot leave the test's list behind. `npm test`
+  therefore needs `npm ci` first, which CI already does. A bare family
+  (`amber`) and a missing shade (`amber-550`) both fail, because Tailwind
+  generates nothing for either.
+- **A template literal's `${…}` is scanned too, and the first cut missed
+  it.** A conditional class list is usually written as quoted strings inside
+  an interpolation, and the QC batch line is exactly that. The first draft
+  cut interpolations out, and restoring `border-line bg-paper-2` stayed
+  green. `stringLiterals` now recurses into each interpolation. That covers
+  one level of braces, which is every case in `src` today.
+- **One word is allowlisted as prose.** `FollowUpsPanel`'s `todo: "to-do"`
+  label has the shape of a gradient stop. The scan cannot tell a one-word
+  string from a one-class list by shape, so `PROSE` names that word. Add to
+  it only a word the scan actually misreads.
+- **Tests: 5** in the new file, registered in `package.json`'s explicit
+  `node --test` list. `npm test` 405, `npm run build` clean.
+- **Revert matrix.** Each change was reverted in place, and the exact text
+  restored after:
+
+  | Reverted | Tests red |
+  |---|---|
+  | QC batch line back to `border-line bg-paper-2` | 1 (names both tokens) |
+  | Help's `text-err` back to `text-danger` | 1 |
+  | the ✕'s `hover:text-err` back to `hover:text-danger` | 1 |
+  | no recursion into `${…}` | 1 (the unit pin; the QC row above was green without it) |
+  | a bare family accepted | 1 |
+  | the `to-do` allowlist | 1 |
+  | opacity suffixes kept on the colour | 2 |
+
+- **Release-note draft**, for whichever release carries it: "Final QC's
+  batch-progress line no longer draws a bright border, and a failed update in
+  Help → About shows in red."
+- **Erratum** (these notes are append-only): "Room for the paper —
+  implemented notes (the panel tray)" lists, under "Found, not done",
+  `QCDrawer`'s batch-progress line with the same undefined
+  `border-line bg-paper-2` pair. It is fixed here, along with two
+  `text-danger` classes that section did not know about.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

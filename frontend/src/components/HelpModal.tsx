@@ -725,7 +725,7 @@ function About({
               </>
             )}
             {installError && (
-              <p className="mt-2 text-xs text-danger">
+              <p className="mt-2 text-xs text-err">
                 Update failed: {installError}
               </p>
             )}

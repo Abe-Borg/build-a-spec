@@ -26,7 +26,7 @@ Session procedure.
 | 3 | Warm the batched verifier cache with a streamed lead seat | **complete** | PR #213 | `d6f2c32` | built at the gate's fallback minimums of 20 (no M2; O2); ships switched off (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`); the default flips on an M3 pass |
 | 4 | Cache `pause_turn` continuations | **complete** | PR #215 | `f3aaf88` | ships switched off (`BUILD_A_SPEC_CONTINUATION_CACHE`); every streamed research and Final QC call that resumes a pause carries the tail, batches never; the default flips on an M3 pass |
 | 5 | Resume, don't restart, on a transient failure | **complete** | PR #219 | `02b2985` | no switch (F5's exception): the first retry resumes a conversation that has a completed response, the final attempt always restarts; research, streamed and batched Final QC read one rule (`retry_mode`); M3 is still owed for Chunks 3 and 4 |
-| 6 | Closeout | **complete** | PR #220 | | no flip applied (no M3; O3): Chunks 3 and 4 ship off, each flip owed after an M3 pass of its own test ([After the program](#after-the-program)); the release-note draft is consolidated in the plan's §7; no later chunk session exists to fill this row's merge commit, so the flip session's step 2 does |
+| 6 | Closeout | **complete** | PR #220 | `b4f991f` | no flip applied (no M3; O3): Chunks 3 and 4 ship off, each flip owed after an M3 pass of its own test ([After the program](#after-the-program)); the release-note draft is consolidated in the plan's §7; no later chunk session existed to fill this row's merge commit, so the first flip session's step 2 filled it |
 
 ### What each status means
 
@@ -83,7 +83,8 @@ plan's Chunk 6, step 3).
 ### Starting a flip session
 
 Once M3 has been run, give a new session this prompt, with the
-measurements filled in:
+measurements filled in. Run M3 first: a flip session given no measurements
+can decide nothing, and only records that it could not (O4, O5).
 
 ```text
 Apply the owed flips of the "Research and Final QC cost, Tier 1" program in
@@ -313,6 +314,11 @@ measured yet, Chunk 2's included, which ships on.
 [After the program](#after-the-program) says what each measurement is still
 good for.
 
+**The first flip session (2026-09-24, on `master` at `b4f991f`) was given
+none either.** Its prompt left the measurements placeholder unfilled, which
+is read as "none", as every earlier session read its own. So it could only
+record that neither flip can be decided yet (O4, O5).
+
 ### M1 — research baseline
 
 *Not yet recorded.*
@@ -336,6 +342,8 @@ good for.
 | O1 | 2026-09-23 | Build Tier 1: the four levers that change no quality, plus measurement. One chunk per session. Agents mark progress here, and give Abraham the next session's prompt after each merge. |
 | O2 | 2026-09-23 | **Chunk 3's first gate (build or skip), applied by the Chunk 3 session as the plan directs.** No M2 is recorded: the session's prompt left the measurements placeholder unfilled, which is read as "none". The plan's "No M2" branch therefore holds: **build**, with both lineage minimums at the fallback of 20 seats (`_WARM_LEAD_MIN_SEATS_WEB`, `_WARM_LEAD_MIN_SEATS_NO_WEB`), and ship **switched off**. The second gate is unchanged: the default flips only on an M3 pass of Chunk 3's own test (the plan, Chunk 3 "Flip"). |
 | O3 | 2026-09-24 | **Chunk 6's flip step, applied by the closeout session as the plan directs.** No M3 is recorded: the session's prompt left the measurements placeholder unfilled, which is read as "none", and M1, M2 and M4 are empty too. So neither default flips. Chunk 3 (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) and Chunk 4 (`BUILD_A_SPEC_CONTINUATION_CACHE`) both ship **off**, each with its flip owed after an M3 pass of its own test. This is recorded in `docs/plans/README.md` and under [After the program](#after-the-program). Step 3 (revisit Chunk 3 against M4) does not apply: its default is off, and there is no M4. |
+| O4 | 2026-09-24 | **Chunk 4's flip (`BUILD_A_SPEC_CONTINUATION_CACHE`), decided by the first flip session as [After the program](#after-the-program) directs: no flip.** The session's prompt left the measurements placeholder unfilled, which is read as "none" (as in O2 and O3). So there is no M3 to apply Chunk 4's test to (the plan, Chunk 4 → "M3 decides the flip"), and no M1 for its "lower uncached input share than M1" to be measured against. The default stays **off**. Nothing was measured, so the flip neither passed nor failed: it is still **owed**. Still needed: M3 with the switch on, from a source checkout — one Research round and one Final QC (the test also fails on a compliance lens or verifier seat refused with `invalid_request`), both profilers on the results, and the error text of anything that failed. M1, the research profiler on projects researched before the trial, is free and is the baseline the test compares against. |
+| O5 | 2026-09-24 | **Chunk 3's flip (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`), decided the same way: no flip.** With no M3 there is no `seat:list-price` row, so no lead ran for the test (the plan, Chunk 3 → "M3 decides the flip") to judge. The default stays **off**, and the flip is still **owed**. Still needed: M3's Final QC half with the switch on — a Final QC large enough that one lineage of verifier seats sharing one copy of the section reaches 20 seats, and the QC profiler on its JSON export, whose `seat:list-price` row says whether a lead ran. One trial serves both chunks: the plan's §8 turns both switches on for the same Research round and Final QC. M2, the QC profiler on the newest Final QC export made before the trial, is free and gives the test its h₀; without it the test takes 0.88. |
 
 ## Done checklist (every chunk)
 

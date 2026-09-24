@@ -326,7 +326,7 @@ copying them.
 
 ### As built
 
-*Not started.*
+*Built on 2026-09-24; the record follows the list below.*
 
 When you build this session, append here:
 - what was built;
@@ -337,6 +337,477 @@ When you build this session, append here:
   traps, in CLAUDE.md's own style), the Layout entries to add or change,
   any erratum an earlier CLAUDE.md section now needs, and anything the root
   README must say.
+
+#### WL-1 as built (2026-09-24)
+
+Built from `master` at `14c1185` (CT-3's merge), on branch
+`claude/focused-meitner-477gz0`. The switch still ships off:
+`settings.QC_BATCH_WARM_LEAD` still defaults to `False`, and
+`test_warm_lead_ships_switched_off` is unchanged and green.
+
+**What was built**
+
+- **`backend/cost_checks.py`**, the warm lead's check:
+  - `REASON_NOT_READ = "not_read"` joins the closed reason vocabulary, and
+    `_WARM_LEAD_REASONS = {not_read, unprofitable}` is what the warm lead
+    may latch on.
+  - One latch (`_WarmLeadState`: a `_Latch` and the last check), with the
+    tail latches' posture: thread-safe, OFF-only, process-local, in memory,
+    one WARNING when it latches. `warm_lead_enabled()` never raises (it
+    answers `True` if the check itself fails); `disable_warm_lead(*, reason,
+    detail="")` takes only a warm-lead reason, the first latch wins, and a
+    malformed call is logged at DEBUG. `_set_locked(latch, …)` is now the
+    one "the first latch wins" rule; `_latch_locked(engine, …)` delegates
+    to it.
+  - `WarmLeadLineage` (frozen): `kind`, `seats` (n, the lead among them),
+    `model`, `lead_usage` (every billed response of the lead, summed),
+    `batched_first` (each other seat's reply to the first batch it rode,
+    or `None`; deviation 12) and `warm` (deviation 2).
+  - `check_warm_leads(lineages)`, called once per phase. Each lineage is
+    judged by `_judge_lineage` (Appendix B, below) and logged in one INFO
+    line; the phase's judgments replace `last_check`; the first lineage
+    judged `not_read` or `unprofitable` latches, with one WARNING.
+    Recording and latching are one lock acquisition; the INFO lines and
+    the WARNING are logged outside it. It never raises: a failure is logged
+    at DEBUG and records nothing.
+  - `_judge_lineage`: per batched seat, `first_iteration_usage` (CT-2) on
+    its reply to the first batch it rode; a seat with no such reply, no
+    readable first iteration or read + write = 0 is unmeasured. It read
+    the prefix when read ≥ 0.95·(read + write). With at least 8 measured
+    seats: h₁ = reads / measured, p = the exact median of read + write,
+    C = `usage_ledger.estimate_usage_cost(model, lead_usage)` (list price),
+    Δ = the 1-hour cache-write rate − the cache-read rate (both through
+    `usage_ledger.model_rates`, as `Decimal` at twelve significant digits,
+    CT-2's `_rate`), b = `settings.BATCH_COST_MULTIPLIER`, and the
+    numerator N = (n − 1)·b·h₁·Δ·p − (1 − b)·C over D = n·b·Δ·p. The
+    verdicts, in order: `not_warm`, `too_few` (below 8 measured),
+    `not_read` (h₁ < 0.5), `unprofitable` (N ≤ 0), `kept`.
+  - The module docstring describes the third check, and says why there is
+    no rule on h₀* > 0 (h₀ is never observed; any rule would guess it).
+  - `snapshot()` gains `"warm_lead": {setting_on, enabled, reason, detail,
+    since, last_check}` beside `continuation_tail`, read in the same one
+    lock acquisition. `last_check` is `None`, then `{at, lineages}`, each
+    lineage `{kind, seats, measured, unmeasured, read_share, prefix_tokens,
+    lead_cost_usd, break_even_read_share, verdict}`, copied on the way
+    out. `reset_for_tests()` clears it in the same one acquisition.
+- **`backend/qc/engine.py`**:
+  - The gate: `_run_batch_calls` picks leads only while
+    `cost_checks.warm_lead_enabled()`, after the switch and the wait.
+  - `_WarmLead.members`: every key of the lineage in specs order, the lead
+    first, filled by `_pick_warm_leads` (the spec's second option).
+  - `release_outcomes`: how each lead's `_await_leaders` wait ended
+    (`warm`, `timeout` or `stopped`), recorded by `release()`.
+  - `streamed_leads()`: "a lead that sent a request", extracted from
+    `results()` so the pricing and the check read one rule.
+  - `_BatchSeatState.first_round` and `first_reply` (deviation 12): the
+    round of the first batch a seat rode, marked when the provider accepts
+    that batch (a refused submission ran nothing, so it is not one), and
+    the reply that batch brought back, recorded when the round is read
+    (`None` for an errored, expired or missing item). Never part of the
+    record.
+  - `check_leads()`: builds one `WarmLeadLineage` per streamed lead
+    (`_sum_billed` of the lead's billed responses; each other member's
+    `first_reply`, failed or not) and hands the phase's lineages to
+    `cost_checks.check_warm_leads`. Its own `try` keeps a gathering failure
+    out of the phase (logged at DEBUG on `buildaspec.qc`).
+  - The normal end is now `settle_all(...)`, `fold_leads(wait=True)`,
+    `check_leads()`, `return finish("ended")`. No other exit calls it.
+- **Developer tools.** `frontend/src/types.ts` gains `WarmLeadCheck`,
+  `WarmLeadLineageCheck` and `CostChecksSnapshot.warm_lead`.
+  `frontend/src/lib/costChecks.ts` appends the warm lead's line after the
+  continuation tail's (deviation 9). `DeveloperToolsModal.tsx` needed no
+  change: it renders every line the helper returns.
+
+**Deviations from the spec, and why**
+
+1. **One call per phase: `check_warm_leads(lineages)`**, not a per-lineage
+   `record_warm_lead_lineage(...)`. `last_check` then describes one phase,
+   and recording and latching are one lock acquisition, so a reader never
+   sees a check without the latch it earned.
+2. **A lineage is judged only when the batch went out after the lead's
+   copy was ready — the `not_warm` verdict, beyond the spec.** The spec
+   measures every lead in `streamed_keys`. But a lead can be streamed and
+   still leave the batch nothing to read:
+   - its wait timed out (no first output within `QC_WARM_WAIT_SECONDS`);
+   - its first request failed fast: `_run_streaming_call`'s `finally`
+     releases the wait when a request ends, raised or not, so the wait's
+     outcome still reads `warm`, and the lead's retry makes it a streamed
+     lead.
+
+   Judged, either would latch `not_read` whenever the batch alone reads
+   little: a false latch, exactly when a lead is worth the most, costing
+   the saving for the rest of the session. So `warm` is `release_outcomes
+   [lead] == "warm"` **and** `api_request_count == len(billed)` (none of
+   the lead's requests failed). The second half is conservative: a failure
+   later in the lead's conversation, after its first output, also reads
+   `not_warm`. That only skips a judgment; it can never cause a latch.
+   The numbers are still computed and reported for a `not_warm` lineage
+   with 8 or more measured seats (h₁ there is close to what the batch reads
+   alone).
+3. **The verdict vocabulary**: `kept`, `too_few`, `not_warm`, `not_read`,
+   `unprofitable` (`WARM_LEAD_VERDICTS`), pinned against the frontend.
+   Below 8 measured seats (`too_few`), h₁, p and h₀* are reported as
+   `None`; C always is.
+4. **`unprofitable` reads the numerator, N ≤ 0.** That is h₀* ≤ 0 whenever
+   D > 0, which it is for every priced model. If the rates ever left
+   D ≤ 0 (reading no cheaper than writing), N ≤ 0 still says the lead cannot
+   pay, and h₀* is reported as `None` instead of a meaningless ratio.
+5. **Rounding.** `read_share` rounds half-even to four places.
+   `break_even_read_share` rounds to four places **away from zero** (CT-2's
+   `_usd` posture), so a break-even a hair above zero never reads as `0.0`
+   beside `kept`, nor one a hair below as a positive. `prefix_tokens` is an
+   int, or a float when an even count's median ends in .5.
+   `lead_cost_usd` is `_usd(C)`; C itself is `estimate_usage_cost`'s value,
+   rounded to six places.
+6. **Δ uses the 1-hour write rate**, falling back to the 5-minute one for a
+   model that has none (none today). The seats' own writes are 1-hour.
+7. **A lineage at the floor of 8 seats is never judged.** It has 7 batched
+   seats, one short of 8 measured, so it always reads `too_few`. At the
+   shipped minimums (20) every lineage has at least 19 batched seats. The
+   tests use 10-seat lineages. WL-2's floor-8 flip-readiness run will see
+   `too_few` for its 8-seat lineages; that is expected.
+8. **The engine gathers under its own `try`**, and `_sum_billed` runs there
+   (it is engine code; the check stays a leaf). A gathering failure is
+   logged at DEBUG on `buildaspec.qc` and records nothing.
+9. **The frontend line.**
+   - The latch: "Warm lead (Final QC): off for this session — the batch
+     did not read the lead's copy (12%)", the share read from the
+     last-check lineage whose verdict is the latch's reason; for
+     `unprofitable`, "(lead cost $1.4563)". A latch with no such lineage
+     (set directly) shows the reason alone.
+   - On: "… on · nothing checked yet", or "… on · last check: " and one
+     phrase per lineage, joined by " · ". `kept` reads "24 no-web seats,
+     22 measured, 100% read the shared copy; the lead pays when the batch
+     alone would read under 71%"; `too_few` "…, 0 measured — too few to
+     judge"; `not_warm` "… — not judged: the batch went out before the
+     lead's copy was ready".
+   - "Warm lead: switched off in settings" when the setting is off; "Warm
+     lead: not reported" for a malformed block. A backend with no warm-lead
+     block (CT-2's) renders no warm-lead line, so the existing tests are
+     unchanged.
+   - `CHECK_REASON_TEXT` gains `not_read`; `WARM_LEAD_VERDICT_TEXT` has the
+     three verdicts that are not reasons. The test pins both against
+     `backend/cost_checks.py`.
+10. **Comments and QA rows made true (R9)**, in files the spec did not
+    list:
+    - `backend/settings.py`: `QC_BATCH_WARM_LEAD`'s comment said "The
+      default flips only on a recorded M3 pass". FD1 made that false, and
+      WL-1 builds its replacement, so it now says no trial will settle it
+      and describes the check. The default is untouched (WL-2's).
+    - `backend/qc/engine.py`: the block comment above `LINEAGE_WEB_TOOLED`
+      said the same; it now names the check, `check_leads` and the gate.
+    - `docs/RELEASE_WINDOWS.md`: the "Streamed lead seat" row now says what
+      the Cost self-checks row shows after that Final QC, and the "Cost
+      self-checks row" row mentions the warm lead's last line. WL-2 adds
+      its own rows.
+11. **The invisibility test's baseline patches out the hand-off too.**
+    The spec's baseline patches the check to a no-op. The engine's
+    `check_leads` still ran in both arms then, so a hand-off that wrote
+    anything back would have shown up in both and passed (the revert
+    matrix's first run found exactly that). The baseline now also makes
+    `cost_checks.WarmLeadLineage` raise, so nothing after the phase's own
+    reads runs in it.
+12. **Each seat is read from its reply to the FIRST batch it rode, not
+    from `settled.billed[0]`** (found by Codex's review of PR #227). The
+    spec says `billed[0]` is a batched seat's "request in the first round,
+    which was submitted after the lead's release". That is not true of a
+    seat whose item in its first batch errored (an overloaded or server
+    error, a rate limit, a timeout). Such an item brings back no reply, so
+    the seat is retried in a later round, and its `billed[0]` is that
+    retry's reply. The retry runs after the first round has ended, when
+    it can read a copy an EARLIER batched seat stored rather than the
+    lead's. Counted, such retries raise h₁ and could keep a lead the first
+    round did not read. In the test, 8 seats write the prefix in round 1
+    and 9 retries read it in round 2: read from the retries, h₁ would be
+    9/17 and the lead kept; read from the first batch, h₁ is 0 of 8
+    measured and the lead switches off (`not_read`).
+    - So the engine records, per seat, the round of the first batch the
+      provider accepted (`_BatchSeatState.first_round`) and the reply that
+      batch brought back (`first_reply`, `None` when it brought none). The
+      check reads only that. A seat whose first batch brought no reply is
+      unmeasured.
+    - A refused submission ran nothing, so it is no seat's first batch:
+      after a retried 429 on `batches.create`, the seats are read from the
+      batch the provider accepted next.
+
+**Knowing changes to existing tests**
+
+None. `frontend/tests/costChecks.test.ts` gains eight tests after its
+nine; the nine are unchanged.
+
+**The tests** — `tests/test_cost_checks_warm_lead.py`, 43 tests (45
+counting parametrized cases). Every engine run passes
+`batch_warm_lead=True` and a nonzero wait, on `claude-opus-5-5`; an autouse
+fixture first checks the rates the hand-computed numbers assume (Opus 5.5:
+$4.00 input, $20.00 output, $0.20 cache read, $8.00 1-hour write per
+million) and b = 0.5.
+
+- The arithmetic, by hand:
+  - `test_h1_p_c_and_the_break_even_by_hand`: n = 10, p = 40,000,
+    C = $0.40028, h₀* = 1.20386 / 1.56, shown as 0.7718.
+  - `test_p_is_the_median_of_the_measured_prefixes`: an even count's mean
+    of the middle two (35,000), and an odd count's middle.
+  - `test_a_seat_read_the_prefix_at_95_percent_and_not_below`: 38,000/2,000
+    reads, 37,600/2,400 does not; h₁ = 0.5 exactly is kept.
+  - `test_not_read_below_half_and_kept_at_half`
+  - `test_an_expensive_lead_is_unprofitable`: C = $1.82028,
+    h₀* = −0.28614 / 1.404.
+  - `test_a_break_even_of_exactly_zero_is_unprofitable`: C = $1.248, N = 0;
+    one output token fewer is kept, shown as 0.0001.
+  - `test_fewer_than_eight_measured_seats_give_no_verdict`
+  - `test_a_lead_the_batch_did_not_wait_for_is_not_judged`
+  - `test_what_cannot_be_read_is_unmeasured_and_nothing_raises`: no
+    response, a searched seat, nothing read or written, a bool, a negative,
+    a missing count, no usage, a string.
+  - `test_a_searched_seat_is_measured_from_its_reported_first_iteration`
+  - `test_a_failure_inside_the_check_records_nothing`
+  - `test_the_rates_come_from_the_ledger`: doubling what `_rates` returns
+    doubles C and Δ.
+- The latch: `test_a_losing_lineage_latches_once_with_one_warning`,
+  `test_one_info_line_per_lineage_with_numbers_only`,
+  `test_the_first_losing_lineage_sets_the_reason`,
+  `test_disable_takes_only_a_warm_lead_reason`,
+  `test_the_warm_lead_and_the_tails_latch_apart`,
+  `test_every_read_and_write_takes_the_one_lock_once` (CT-1's counting
+  lock), `test_many_threads_check_and_one_latches`,
+  `test_an_empty_check_records_nothing`, and the pair
+  `test_a_latch_left_set_on_purpose` /
+  `test_the_next_test_starts_with_the_warm_lead_clear`.
+- End to end:
+  - `test_a_lineage_the_batch_reads_is_kept_and_diagnostics_record_it`:
+    ten no-web seats, h₁ = 1, h₀* = 0.91186 / 1.17 (0.7794), through
+    `diagnostics.snapshot()`.
+  - `test_a_batch_that_writes_the_prefix_switches_the_lead_off_for_the_next_run`:
+    `not_read`, one WARNING; the next run streams nothing before the batch
+    and batches all ten seats.
+  - `test_an_expensive_lead_on_a_lightly_read_lineage_is_unprofitable`:
+    h₁ = 5/9, C = $1.45628, h₀* = −0.1224.
+  - `test_a_web_tooled_lineage_that_searched_without_iterations_is_unmeasured`
+    and `test_a_web_tooled_lineage_with_iterations_is_measured`.
+  - `test_a_seat_the_round_ceiling_failed_is_still_measured` and
+    `test_a_paused_seat_is_measured_from_its_first_response`.
+  - `test_a_retried_seat_is_measured_only_by_its_first_batch` and
+    `test_a_refused_submission_is_not_a_seats_first_batch` (deviation 12).
+    The first: 18 no-web seats, 8 that wrote the prefix in round 1 and 9
+    whose round-1 items errored and whose retries read it in round 2 give
+    8 measured, 9 unmeasured, h₁ = 0 and `not_read`. The second: a 429 on
+    the first `batches.create`, and the nine seats are read from the batch
+    accepted next.
+  - `test_a_lead_whose_first_request_failed_is_not_judged` and
+    `test_a_lead_whose_wait_timed_out_is_not_judged` (deviation 2). The
+    second uses a 50 ms wait that can only expire: the lead is held on an
+    event until the batch's results are read.
+  - `test_the_check_reads_the_lead_only_after_it_is_joined`: the lead is
+    held after its first output until its future's `result()` is asked,
+    which only the join does.
+- Never measured: `test_a_phase_nobody_finished_is_never_measured` (a Stop
+  after submission, the settlement window; a refused submission that ends
+  the phase; a failed results read),
+  `test_an_id_less_submission_is_never_measured`,
+  `test_the_wall_clock_ceiling_is_never_measured`,
+  `test_a_stop_during_the_lead_wait_is_never_measured`, and
+  `test_a_lead_that_sent_nothing_is_not_measured_on_a_normal_end`.
+- `test_the_latch_stops_the_next_phase_picking_a_lead` and
+  `test_gathering_for_the_check_never_fails_the_phase`.
+- `test_the_check_changes_no_request_record_multiplier_meter_event_or_manifest`
+  (F3, F4, R4, R6; deviation 11). Requests, batches, the whole record,
+  the multipliers, the meter buckets, the manifest, the fingerprint and
+  every event are identical. Set aside: the record's wall-clock
+  `duration_ms`, and phase 1's `done` counter, which counts lenses in the
+  order their threads finish.
+- `test_diagnostics_report_the_last_check_and_survive_the_scrub`: the
+  block, unchanged by `scrub_data`, identical in `diagnostics.snapshot()`
+  and `/api/diagnostics`, no key matching the credential pattern, and a
+  copy handed out.
+
+`frontend/tests/costChecks.test.ts` gains 8 tests (17 in all): each
+warm-lead state's line, the latch's evidence, malformed and older
+snapshots, and the verdict vocabulary pinned against the backend.
+
+**What the check cannot see — for WL-2 and Abraham**
+
+- **h₀**, as §2 says: a lead that is read but was not needed is kept.
+- **Most web-tooled lineages.** A web-tooled seat that searched in its
+  first response reports summed usage and no per-iteration usage on the GA
+  endpoint (CT-2's findings), so it is unmeasured. Where most seats search
+  first, the lineage reads `too_few` and its lead is kept, judged by
+  nothing. A no-web seat is measurable whenever its first batch brings a
+  reply.
+- **A seat whose first batch brought no reply** (deviation 12). Its retry
+  is not evidence about the lead, so it is unmeasured. A phase where many
+  first items fail can read `too_few`.
+- **A lineage of exactly 8 seats** (deviation 7).
+
+**Verification** (Linux container, from the repository root)
+
+- `.venv/bin/python -m ruff check .`: all checks passed.
+- `.venv/bin/python -m pytest -q`, on the final code: 2990 passed, 64
+  skipped (6 min 44 s). CT-3 ended at 2945; the 45 new cases are
+  `tests/test_cost_checks_warm_lead.py`'s. Before the fix for Codex's
+  review it was 2988 passed, 64 skipped.
+- `npm test` (in `frontend/`): 438 passed, 0 failed (430 before).
+- `npm run build`: built; the only warning is the existing chunk-size one.
+- `tests/test_tier1_finish_tracker.py` and `tests/test_docs_consistency.py`
+  pass with this As built and the ticks in place.
+- `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md`
+  prints nothing.
+
+**Revert matrix.** Each mechanism was reverted in place, one at a time, by
+a script: it replaced one exact snippet, ran the suites, restored the
+exact text it read, and checked it byte-identical; the working tree's diff
+was byte-identical at the end. The backend rows ran the new file,
+`test_qc_batch_warm_lead.py`, `test_cost_checks_tail_rejection.py` and
+`test_cost_checks_tail_value.py` (140 tests); the frontend rows ran
+`frontend/tests/costChecks.test.ts`. "Red" counts failing tests. The
+table is the run on the final code, after the fix for Codex's review
+(deviation 12).
+
+51 rows, 51 red.
+
+| Mechanism reverted | Red |
+|---|---|
+| gate: a lead picked whatever the latch says | 2 |
+| the latch read always clear | 6 |
+| the check never latches | 10 |
+| a later latch overwrites the first | 5 (two of them the tail's) |
+| a latch writes no WARNING | 4 |
+| `disable_warm_lead` takes any reason | 1 |
+| the check records and latches in two lock acquisitions | 1 |
+| reset leaves the warm lead | 47 (a latch carries into every later test) |
+| the check runs before the leads are joined | 2 |
+| the check runs on every terminal path (inside `finish`) | 7 |
+| the check never runs | 15 |
+| a lead that sent nothing is measured | 1 |
+| the wait's outcome not recorded | 11 |
+| `warm` ignores the wait's outcome | 1 |
+| `warm` ignores a failed request | 1 |
+| no `not_warm` verdict | 3 |
+| a seat the round ceiling failed is skipped | 1 |
+| gathering raises into the phase | 2 |
+| the seat threshold 0.95 → 0.9 | 1 |
+| the seat threshold strict (> 0.95) | 1 |
+| read + write = 0 counted as measured | 2 |
+| a seat read from its last reply, updated every round | 2 |
+| the check reads `billed[0]` again (the code Codex flagged) | 1 |
+| the first reply taken from any round, not the first batch's | 1 |
+| a refused submission counted as a seat's first batch | 1 |
+| no first reply recorded | 12 |
+| the minimum measured 8 → 7 | 2 |
+| p is the mean, not the median | 1 |
+| C at the batch rate | 13 |
+| Δ uses the 5-minute write rate | 10 |
+| n does not count the lead | 11 |
+| no INFO line | 2 |
+| the break-even rounds half-even | 5 |
+| `not_read` at or below one half | 6 |
+| no `not_read` rule | 8 |
+| `unprofitable` only below zero | 3 |
+| no `unprofitable` rule | 5 |
+| the check raises | 1 |
+| sabotage: the check changes a response it reads | 2 |
+| sabotage: the hand-off emits an event | 1 |
+| sabotage: the hand-off edits a record | 3 |
+| the snapshot has no warm-lead block | 26 |
+| the snapshot hands out the module's record | 1 |
+| `setting_on` reads the tail's switch | 1 |
+| a key that trips the redaction pattern (`prefix_token`) | 7 |
+| frontend: no words for `not_read` | 4 |
+| frontend: no words for `not_warm` | 2 |
+| frontend: no warm-lead line | 7 |
+| frontend: the setting off not said | 1 |
+| frontend: the latch's evidence dropped | 1 |
+| frontend: the break-even clause dropped | 1 |
+
+The first run, before the review, found two rows green:
+- "A seat read from its last response" passed because no test had a
+  batched seat with two billed responses.
+  `test_a_paused_seat_is_measured_from_its_first_response` now has one.
+- The hand-off sabotage passed because the invisibility test's baseline
+  still ran the hand-off (deviation 11).
+
+Deviation 12 then replaced `billed[0]` with `first_reply`. So "a seat read
+from its last response" became "a seat read from its last reply, updated
+every round". Four rows cover the fix, and "a seat the round ceiling
+failed is skipped" is now expressed on `first_reply`. One mutation was
+left out because it cannot change anything: taking the LAST reply instead
+of the first at the moment the first batch is read. A seat has at most
+one reply then, so the two are the same.
+
+**For FIN-1**
+
+- **CLAUDE.md implemented notes** — a section "The warm lead checks that
+  the batch reads its copy — implemented notes (Tier 1 finish, WL-1)", in
+  CLAUDE.md's own style. The why and the traps:
+  - *Why.* Whether a batch request can read an entry a streamed request
+    wrote is undocumented, and no trial will settle it (FD1). So after
+    every batched phase that ends normally and sent a lead, the app reads
+    the usage the batch already reported: nothing is sent (R5).
+  - *What is measured* (Appendix B): per batched seat, the first iteration
+    of its reply to the first batch it rode (read ≥ 95% of read + write);
+    per lineage with 8 or more measured seats, h₁, p, C and h₀*.
+    `not_read` below h₁ = 0.5, `unprofitable` at h₀* ≤ 0; one run can
+    latch, and the next phase picks no lead.
+  - *No rule on h₀* > 0*: h₀ is never observed. A read-but-unneeded lead is
+    kept, at the price of its discount.
+  - *`not_warm`* (deviation 2): a lead whose wait timed out, or whose first
+    request failed (its `finally` releases the wait), left the batch
+    nothing to read; judging it would latch falsely exactly when a lead is
+    worth the most.
+  - *Traps.*
+    - A lineage of exactly 8 seats has 7 batched seats and can never be
+      judged.
+    - A web-tooled seat that searched first is unmeasured on the GA
+      endpoint; web-tooled lineages mostly read `too_few`.
+    - The check reads each seat's reply to the FIRST batch it rode
+      (`_BatchSeatState.first_reply`), never `billed[0]` (Codex, PR #227).
+      A seat whose first item errored is retried in a later round, where it
+      can read a copy an earlier batched seat stored: its `billed[0]` is
+      that retry, and counting it keeps a lead the first round never read.
+      A refused submission ran nothing, so it is no seat's first batch.
+      And a paused seat's continuation is not its read of the prefix.
+    - The check runs only after `fold_leads(wait=True)`: an unjoined lead
+      has no record, so it is not "streamed" and would be skipped.
+    - Comparing two runs needs QC's `duration_ms` and phase 1's `done`
+      counter set aside; and an invisibility baseline must patch out the
+      engine's hand-off, not only the check, or a hand-off that writes
+      back passes in both arms.
+    - A lineage's values sit six levels down in the diagnostics payload,
+      the scrub's bound, so they must be scalars.
+    - `break_even_read_share` rounds away from zero, like `_usd`.
+- **Layout.**
+  - `backend/cost_checks.py`: add "the warm lead's check (WL-1):
+    `warm_lead_enabled`, `disable_warm_lead` and `check_warm_leads`
+    (`WarmLeadLineage`; Appendix B's h₁, p, C and h₀*; `not_read` below
+    h₁ = 0.5, `unprofitable` at h₀* ≤ 0; `not_warm` and `too_few` never
+    latch), and the snapshot's `warm_lead` block".
+  - `backend/qc/engine.py` (the Chunk 3 part of its entry): the gate reads
+    `cost_checks.warm_lead_enabled()`; `_WarmLead.members`;
+    `_BatchSeatState.first_round` / `first_reply`; `release_outcomes`;
+    `streamed_leads()`; `check_leads()` at the normal end only, after
+    `fold_leads(wait=True)`.
+  - `frontend/src/lib/costChecks.ts`: the warm lead's line and
+    `WARM_LEAD_VERDICT_TEXT`; `frontend/src/types.ts`: `WarmLeadCheck`.
+  - Add `tests/test_cost_checks_warm_lead.py`, and extend the
+    `frontend/tests/costChecks.test.ts` entry.
+- **Errata** for earlier CLAUDE.md sections:
+  - The Layout's `settings.py` entry says `QC_BATCH_WARM_LEAD` "flips on
+    only on a recorded M3 pass". Since FD1 its flip waits on WL-1's check
+    and WL-2's merge, not M3.
+  - "Final QC's batched phase can stream a lead seat first (Research/QC
+    cost Tier 1, Chunk 3)" says the default "waits for an M3 pass". Same
+    correction.
+  - "Research and Final QC cost, Tier 1, as shipped (closeout)" says
+    Chunk 3's default "flips only on an M3 pass of that chunk's own test".
+    Same correction.
+- **README** — in the warm-lead subsection (which says it "stays off until
+  a measured run shows it does (the plan's M3)") and the
+  `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` Configuration row ("**off** until a
+  measured run shows it pays"): after each Final QC that sent a lead, the
+  app reads how many of the batched seats read the lead's copy. If fewer
+  than half did, or the lead cost more than it could have saved, the lead
+  switches off until the app restarts. Settings → Developer tools → "Cost
+  self-checks" shows the last check. (WL-2 flips the default; FIN-1 writes
+  both.)
 
 ---
 

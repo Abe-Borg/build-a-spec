@@ -493,9 +493,13 @@ QC_WARM_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_WARM_WAIT_SECONDS", 45, minimum
 #
 # OFF by default, deliberately: a lead pays for itself only if the batch can
 # read the entry a STREAMED request wrote, and no document states that the two
-# transports share it. The default flips only on a recorded M3 pass (the cost
-# plan's Chunk 3 "Flip"). Not in the QC input manifest: it changes how one
-# seat is sent, never what any seat is asked (the plan's F3).
+# transports share it. No measured trial will settle that (the Tier 1 finish
+# program's FD1): instead, after every batched phase that ends normally and
+# sent a lead, a runtime self-check (`backend.cost_checks`, session WL-1) reads
+# the usage the batch reported and switches the lead off for the rest of the
+# app session when the batch did not read the lead's copy or the lead cost
+# more than it could have saved. Not in the QC input manifest: it changes how
+# one seat is sent, never what any seat is asked (the plan's F3).
 QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", False)
 
 # Continuations read their own cache (Research/QC cost Tier 1, Chunk 4). A

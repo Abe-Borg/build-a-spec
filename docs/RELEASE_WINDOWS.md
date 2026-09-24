@@ -330,9 +330,15 @@ invisible to CI and expensive to the user.
       its `cost_multiplier` as 1.0, every batched seat's as 0.5), the
       methodology lists **Streamed lead seat**, and
       `.\.venv\Scripts\python tools\qc_export_cost_profile.py "<the JSON export>"`
-      shows a `seat:list-price:<group>` row. With the switch off (the
-      default) none of that appears and the methodology does not mention a
-      lead.
+      shows a `seat:list-price:<group>` row. Afterwards Settings →
+      Developer tools → Environment → **Cost self-checks** reads
+      `Warm lead (Final QC): on · last check: …`, with how many of that
+      group's batched seats read the lead's copy. It reads `off for this
+      session` only when the activity log also holds the `Cost self-check:
+      the warm lead is switched off` WARNING, and then the next Final QC
+      streams no lead. With the switch off (the default) none of that
+      appears, the methodology does not mention a lead, and the row reads
+      `Warm lead: switched off in settings`.
 
 ### A paused call reads its own cache (cost Tier 1, Chunk 4 — on by default)
 
@@ -365,7 +371,9 @@ they decided.
       resumed requests it measured and their estimated saving (or `nothing
       measured yet`), then `Continuation tail, Final QC: on · …`. Neither
       line reads `off for this session` unless the activity log also holds
-      the WARNING that switched it off.
+      the WARNING that switched it off. A last line covers the warm lead
+      (`Warm lead: switched off in settings`, its default; the Streamed lead
+      seat row above covers it on).
 - [ ] **Switching it off.** Set `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`
       (Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`) before you
       start the app: the Cost self-checks row reads `Continuation tail:

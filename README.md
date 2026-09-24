@@ -1047,7 +1047,7 @@ first.
   that every comment survives both resolutions; the plan lists what to look
   at first.
 
-## Research and Final QC cost (in progress)
+## Research and Final QC cost (Tier 1)
 
 Requirements research and Final QC are the two expensive things the app
 does, and this program cuts what they cost **without changing anything that
@@ -1055,19 +1055,31 @@ affects quality**: no model, effort level, prompt, search or fetch budget,
 verifier panel, adjudication rule or output changes. Only how and when the
 same requests reach the provider changes — calls that share a cached prefix
 stop writing it several times over, a paused call reads its own cache, and a
-retry resumes instead of starting over — and every change is measured on
-real saved files before it is trusted. The plan is
+retry resumes instead of starting over. The plan is
 [`docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md`](docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md);
 where it stands is
 [`docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`](docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md),
-and nowhere else. It is being built one chunk at a time. So far a user sees
-one change in an ordinary run: Final QC's first stage starts a few seconds
-later (Chunk 2, below). When a request fails for a passing reason — a rate
-limit, a server error, a dropped connection — a research area or a review
-now carries on from the step that failed instead of starting over (Chunk 5,
-below); that has no switch, and shows only when something fails. Chunks 3
-and 4 are built but ship switched off, so they change nothing until a
-measured run says each one is safe and pays.
+and nowhere else.
+
+**The program is complete** (six chunks, closed 2026-09-24), and no release
+carries it yet: whichever release next ships from `master` owes its release
+notes. In an ordinary run a user sees one change: Final QC's first stage
+starts a few seconds later (Chunk 2, below). When a request fails for a
+passing reason — a rate limit, a server error, a dropped connection — a
+research area or a review carries on from the step that failed instead of
+starting over (Chunk 5, below). That has no switch, and shows only when
+something fails. Those two rest on documented provider behaviour and the
+test suite. No measurement of a real run had been recorded when the program
+closed, so what they save is still unmeasured; the profilers below are how
+to measure it.
+
+Chunks 3 and 4 are built but ship switched off. Each rests on provider
+behaviour that only a real run can confirm: whether a batch can read a copy
+a separately streamed request stored (Chunk 3), and whether a resumed
+request's automatic cache breakpoint is accepted and read (Chunk 4). Each
+turns on only when a measured run (the plan's M3) passes its own test, and
+until then changes nothing. The progress file's "After the program" section
+says how.
 
 ### Measure what research costs (Chunk 1)
 

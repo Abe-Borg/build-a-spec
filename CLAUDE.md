@@ -17455,6 +17455,104 @@ it is the owner's call; the draft is below.
   3. The Batch 6 era's one-shot "tutorial updated" invitation
      (`consumeTutorialUpdateInvitation`) is retired.
 
+## Research and Final QC cost, Tier 1, as shipped — implemented notes (closeout)
+
+The Research and Final QC cost program ran as six chunks, one session each,
+on 2026-09-23 and 2026-09-24: the plan (PR #205), then Chunks 1–5 (PRs #208,
+#210, #213, #215 and #219), then this closeout (Chunk 6). It cut what
+requirements research and Final QC cost by changing only how and when the
+same requests reach the provider. No model, effort, prompt, tool or
+`max_uses`, verifier panel, adjudication, grounding rule or output changed
+(the plan's F1).
+- Chunk 1 made research cost measurable (`tools/research_cost_profile.py`).
+- Chunk 2 staggers the calls that share a cached prefix — Final QC's four
+  web-toolless lenses and the consolidation grouping calls — so one writes
+  the entry the others read. It ships on (`BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`,
+  45 s).
+- Chunk 3 can stream one seat of each large batched verifier lineage first,
+  at list price, so the batch reads the entry it wrote. It ships off
+  (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`).
+- Chunk 4 gives a resumed `pause_turn` request a top-level automatic cache
+  breakpoint in both streaming engines. It ships off
+  (`BUILD_A_SPEC_CONTINUATION_CACHE`).
+- Chunk 5 resumes the conversation after a request's own retryable failure,
+  and restarts only on the final attempt. It has no switch
+  (`retry_policy.retry_mode`).
+
+Every chunk kept F3 (a retained Final QC result stays current with its
+switch in either position) and F4 (every billed call is exactly one record,
+at its own `cost_multiplier`). The closeout changed no code. Where the
+program stands, what is still owed and the flip session's prompt are in
+`docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md` ("After the program"). The
+release notes a release can lift are the plan's §7 "Release-note draft
+(Tier 1)".
+
+- **Nothing was measured.** No session was given a measurement (Chunks
+  2–6 each record the placeholder left unfilled), so M1–M4 are all empty
+  and every gate took its no-measurement branch (the progress file's O2
+  and O3). Chunk 2 ships on
+  under F5's documented-guarantee branch, and Chunk 5 under its own rule
+  (the final attempt always restarts). Neither saving has been measured.
+  The QC profiler's "Phase 1" line, on the first real Final QC export made
+  with this build, measures Chunk 2 (expected: 3 of the 4 lenses read, 1
+  wrote).
+- **Two switches ship off, for different reasons.** Chunk 3 pays only if a
+  batch request can read an entry a separately streamed request wrote, and
+  nothing documents that either way. Chunk 4's request shape is documented
+  as allowed, but if the provider refused it, every paused research area and
+  compliance review would fail with a 400, so it is proven live first. Each
+  default flips only on an M3 pass of that chunk's own test (the plan's
+  "M3 decides the flip"). A flip is one commit per chunk, applied by a flip
+  session. The progress file gives that session's prompt and its seven
+  steps.
+- **Flip readiness, re-measured on the final tree.** Chunk 3 measured it
+  before Chunks 4 and 5 changed the same loops, and Chunk 4 before Chunk 5.
+  So the closeout ran it again, with both switches on through the
+  environment and two scratch pytest plugins (not committed): one lowers
+  the lead minimums, and one runs a record-only copy of Chunk 4's
+  breakpoint guard on every request the fakes capture.
+  - The whole suite, with the minimums as shipped: 2,833 passed, 64
+    skipped, none failed. The guard saw 2,370 streamed requests (57 of them
+    carrying the continuation tail) and 938 batched ones (none carrying
+    it), with no violation.
+  - Chunk 3's own method, the QC tests outside the lead seat's test file
+    (`-k "qc or QC or final"`) with both minimums at the floor of 8: 403
+    passed, none failed. 3 of 138 batch phases picked a lead, so the lead
+    path really ran. The guard found no violation in 1,460 streamed and
+    618 batched requests.
+
+  Each chunk's `..._ships_switched_off` pin reads the default from the
+  source, so the environment could not reach it in either run; the flip
+  replaces it. Everything else passes either way, so a flip is still one
+  commit per chunk.
+- **The release notes are owed, not written** (F7). The plan's §7 now holds
+  one block, shaped as a `ReleaseSection`: items 1 and 2 (Chunks 2 and 5)
+  always, and items 3 and 4 only if their switch defaults on in the release.
+  None of the program is in a 1.21.0 tagged at the project-workspace
+  closeout commit (`a273ab7`, which contains none of this program's
+  merges). A release cut from `master` at or after `02b2985` carries all of
+  it.
+- **Found in passing, not done.** The Final QC launch confirmation's "Why
+  it's expensive" paragraph (`QCDrawer.tsx`) still says "Opus 5 costs more
+  per token". The default QC model has been Opus 5.5 since v1.20.0, and the
+  rest of that modal already names the configured model through
+  `qcModelLabel`. `qcModel.test.ts`'s pin, `/Opus 5(\.5)?/`, misses it
+  because the copy spells the space as `&nbsp;`. This came from PR #177, not
+  from this program, so it is left for its own change. The session's attempt
+  to queue it as a suggested task timed out twice.
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Final QC's batched phase can stream a lead seat first" (Chunk 3) says
+     "The refused-submission retry restarts only the seats that were
+     submitted." Since Chunk 5 it RETRIES only those seats. A seat with a
+     completed response, on a retry that is not the final attempt, resumes
+     and re-submits the request that was refused. The rest restart. The
+     point that stands is that a streaming lead is never one of them.
+  2. "Final QC's calls that share a cache start staggered" (Chunk 2) says
+     its measurement "is Abraham's M2 run, and the progress file records
+     it." No M2 was recorded by the program's close. The M2 slot is empty,
+     and Chunk 2's effect is unmeasured (above).
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

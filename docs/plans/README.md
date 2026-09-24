@@ -5,15 +5,22 @@ Owner: Abraham.
 ## Active
 
 **[Research and Final QC cost, Tier 1](RESEARCH_QC_COST_TIER1_2026-09-23.md)**
-— opened 2026-09-23. Cut what requirements research and Final QC cost
-without changing any model, effort, prompt, budget, panel or result. Calls
-that share a cached prefix stop writing it more than once; paused research
-and review calls read their own cache; a transient failure resumes instead
-of starting over; and a research cost profiler measures the effect. Six
-chunks, one per session. Where it stands, the handoff prompt, the
-measurements and the owner decisions live ONLY in
-[`RESEARCH_QC_COST_TIER1_PROGRESS.md`](RESEARCH_QC_COST_TIER1_PROGRESS.md);
-start there, not here.
+— **complete** (opened 2026-09-23, closed 2026-09-24 by Chunk 6; its code is
+all on `master`, and its release notes are owed to the next release). Cut
+what requirements research and Final QC cost without changing any model,
+effort, prompt, budget, panel or result. Calls that share a cached prefix
+stop writing it more than once; paused research and review calls read their
+own cache; a transient failure resumes instead of starting over; and a
+research cost profiler measures the effect. Six chunks, one per session.
+Chunk 2's staggered launch ships on, and Chunk 5's resume has no switch.
+**Chunk 3 shipped off; flip owed after M3. Chunk 4 shipped off; flip owed
+after M3.** No measurement of a real run was recorded during the program, so
+none of its savings has been measured yet. Whichever release next ships from
+`master` owes the plan's §7 "Release-note draft (Tier 1)": Chunks 2 and 5
+always, Chunks 3 and 4 only if flipped by then. Where it stands, the owed
+flips and how to apply them, the measurements and the owner decisions live
+ONLY in [`RESEARCH_QC_COST_TIER1_PROGRESS.md`](RESEARCH_QC_COST_TIER1_PROGRESS.md)
+(its "After the program" section); start there, not here.
 
 **[Project workspace](project-workspace/README.md)** — the live program
 (decisions ratified 2026-09-22; Phase 1 shipped in v1.20.0, PR #174; where

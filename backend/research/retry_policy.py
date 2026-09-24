@@ -7,6 +7,12 @@ Semantics preserved exactly: typed-SDK-first classification with the
 message-substring heuristic demoted to a last resort for generic
 exceptions, per-class backoff multipliers, and ``INVALID_REQUEST`` never
 retried (the request shape would have to change to get a different answer).
+
+One Build-a-Spec addition, not part of the port: :func:`retry_mode`, the
+resume-first rule every retry loop in both engines applies (Research/QC cost
+Tier 1, Chunk 5). It lives here, beside the policy it extends, so research,
+streamed Final QC and batched Final QC cannot disagree about when a
+conversation survives a transient failure.
 """
 from __future__ import annotations
 
@@ -116,3 +122,42 @@ def compute_backoff_seconds(
     else:
         multiplier = 1.0
     return base * (multiplier ** max(0, int(attempt)))
+
+
+# How a retry starts (Research/QC cost Tier 1, Chunk 5). The values ride the
+# ``{prefix}_retry`` live events as ``mode``, so they are wire vocabulary.
+RETRY_MODE_RESUME = "resume"
+RETRY_MODE_RESTART = "restart"
+
+
+def retry_mode(*, progressed: bool, next_attempt: int, attempts: int) -> str:
+    """Resume first, restart last: how the retry about to run begins.
+
+    A research dimension or a Final QC call is a conversation — an opening
+    request, then a ``pause_turn`` continuation for every pause — and a
+    transient failure (rate limit, server error, dropped connection) can land
+    after it has made real, paid-for progress. Restarting threw that progress
+    away and paid for every finished continuation again.
+
+    ``RETRY_MODE_RESUME`` when both hold:
+
+    - ``progressed``: the conversation has at least one completed response,
+      and the failure was a request's own, so the request that failed can be
+      sent again exactly as it stood (messages, responses, container and
+      continuation count all carry on);
+    - ``next_attempt`` (0-based) is not the final attempt of ``attempts``.
+
+    ``RETRY_MODE_RESTART`` otherwise — no progress to keep, or the final
+    attempt, which always starts a fresh conversation. That is the whole
+    safety argument for having no switch: a conversation that keeps failing
+    once resumed still gets the clean attempt it always got, so the new path
+    can cost at most the one extra attempt it spent on the resume.
+
+    With the default three attempts, the first retry can resume and the
+    second (the final attempt) always restarts. Backoff and attempt counting
+    are unchanged either way; only what the next attempt starts from differs.
+    """
+    final_attempt = max(1, int(attempts)) - 1
+    if progressed and int(next_attempt) < final_attempt:
+        return RETRY_MODE_RESUME
+    return RETRY_MODE_RESTART

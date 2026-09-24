@@ -1198,6 +1198,10 @@ def test_failed_fetch_and_abandoned_retry_cannot_ground_final_payload() -> None:
     retry_scripts = _scripts(
         code_compliance=[
             pause_response(searched_urls=[old_url]),
+            # The first retry RESUMES this conversation (cost Tier 1, Chunk
+            # 5), so its evidence is still the model's; the final attempt's
+            # RESTART is what abandons it.
+            ConnectionResetError("connection reset by peer"),
             ConnectionResetError("connection reset by peer"),
             qc_findings_response(
                 "code_compliance",

@@ -371,6 +371,9 @@ def test_malformed_frames_are_ignored_and_stream_failure_retries(monkeypatch) ->
             "max_attempts": 3,
             "reason": "connection",
             "backoff_s": 5.0,
+            # The stream died before any response, so there was nothing to
+            # resume (cost Tier 1, Chunk 5).
+            "mode": "restart",
         }
     ]
     terminal = _events_for(events, type="lens_complete", lens_id="completeness")
@@ -515,7 +518,7 @@ def _lens_requests(client: SequencedFakeClient, lens_id: str) -> list[dict]:
     ]
 
 
-def test_qc_pause_continuation_echoes_the_container_and_a_retry_drops_it(
+def test_qc_pause_continuation_echoes_the_container_a_resume_keeps_it_and_a_restart_drops_it(
     monkeypatch,
 ) -> None:
     """QC's continuation obeys the same container contract as research.
@@ -523,8 +526,9 @@ def test_qc_pause_continuation_echoes_the_container_and_a_retry_drops_it(
     A code-execution-called server tool can only be resumed inside the
     container it started in. With direct callers none is expected, so this
     is the defense-in-depth half — and the reset boundary is the part worth
-    pinning: a retry abandons the conversation, so it must not inherit the
-    failed attempt's container.
+    pinning. The container is conversation-local (cost Tier 1, Chunk 5): a
+    retry that RESUMES the conversation sends the failed request again with
+    it, and only a RESTART, which abandons the conversation, drops it.
     """
     import backend.qc.engine as engine
 
@@ -546,6 +550,9 @@ def test_qc_pause_continuation_echoes_the_container_and_a_retry_drops_it(
                 qc_findings_response(
                     "code_compliance", findings=[], stop_reason="pause_turn"
                 ),
+                # The first retry resumes; the second (the final attempt)
+                # restarts.
+                retryable,
                 retryable,
                 qc_findings_response("code_compliance", findings=[]),
             ]
@@ -555,11 +562,21 @@ def test_qc_pause_continuation_echoes_the_container_and_a_retry_drops_it(
     _run_client(client, events)
 
     requests = _lens_requests(client, "code_compliance")
-    assert len(requests) == 4
+    assert len(requests) == 5
     assert "container" not in requests[0]
     assert requests[1]["container"] == "cont_qc_1"
     assert requests[2]["container"] == "cont_qc_1"
-    assert "container" not in requests[3]
+    # The resume: the request that failed, sent again as it stood.
+    assert requests[3]["container"] == "cont_qc_1"
+    assert requests[3]["messages"] == requests[2]["messages"]
+    # The final attempt's restart: a new conversation from the opening
+    # request, with no inherited container.
+    assert "container" not in requests[4]
+    assert [m["role"] for m in requests[4]["messages"]] == ["user"]
+    assert [
+        event["mode"]
+        for event in _events_for(events, type="lens_retry", lens_id="code_compliance")
+    ] == ["resume", "restart"]
 
     # The pause contract is unchanged, and the container never enters the
     # cached prefix or the conversation.
@@ -840,6 +857,9 @@ def test_verifier_retry_then_relays_tool_activity_for_the_same_seat(
             "max_attempts": 3,
             "reason": "connection",
             "backoff_s": 5.0,
+            # The seat's first request failed before any response, so there
+            # was nothing to resume (cost Tier 1, Chunk 5).
+            "mode": "restart",
         }
     ]
     assert next(event for event in seat if event["type"] == "verifier_search")[

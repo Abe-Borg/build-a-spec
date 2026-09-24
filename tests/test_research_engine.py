@@ -319,18 +319,23 @@ def test_retryable_failure_retries_then_succeeds(monkeypatch):
     assert any(i.requirement == "Recovered." for i in profile.items)
 
 
-def test_pause_continuation_echoes_the_container_and_a_retry_drops_it(monkeypatch):
+def test_pause_continuation_echoes_the_container_a_resume_keeps_it_and_a_restart_drops_it(
+    monkeypatch,
+):
     """The provider continuation container, end to end for one dimension.
 
     Defense-in-depth: with ``allowed_callers: ["direct"]`` no container is
     expected. But a code-execution-called server tool can only be resumed
-    inside the container it started in, so if one ever arrives the resume
-    has to echo it — and a *retry*, which abandons the conversation for a
-    fresh one, must not.
+    inside the container it started in, so if one ever arrives every request
+    of the conversation has to echo it — a request RESUMED after a transient
+    failure included (cost Tier 1, Chunk 5: the container is
+    conversation-local) — and a RESTART, which abandons the conversation for
+    a fresh one, must not.
 
     One scripted dimension covers the whole contract: pause with a
-    container, pause without one (not a revocation), a retryable failure,
-    then success on a clean attempt.
+    container, pause without one (not a revocation), a retryable failure
+    (the first retry resumes), a second one (the final attempt restarts),
+    then success on the clean attempt.
     """
     import backend.research.engine as engine
 
@@ -351,6 +356,7 @@ def test_pause_continuation_echoes_the_container_and_a_retry_drops_it(monkeypatc
                 # next request must still carry it.
                 pause_response(searched_urls=["https://a.gov/two"]),
                 retryable,
+                retryable,
                 research_response(
                     items=[_item("Recovered.", ["https://a.gov/one"])],
                     searched_urls=["https://a.gov/one"],
@@ -369,15 +375,21 @@ def test_pause_continuation_echoes_the_container_and_a_retry_drops_it(monkeypatc
         for req in client.requests
         if DIM_KEYS["governing_codes"] in user_text(req["messages"])
     ]
-    assert len(requests) == 4
+    assert len(requests) == 5
     # 1: opening request, no container to know about yet.
     assert "container" not in requests[0]
     # 2: the paused response supplied one.
     assert requests[1]["container"] == "cont_research_1"
     # 3: the second pause omitted it; the latest nonblank id is retained.
     assert requests[2]["container"] == "cont_research_1"
-    # 4: a fresh retry attempt — a new conversation, so no inherited id.
-    assert "container" not in requests[3]
+    # 4: the first retry RESUMES — the same conversation, so the request
+    # that failed goes again as it stood, container and all.
+    assert requests[3]["container"] == "cont_research_1"
+    assert requests[3]["messages"] == requests[2]["messages"]
+    # 5: the final attempt RESTARTS — a new conversation, so no inherited
+    # id, and it begins from the opening request.
+    assert "container" not in requests[4]
+    assert [m["role"] for m in requests[4]["messages"]] == ["user"]
 
     # The pause contract itself is unchanged: the paused assistant content
     # is re-sent verbatim, with no synthetic user turn wedged in.
@@ -730,6 +742,9 @@ def test_retry_emits_dimension_retry_event(monkeypatch):
             "max_attempts": 3,
             "reason": "connection",
             "backoff_s": 5.0,
+            # The opening request failed before any response, so there was
+            # no conversation to resume (cost Tier 1, Chunk 5).
+            "mode": "restart",
         }
     ]
     # The retry precedes the dimension's recovery.

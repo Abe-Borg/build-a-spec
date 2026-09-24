@@ -92,7 +92,7 @@ def settle_capability_sweep(timeout: float = 120.0) -> None:
 
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
-    from backend import sessions
+    from backend import cost_checks, sessions
     from backend.llm.client import reset_client_cache
     from backend.llm.conversation import reset_thinking_display_probe
 
@@ -102,6 +102,9 @@ def _fresh_session(monkeypatch):
     # The thinking.display capability degrade is process-scoped; re-arm it so
     # a fallback test can't leak "omitted" into a later test's request.
     reset_thinking_display_probe()
+    # So are the cost self-checks' latches (Tier 1 finish): a test that
+    # switches a saving off must not leave it off for the next one.
+    cost_checks.reset_for_tests()
     # Reference uploads use Anthropic's remote token-counting endpoint in
     # production. Keep the suite hermetic while preserving deterministic
     # cumulative-limit behavior.
@@ -121,3 +124,4 @@ def _fresh_session(monkeypatch):
     _restore_default_module()
     reset_client_cache()
     reset_thinking_display_probe()
+    cost_checks.reset_for_tests()

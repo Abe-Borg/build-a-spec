@@ -1435,7 +1435,7 @@ def snapshot() -> dict[str, Any]:
     I/O: anything held under that lock blocks model turns (the freeze
     class the capability-sweep work removed).
     """
-    from . import api_key_store, sessions, settings
+    from . import api_key_store, cost_checks, sessions, settings
     from .llm.conversation import effective_discipline
     from .llm.history_hygiene import history_composition
     from .research.engine import incomplete_dimension_facts
@@ -1717,6 +1717,11 @@ def snapshot() -> dict[str, Any]:
         },
         "session": session_block,
         "usage": usage,
+        # What the cost self-checks have decided (Tier 1 finish, CT-1): top
+        # level, not under ``session``, because a latch belongs to the
+        # process, not to a workspace. Read without the session guard — it is
+        # not session state, and ``cost_checks`` takes its own lock.
+        "cost_checks": cost_checks.snapshot(),
     }
     if server_identity:
         payload["server"] = server_identity

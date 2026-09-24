@@ -573,12 +573,11 @@ required keyword, so the rule is structural.
 **Verification** (Linux container, from the repository root)
 
 - `.venv/bin/python -m ruff check .`: all checks passed.
-- `.venv/bin/python -m pytest -q`: 2911 passed, 64 skipped (9 min 5 s).
-  That run collected the new file before
-  `test_every_read_and_write_takes_the_one_lock` was added; that test
-  passed on its own, and the new file passed eight runs in a row before
-  it and 38 of 38 after it (the revert matrix's baseline run: 208 passed
-  across the seven suites).
+- `.venv/bin/python -m pytest -q` on the finished code: 2912 passed,
+  64 skipped (8 min 39 s). An earlier run, before
+  `test_every_read_and_write_takes_the_one_lock` was added: 2911 passed,
+  64 skipped. The new file also passed eight runs in a row, and the
+  revert matrix's baseline run passed 208 of 208 across its seven suites.
 - `npm test` (in `frontend/`): 421 passed, 0 failed.
 - `npm run build`: built; the only warning is the existing chunk-size one.
 - `tests/test_tier1_finish_tracker.py` and `tests/test_docs_consistency.py`

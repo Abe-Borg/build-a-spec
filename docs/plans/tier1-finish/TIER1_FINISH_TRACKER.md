@@ -2,7 +2,7 @@
 
 <!-- TIER1-FINISH-STATUS: IN PROGRESS -->
 
-**Next session:** CT-1 — Survive a rejected continuation tail
+**Next session:** CT-2 — Measure what the continuation tail saves
 
 Owner: Abraham. Opened 2026-09-24.
 
@@ -51,7 +51,7 @@ saving on, one pull request per session:
 
 | ID | Plan | Title | Status | PR | Merge commit |
 |---|---|---|---|---|---|
-| CT-1 | Chunk 4 | Survive a rejected continuation tail | not started | — | — |
+| CT-1 | Chunk 4 | Survive a rejected continuation tail | done | PR #224 | — |
 | CT-2 | Chunk 4 | Measure what the continuation tail saves | not started | — | — |
 | CT-3 | Chunk 4 | Turn the continuation tail on | not started | — | — |
 | WL-1 | Chunk 3 | Check that the batch reads the warm lead | not started | — | — |

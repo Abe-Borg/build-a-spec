@@ -357,11 +357,26 @@ backend/
                            fresh dict(_CONTINUATION_CACHE_CONTROL), top-level
                            cache_control beside container — to a request
                            _is_continuation calls a resume, and to nothing
-                           else (the engines keep separate copies)
+                           else (the engines keep separate copies). Chunk 5:
+                           the conversation (messages, all_responses, the
+                           container, and — as len(all_responses) — the
+                           continuation count) is hoisted out of the attempt
+                           loop, and a retryable failure RESUMES it by
+                           retry_mode (the request that failed, sent again)
+                           or RESTARTS it (billed_responses takes the
+                           abandoned responses; opening messages; container
+                           cleared); in_request marks a request's own
+                           failure, the only kind a resume sends again;
+                           dimension_retry carries mode
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
   research/retry_policy.py [PORT: verification/retry_policy.py realtime subset]
+                           + one Build-a-Spec addition (cost Tier 1, Chunk 5):
+                           retry_mode(progressed, next_attempt, attempts) →
+                           RETRY_MODE_RESUME / RETRY_MODE_RESTART, the resume-
+                           first, restart-last rule every retry loop in both
+                           engines reads (the final attempt always restarts)
   research/resend_sanitizer.py  [PORT ≈verbatim: fetched-PDF elision; pypdf]
   research/schema.py       [PORT: structured_schemas.py research slice +
                            api_config.py web-tool builders + domain blocklist];
@@ -525,7 +540,17 @@ backend/
                            cache_control beside container — to a request
                            _is_continuation calls a resume, and to nothing
                            else; _qc_request_kwargs and the batched params
-                           never carry it
+                           never carry it. Chunk 5: _run_streaming_call hoists
+                           the conversation out of the attempt loop exactly as
+                           research does (resume by retry_mode, restart into
+                           `billed`, the budget the conversation's, in_request
+                           for a request's own failure, {prefix}_retry carries
+                           mode); _CallResult.responses is the final
+                           CONVERSATION's, which a resume carries across
+                           attempts; _BatchSeatState gains resume_attempt()
+                           (attempt += 1, everything else carried) and
+                           retry(attempts=) → the mode, read by
+                           _apply_batch_item and the refused-submission path
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
@@ -2430,6 +2455,25 @@ tests/
                            or a built-in keyword (every string literal, read
                            by the TypeScript parser, interpolations included;
                            a class list the shape check would skip fails too)
+  test_retry_resume.py     [Research/QC cost Tier 1, Chunk 5] resume, don't
+                           restart: retry_mode's whole truth table and the one
+                           function every site reads; then ONE assertion set
+                           run over research's _run_dimension and QC's
+                           _run_lens (the engines keep separate copies of the
+                           loop, so the same test over both keeps them
+                           together): the failed request sent again as it
+                           stood, the final attempt restarting fresh, no
+                           progress = restart, each response billed once,
+                           resumed retrievals still grounding, the budget the
+                           conversation's, the event's exact dicts, Chunk 4's
+                           tail riding the resend, a Stop in the resume's
+                           backoff still billing, a post-response failure
+                           restarting; the batch's two retry sites (a refused
+                           submission and an errored item both resend the
+                           same messages), its continuation budget and its
+                           final-attempt restart; and end to end, the mode in
+                           a round's log and a resumed run's retained result
+                           staying current (F3)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -2506,7 +2550,8 @@ always follows its own live ones): `dimension_started` {title,
 max_searches, max_fetches}, `dimension_activity` {kind: thinking|searching|
 fetching|writing, on change only}, `dimension_search` {query} /
 `dimension_fetch` {url} (detected live from the raw stream, chat-loop
-style), and `dimension_retry` {attempt, max_attempts, reason, backoff_s}.
+style), and `dimension_retry` {attempt, max_attempts, reason, backoff_s,
+mode: resume|restart (Research/QC cost Tier 1, Chunk 5)}.
 The `stream_end` sentinel is still exactly `{type, status}` — `status` may
 now be `superseded` when a NEWER run takes the runner over mid-stream
 (`sse_events` binds to the run token at call time, the QC shape). Every
@@ -16926,6 +16971,207 @@ change or version bump, and no release-note item (the draft line is below).
   `QCDrawer`'s batch-progress line with the same undefined
   `border-line bg-paper-2` pair. It is fixed here, along with two
   `text-danger` classes that section did not know about.
+
+## A dropped connection resumes the conversation — implemented notes (Research/QC cost Tier 1, Chunk 5)
+
+Chunk 5 of `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` (where the
+program stands is `docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`, and only
+there). **No switch**: F5's one exception. No route, SSE event type,
+dependency, env knob, project-format change, version bump or
+`release_notes.py` entry; the `{prefix}_retry` events gain one field. The
+plan's Chunk 5 **As built** carries the deviations; this section is the why
+and the traps.
+
+- **Why a retry paid twice.** Both engines built a call's conversation —
+  its messages, its responses, its container — inside the attempt loop, so
+  a retryable failure (rate limit, server error, dropped connection) after k
+  `pause_turn` continuations threw all of it away, and the next attempt paid
+  for those k continuations again from the opening request. On a large
+  research area that is $0.50–2.00 per event (the plan's §10.4); how often
+  it happens is unmeasured, and the value is removing the worst case.
+- **The rule is one function, in the ported module, disclosed.**
+  `retry_policy.retry_mode(progressed=, next_attempt=, attempts=)` returns
+  `RETRY_MODE_RESUME` when the conversation has progress and the retry about
+  to run is not the final attempt, else `RETRY_MODE_RESTART`. It sits beside
+  the policy both engines already import (research directly, Final QC via
+  `..research.retry_policy`), so research, streamed Final QC and batched
+  Final QC cannot disagree; the module docstring names it as the port's one
+  Build-a-Spec addition. The two strings are wire vocabulary (they ride the
+  events).
+- **The final attempt always restarts — that is why there is no switch.**
+  With `max_attempts` = 3 the first retry can resume and the second cannot.
+  A conversation that keeps failing once resumed still gets a clean attempt,
+  so the new path costs at most the one attempt it spent on the resume.
+  Degenerate ceilings (0 or 1 attempts, or 2 — where the only retry IS the
+  final one) never resume; the truth table is pinned.
+- **The conversation is hoisted out of the attempt loop** in
+  `_run_dimension` and `_run_streaming_call`: `messages`, `all_responses`
+  and `container_id`, with an `_opening_messages()` / `opening_messages()`
+  builder for a restart. A RESTART moves `all_responses` into the abandoned
+  pool (`billed_responses` / `billed`), rebuilds the opening messages and
+  clears the container, exactly as every retry used to; a RESUME touches
+  none of them and the loop sends the same request again.
+- **Only a request's own failure resumes** (`in_request`, not in the
+  spec's text). The flag is True exactly while `messages.stream` through
+  `get_final_message()` runs. A failure after the response arrived — the
+  resend sanitizer, parsing, research's grounding — finds the response
+  appended and the messages possibly not, so there is no request to send
+  again as it stood; the retry restarts. Both engines pass
+  `progressed = in_request and bool(all_responses)`. The batch needs no
+  flag: its failures are always a request's own (an errored result line, a
+  refused submission), so `_BatchSeatState.retry` reads progress alone.
+- **The continuation budget is `len(all_responses)`.** `while
+  len(all_responses) <= MAX` replaces `for _ in range(MAX + 1)`, so the
+  budget is the conversation's by construction: a failed request appends no
+  response, so its resend spends none, a resume earns no second allowance,
+  and a restart empties it with the conversation. The 2× search ceiling
+  already summed `all_responses`, so it spans a resume too. The batch keeps
+  its `continuations` counter, which `resume_attempt` carries.
+- **Billing: every response counted once.** A resume moves nothing; only a
+  restart moves a conversation into the abandoned pool; every terminal path
+  reports `[*billed, *all_responses]`. **The trap the hoist opened:** the
+  top-of-attempt Stop and the post-loop fallthrough read the abandoned pool
+  alone, which was right while every attempt began from nothing and would
+  have dropped a resumed conversation's spend. Both now read the pair. The
+  Stop is reachable (a Stop landing in the resume's backoff) and pinned; the
+  fallthrough is not (every attempt returns or retries, and the last one's
+  failure returns), so its change is consistency only.
+- **Grounding follows the conversation the model saw.**
+  `_CallResult.responses` is now the final CONVERSATION's — which a resume
+  carries across attempts — and research grounds from `all_responses`, so a
+  page read before the failure still grounds a citation made after the
+  resume (the "pooled across `pause_turn` continuations" rule). Only a
+  restart moves evidence to attempted-only (`attempted_search_queries` /
+  `attempted_sources`).
+- **Containers are conversation-local now.** A resumed request is the very
+  continuation that failed, so it must carry the container a pending
+  code-execution-called tool would resume in; a restart is a new
+  conversation and must not inherit one. The two engines' docstrings and
+  `restart_attempt`'s say so; errata below.
+- **Chunk 4's tail rides the resend unchanged.** It is built per request
+  from the same messages by `_is_continuation`, so a resent continuation
+  carries it exactly as the failed one did and a resent opening request
+  carries none — pinned as the resent request equalling the failed one, byte
+  for byte.
+- **Final QC's counters keep their meanings.** `api_request_count` counts
+  every request sent, the failed one and its resend both ("client API
+  requests … including retries", the Chunk 5.3 label); `model_response_count`
+  is `len(billed)`, so each response once.
+- **The batch: `resume_attempt()` beside `restart_attempt()`**, and
+  `retry(attempts=)` that applies the rule, advances the seat and returns
+  the mode — so `_apply_batch_item` (an errored result line) and the
+  refused-submission path of `_run_batch_calls` cannot apply it differently.
+  `resume_attempt` only advances `attempt`; messages, responses, container
+  and continuation count carry, so the next round submits exactly the
+  request that failed. The backoff is still read BEFORE the retry advances
+  the attempt (the Batch 1 convention). A streamed lead seat (Chunk 3) is an
+  ordinary `_run_streaming_call` and follows the streaming rule.
+- **Events.** `mode` joins all five retry-emitting sites: research's
+  `dimension_retry`, the streamed `{prefix}_retry` (lens, consolidation,
+  verifier), and the batch's two `verifier_retry` sites. The runners mirror
+  every key into traces, so a trace says which kind each retry was.
+  `frontend/src/types.ts` gains `RetryMode` and an optional `mode` on the
+  four retry members; no copy changed — "Retrying (attempt N/M)" on the
+  board, "Retrying N/M" in the Review Room and "retrying in Ns" in the agent
+  timeline are true of either mode. The activity state resets on either
+  mode, so a resumed request re-announces its phase and the card moves off
+  the retry notice.
+- **F3, for a chunk with no switch.** How a retry began is not a review
+  input: nothing reaches the input manifest, and a run whose compliance lens
+  resumed fingerprints its inputs exactly as a run that never failed
+  (pinned).
+- **One knowing test change the spec's inventory missed.**
+  `test_failed_fetch_and_abandoned_retry_cannot_ground_final_payload`
+  (`tests/test_qc_audit_report.py`) scripted its abandonment as pause →
+  failure → success; that retry now resumes, so the evidence is the model's
+  and grounds. One more failure makes the final attempt's restart the
+  abandonment, and every assertion stands. The five the spec lists changed
+  as it says: the two container tests renamed
+  `…_a_resume_keeps_it_and_a_restart_drops_it` (pause → pause → failure →
+  failure → success), and the three exact-dict retry tests gained
+  `"mode": "restart"` and nothing else.
+- **The trust dossier's Research card** gains one clause: the first retry
+  picks the conversation up at the step that failed, the last starts it
+  fresh.
+- **Test traps.** (1) The research and QC tests are ONE assertion set,
+  parametrized over `_run_dimension` and `_run_lens` (the web-tooled
+  compliance lens): the engines keep separate copies of the loop, so the
+  same test over both is what keeps them together. (2) `_pause()` pairs
+  its search (`server_tool_use` then its result, the shape the API sends),
+  so the resend sanitizer keeps it on every later request. (3) The batch's
+  budget test pauses without searching: a verifier seat's 2× search ceiling
+  (16) is below the 17 pauses the budget allows, and would end the seat
+  first. (4) The batch fake answers `_one_finding_scripts`' verdict turns in
+  submission order across both seats, so seat 2's verdict sits second in
+  the list. (5) A post-response failure is modelled by making the resend
+  sanitizer raise a retryable class once — nothing real does, but it is
+  what occupies that window.
+- **Tests: `tests/test_retry_resume.py` (28)**, plus the knowing changes
+  above. Revert matrix — each mechanism reverted in place, one at a time,
+  restored from the exact text read, and the tree checked clean afterwards
+  (the new file and the research, live-events, batch-verification,
+  warm-lead, continuation-cache, research-rounds, verifier-v3 and stop
+  suites run each time):
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | rule: the final-attempt clause dropped | 8 |
+  | rule: the progress clause dropped | 8 |
+  | research: the rule never consulted (always restart) | 10 |
+  | research: a post-response failure resumes (`in_request` ignored) | 1 |
+  | research: the rule read with the current attempt, not the next | 3 |
+  | research: a restart keeps the container | 2 |
+  | research: a restart keeps the messages | 3 |
+  | research: a restart drops the abandoned spend | 1 |
+  | research: the continuation budget per attempt | 1 |
+  | research: the top-of-attempt Stop bills restarts only | 1 |
+  | research: the event names no mode | 12 |
+  | research: the unreachable fallthrough bills restarts only | 0 — by design, above |
+  | QC: the rule never consulted (always restart) | 10 |
+  | QC: a post-response failure resumes (`in_request` ignored) | 1 |
+  | QC: a restart keeps the container | 2 |
+  | QC: a restart keeps the messages | 3 |
+  | QC: a restart drops the abandoned spend | 1 |
+  | QC: the continuation budget per attempt | 1 |
+  | QC: the top-of-attempt Stop bills restarts only | 1 |
+  | QC: the event names no mode | 14 |
+  | QC: the unreachable fallthrough bills restarts only | 0 — by design, above |
+  | batch: an errored item always restarts | 3 |
+  | batch: a refused submission always restarts | 1 |
+  | batch: a resume resets the continuation count | 1 |
+  | batch: a resume drops the container | 2 |
+  | batch: the rule read with the current attempt, not the next | 1 |
+  | batch: an errored item's event names no mode | 3 |
+  | batch: a refused submission's event names no mode | 1 |
+
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Server-tool caller mode — implemented notes (direct callers)", Chunk
+     1.2's bullet: each engine kept an **attempt-local** `container_id`, and
+     rule (2) put its reset "inside the retry loop … — a retry abandons the
+     conversation". It is conversation-local now: a resumed request carries
+     it, and only a restart clears it.
+  2. "A failed research round is still a paid round" (Chunk 4.3): "a
+     retryable death abandons its attempt's conversation but not its bill".
+     Only a restart abandons one now; a resumed conversation carries on, and
+     its spend is counted once, inside it.
+  3. "Final QC phase 2 is batched" (v1.12.0): each result "queues a retry
+     on a fresh conversation (a retry abandons its attempt's conversation and
+     container, exactly as streaming does)". A retry resumes first and
+     restarts last, exactly as streaming does now.
+  4. "The Final QC batch phase cannot hang" (Batch 1): the seat attempt is
+     read "BEFORE `restart_attempt()` advances it". It is read before
+     `retry()` advances it, which resumes or restarts.
+  5. The audit-grade report extension ("Complete lens records"): "Accepted
+     final-attempt queries/sources are the only records eligible for
+     grounding". They are the final CONVERSATION's, which a resume carries
+     across attempts; `attempted_*` still preserve every billed attempt,
+     including a conversation a restart abandoned.
+  6. "Final QC Review Room — live three-stage contract": "retry carries
+     attempt, ceiling, observable reason and backoff". It carries `mode`
+     too. The Event protocol section's `dimension_retry` payload is
+     reference, not notes, and was updated in place, as were the Layout
+     entries for the retry policy, the two engines and the new test file.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

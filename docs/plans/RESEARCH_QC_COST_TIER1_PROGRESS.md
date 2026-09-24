@@ -9,6 +9,13 @@ description or a commit message is not. The spec is
 A new session starts from [How to start a session](#how-to-start-a-session)
 and then follows the [Session procedure](#session-procedure) step by step.
 
+**The program is complete** (Chunk 6, the closeout, 2026-09-24). Every
+chunk's code is on `master`. Two switches still ship off, each with its flip
+owed after a measured run, and the release notes are owed to the next
+release. [After the program](#after-the-program) says what is left and how
+to do it. A session that applies the owed flips starts there, not from the
+Session procedure.
+
 ## Status
 
 | Chunk | Title | Status | PR | Merge commit | Notes |
@@ -18,7 +25,7 @@ and then follows the [Session procedure](#session-procedure) step by step.
 | 2 | Staggered launch for calls that share a cached prefix | **complete** | PR #210 | `ed75f7a` | ships on (`BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`, 45 s); M2 after merge measures it and gates Chunk 3 |
 | 3 | Warm the batched verifier cache with a streamed lead seat | **complete** | PR #213 | `d6f2c32` | built at the gate's fallback minimums of 20 (no M2; O2); ships switched off (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`); the default flips on an M3 pass |
 | 4 | Cache `pause_turn` continuations | **complete** | PR #215 | `f3aaf88` | ships switched off (`BUILD_A_SPEC_CONTINUATION_CACHE`); every streamed research and Final QC call that resumes a pause carries the tail, batches never; the default flips on an M3 pass |
-| 5 | Resume, don't restart, on a transient failure | **complete** | PR #219 | | no switch (F5's exception): the first retry resumes a conversation that has a completed response, the final attempt always restarts; research, streamed and batched Final QC read one rule (`retry_mode`); M3 is still owed for Chunks 3 and 4 |
+| 5 | Resume, don't restart, on a transient failure | **complete** | PR #219 | `02b2985` | no switch (F5's exception): the first retry resumes a conversation that has a completed response, the final attempt always restarts; research, streamed and batched Final QC read one rule (`retry_mode`); M3 is still owed for Chunks 3 and 4 |
 | 6 | Closeout | not started | | | |
 
 ### What each status means
@@ -38,6 +45,104 @@ and then follows the [Session procedure](#session-procedure) step by step.
 
 An open pull request is not a status. The reconcile step finds it on
 GitHub.
+
+## After the program
+
+The closeout (Chunk 6) ended the chunk sequence on 2026-09-24. There is no
+Chunk 7, and the Session procedure has nothing left to pick. Four things are
+still owed. None of them is code a session can write on its own, because
+each one waits on a real run.
+
+| What | Why it is owed | Who | Cost |
+|---|---|---|---|
+| **M3**, the trial (the plan's §8) | It is the only thing that can decide the two flips below. | Abraham | only the runs themselves |
+| **Chunk 4's flip** (`BUILD_A_SPEC_CONTINUATION_CACHE`) | It ships off, and flips only on an M3 pass of its own test (the plan, Chunk 4 → "M3 decides the flip"). | a flip session | — |
+| **Chunk 3's flip** (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) | It ships off, and flips only on an M3 pass of its own test (the plan, Chunk 3 → "M3 decides the flip"). | a flip session | — |
+| **The release notes** | Whichever release next ships from `master` owes the plan's §7 "Release-note draft (Tier 1)". | that release's closeout | — |
+
+**Two free baselines make M3's verdict sharper, and both read files you
+already have.**
+- **M1**, the research profiler on projects researched so far (every one of
+  them was researched with the switch off), is what Chunk 4's test compares
+  against. Without it the test has no "lower uncached share than M1".
+- **M2**, the QC profiler on your newest Final QC JSON export, gives Chunk
+  3's test its baseline h₀ (0.88 is assumed without it). It also closes step
+  2 of `docs/review-results/2026-09-09/EXECUTION_RECORD.md`.
+
+**M3** then needs one Research round and one Final QC made from a source
+checkout with both switches on (the plan's §8 has the commands). Chunk 3's
+half says nothing unless that Final QC had a group of at least 20 verifier
+seats sharing one copy of the section. The QC profiler's `seat:list-price`
+row says whether a lead ran.
+
+**M4** comes last: the same two profilers on new runs, once the flips are in
+normal use. It confirms the saving. It is also Chunk 3's standing check: if a
+later M4 no longer passes Chunk 3's M3 test, its default goes back off (the
+plan's Chunk 6, step 3).
+
+### Starting a flip session
+
+Once M3 has been run, give a new session this prompt, with the
+measurements filled in:
+
+```text
+Apply the owed flips of the "Research and Final QC cost, Tier 1" program in
+this repository.
+
+Read these three files completely before touching code:
+1. CLAUDE.md
+2. docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md
+3. docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md
+
+The program is complete. Follow the progress file's "After the program"
+section, not its Session procedure. In short: record the measurements;
+apply Chunk 4's and Chunk 3's own "M3 decides the flip" tests to them; flip
+each chunk whose test passes, each as its own commit; record the decision
+either way; open one pull request and drive it to merge.
+
+Measurements (M3's research and Final QC profiler output; M1 and M2 if you
+have them; the error text of anything that failed):
+<paste the profiler output here>
+```
+
+### The flip session's steps
+
+1. **Read** the three files. CLAUDE.md is binding. The spec is the plan's
+   Chunk 3 and Chunk 4 "Flip" and "M3 decides the flip" sections.
+2. **Reconcile.** Run `git fetch origin master`.
+   - If an open pull request's title starts with `Research/QC cost Tier 1`,
+     stop and tell Abraham.
+   - Fill in any blank merge commit in the Status table. Chunk 6's is blank
+     at the close.
+3. **Record** the measurements under [Measurements](#measurements), dated,
+   each saying which build it was taken on.
+4. **Decide each chunk separately, by its own test.** Record each decision,
+   with its numbers, as the next row in [Owner decisions](#owner-decisions).
+   If the prompt carries no M3, or a chunk's half of it is missing (Chunk
+   3's needs a `seat:list-price` row), change nothing for that chunk, and say
+   which run is still needed.
+5. **Flip each chunk that passed, as its own commit.** Its "Flip" section
+   lists the parts. In full:
+   - its default in `backend/settings.py`;
+   - `test_..._ships_switched_off` replaced by `..._ships_switched_on`, still
+     read from the source with `ast`;
+   - its README Configuration row and subsection;
+   - the §7 block, where its item is no longer conditional;
+   - an implemented-notes section in CLAUDE.md, with an erratum for the
+     chunk's "It ships switched off";
+   - the trust dossier's Research and Final QC cards, re-read against the new
+     default;
+   - `docs/plans/README.md`'s "flip owed" line.
+6. **For a chunk that failed,** leave the default off. Record the numbers
+   and the likely cause (the plan's "Fail" bullet). Say whether the flip is
+   still owed (a larger run could pass it) or abandoned.
+7. **Verify, then open one pull request.**
+   - Verify as the Session procedure's step 5 says.
+   - Title it `Research/QC cost Tier 1 — flip: <what flipped, or "none">`.
+   - No version bump, `backend/release_notes.py` entry or tag (the plan's
+     F7).
+   - Drive it to merge. Abraham merges. After the merge there is no next
+     prompt, unless a flip is still owed.
 
 ## How to start a session
 
@@ -193,13 +298,20 @@ Two exceptions:
 | Chunk 3 | nothing new. M3, after Chunk 4, tests it: Chunk 3 ships switched off. | — |
 | Chunk 4 | **M3**: from a source checkout, run one Research round and one Final QC with the new switches on. Paste both profilers' output, plus the error text of anything that failed. Chunks 3 and 4 each flip their default only on a pass of their own test. | only the runs themselves |
 | Chunk 5 | M3, if it has not been done yet. | as above |
-| Chunk 6 | nothing. The program is complete. | — |
+| Chunk 6 | nothing: the program is complete. M3 is still owed for the two switches that ship off, and the flips it decides are applied by a flip session ([After the program](#after-the-program)). | only the runs themselves |
 
 The exact commands for M1–M4 are in the plan's §8.
 
 ## Measurements
 
 Each entry is dated, and says which chunk's build it was taken on.
+
+**None had been recorded at the closeout (2026-09-24).** Every chunk's
+session came with the placeholder unfilled, so every gate took its
+no-measurement branch (O2, O3). So no effect of this program has been
+measured yet, Chunk 2's included, which ships on.
+[After the program](#after-the-program) says what each measurement is still
+good for.
 
 ### M1 — research baseline
 
@@ -223,6 +335,7 @@ Each entry is dated, and says which chunk's build it was taken on.
 |---|---|---|
 | O1 | 2026-09-23 | Build Tier 1: the four levers that change no quality, plus measurement. One chunk per session. Agents mark progress here, and give Abraham the next session's prompt after each merge. |
 | O2 | 2026-09-23 | **Chunk 3's first gate (build or skip), applied by the Chunk 3 session as the plan directs.** No M2 is recorded: the session's prompt left the measurements placeholder unfilled, which is read as "none". The plan's "No M2" branch therefore holds: **build**, with both lineage minimums at the fallback of 20 seats (`_WARM_LEAD_MIN_SEATS_WEB`, `_WARM_LEAD_MIN_SEATS_NO_WEB`), and ship **switched off**. The second gate is unchanged: the default flips only on an M3 pass of Chunk 3's own test (the plan, Chunk 3 "Flip"). |
+| O3 | 2026-09-24 | **Chunk 6's flip step, applied by the closeout session as the plan directs.** No M3 is recorded: the session's prompt left the measurements placeholder unfilled, which is read as "none", and M1, M2 and M4 are empty too. So neither default flips. Chunk 3 (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) and Chunk 4 (`BUILD_A_SPEC_CONTINUATION_CACHE`) both ship **off**, each with its flip owed after an M3 pass of its own test. This is recorded in `docs/plans/README.md` and under [After the program](#after-the-program). Step 3 (revisit Chunk 3 against M4) does not apply: its default is off, and there is no M4. |
 
 ## Done checklist (every chunk)
 

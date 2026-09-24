@@ -1577,7 +1577,103 @@ time. 27 of 29 rows are red; the two at 0 are the unreachable fallthroughs
 
 #### As built
 
-*(Filled in by the session that builds this chunk.)*
+Built on 2026-09-24 from `master` at `02b2985`. No measurements came with
+the session: the prompt's placeholder was left unfilled, read as "none", as
+every earlier session read it. **The closeout changed no code.** Its files
+are the progress file, this plan, README, CLAUDE.md and
+`docs/plans/README.md`.
+
+The ten steps, as they went:
+
+1. **Reconcile and backfill.** Chunk 5's merge commit, `02b2985`, is filled
+   in. No open pull request carried the program's title (#217 and #218 were
+   open, and unrelated). Chunk 6's own merge commit stays blank, because no
+   later chunk session exists to fill it; the flip session's step 2 does.
+2. **Flip, if owed.** No M3 is recorded, so neither default flips. That is
+   recorded three places: owner decision O3; `docs/plans/README.md` ("Chunk
+   3 shipped off; flip owed after M3. Chunk 4 shipped off; flip owed after
+   M3."); and the progress file's new "After the program".
+3. **Revisit Chunk 3 against M4.** Does not apply: its default is off, and
+   there is no M4.
+4. **Record the after-numbers.** There are none. The progress file's
+   Measurements section says so, dated.
+5. **Consolidate §7.** "Release-note draft (Tier 1)" now opens §7 (see
+   deviation 2).
+6. **README.** The section is retitled "## Research and Final QC cost
+   (Tier 1)", and every subsection is kept. Only the intro changed (see
+   deviation 5).
+7. **CLAUDE.md.** One closeout section, "Research and Final QC cost, Tier 1,
+   as shipped", with two errata (see deviation 6).
+8. **`docs/plans/README.md`.** The entry is marked **complete** in place,
+   the compaction precedent. It names the two owed flips and the owed
+   release-note draft.
+9. **No version bump.** The prompt asked for no release. v1.20.0 is still
+   the latest published release (checked through the GitHub Releases API),
+   and `settings.VERSION` is 1.21.0, unreleased.
+10. **After merge.** Abraham is told the program is complete, and given the
+    follow-ups he owns.
+
+Deviations and additions, each recorded because the spec text is not
+rewritten:
+
+1. **"After the program", with a flip-session prompt.** The spec says there
+   is no next-session prompt, meaning there is no Chunk 7. But two flips are
+   owed, and the Session procedure cannot reach them, because every row is
+   complete. The progress file now has an "After the program" section:
+   - what is still owed, and who owes it;
+   - the two free baselines that sharpen M3's verdict (M1 is what Chunk 4's
+     test compares against; M2 gives Chunk 3's test its h₀);
+   - the prompt that starts a flip session once M3 has been run;
+   - the flip session's seven steps, built from the Chunk 3 and Chunk 4
+     "Flip" sections, Chunk 4's As built 13 (re-read the trust dossier when
+     a default moves) and the Session procedure's verify-and-PR rules.
+
+   There is still no next *chunk* prompt. The "What Abraham does between
+   sessions" row for Chunk 6 now points at that section instead of saying
+   there is nothing.
+2. **The per-chunk drafts are kept, under a subheading.** The spec text is
+   append-only, so the consolidated block opens §7 and says it supersedes
+   the drafts under "The per-chunk drafts". The block is shaped as one
+   `ReleaseSection`: a section title, then numbered items whose bold line is
+   the `ReleaseItem.title` and whose paragraph is its `body`. It adds three
+   things the drafts did not have: which release owes it (none of it is in a
+   1.21.0 tagged at `a273ab7`), each conditional item marked by the setting
+   that decides it, and one optional summary sentence. The item wording is
+   the chunks' own, unchanged. Each draft was re-checked against the final
+   code, and all four still describe it.
+3. **O3.** The flip step's outcome is recorded as an owner-decision row,
+   because O2 is the precedent: a gate the plan directs, applied by a
+   session.
+4. **Flip readiness, re-measured on the final tree.** Pending: re-run
+   with both switches on before the pull request opens.
+5. **The README intro now says what is true at the close.** The old intro
+   said every change "is measured on real saved files before it is
+   trusted". That is F8's intent, not what happened: nothing was measured,
+   and Chunks 2 and 5 are on without a measurement (Chunk 2 under F5's
+   documented-guarantee branch, Chunk 5 because it has no switch). The new
+   intro says the program is complete and that no release carries it yet.
+   It says what a user sees, that no saving has been measured, and why
+   Chunks 3 and 4 wait. The rest of the section is unchanged.
+6. **The errata sweep** read every earlier CLAUDE.md section the program
+   touched, the README outside the program's section, Help, the trust
+   dossier and the QC drawer's copy. It found two statements the program
+   made stale that no chunk's errata covered, and both are errata in the
+   closeout section:
+   - Chunk 3's "The refused-submission retry restarts only the seats that
+     were submitted". Since Chunk 5, a seat with progress resumes.
+   - Chunk 2's "the progress file records it". M2 was never recorded.
+
+   Every other stale statement had already been corrected by the chunk that
+   made it stale. The trust dossier's Research and Final QC cards describe
+   the shipped defaults as they are, so the dossier is unchanged.
+7. **Found in passing, not done:** the Final QC launch confirmation's
+   hard-coded "Opus 5" (CLAUDE.md's closeout section). It is outside the
+   program, from PR #177, so it is left for its own change. Queuing it as a
+   suggested task timed out twice.
+8. **§2's "today" is the program's starting point.** §2.3–§2.4 describe the
+   code at `cef31d0`. Chunks 2–5 changed every behaviour they name, and each
+   chunk's As built records how. Section 2 is left as written: it is the
+   evidence the chunks were designed from.
 
 ---
 
@@ -1586,6 +1682,78 @@ time. 27 of 29 rows are red; the two at 0 are the unreachable fallthroughs
 Written for a spec author, not for someone reading `CLAUDE.md`. Chunk 6
 consolidates them. A draft marked *(conditional)* ships only if its switch
 is on in the release that carries it.
+
+### Release-note draft (Tier 1)
+
+Consolidated by the closeout (Chunk 6, 2026-09-24) from the per-chunk drafts
+under the next heading, which it supersedes. **This is the block a release
+lifts.** It is one `ReleaseSection` for `backend/release_notes.py`: the
+section title, then one `ReleaseItem` per numbered entry, the bold line as
+its `title` and the paragraph under it as its `body`. The wording is the
+chunks' own, unchanged. Chunk 1 is a developer tool and has no note.
+
+- **Which release owes it.** Whichever release next ships from `master`.
+  None of this program is in a 1.21.0 tagged at the project-workspace
+  closeout commit (`a273ab7`), so that release needs none of it. A release
+  cut from `master` at or after `02b2985` (Chunk 5's merge) carries all of
+  it.
+- **Which items.** Items 1 and 2 go in any such release: Chunk 2's
+  staggered launch is on by default, and Chunk 5 has no switch. Items 3 and
+  4 are *(conditional)*. Include each only if its switch defaults on in the
+  `backend/settings.py` being released. At the closeout both are off, and
+  each flip is owed after an M3 pass of that chunk's own test (the progress
+  file's "After the program").
+- **Where it goes.** If the release's entry already has a section on cost
+  (1.21.0's has "What a review costs"), the items can join it instead.
+  Keep them in this order either way, so leaving out the conditional ones
+  leaves a clean list.
+
+**Section title:** What research and Final QC cost
+
+1. **Final QC's first stage reuses what it already paid for**
+
+   Four of Final QC's five reviewers read the same copy of your section.
+   They used to start at the same moment, so each paid to store its own
+   copy. Now one starts a few seconds ahead and the other three reuse its
+   copy. The step that groups duplicate findings does the same when it has
+   several groups to check. The reviewers, their instructions and what they
+   find are unchanged, and a Final QC result you already have stays current;
+   the review simply starts a few seconds later.
+
+2. **A dropped connection no longer starts a research area over**
+
+   A brief rate limit or connection failure used to throw away every step a
+   research area or reviewer had already finished, and paid for, and start
+   it from the top. The app now retries the step that failed and carries on.
+   If that retry fails too, the last attempt still starts fresh.
+
+3. **Batched verification reuses what it already paid for** —
+   *(conditional: only if `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` defaults on in
+   the released build)*
+
+   When many of Final QC's verifying reviewers work from the same copy of
+   your section, one of them now starts first, at full price, so the rest of
+   the batch can read its copy instead of each storing their own. The report
+   lists that reviewer at full price, so the cost it shows stays exact.
+
+4. **Long research stops paying twice for what it already read** —
+   *(conditional: only if `BUILD_A_SPEC_CONTINUATION_CACHE` defaults on in
+   the released build)*
+
+   A research area that searches the web in several steps used to pay full
+   price, at every step, to re-send everything it had already found. It now
+   reuses its own cached copy. The code-compliance review gets the same
+   benefit. The findings, sources and limits are unchanged.
+
+**For the release's summary paragraph**, if it mentions this program, one
+sentence covers the two unconditional items: "Research and Final QC pay less
+for the same work: four of Final QC's reviewers now share one stored copy of
+your section instead of each paying for its own, and a dropped connection no
+longer starts a research area over."
+
+### The per-chunk drafts
+
+Each chunk's own draft, as it wrote it. The block above supersedes them.
 
 - **Chunk 1.** None; a developer tool.
 - **Chunk 2 — Final QC's first stage reuses what it already paid for.**

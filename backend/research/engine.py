@@ -42,6 +42,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Callable
 
 from .. import settings
@@ -1845,7 +1846,11 @@ def _dimension_user_content(shared: str, task: str) -> list[dict[str, Any]]:
     the other two, inside the limit of four). All three take the default
     5-minute TTL, so the provider's non-increasing-TTL rule is trivially
     satisfied — do not give this one a longer TTL than the system block
-    without moving that one too.
+    without moving that one too. The fourth slot is spoken for: with
+    ``settings.CONTINUATION_CACHE`` on, a continuation request carries a
+    top-level automatic breakpoint (:data:`_CONTINUATION_CACHE_CONTROL`),
+    so a fourth EXPLICIT marker anywhere in this request would be a 400 on
+    every resume.
     """
     return [
         {
@@ -1855,6 +1860,53 @@ def _dimension_user_content(shared: str, task: str) -> list[dict[str, Any]]:
         },
         {"type": "text", "text": task},
     ]
+
+
+# The continuation tail (Research/QC cost Tier 1, Chunk 4; the switch is
+# ``settings.CONTINUATION_CACHE``). Copied into ``qc.engine`` rather than
+# imported — the two engines keep separate copies of what they share.
+#
+# A ``pause_turn`` continuation re-sends the whole conversation so far, and
+# nothing after block 0 carries a breakpoint, so block 1 and every re-sent
+# assistant turn — thinking, search results, fetched pages — bill as uncached
+# input on every resume. The API already wrote 5-minute entries after the
+# previous request's server-tool results (it does so whenever a request uses
+# caching at all); a top-level automatic breakpoint lands on the
+# continuation's last block and walks back up to 20 positions to reach the
+# last such entry, where no breakpoint could before. MEASURED BY M3, not
+# assumed: whether the re-sent content matches those entries byte for byte
+# is the provider's business. If it does not, each continuation pays the
+# 5-minute write premium on what it re-sends (+25% on that part) instead —
+# which M3's flip rule catches (writes growing faster than reads).
+#
+# Only on a CONTINUATION. A first request's tail is the unique brief, so a
+# breakpoint there is a pure write surcharge (the documented "prompt ends in
+# unique per-request content" case). The shortest TTL on purpose: the reader
+# is the next continuation, seconds later, and the 5-minute entry after the
+# 5-minute markers above keeps TTLs non-increasing through the request. A
+# continuation's last block is re-sent paused content, which never carries
+# an explicit marker, so the documented 400 for an explicit marker on the
+# last block with a different TTL cannot arise, and the three explicit
+# markers leave this the fourth slot. A top-level request argument beside
+# ``container``, never inside a content block (the plan's F2); a fresh dict
+# per request, never this object.
+_CONTINUATION_CACHE_CONTROL: Mapping[str, str] = MappingProxyType(
+    {"type": "ephemeral"}
+)
+
+
+def _is_continuation(messages: list) -> bool:
+    """True for a request that resumes a paused turn.
+
+    The ``pause_turn`` contract: a continuation re-sends the paused
+    assistant content with no synthetic user turn after it, so its
+    conversation ends on the assistant. A first request ends on the user.
+    """
+    if not messages:
+        return False
+    last = messages[-1]
+    role = last.get("role") if isinstance(last, Mapping) else getattr(last, "role", None)
+    return role == "assistant"
 
 
 # ---------------------------------------------------------------------------
@@ -2120,6 +2172,7 @@ def _run_dimension(
     established_facts: str = "",
     reference_documents: str = "",
     project_facts: str = "",
+    continuation_cache: bool = False,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _DimensionOutcome:
@@ -2142,6 +2195,12 @@ def _run_dimension(
     spending on work nobody will see. A call already in flight is not
     interrupted mid-stream — it finishes naturally and its outcome is
     discarded by the caller.
+
+    ``continuation_cache`` (``settings.CONTINUATION_CACHE``, pinned per round
+    by the caller) adds the continuation tail
+    (:data:`_CONTINUATION_CACHE_CONTROL`) to every request that resumes a
+    paused turn, and to nothing else. Off — the default for a direct caller
+    — every request is exactly what it always was.
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
@@ -2282,6 +2341,12 @@ def _run_dimension(
                 stream_kwargs = dict(request_kwargs)
                 if container_id:
                     stream_kwargs["container"] = container_id
+                if continuation_cache and _is_continuation(messages):
+                    # The continuation tail: beside the container, never in
+                    # a block, and only on a resume (the constant says why).
+                    stream_kwargs["cache_control"] = dict(
+                        _CONTINUATION_CACHE_CONTROL
+                    )
                 with client.messages.stream(
                     messages=messages, **stream_kwargs
                 ) as stream:
@@ -2495,6 +2560,7 @@ def run_requirements_research(
     reference_docs: list[ReferenceDoc] | None = None,
     section_label: str = "",
     project_facts: list[ProjectFact] | None = None,
+    continuation_cache: bool | None = None,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> RequirementsProfile:
@@ -2528,6 +2594,13 @@ def run_requirements_research(
     before, and so does a profile that researched a DIFFERENT project
     (:func:`established_facts_for`).
 
+    ``continuation_cache`` gives each dimension's ``pause_turn``
+    continuations a top-level automatic cache breakpoint (the plan's Chunk 4;
+    :data:`_CONTINUATION_CACHE_CONTROL` says why). ``None`` reads
+    ``settings.CONTINUATION_CACHE``, pinned ONCE for the round so every
+    dimension resumes the same way whatever the environment does mid-run. It
+    changes how a resume is cached, never what any dimension is asked.
+
     ``event_sink`` receives progress dicts: ``research_started`` (with the
     id→title roster), then live per-worker activity as it happens
     (``dimension_started`` / ``dimension_activity`` / ``dimension_search``
@@ -2560,6 +2633,12 @@ def run_requirements_research(
     stamped_at = current_datetime()
     today_block = date_context_block(stamped_at)
     research_date = current_date_iso(stamped_at)
+    # Pinned beside the clock, and for the same reason: one round, one answer.
+    continuation_cache = (
+        settings.CONTINUATION_CACHE
+        if continuation_cache is None
+        else bool(continuation_cache)
+    )
 
     # Echo the parsed location the moment research starts: a typo'd city
     # must be visible before spend accumulates.
@@ -2625,6 +2704,7 @@ def run_requirements_research(
                 ),
                 reference_documents=reference_block,
                 project_facts=facts_block,
+                continuation_cache=continuation_cache,
                 event_sink=event_sink,
                 should_stop=should_stop,
             ): dimension

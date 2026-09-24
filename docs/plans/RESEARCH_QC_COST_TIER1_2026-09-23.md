@@ -1183,7 +1183,114 @@ a boolean, **default off in this chunk**.
 
 #### As built
 
-*(Filled in by the session that builds this chunk.)*
+Built on 2026-09-23 from `master` at `d6f2c32`. **No gate applies to the
+build**; the chunk ships **switched off**, as specified, and its default
+flips only on an M3 pass of the rule above. No measurements came with the
+session (the prompt's placeholder was left unfilled, read as "none"), so
+nothing was added to the progress file's Measurements.
+
+Files: `backend/settings.py`, `backend/research/engine.py`,
+`backend/qc/engine.py`, the new `tests/test_continuation_cache.py`, new
+cases in `tests/test_research_engine.py` and `tests/test_qc_live_events.py`
+(plus one knowing helper change there), README, CLAUDE.md and
+`docs/RELEASE_WINDOWS.md`.
+
+Deviations and additions, each recorded because the spec text is not
+rewritten:
+
+1. **The switch is pinned per round and per run**, the Chunks 2 and 3
+   precedent: `run_requirements_research(continuation_cache=)` and
+   `run_final_qc(continuation_cache=)` take `None` to mean the setting and
+   read it once — research beside the clock, Final QC beside the other
+   switches — so every dimension, lens, seat and grouping call of one run
+   resumes the same way whatever the environment does mid-run.
+   `_run_dimension` and `_run_streaming_call` default to off for a direct
+   caller.
+2. **Every streamed QC call gets the tail, not only lenses and seats**,
+   because they all resume through `_run_streaming_call`: the lenses, the
+   grouping calls (`_consolidate_candidates` → `_run_consolidation_call`),
+   the streamed seats, and Chunk 3's leads (`_run_batch_calls` hands the
+   switch to its leads ONLY; the batch builder never adds it). In practice
+   only a call carrying web tools can pause — research dimensions,
+   `code_compliance` and its seats — so the grouping call's wiring is
+   uniformity, not a saving; a test pins it anyway, so no future call can
+   resume differently from the rest.
+3. **The constant is read-only and each request gets a copy.**
+   `_CONTINUATION_CACHE_CONTROL` is a `MappingProxyType`, and each request
+   gets `dict(_CONTINUATION_CACHE_CONTROL)`: the SDK JSON-serializes the
+   argument, which a mappingproxy is not, and one shared dict would let one
+   request's mutation reach the next. A mappingproxy compares equal to a
+   dict, so the tests pin `type(...) is dict` as well as the value.
+4. **`_is_continuation(messages)`** is the spec's condition, one helper
+   per engine (copied, not imported): the last message's role is
+   `assistant`, read off a dict or an SDK object. An empty list is not a
+   continuation.
+5. **SDK floor: no change.** `requirements.txt` allows `anthropic>=1.0`.
+   1.0.0 was installed in a scratch venv and a `messages.stream(...,
+   cache_control={"type": "ephemeral"}, container="cont_1")` call against a
+   mock transport put both keys, as given, in the request body.
+6. **The QC pair is one test each for both calls the spec names.**
+   `test_a_qc_continuation_carries_the_automatic_breakpoint_when_on` and
+   `test_the_switch_off_sends_todays_qc_requests_exactly` (in
+   `tests/test_qc_live_events.py`) each run a compliance lens that pauses
+   twice and a streamed web-lineage seat that pauses once, asserting the
+   lens's 5-minute markers and the seat's `1h`/`1h`/`1h` markers beside the
+   5-minute tail. The spec's cross-engine tests live in the new
+   `tests/test_continuation_cache.py`, under the names the spec gives.
+7. **Tests beyond the spec:** the guard refusing the shapes it exists to
+   catch — the three the provider rejects (a 1-hour tail after 5-minute
+   markers, an explicit marker on the last block beside the tail, a fifth
+   breakpoint) and a tail on a first request (accepted, but a pure write
+   surcharge) — so the guard itself is proven, not only obeyed; a
+   streamed lead resuming with the tail while its batch carries none; a
+   paused grouping call resuming with it; the setting reaching a research
+   round and a Final QC run; and `test_continuation_cache_ships_switched_off`
+   (the default read from the source with `ast`, the page-trim pin's idiom;
+   the flip replaces it with `..._ships_switched_on`).
+8. **F3 runs on both verifier transports.** The transport IS a manifest
+   input (`configuration.batch_verification`) and the staleness check
+   rebuilds with the live setting, so each run is compared under the
+   transport it used; only the continuation switch moves.
+9. **One knowing test-helper change:** `tests/test_qc_live_events.py`'s
+   `_run_client` gained `continuation_cache=` (default `None`, which reads
+   the setting — off), so the new QC tests can drive the switch. Every
+   existing caller is unchanged.
+10. **Kept green, unchanged:**
+    `test_qc_requests_cache_the_shared_prefix_across_the_whole_fan_out`,
+    `test_the_research_request_caches_the_shared_half`, and the reference-
+    and facts-visibility layout tests. The first's comment ("Every
+    breakpoint in one request must carry the SAME ttl") is left as it is:
+    it checks the explicit markers of first requests, of which it is still
+    true.
+11. **Comments corrected as point 7 asks:** `_cache_control`'s docstring
+    and the comment opening `_run_streaming_call` now say every *explicit*
+    marker, and name the tail as the one shorter-lived breakpoint the
+    ordering rule allows; the NOTE above `_qc_request_kwargs` is rewritten;
+    `_dimension_user_content`'s docstring says the fourth slot is the
+    tail's, so a fourth explicit marker would be a 400 on every resume.
+12. **The guard ran once over the whole suite**, beyond the five scenarios
+    `test_no_request_exceeds_four_breakpoints` captures: a scratch pytest
+    plugin (not committed) wrapped `SequencedFakeClient.stream` and the fake
+    batch `create`, and ran the same checks on every research and QC request
+    the full suite sends, with `BUILD_A_SPEC_CONTINUATION_CACHE=1`.
+    Across the 2,782 tests that passed it checked 2,238 streamed requests (43
+    of them carrying the tail) and 904 batched requests (none carrying it),
+    with **no violation**. The same run is the flip-readiness check: with the
+    switch on, the only failure was the README knob test, which had read
+    README before its Configuration row landed mid-run; it passes on the
+    finished tree, with the switch on and off. So a later flip breaks no
+    existing suite.
+13. **The trust dossier is unchanged.** It describes the shipped defaults
+    and makes no claim about what a resume costs. The flip session should
+    re-read its research and Final QC cards when the default moves.
+14. **The release-note draft (§7) is unchanged**; it is conditional, and
+    still accurate.
+
+Revert matrix: each mechanism reverted in place, one at a time, restored
+from the exact text read, the tree checked clean after every row, with the
+new file and the research, live-events, batch-verification, warm-lead and
+warm-launch suites run each time. All 22 rows are red; the counts are in
+CLAUDE.md's implemented notes.
 
 ---
 

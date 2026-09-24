@@ -20,8 +20,10 @@ from tests.fakes import (
     block_stop_event,
     code_execution_tool_events,
     input_json_delta_event,
+    pause_response,
     qc_findings_response,
     qc_verdict_response,
+    user_text,
 )
 
 
@@ -103,6 +105,7 @@ def _run_client(
     *,
     event_sink=None,
     should_stop=lambda: False,
+    continuation_cache: bool | None = None,
 ) -> object:
     store = _store()
     return run_final_qc(
@@ -123,6 +126,10 @@ def _run_client(
         # would be pinning the wrong contract. Its own coverage lives in
         # tests/test_qc_batch_verification.py.
         batch_verification=False,
+        # None reads settings.CONTINUATION_CACHE, off by default; the
+        # continuation-tail tests below pass it explicitly (cost Tier 1,
+        # Chunk 4).
+        continuation_cache=continuation_cache,
         event_sink=event_sink or events.append,
         should_stop=should_stop,
     )
@@ -571,6 +578,165 @@ def test_qc_pause_continuation_echoes_the_container_and_a_retry_drops_it(
             "container" not in request
             for request in _lens_requests(client, lens.lens_id)
         )
+
+
+# ---------------------------------------------------------------------------
+# The continuation tail (Research/QC cost Tier 1, Chunk 4)
+# ---------------------------------------------------------------------------
+
+# Every key a streamed QC request carried before the switch existed.
+_TODAYS_QC_REQUEST_KEYS = {
+    "model",
+    "max_tokens",
+    "system",
+    "tools",
+    "thinking",
+    "output_config",
+    "messages",
+}
+_PAUSED_SEAT_TITLE = "Seat pause candidate"
+
+
+def _pausing_qc_scripts() -> dict[str, list[object]]:
+    """The compliance lens pauses twice; its finding's first seat pauses once.
+
+    Each pause ends on a pending search — the block a real pause resumes
+    from. The seat checks a compliance finding, so it carries the web tools
+    and the 1-hour markers: the "streamed web-lineage seat" of the plan.
+    """
+    scripts = _scripts(
+        code_compliance=[
+            pause_response(
+                searched_urls=["https://example.test/a"], pending_query="lens one"
+            ),
+            pause_response(
+                searched_urls=["https://example.test/b"], pending_query="lens two"
+            ),
+            qc_findings_response(
+                "code_compliance", findings=[_finding(_PAUSED_SEAT_TITLE)]
+            ),
+        ]
+    )
+    scripts[_PAUSED_SEAT_TITLE] = [
+        pause_response(
+            searched_urls=["https://example.test/seat"], pending_query="seat one"
+        ),
+        qc_verdict_response(True),
+        qc_verdict_response(True),
+    ]
+    return scripts
+
+
+def _seat_requests(client: SequencedFakeClient) -> list[dict]:
+    return [
+        request
+        for request in client.requests
+        if "[[QC-VERIFY:" in user_text(request["messages"])
+    ]
+
+
+def _explicit_ttls(request: dict) -> list[str | None]:
+    return [
+        block["cache_control"].get("ttl")
+        for block in (
+            *request["tools"],
+            *request["system"],
+            *request["messages"][0]["content"],
+        )
+        if "cache_control" in block
+    ]
+
+
+def test_a_qc_continuation_carries_the_automatic_breakpoint_when_on(
+    monkeypatch,
+) -> None:
+    """With the switch on, a paused compliance lens and a paused streamed seat
+    each resume with one top-level 5-minute breakpoint, and nothing else.
+
+    The seat is the case the ordering rule is about: its explicit markers are
+    1-hour, and the tail is 5 minutes — a shorter-lived breakpoint AFTER
+    longer-lived ones, which is allowed (the reverse would be the 400). First
+    requests carry no tail, and neither does any call that never paused.
+    """
+    import backend.qc.engine as engine
+
+    # One worker, so the paused seat is deterministically the first one.
+    monkeypatch.setattr(settings, "QC_MAX_WORKERS", 1)
+    client = SequencedFakeClient(_pausing_qc_scripts())
+    events: list[dict] = []
+    result = _run_client(client, events, continuation_cache=True)
+    assert [finding.title for finding in result.findings] == [_PAUSED_SEAT_TITLE]
+
+    lens_first, *lens_continuations = _lens_requests(client, "code_compliance")
+    assert len(lens_continuations) == 2
+    assert "cache_control" not in lens_first
+    for request in lens_continuations:
+        assert request["messages"][-1]["role"] == "assistant"
+        assert request["cache_control"] == {"type": "ephemeral"}
+        # A plain dict per request, never the module constant: the SDK
+        # serializes it as JSON, which a mappingproxy is not.
+        assert type(request["cache_control"]) is dict
+        assert request["cache_control"] is not engine._CONTINUATION_CACHE_CONTROL
+        assert set(request) - set(lens_first) == {"cache_control"}
+        # The lens's own markers keep the 5-minute default, as always.
+        assert _explicit_ttls(request) == [None, None, None]
+    assert lens_continuations[0]["cache_control"] is not lens_continuations[1][
+        "cache_control"
+    ]
+
+    seat_first, seat_continuation, second_seat = _seat_requests(client)
+    assert "cache_control" not in seat_first
+    assert "cache_control" not in second_seat
+    assert seat_continuation["messages"][-1]["role"] == "assistant"
+    assert seat_continuation["cache_control"] == {"type": "ephemeral"}
+    assert "ttl" not in seat_continuation["cache_control"]
+    assert _explicit_ttls(seat_continuation) == ["1h", "1h", "1h"]
+    assert set(seat_first) == _TODAYS_QC_REQUEST_KEYS
+
+    for lens in QC_LENSES:
+        if lens.lens_id == "code_compliance":
+            continue
+        (only,) = _lens_requests(client, lens.lens_id)
+        assert "cache_control" not in only
+
+
+def test_the_switch_off_sends_todays_qc_requests_exactly(monkeypatch) -> None:
+    """Off — the shipped default — is today's QC request, byte for byte.
+
+    The same scripted turns (built once, shared by both runs) and a pinned
+    clock: taking out the one key the switch adds to the on run gives back
+    exactly what the off run sent, and every off request carries today's
+    keys and nothing else.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    import backend.qc.engine as engine
+
+    monkeypatch.setattr(settings, "QC_MAX_WORKERS", 1)
+    fixed = datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(engine, "current_datetime", lambda *_a, **_k: fixed)
+    scripts = _pausing_qc_scripts()
+
+    def run(switch: bool) -> SequencedFakeClient:
+        client = SequencedFakeClient(scripts)
+        _run_client(client, [], continuation_cache=switch)
+        return client
+
+    off, on = run(False), run(True)
+
+    def canonical(request: dict) -> str:
+        return json.dumps(request, sort_keys=True, default=repr)
+
+    assert len(off.requests) == len(on.requests)
+    without_tail = [
+        {key: value for key, value in request.items() if key != "cache_control"}
+        for request in on.requests
+    ]
+    assert [canonical(r) for r in off.requests] == [canonical(r) for r in without_tail]
+    assert all(set(request) == _TODAYS_QC_REQUEST_KEYS for request in off.requests)
+    # Two lens continuations and one seat continuation, and nothing else.
+    assert sum("cache_control" in request for request in on.requests) == 3
 
 
 def test_failed_verifier_makes_panel_inconclusive_without_fix_validation() -> None:

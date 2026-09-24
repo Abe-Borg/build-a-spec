@@ -57,6 +57,7 @@ from concurrent.futures import (
     wait,
 )
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Callable
 
 from .. import settings
@@ -3319,13 +3320,20 @@ def _parse(all_responses: list[Any], tool_name: str, json_tag: re.Pattern) -> di
 def _cache_control(cache_ttl: str) -> dict[str, Any]:
     """One breakpoint value. A fresh dict per call — callers mutate in place.
 
-    EVERY breakpoint in a single request must be built from the same
+    EVERY explicit marker in a single request must be built from the same
     ``cache_ttl``. The API requires longer-lived cache entries to appear
     before shorter-lived ones in prompt order (tools → system → messages),
     so a request that marks tools and system at the 5-minute default and
     then the user turn at ``1h`` is rejected outright — not degraded, not
-    uncached. Keeping one TTL per request means there is no order to get
-    wrong. See ``_run_streaming_call``.
+    uncached. Keeping one TTL across the explicit markers means there is no
+    order to get wrong among them. See ``_run_streaming_call``.
+
+    The one shorter-lived breakpoint the ordering rule allows is the
+    continuation tail (:data:`_CONTINUATION_CACHE_CONTROL`, cost Tier 1
+    Chunk 4): a top-level automatic breakpoint at the shortest TTL, which
+    lands on the request's LAST block, after every explicit marker — so a
+    5-minute tail after 1-hour markers is non-increasing and allowed. The
+    reverse (a longer-lived tail after shorter markers) would be the 400.
     """
     control: dict[str, Any] = {"type": "ephemeral"}
     if cache_ttl:
@@ -3352,6 +3360,52 @@ def _qc_user_content(
         },
         {"type": "text", "text": request_suffix},
     ]
+
+
+# The continuation tail (Research/QC cost Tier 1, Chunk 4; the switch is
+# ``settings.CONTINUATION_CACHE``). A copy of ``research.engine``'s, not an
+# import — the two engines keep separate copies of what they share.
+#
+# A streamed call that pauses (the web-tooled compliance lens, or a verifier
+# seat checking one of its findings) re-sends its whole conversation on every
+# resume, and nothing after the shared block is marked, so every re-sent
+# assistant turn bills as uncached input. The API already wrote 5-minute
+# entries after the previous request's server-tool results (whenever a
+# request carries any breakpoint); a top-level automatic breakpoint lands on
+# the continuation's last block and walks back up to 20 positions to reach
+# the last such entry. MEASURED BY M3, not assumed: if the re-sent content
+# does not match those entries, each continuation pays the 5-minute write
+# premium on what it re-sends (+25% on that part), and M3's flip rule
+# catches it (writes growing faster than reads).
+#
+# Only on a CONTINUATION (a first request's tail is the unique per-call
+# suffix, where a breakpoint is a pure write surcharge). The shortest TTL
+# whatever ``cache_ttl`` the explicit markers carry: the reader is the next
+# continuation, seconds later, and a 5-minute tail after 1-hour markers is
+# the one mixed order the rule allows — a 1-hour tail would pay double for an
+# entry nothing reads after five minutes. The three explicit markers leave
+# this the fourth slot, and a continuation's last block is re-sent paused
+# content, which never carries an explicit marker, so the documented 400 for
+# a differently-timed marker on the last block cannot arise. A top-level
+# argument beside ``container``, never in a block (the plan's F2); a fresh
+# dict per request, never this object.
+_CONTINUATION_CACHE_CONTROL: Mapping[str, str] = MappingProxyType(
+    {"type": "ephemeral"}
+)
+
+
+def _is_continuation(messages: list) -> bool:
+    """True for a request that resumes a paused turn.
+
+    The ``pause_turn`` contract: a continuation re-sends the paused
+    assistant content with no synthetic user turn after it, so its
+    conversation ends on the assistant. A first request ends on the user.
+    """
+    if not messages:
+        return False
+    last = messages[-1]
+    role = last.get("role") if isinstance(last, Mapping) else getattr(last, "role", None)
+    return role == "assistant"
 
 
 def _safe_stream_json(text: str) -> dict[str, Any]:
@@ -3498,17 +3552,23 @@ def _relay_stream_activity(
             continue
 
 
-# NOTE — deliberately no messages breakpoints here, unlike the interview
-# loop's ``_with_cache_breakpoints`` (``llm/conversation.py``). A
-# pause_turn continuation does re-bill its accumulated assistant turns at
-# full input price, so one would pay off for the search-heavy compliance
-# lens. It cannot be applied as-is: the continuation branch below re-sends
-# ``response.content`` verbatim (the pause_turn contract) as SDK block
-# objects, not the serialized dicts the interview loop builds, so there is
-# no dict to hang ``cache_control`` on. Marking them would mean changing
-# what gets re-sent, which is a behavioural change to the fan-out's resume
-# path and not something a caching change should do on the side. The shared
-# document prefix is cached regardless, which is the bulk of the payload.
+# NOTE — the shared block is the only EXPLICIT breakpoint in the messages,
+# and no more can be added the interview loop's way
+# (``_with_cache_breakpoints`` in ``llm/conversation.py``). A pause_turn
+# continuation re-bills its accumulated assistant turns at full input price,
+# but it re-sends ``response.content`` verbatim (the pause_turn contract) as
+# SDK block objects, not serialized dicts, so there is no dict to hang
+# ``cache_control`` on — and marking them would change what gets re-sent.
+#
+# A continuation can still read its own cache without touching a block: a
+# TOP-LEVEL automatic breakpoint (``cache_control`` as a request argument,
+# beside ``container``) lands on the request's last cacheable block by
+# itself. That is the continuation tail (``_CONTINUATION_CACHE_CONTROL``,
+# cost Tier 1 Chunk 4, behind ``settings.CONTINUATION_CACHE``), which
+# ``_run_streaming_call`` adds to a resume and to nothing else. It is never
+# added HERE: this builder is the one request shape both transports send
+# (the plan's F2), and the batched transport deliberately carries no tail
+# (see ``_run_batch_calls``).
 
 
 def _qc_request_kwargs(
@@ -3570,6 +3630,7 @@ def _run_streaming_call(
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
     first_output: threading.Event | None = None,
+    continuation_cache: bool = False,
 ) -> _CallResult:
     """One QC call: request → pause_turn continuations → parse. Never raises.
 
@@ -3593,15 +3654,25 @@ def _run_streaming_call(
     waiting on it buys nothing. The third covers a stop before the first
     request. A follower waiting on this event therefore never waits longer
     than the leader's own first request takes, whatever it does.
+
+    ``continuation_cache`` (``settings.CONTINUATION_CACHE``, pinned per run by
+    :func:`run_final_qc`) adds the continuation tail
+    (:data:`_CONTINUATION_CACHE_CONTROL`) to every request that resumes a
+    paused turn, and to nothing else: a top-level argument beside the
+    container, so ``request_kwargs`` — every explicit breakpoint included —
+    stays byte-identical. Off, the default for a direct caller, every request
+    is exactly what it always was.
     """
     try:
-        # One TTL for every breakpoint in the request. The API requires
+        # One TTL for every EXPLICIT marker in the request. The API requires
         # longer-lived cache entries to precede shorter-lived ones in prompt
         # order, and tools render before system, which renders before messages —
         # so marking these two at the 5-minute default while the user turn asks
         # for 1h produces a request the provider rejects. Do not "optimise" the
         # small blocks back down to the default: mixed TTLs here are not a
-        # cheaper cache, they are a 400 on every call in the phase.
+        # cheaper cache, they are a 400 on every call in the phase. The one
+        # shorter-lived breakpoint the rule allows is the continuation tail
+        # below: 5 minutes, on the LAST block, after all of these.
         request_kwargs = _qc_request_kwargs(
             system_prompt=system_prompt,
             tools=tools,
@@ -3657,6 +3728,13 @@ def _run_streaming_call(
                     stream_kwargs = dict(request_kwargs)
                     if container_id:
                         stream_kwargs["container"] = container_id
+                    if continuation_cache and _is_continuation(messages):
+                        # The continuation tail: beside the container, never
+                        # in a block, and only on a resume (the constant says
+                        # why). 5 minutes after this call's 1h markers too.
+                        stream_kwargs["cache_control"] = dict(
+                            _CONTINUATION_CACHE_CONTROL
+                        )
                     try:
                         with client.messages.stream(
                             messages=messages, **stream_kwargs
@@ -4317,11 +4395,14 @@ def _run_lens(
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
     first_output: threading.Event | None = None,
+    continuation_cache: bool = False,
 ) -> _LensOutcome:
     """One lens's full lifecycle. Never raises (KeyboardInterrupt aside).
 
     ``pieces`` come from :func:`_lens_call_pieces`, built once by the caller
     so the staggered launch's lineage key names exactly what this sends.
+    ``continuation_cache`` is the run's pinned switch, handed to
+    :func:`_run_streaming_call` for a lens that pauses.
     """
     event_sink(
         {
@@ -4361,6 +4442,7 @@ def _run_lens(
         event_sink=event_sink,
         should_stop=should_stop,
         first_output=first_output,
+        continuation_cache=continuation_cache,
     )
     usage = _sum_billed(result.billed)
     queries, retrieved_sources = _collect_call_activity(result.responses)
@@ -4740,6 +4822,7 @@ def _consolidate_candidates(
     today: str = "",
     enabled: bool = True,
     warm_wait_seconds: float = 0,
+    continuation_cache: bool = False,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> tuple[list[_Candidate], QCConsolidation, list[Any]]:
@@ -4753,7 +4836,8 @@ def _consolidate_candidates(
     two or more eligible buckets are one cache lineage, and they launch
     staggered behind the first (``warm_wait_seconds``; 0 = all at once, the
     default for a direct caller). One eligible bucket is a lineage of one and
-    never waits.
+    never waits. ``continuation_cache`` is the run's pinned switch, handed to
+    each grouping call (off for a direct caller).
     """
     origins: list[QCCandidateOrigin] = []
     taken_origin_ids: set[str] = set()
@@ -4961,6 +5045,7 @@ def _consolidate_candidates(
                 event_sink=event_sink,
                 should_stop=should_stop,
                 first_output=first_output,
+                continuation_cache=continuation_cache,
             )
 
         futures = _launch_staggered(
@@ -5078,6 +5163,7 @@ def _run_consolidation_call(
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
     first_output: threading.Event | None = None,
+    continuation_cache: bool = False,
 ) -> tuple[list[dict[str, Any]] | None, str, _CallResult | None]:
     """One bucket's grouping call. ``None`` groups = fall back to singletons."""
     result = _run_streaming_call(
@@ -5098,6 +5184,7 @@ def _run_consolidation_call(
         event_sink=event_sink,
         should_stop=should_stop,
         first_output=first_output,
+        continuation_cache=continuation_cache,
     )
     if result.payload is None:
         return None, result.error or "The grouping call failed.", result
@@ -5219,6 +5306,7 @@ def _verify_one(
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
     shared_should_stop: Callable[[], bool] = lambda: False,
+    continuation_cache: bool = False,
 ) -> _VerifierOutcome:
     worker_fields = {
         "candidate_id": candidate_id,
@@ -5272,6 +5360,9 @@ def _verify_one(
         event_fields=worker_fields,
         event_sink=event_sink,
         should_stop=lambda: should_stop() or shared_should_stop(),
+        # A streamed seat's continuations are seconds apart, like a lens's,
+        # so they get the tail too: 5 minutes after this seat's 1h markers.
+        continuation_cache=continuation_cache,
     )
     return _verifier_outcome(
         result,
@@ -5746,6 +5837,7 @@ def _run_batch_calls(
     should_stop: Callable[[], bool] = lambda: False,
     warm_leads: bool = False,
     warm_wait_seconds: float = 0.0,
+    continuation_cache: bool = False,
 ) -> _BatchPhaseOutcome:
     """Run many independent QC calls through the Message Batches API.
 
@@ -5789,6 +5881,11 @@ def _run_batch_calls(
     bound; it is bounded the way any streamed seat is — ``should_stop``
     between its requests, the SDK timeout within one. Its keys come back in
     ``_BatchPhaseOutcome.streamed_keys`` so the caller prices it at list.
+
+    ``continuation_cache`` (``settings.CONTINUATION_CACHE``, pinned per run)
+    reaches the streamed leads ONLY: a lead is an ordinary streamed call, so
+    its continuations carry the tail as any streamed seat's do. A batched
+    seat's continuation never carries it — see the request builder below.
     """
     states = {
         key: _BatchSeatState(spec=spec, messages=[]) for key, spec in specs.items()
@@ -6044,6 +6141,7 @@ def _run_batch_calls(
                 event_sink=event_sink,
                 should_stop=should_stop,
                 first_output=released,
+                continuation_cache=continuation_cache,
             )
             future.add_done_callback(lambda _done, event=released: event.set())
             lead_futures[lead.key] = future
@@ -6092,6 +6190,13 @@ def _run_batch_calls(
         requests: list[dict[str, Any]] = []
         for key in pending:
             state = states[key]
+            # No continuation tail here, whatever ``continuation_cache`` says
+            # (cost Tier 1, Chunk 4, point 5). Batch rounds are minutes apart,
+            # so the 5-minute entries the previous request's server loop wrote
+            # have usually expired by the next round: a tail would pay the
+            # write premium on the whole re-sent turn and read nothing. If a
+            # later measurement shows batched continuations are common and
+            # long, a 1-hour batch tail is a separate decision.
             params: dict[str, Any] = {
                 **_qc_request_kwargs(
                     system_prompt=state.spec.system_prompt,
@@ -6939,6 +7044,7 @@ def run_final_qc(
     batch_verification: bool | None = None,
     warm_wait_seconds: float | None = None,
     batch_warm_lead: bool | None = None,
+    continuation_cache: bool | None = None,
     version_index: int,
     started_at: str,
     finished_at: str,
@@ -7002,6 +7108,16 @@ def run_final_qc(
         settings.QC_BATCH_WARM_LEAD
         if batch_warm_lead is None
         else bool(batch_warm_lead)
+    )
+    # And the continuation tail (cost Tier 1, Chunk 4), the same way: it
+    # changes how a streamed call's resume is CACHED, never what any call is
+    # asked, so it stays out of the input manifest (F3); pinned so every
+    # streamed call in the run — lenses, grouping calls, seats and leads —
+    # resumes alike. The batched transport never carries it.
+    continuation_cache = (
+        settings.CONTINUATION_CACHE
+        if continuation_cache is None
+        else bool(continuation_cache)
     )
     # Same discipline, load-bearing for a different reason: this string leads
     # both cached shared prefixes, so re-reading the clock per call would
@@ -7107,6 +7223,7 @@ def run_final_qc(
                 event_sink=event_sink,
                 should_stop=should_stop,
                 first_output=first_output,
+                continuation_cache=continuation_cache,
             )
 
         futures = _launch_staggered(
@@ -7262,6 +7379,7 @@ def run_final_qc(
         today=today,
         enabled=consolidation_enabled,
         warm_wait_seconds=warm_wait_seconds,
+        continuation_cache=continuation_cache,
         event_sink=event_sink,
         should_stop=should_stop,
     )
@@ -7460,6 +7578,8 @@ def run_final_qc(
                 should_stop=should_stop,
                 warm_leads=batch_warm_lead,
                 warm_wait_seconds=warm_wait_seconds,
+                # The streamed leads' continuations only; batched seats never.
+                continuation_cache=continuation_cache,
             )
             call_results = batch_phase.results
             unassigned_batch_results = batch_phase.unassigned_results
@@ -7532,6 +7652,7 @@ def run_final_qc(
                             event_sink=event_sink,
                             should_stop=should_stop,
                             shared_should_stop=shared_failure.is_set,
+                            continuation_cache=continuation_cache,
                         )
                         futures[future] = (i, j)
 

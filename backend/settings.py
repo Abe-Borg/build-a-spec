@@ -498,6 +498,26 @@ QC_WARM_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_WARM_WAIT_SECONDS", 45, minimum
 # seat is sent, never what any seat is asked (the plan's F3).
 QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", False)
 
+# Continuations read their own cache (Research/QC cost Tier 1, Chunk 4). A
+# research area, or a streamed Final QC call carrying web tools, can pause
+# mid-turn (`pause_turn`) and be resumed by re-sending the whole conversation
+# so far — and everything after the cached shared block was billed at full
+# input price on every resume. With this on, a request that RESUMES a paused
+# turn (never a first request) carries one top-level automatic cache
+# breakpoint at the shortest (5-minute) TTL, beside `container` and outside
+# every content block, so it can read the entries the API already wrote
+# after the previous request's server-tool results. Same request otherwise;
+# the batched verifier transport never carries it (its rounds are minutes
+# apart, so the entries a tail would read have expired).
+#
+# OFF by default, deliberately: the shape is allowed by the documented rules,
+# but a provider rejection would fail every paused research area and
+# compliance lens with a 400, so it is proven live first. The default flips
+# only on a recorded M3 pass (the cost plan's Chunk 4 "Flip") — compaction
+# Phase 2's precedent. Not in the QC input manifest: it changes how a
+# continuation is cached, never what any call is asked (the plan's F3).
+CONTINUATION_CACHE = _bool_env("BUILD_A_SPEC_CONTINUATION_CACHE", False)
+
 # Per-call web allowances (runaway guards, not budgets — env-overridable).
 # The code-compliance lens gets the big search allowance to check standards'
 # actual current content; the other lenses and verifiers get the small one.

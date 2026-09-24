@@ -145,7 +145,12 @@ backend/
                            cost Tier 1 Chunk 3's streamed lead seat; flips on
                            only on a recorded M3 pass; inert at a zero
                            QC_WARM_WAIT_SECONDS; pinned per run, never in the
-                           QC input manifest);
+                           QC input manifest); CONTINUATION_CACHE
+                           (BUILD_A_SPEC_CONTINUATION_CACHE, default OFF —
+                           cost Tier 1 Chunk 4's continuation tail, research
+                           and QC alike; flips on only on a recorded M3 pass;
+                           pinned per round/run, never in the QC input
+                           manifest);
                            REDLINE_COMMENTS (BUILD_A_SPEC_REDLINE_COMMENTS,
                            default ON — redline Phase 3, owner decision 9;
                            0 = the redline without comments byte for byte;
@@ -345,7 +350,14 @@ backend/
                            symmetric evidence date (_evidence_date), each
                            dimension's latest-dated error, the profile date
                            and project; returns base itself when nothing is
-                           new (the idempotence)
+                           new (the idempotence). Cost Tier 1 Chunk 4:
+                           run_requirements_research(continuation_cache=)
+                           pins settings.CONTINUATION_CACHE beside the clock,
+                           and _run_dimension adds the continuation tail — a
+                           fresh dict(_CONTINUATION_CACHE_CONTROL), top-level
+                           cache_control beside container — to a request
+                           _is_continuation calls a resume, and to nothing
+                           else (the engines keep separate copies)
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -492,7 +504,17 @@ backend/
                            round and poll, and joined by finish() — every
                            terminal path — before the last frame and the
                            outcome; _BatchPhaseOutcome.streamed_keys makes
-                           run_final_qc record them at cost_multiplier 1.0
+                           run_final_qc record them at cost_multiplier 1.0.
+                           Chunk 4: with CONTINUATION_CACHE on (continuation_
+                           cache=, pinned in run_final_qc and threaded to
+                           every streamed call — lenses, grouping calls,
+                           streamed seats, the leads), _run_streaming_call
+                           adds the continuation tail — a fresh
+                           dict(_CONTINUATION_CACHE_CONTROL), top-level
+                           cache_control beside container — to a request
+                           _is_continuation calls a resume, and to nothing
+                           else; _qc_request_kwargs and the batched params
+                           never carry it
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
@@ -2320,6 +2342,20 @@ tests/
                            in both projections and only for a run that sent a
                            lead; the QC profiler's seat:list-price row; the
                            floor of 8; and the default read from the source
+  test_continuation_cache.py
+                           [Research/QC cost Tier 1, Chunk 4] the continuation
+                           tail across both engines: a guard that counts every
+                           captured request's breakpoints and TTL order (and
+                           itself refuses the shapes it exists to catch); the
+                           batched transport never carrying it; a streamed
+                           lead and a paused grouping call reaching it; the
+                           container riding beside it with the cached blocks
+                           unchanged; F3 on both verifier transports; the
+                           setting reaching a round and a run; and the default
+                           read from the source. The per-engine on / off-is-
+                           today pairs live beside the engines' other
+                           continuation tests (test_research_engine.py,
+                           test_qc_live_events.py)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -16188,6 +16224,169 @@ why and the traps.
   2. README's `BUILD_A_SPEC_QC_BATCH_VERIFICATION` row and the trust dossier's
      stage 2 still said phase 2 is "one" batch; both now say one per round, the
      correction the v1.18.0 notes recorded for the Layout and the release copy.
+
+## A paused call reads its own cache — implemented notes (Research/QC cost Tier 1, Chunk 4)
+
+Chunk 4 of `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` (where the
+program stands is `docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`, and only
+there). **It ships switched off.** No route, SSE event type, dependency,
+project-format change, version bump or `release_notes.py` entry; one env knob
+(`BUILD_A_SPEC_CONTINUATION_CACHE`). The plan's Chunk 4 **As built** carries
+the deviations; this section is the why and the traps.
+
+- **Why a resume paid full price.** A `pause_turn` continuation re-sends the
+  whole conversation — the brief, then every paused assistant turn with its
+  thinking, search results and fetched pages — and nothing after block 0
+  carried a breakpoint, so every resume billed all of it as uncached input.
+  The interview's answer, a tail marker on the last message dict, cannot be
+  ported: both fan-outs re-send `response.content` verbatim as SDK block
+  objects, so there is no dict to hang `cache_control` on, and adding one
+  would change what the pause contract says to re-send.
+- **The way around it is a request argument, not a block.** A top-level
+  `cache_control` asks the provider to put an automatic breakpoint on the
+  request's last cacheable block itself, walking back past a block that
+  cannot carry one. The re-sent content stays byte for byte what the pause
+  contract says, and the one addition lives beside `container` in the
+  per-request `stream_kwargs` copy — never in `request_kwargs`, never in a
+  block (F2). `_qc_request_kwargs` stays the ONE request shape both QC
+  transports build from.
+- **Only on a continuation** (`_is_continuation`: the conversation ends on
+  the assistant; the pause contract adds no synthetic user turn). A first
+  request's end is the unique brief, where a breakpoint is a pure write
+  surcharge.
+- **Five minutes, in both TTL families.** The reader is the next
+  continuation, seconds later. After research's and the web-toolless lenses'
+  5-minute explicit markers it keeps the request uniform; after a verifier
+  seat's 1-hour markers it is a shorter-lived breakpoint AFTER longer-lived
+  ones, which the ordering rule allows — PR #82's 400 was the reverse. A
+  1-hour tail would pay 2.0× input instead of 1.25× for an entry nothing
+  reads after five minutes.
+- **Slots.** Every request that carries it has exactly three explicit
+  markers (the last tool, the system block, block 0), so it is the fourth —
+  the provider's limit. A continuation's last block is re-sent paused
+  content, which never carries an explicit marker, so the documented 400 (an
+  explicit marker on the last block with a different TTL) cannot arise.
+- **Why it should work, and what it costs if it does not — measured by M3,
+  never assumed.** Server tools write a 5-minute entry after their tool
+  results whenever a request uses caching; a continuation re-sends that
+  content verbatim, so a breakpoint at its end walks back (at most 20
+  positions) to the last such entry, which nothing after block 0 could reach
+  before. The worst case — the entries do not match what is re-sent — costs
+  each continuation the 5-minute write premium on its re-sent turn (+25% on
+  that part). M3 would show cache writes rising while reads do not, and the
+  flip rule catches exactly that.
+- **The batched transport never carries it.** Batch rounds are minutes
+  apart, so the 5-minute entries have usually expired by the next round; a
+  tail would pay the write premium on the whole re-sent turn and read
+  nothing. A 1-hour batch tail is a separate decision for a later
+  measurement. A Chunk 3 lead IS an ordinary streamed call, so its
+  continuations carry it; its batch does not.
+- **Every streamed QC call gets it, through the one loop.**
+  `run_final_qc(continuation_cache=)` pins the switch once (`None` = the
+  setting, the Chunks 2 and 3 precedent) and threads it to `_run_lens`,
+  `_consolidate_candidates` → `_run_consolidation_call`, the streamed
+  `_verify_one`, and `_run_batch_calls`' leads, all into
+  `_run_streaming_call`. In practice only a call with web tools can pause —
+  research dimensions, `code_compliance` and its seats — but nothing depends
+  on which call pauses: a grouping call that paused would resume the same
+  way, and a test pins it. Research pins the switch beside the clock, once
+  per round, for the same reason: one round, one answer.
+- **A fresh dict per request from a read-only constant.**
+  `_CONTINUATION_CACHE_CONTROL` is a `MappingProxyType`, so no request can
+  mutate the shared value, and each request gets `dict(...)`: the SDK
+  JSON-serializes the argument, which a mappingproxy is not. One copy per
+  engine — copied, not imported, the engines' standing posture.
+- **Off is today's request, byte for byte**, pinned per engine: the same
+  scripted turns run both ways under a pinned clock, and removing the one key
+  from the on run gives the off run, request for request.
+- **F3.** How a resume is cached is not a review input: nothing about it
+  reaches the QC input manifest, so a retained Final QC result stays current
+  with the switch in either position — pinned on BOTH verifier transports.
+  The transport itself IS a manifest input
+  (`configuration.batch_verification`), and the staleness check rebuilds the
+  manifest with the live setting, so each run is compared under the
+  transport it used. The first cut ran the streamed transport against the
+  batched default and went red for the transport, not the switch.
+- **SDK floor, unchanged.** `requirements.txt` allows `anthropic>=1.0`;
+  1.0.0 in a scratch venv put `cache_control` and `container`, as given, in
+  the body of a `messages.stream(...)` call against a mock transport.
+- **Test traps.** (1) A grouping request's marker is
+  `[[QC-CONSOLIDATE:<bucket id>]]`. `tests/test_qc_warm_launch.py`'s
+  `_WatchedClient` adds `bucket:` only when it NAMES a call, so a script keyed
+  with that prefix matched nothing, the fake answered the grouping call with
+  its default singleton partition, and the "paused grouping call" never
+  paused — the guard's own count of tails is what caught it. (2) A
+  mappingproxy compares equal to a dict, so `== {"type": "ephemeral"}` cannot
+  pin the fresh copy; `type(...) is dict` does. (3) `tests/fakes.py`'s
+  `SequencedFakeClient.requests` also holds every batched seat's params (the
+  batch fake resolves them through the same scripts), so a test about which
+  transport sent what keeps its own record of the streamed calls
+  (`_StreamLog`).
+- **The guard ran once over the whole suite.** Beyond the five scenarios
+  `test_no_request_exceeds_four_breakpoints` captures, a scratch pytest
+  plugin (not committed) ran the same checks on every research and QC
+  request the full suite sends, with `BUILD_A_SPEC_CONTINUATION_CACHE=1`.
+  Over the 2,782 tests that passed it checked 2,238 streamed requests (43
+  carrying the tail) and 904 batched ones (none), with no violation. The same
+  run is the flip-readiness check: the only failure was the README knob test,
+  which had read README before its row landed mid-run, and it passes on the
+  finished tree with the switch on and off.
+- **Tests: `tests/test_continuation_cache.py` (10)**, plus the research pair
+  in `tests/test_research_engine.py` and the QC pair in
+  `tests/test_qc_live_events.py` (whose `_run_client` gained
+  `continuation_cache=`, default `None` — a knowing helper change). Revert
+  matrix — each mechanism reverted in place, one at a time, restored from the
+  exact text read, and the tree checked clean after every row (the new file
+  and the research, live-events, batch-verification, warm-lead and
+  warm-launch suites run each time):
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | research: no tail in `_run_dimension` | 5 |
+  | research: the round not passing the switch to a dimension | 5 |
+  | research: `None` not reading the setting | 1 |
+  | research: the tail on first requests too (no continuation gate) | 5 |
+  | research: the constant itself, not a fresh dict | 1 |
+  | research: the tail at 1 hour | 3 |
+  | QC: no tail in `_run_streaming_call` | 8 |
+  | QC: the tail on first requests too (no continuation gate) | 8 |
+  | QC: the constant itself, not a fresh dict | 1 |
+  | QC: the tail at 1 hour | 5 |
+  | QC: `_run_lens` not forwarding | 6 |
+  | QC: `run_final_qc` not passing it to a lens | 6 |
+  | QC: `run_final_qc` not passing it to consolidation | 2 |
+  | QC: `_consolidate_candidates` not passing it to a grouping call | 2 |
+  | QC: `_run_consolidation_call` not forwarding | 2 |
+  | QC: `_verify_one` not forwarding | 4 |
+  | QC: `run_final_qc` not passing it to a streamed seat | 4 |
+  | QC: `_run_batch_calls` not passing it to a lead | 2 |
+  | QC: `run_final_qc` not passing it to the batch phase | 2 |
+  | QC: `None` not reading the setting | 1 |
+  | QC: the tail added to batched params too | 1 |
+  | the shipped default on | 1 |
+
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Final QC cost + speed" (v1.8.0) says "**The TTL is uniform across every
+     breakpoint in a request**". It is uniform across every EXPLICIT marker;
+     with `CONTINUATION_CACHE` on, a streamed seat's continuation also
+     carries the 5-minute tail, the one shorter-lived breakpoint the
+     ordering rule allows because it comes last.
+  2. The same section's "**No messages-tail breakpoint (deliberate)**" is
+     right about an explicit marker — there is still no dict to hang one on —
+     but a top-level automatic breakpoint needs none, and behind the switch a
+     resume now carries one. The NOTE it points to now sits above
+     `_qc_request_kwargs`, and is rewritten.
+  3. "Attached documents reach the research and QC teams" calls a research
+     dimension's block-0 marker the "Third breakpoint (inside the limit of
+     four)". On a continuation with the switch on, the automatic tail is the
+     fourth, so any further explicit marker in that request would be a 400 on
+     every resume; `_dimension_user_content`'s docstring now says so.
+  4. "Final QC phase 2 is batched" (v1.12.0): "Both paths call it; pinned by
+     a byte-comparison of a streamed and a batched seat's request." Still
+     true of what `_qc_request_kwargs` builds. With the switch on, a streamed
+     seat's CONTINUATION also carries the top-level tail, which a batched
+     continuation never does — by design, and only beside the request.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

@@ -291,8 +291,10 @@ def test_no_request_exceeds_four_breakpoints(monkeypatch) -> None:
     assert ("1h", "1h", "1h") in tail_families
 
 
-def test_the_guard_refuses_what_the_provider_would() -> None:
-    """The guard itself, against the shapes it exists to catch."""
+def test_the_guard_refuses_the_shapes_it_exists_to_catch() -> None:
+    """The guard itself, against the shapes it exists to catch: the three the
+    provider rejects, and a tail on a first request, which it would accept
+    and bill as a pure write surcharge."""
     base = {
         "tools": [{"name": "t", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         "system": [{"text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
@@ -323,10 +325,11 @@ def test_the_guard_refuses_what_the_provider_would() -> None:
     marked_last = json.loads(json.dumps(base))
     marked_last["messages"][-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
     assert refused({**marked_last, "cache_control": _TAIL})
-    # A tail on a first request.
+    # A tail on a first request: accepted by the provider, but a pure write
+    # surcharge on the unique brief, so the app never sends one.
     first = {**base, "messages": base["messages"][:1], "cache_control": _TAIL}
     assert refused(first)
-    # A fourth explicit marker.
+    # A fourth explicit marker: with the tail, five breakpoints.
     crowded = json.loads(json.dumps(base))
     crowded["messages"][0]["content"][1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
     assert refused(crowded)

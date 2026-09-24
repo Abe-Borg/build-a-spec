@@ -1681,8 +1681,12 @@ frontend/src/
                            one read per launch, a failed read → false, a read
                            landing after the tour finished never undoes it,
                            markCompleted = true at once + a save whose failure
-                           is console.debug) and the app's one instance, read
-                           by App through useSyncExternalStore
+                           is console.debug, returning a promise that settles
+                           with the save or after COMPLETION_SAVE_WAIT_MS, 5 s)
+                           and the app's one instance, read by App through
+                           useSyncExternalStore. useOnboarding's runRestore
+                           starts the save before the restore request and
+                           awaits it before every settle
   lib/panelTray.ts         the panel tray's vocabulary + pure rules: PANEL_IDS
                            (stacking order) + PANEL_LABELS, {folded, hidden}
                            kept SEPARATE (a fold never rewrites the per-panel
@@ -16928,6 +16932,19 @@ it is the owner's call; the draft is below.
     diagnostics as faults, and this is not one.
   - A read that resolves after the tour finished never undoes the finish:
     the read began before it and describes the old file.
+- **The ending waits for the save** (review finding on PR #218, Codex).
+  The first cut sent the save and moved on, so closing the window right after
+  *Finish* could end the process — and the request with it — before the file
+  was written, and the next launch offered the tour as new. `markCompleted()`
+  now returns a promise that settles with the save (success or failure) or
+  after `COMPLETION_SAVE_WAIT_MS` (5 s), and never rejects. `runRestore` starts
+  it BEFORE the restore request, so the two run in parallel and it rarely
+  adds any wait, then awaits it before each of its three `settle` calls: the
+  finishing card stays up until the file is written, and the bound means a
+  hung request can never strand it. Persisting completion inside the
+  server's restore transaction was the alternative, and was not taken: it
+  would give `/api/tutorial/restore` a second job and a frontend-owned
+  version to carry, for a window the await already closes.
 - **No flicker.** While the answer is `null` the chip has no pulse and its
   subtitle keeps its line but is `invisible`, so the chip's height never
   moves and neither a first-timer nor a returning user sees text change
@@ -16957,7 +16974,7 @@ it is the owner's call; the draft is below.
   outside a 1280×720 viewport, so Playwright's `click()` times out; the
   harness clicks through `element.click()` and a 1440×900 context.
 - **Tests.** `tests/test_onboarding_state.py` (28 cases, parametrized
-  included) and `frontend/tests/onboardingCompletion.test.ts` (9), registered
+  included) and `frontend/tests/onboardingCompletion.test.ts` (12), registered
   in `package.json`. Two tour-test assertions changed knowingly: the
   storage module no longer carries the completion key or the invitation,
   and the chip's pulse condition is the new one.
@@ -16986,6 +17003,16 @@ it is the owner's call; the draft is below.
   | FE: App never loading it | 1 |
   | FE: the chip pulsing while unknown | 2 |
   | FE: the subtitle shown while unknown | 1 |
+  | FE: the save not waited on (review fix) | 1 |
+  | FE: no bound on the wait | 1 |
+  | FE: the no-workspace ending not waiting | 1 |
+  | FE: the already-restored ending not waiting | 1 |
+  | FE: the ordinary ending not waiting | 1 |
+  | FE: the save started only after the restore | 1 |
+
+  The bound's test races the store against a timer of its own: without it,
+  a promise that never settles is only cancelled by the runner, not failed,
+  and the first revert of the bound stayed green for exactly that reason.
 
 - **Release-note draft** (a "Tutorial" section, for whichever release
   carries it):

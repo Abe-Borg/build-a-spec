@@ -485,9 +485,16 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       const workspace = workspaceRef.current;
       setEndConfirm(false);
       pendingCompletedRef.current = completed;
+      // Saved in parallel with the restore, and awaited before the tour goes
+      // idle: once the finishing card is gone the user may close the window,
+      // and a save still in flight then would die with the backend (Codex,
+      // PR #218). It is started first so it rarely adds any wait, and it is
+      // bounded, so it can never strand the card.
+      const completionSaved = completed
+        ? markOnboardingCompleted()
+        : Promise.resolve();
       const settle = (session?: SessionBundle) => {
         if (session) capsRef.current.applySession(session);
-        if (completed) markOnboardingCompleted();
         clearOnboardingProgress();
         workspaceRef.current = null;
         startRequestRef.current = null;
@@ -495,7 +502,9 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         setPhase({ kind: "idle" });
       };
       if (!workspace) {
-        runRef.current += 1;
+        const idleRun = (runRef.current += 1);
+        await completionSaved;
+        if (runRef.current !== idleRun) return true;
         settle();
         return true;
       }
@@ -533,6 +542,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
             // stale document as though it were the user's project.
             const restored = await getSessionBundle().catch(() => null);
             if (!restored) throw firstError;
+            await completionSaved;
             // Same guard as the success path below, and it is not redundant
             // here: acceptNativeRestore is not a restore call, so it slips
             // past the in-flight serialization and can apply newer state
@@ -556,6 +566,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
             status.scope === "scenario" ? status.scenario_kind : undefined;
           session = await transition();
         }
+        await completionSaved;
         // A newer restore already owns the terminal state; write nothing.
         if (runRef.current !== run) return true;
         settle(session);

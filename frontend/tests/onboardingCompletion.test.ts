@@ -142,6 +142,79 @@ test("a failed save keeps this launch's answer and says nothing loud", async (t)
   assert.equal(debug.mock.callCount(), 1);
 });
 
+test("finishing waits for the save to settle before it resolves", async () => {
+  let finishWrite: () => void = () => {};
+  const store = createOnboardingCompletionStore({
+    read: async () => ({ completed_version: null }),
+    write: () =>
+      new Promise<void>((resolve) => {
+        finishWrite = resolve;
+      }),
+  });
+  let settled = false;
+  const done = store.markCompleted().then(() => {
+    settled = true;
+  });
+  // Shown at once, but not settled until the file is written: the tour's
+  // ending waits on this so a window closed right after Finish cannot abort
+  // the save (Codex, PR #218).
+  assert.equal(store.get(), true);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(settled, false);
+  finishWrite();
+  await done;
+  assert.equal(settled, true);
+});
+
+test("a hung save cannot strand the finishing card", async () => {
+  const store = createOnboardingCompletionStore(
+    {
+      read: async () => ({ completed_version: null }),
+      write: () => new Promise<void>(() => {}),
+    },
+    20,
+  );
+  // Raced against a timer of the test's own, so an unbounded wait fails
+  // here instead of leaving a promise the runner would merely cancel.
+  let testTimer: ReturnType<typeof setTimeout> | undefined;
+  const winner = await Promise.race([
+    store.markCompleted().then(() => "bounded"),
+    new Promise<string>((resolve) => {
+      testTimer = setTimeout(() => resolve("stranded"), 2000);
+    }),
+  ]);
+  clearTimeout(testTimer);
+  assert.equal(winner, "bounded");
+  assert.equal(store.get(), true);
+});
+
+test("the tour's ending starts the save first and waits on it before going idle", () => {
+  // Started before the restore request, so it runs in parallel with it.
+  const runRestore = hook.indexOf("const runRestore = useCallback(");
+  const start = hook.indexOf("const completionSaved = completed", runRestore);
+  assert.ok(runRestore > 0 && start > runRestore);
+  assert.ok(start < hook.indexOf("restoreTutorialWorkspace({", runRestore));
+  assert.match(hook, /\? markOnboardingCompleted\(\)\s*:\s*Promise\.resolve\(\)/);
+  // Every path that settles waits for it first.
+  assert.match(
+    hook,
+    /await completionSaved;\s*\n\s*if \(runRef\.current !== idleRun\) return true;\s*\n\s*settle\(\);/,
+  );
+  assert.match(
+    hook,
+    /await completionSaved;\s*\n(\s*\/\/[^\n]*\n)*\s*if \(runRef\.current !== run\) return true;\s*\n\s*settle\(session\);/,
+  );
+  assert.match(
+    hook,
+    /if \(!restored\) throw firstError;\s*\n\s*await completionSaved;/,
+  );
+  const settle = hook.slice(
+    hook.indexOf("const settle = "),
+    hook.indexOf('setPhase({ kind: "idle" });'),
+  );
+  assert.doesNotMatch(settle, /markOnboardingCompleted/);
+});
+
 test("the client reads and writes /api/ui/onboarding", async () => {
   const originalFetch = globalThis.fetch;
   const calls: { input: RequestInfo | URL; init?: RequestInit }[] = [];

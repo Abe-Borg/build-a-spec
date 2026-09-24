@@ -47,14 +47,26 @@ export interface OnboardingCompletionStore {
   subscribe(listener: () => void): () => void;
   /** Read the saved answer once per launch. Later calls reuse the first. */
   load(): Promise<void>;
-  /** Finished the tour: true at once for this launch, and saved for the next. */
-  markCompleted(): void;
+  /**
+   * Finished the tour: true at once for this launch, and saved for the next.
+   * Resolves once the save settles (success or failure) or after
+   * `saveWaitMs`, whichever is first, and never rejects: the tour's ending
+   * waits on it so a window closed right after Finish cannot abort the save,
+   * and the bound keeps a hung request from stranding the finishing card.
+   */
+  markCompleted(): Promise<void>;
 }
 
-export function createOnboardingCompletionStore(io: {
-  read: () => Promise<unknown>;
-  write: (version: number) => Promise<void>;
-}): OnboardingCompletionStore {
+/** How long the tour's ending waits for the completion save, at most. */
+export const COMPLETION_SAVE_WAIT_MS = 5000;
+
+export function createOnboardingCompletionStore(
+  io: {
+    read: () => Promise<unknown>;
+    write: (version: number) => Promise<void>;
+  },
+  saveWaitMs: number = COMPLETION_SAVE_WAIT_MS,
+): OnboardingCompletionStore {
   let value: OnboardingCompleted = null;
   let loading: Promise<void> | null = null;
   const listeners = new Set<() => void>();
@@ -88,12 +100,19 @@ export function createOnboardingCompletionStore(io: {
     },
     markCompleted() {
       set(true);
-      io.write(ONBOARDING_COMPLETION_VERSION).catch((error: unknown) => {
-        // This launch already shows the tour as finished; the next one will
-        // invite the user again. console.debug, not error: clientLog ships
-        // errors to diagnostics as faults, and this is not one.
-        console.debug("Finishing the tutorial could not be saved", error);
+      const saved = io
+        .write(ONBOARDING_COMPLETION_VERSION)
+        .catch((error: unknown) => {
+          // This launch already shows the tour as finished; the next one will
+          // invite the user again. console.debug, not error: clientLog ships
+          // errors to diagnostics as faults, and this is not one.
+          console.debug("Finishing the tutorial could not be saved", error);
+        });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const bound = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, saveWaitMs);
       });
+      return Promise.race([saved, bound]).finally(() => clearTimeout(timer));
     },
   };
 }
@@ -103,7 +122,10 @@ export const onboardingCompletion = createOnboardingCompletionStore({
   write: saveOnboardingCompletion,
 });
 
-/** The one place the tour marks itself finished (useOnboarding's ending). */
-export function markOnboardingCompleted(): void {
-  onboardingCompletion.markCompleted();
+/**
+ * The one place the tour marks itself finished (useOnboarding's ending),
+ * which waits on the returned promise before it leaves the finishing state.
+ */
+export function markOnboardingCompleted(): Promise<void> {
+  return onboardingCompletion.markCompleted();
 }

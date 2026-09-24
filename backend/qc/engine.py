@@ -5749,6 +5749,14 @@ class _BatchSeatState:
     # Submitted requests for this seat whose result never came back. Counted
     # before the seat settles, because ``settle`` freezes it into the record.
     uncollected_requests: int = 0
+    # What the warm lead's self-check reads (Tier 1 finish, WL-1): the round
+    # of the first batch this seat rode, and the reply that batch brought
+    # back — ``None`` for an errored, expired or missing item. Never a later
+    # round's reply: a retry runs after that round has ended, when it can
+    # read a copy an earlier batched seat stored rather than the lead's
+    # (Codex, PR #227). Never part of the record.
+    first_round: int | None = None
+    first_reply: Any = None
 
     def initial_messages(self) -> list[dict]:
         return [
@@ -6384,10 +6392,13 @@ def _run_batch_calls(
         after the leads are joined: a Stop, the wall-clock ceiling, a
         refused or id-less submission, a failed results read and the
         settlement window each end a phase nobody finished, whose seats are
-        an incomplete sample. Each batched seat is read from its FIRST
-        billed response — its request in the first round it rode, submitted
-        after the lead's release — so a seat the round ceiling settled as a
-        failure still counts if it has one. The lineage is ``warm`` only when
+        an incomplete sample. Each batched seat is read from the reply its
+        FIRST batch brought back (``first_reply``), submitted after the
+        lead's release, so a seat the round ceiling settled as a failure
+        still counts if it has one. A seat whose first item errored has
+        none: its retry ran in a later round, where it could read a copy an
+        earlier batched seat stored rather than the lead's, so it is
+        unmeasured (Codex, PR #227). The lineage is ``warm`` only when
         the lead's wait ended on its first output and none of its requests
         failed: a lead that timed out, or whose first request failed fast
         (its ``finally`` releases the wait too), had no copy the batch could
@@ -6401,16 +6412,11 @@ def _run_batch_calls(
                 if lead.key not in streamed:
                     continue
                 result = states[lead.key].settled
-                batched_first = []
-                for key in lead.members:
-                    if key == lead.key:
-                        continue
-                    settled = states[key].settled
-                    batched_first.append(
-                        settled.billed[0]
-                        if settled is not None and settled.billed
-                        else None
-                    )
+                batched_first = [
+                    states[key].first_reply
+                    for key in lead.members
+                    if key != lead.key
+                ]
                 lineages.append(
                     cost_checks.WarmLeadLineage(
                         kind=lead.kind,
@@ -6599,6 +6605,11 @@ def _run_batch_calls(
             message = "Batched verification submission returned no batch id."
             settle_all(pending, message, FailureClass.UNKNOWN.value)
             return finish("failed", round=round_index + 1, error=message)
+        for key in pending:
+            # A refused submission ran nothing, so it is not a seat's first
+            # batch; the first one the provider accepted is.
+            if states[key].first_round is None:
+                states[key].first_round = round_index
         emit("submitted", round=round_index + 1, batch_id=batch_id, submitted=len(requests))
 
         last_counts: dict[str, int] | None = None
@@ -6685,6 +6696,16 @@ def _run_batch_calls(
                 "Batched verification returned no result for this seat.",
                 FailureClass.UNKNOWN.value,
             )
+
+        # The reply each seat's FIRST batch brought back, for the warm lead's
+        # self-check (see ``_BatchSeatState.first_reply``). Responses are
+        # only ever appended, and a restart moves them to ``billed`` in
+        # order, so the first of these is the earliest the seat has.
+        for key in pending:
+            state = states[key]
+            if state.first_round == round_index:
+                replies = [*state.billed, *state.all_responses]
+                state.first_reply = replies[0] if replies else None
 
     # settle_all, not a bare loop: a lead still streaming is unsettled but
     # was never a batched seat, and finish() joins it for its real record.

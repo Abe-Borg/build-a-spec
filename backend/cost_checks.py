@@ -649,9 +649,11 @@ class WarmLeadLineage:
     - ``model`` — the model its seats were sent to;
     - ``lead_usage`` — every billed response of the lead, summed
       (``usage_ledger.usage_to_dict``'s keys); billed at list price;
-    - ``batched_first`` — each OTHER seat's first billed response (its
-      request in the phase's first round, submitted after the lead's
-      release), or ``None`` for a seat that has none;
+    - ``batched_first`` — each OTHER seat's reply to the first batch it
+      rode (submitted after the lead's release), or ``None`` for a seat
+      whose first batch brought none. A retried seat's later reply is never
+      here: it ran after that round ended, when it could read a copy an
+      earlier batched seat stored rather than the lead's;
     - ``warm`` — whether the batch went out after the lead's entry was
       readable: the lead's first output arrived before the wait ended and
       none of its requests failed. When it did not, the batch had no copy of
@@ -746,9 +748,9 @@ def _seat_prefix(response: Any) -> tuple[int, int] | None:
     """A batched seat's first iteration, as ``(read, write)`` cached tokens.
 
     ``None`` — the seat is unmeasured, counted and never guessed — when the
-    seat has no billed response, its first iteration cannot be read (a
-    web-tooled seat that searched, with no ``usage.iterations`` reported), or
-    it read and wrote nothing.
+    seat's first batch brought no reply, its first iteration cannot be read
+    (a web-tooled seat that searched, with no ``usage.iterations``
+    reported), or it read and wrote nothing.
     """
     counts = first_iteration_usage(response)
     if counts is None:

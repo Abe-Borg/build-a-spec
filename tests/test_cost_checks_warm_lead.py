@@ -46,7 +46,7 @@ from backend.spec_modules import DEFAULT_MODULE
 from backend.tracing.redaction import _SECRET_KEY_PATTERN, scrub_data
 from tests.fakes import pause_response, qc_verdict_response, search_result_block
 from tests.test_cost_checks_tail_rejection import _CountingLock
-from tests.test_qc_batch_verification import _bad_request, _store
+from tests.test_qc_batch_verification import _bad_request, _rate_limited, _store
 from tests.test_qc_batch_warm_lead import (
     _LeadClient,
     _LeapClock,
@@ -812,6 +812,74 @@ def test_a_paused_seat_is_measured_from_its_first_response(monkeypatch) -> None:
     (lineage,) = _warm_block()["last_check"]["lineages"]
     assert (lineage["measured"], lineage["read_share"]) == (9, 1.0)
     assert lineage["prefix_tokens"] == 30_000
+
+
+def test_a_retried_seat_is_measured_only_by_its_first_batch(monkeypatch, caplog) -> None:
+    """A seat whose item in its first batch errored is retried in the next
+    round, after that round has ended, when it can read a copy an EARLIER
+    batched seat stored rather than the lead's (Codex, PR #227). So the check
+    reads a seat's reply to the first batch it rode, and a seat whose first
+    batch brought none is unmeasured.
+
+    Eighteen no-web seats: the lead, 8 batched seats that wrote the prefix
+    in round 1, and 9 whose round-1 items errored and whose round-2 retries
+    read it (from the writers' copies). Read from their retries the lineage
+    would read 9 of 17 and keep the lead; read from their first batch it
+    reads 0 of 8 measured, with the 9 retried seats unmeasured."""
+    caplog.set_level(logging.WARNING, logger="buildaspec.cost_checks")
+    _minimums_at_the_floor(monkeypatch)
+    titles, scripts = _doc_scripts(count=9)
+    overloaded = RuntimeError("overloaded")  # an api_error line: retryable
+
+    def seat(tokens: dict[str, int]) -> SimpleNamespace:
+        return qc_verdict_response(True, tokens=tokens)
+
+    # A title's queue is popped in submission order: its first seat, then its
+    # second, then round 2's retries. The lead took the first title's first
+    # turn before any batch.
+    scripts[titles[0]] = [scripts[titles[0]][0], overloaded, seat(_READ)]
+    for title in titles[1:5]:
+        scripts[title] = [seat(_WROTE), seat(_WROTE)]
+    for title in titles[5:]:
+        scripts[title] = [overloaded, overloaded, seat(_READ), seat(_READ)]
+    client = _LeadClient(scripts)
+    result = _run(client)
+
+    assert client.streamed == [titles[0]]
+    assert [len(batch) for batch in client.batches.created] == [17, 9]
+    assert result.execution_status == "complete"
+    (lineage,) = _warm_block()["last_check"]["lineages"]
+    assert (lineage["seats"], lineage["measured"], lineage["unmeasured"]) == (18, 8, 9)
+    assert lineage["read_share"] == 0.0
+    assert lineage["verdict"] == "not_read"
+    assert not cost_checks.warm_lead_enabled()
+    assert len(_warnings(caplog)) == 1
+
+
+def test_a_refused_submission_is_not_a_seats_first_batch(monkeypatch) -> None:
+    """A 429 on the first ``batches.create`` ran nothing, so it is no seat's
+    first batch: the batch the provider accepted next is, and its replies
+    are read as usual."""
+    _minimums_at_the_floor(monkeypatch)
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+    titles, scripts = _doc_scripts()
+    creates = {"n": 0}
+
+    def refuse_the_first(_requests) -> None:
+        creates["n"] += 1
+        if creates["n"] == 1:
+            raise _rate_limited()
+
+    client = _LeadClient(scripts, on_create=refuse_the_first)
+    result = _run(client)
+
+    assert creates["n"] == 2
+    assert len(client.batches.created) == 1
+    assert result.execution_status == "complete"
+    (lineage,) = _warm_block()["last_check"]["lineages"]
+    assert (lineage["measured"], lineage["unmeasured"]) == (9, 0)
+    assert lineage["read_share"] == 1.0
+    assert lineage["verdict"] == "kept"
 
 
 def test_a_lead_whose_first_request_failed_is_not_judged(monkeypatch) -> None:

@@ -136,7 +136,7 @@ test("a round-less frame merges normally rather than being judged", () => {
   assert.deepEqual(merged.events.map((e) => e.seq), [0, 1]);
 });
 
-test("merge never writes status, error or profile", () => {
+test("within a run, merge never writes status, error or profile", () => {
   const base: ResearchSnapshot = {
     status: "complete",
     error: "boom",
@@ -179,6 +179,126 @@ test("a restart of the SAME round number after a stop resets the log", () => {
   const stopped: ResearchSnapshot = { ...snapshot, status: "failed" };
   const restarted = mergeResearchEvent(stopped, started(2));
   assert.deepEqual(restarted.events.map((e) => e.seq), [0]);
+});
+
+/* --- a new run takes its own lifecycle (the stuck "complete" drawer) --- */
+
+const finishedRound = (round: number): ResearchSnapshot => ({
+  status: "complete",
+  error: "",
+  events: [
+    started(round),
+    evt(1, "dimension_complete", { round }),
+    evt(2, "research_complete", { round }),
+  ],
+  profile: profile(4),
+});
+
+test("a new round's start frame takes that round's running state, not the last one's", () => {
+  const next = mergeResearchEvent(finishedRound(1), started(2));
+  assert.equal(next.status, "running");
+  assert.equal(next.error, "");
+  assert.deepEqual(next.events.map((e) => e.round), [2]);
+  // Rounds accumulate, and the server keeps the profile through the next
+  // round: the reset replaces the LOG, never the findings.
+  assert.equal(next.profile?.item_count, 4);
+});
+
+test("a restart after a stop drops the stop's error with its status", () => {
+  const stopped: ResearchSnapshot = {
+    status: "failed",
+    error: "Stopped by user — this round's progress was discarded.",
+    error_kind: "",
+    events: [started(2), evt(1, "research_failed", { round: 2 })],
+    profile: profile(7),
+  };
+  const restarted = mergeResearchEvent(stopped, started(2));
+  assert.equal(restarted.status, "running");
+  assert.equal(restarted.error, "");
+  assert.equal(restarted.error_kind, "");
+
+  const refused: ResearchSnapshot = {
+    ...stopped,
+    error: "no API key",
+    error_kind: "auth_error",
+  };
+  const retried = mergeResearchEvent(refused, started(2));
+  assert.equal(retried.error_kind, "");
+});
+
+test("the refetch a new round's start triggers cannot leave it looking finished", () => {
+  // The reproduced bug. Press Research again (any scope) after a round has
+  // finished: the stream replays the new round's first frames, the start
+  // frame triggers a status refetch, and the server answers with exactly
+  // the frames the stream had already delivered. At that equal watermark
+  // the reconcile keeps the local terminal status — right for a status
+  // that belongs to the log beside it, wrong for the LAST round's
+  // `complete` riding along with this round's log. The drawer then said
+  // "complete", with Research again still clickable, until the round ended.
+  let local = mergeResearchEvent(finishedRound(1), started(2));
+  local = mergeResearchEvent(local, evt(1, "dimension_started", { round: 2 }));
+  const peer: ResearchSnapshot = {
+    status: "running",
+    error: "",
+    events: [started(2), evt(1, "dimension_started", { round: 2 })],
+    profile: profile(4),
+  };
+  const decision = reconcileResearchSnapshotUpdate(local, peer, {
+    requestGeneration: 5,
+    currentGeneration: 5,
+  });
+  assert.equal(decision.accepted, true);
+  assert.equal(decision.snapshot.status, "running");
+  assert.equal(isResearchActiveSnapshot(decision.snapshot), true);
+
+  // A slower fetch that has not caught up is still rejected — and the
+  // snapshot it leaves in place is the running one.
+  const behind: ResearchSnapshot = { status: "running", error: "", events: [started(2)] };
+  const rejected = reconcileResearchSnapshotUpdate(local, behind);
+  assert.equal(rejected.accepted, false);
+  assert.equal(rejected.snapshot.status, "running");
+});
+
+test("the same race after a stop shows the restarted round running", () => {
+  const stopped: ResearchSnapshot = {
+    status: "failed",
+    error: "Stopped by user — this round's progress was discarded.",
+    events: [started(2), evt(1, "research_failed", { round: 2 })],
+    profile: profile(7),
+  };
+  const local = mergeResearchEvent(stopped, started(2));
+  const peer: ResearchSnapshot = {
+    status: "running",
+    error: "",
+    events: [started(2)],
+    profile: profile(7),
+  };
+  const decision = reconcileResearchSnapshotUpdate(local, peer);
+  assert.equal(decision.snapshot.status, "running");
+  assert.equal(decision.snapshot.error, "");
+});
+
+test("a later round's frame without its start frame takes the state that frame says", () => {
+  const worker = mergeResearchEvent(
+    finishedRound(3),
+    evt(1, "dimension_started", { round: 4 }),
+  );
+  assert.equal(worker.status, "running");
+  assert.deepEqual(worker.events.map((e) => e.round), [4]);
+
+  // A terminal frame is never read as "running": the run it opens has
+  // already ended, and the milestone refetch it triggers brings the rest.
+  const ended = mergeResearchEvent(
+    finishedRound(3),
+    evt(6, "research_complete", { round: 4 }),
+  );
+  assert.equal(ended.status, "complete");
+  const failed = mergeResearchEvent(
+    finishedRound(3),
+    evt(6, "research_failed", { round: 4, error: "every area failed" }),
+  );
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error, "every area failed");
 });
 
 test("merge ignores the stream_end sentinel", () => {

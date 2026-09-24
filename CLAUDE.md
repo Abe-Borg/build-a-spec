@@ -2427,6 +2427,10 @@ tests/
                            failed write's 500 with the old file whole and no
                            temp left, the lenient reader's matrix, the bounds,
                            and the launch token in front of both routes
+  frontend/tests/actionBar.test.ts
+                           the document panel's action bar fits the pane:
+                           a wrapping row of one-line groups, every label
+                           nowrap, every tour anchor and capability kept
   frontend/tests/panelTray.test.ts
                            the tray's pure rules (strict read, round trip, a
                            fold keeping the per-panel choice, the tour lock,
@@ -17172,6 +17176,75 @@ and the traps.
      too. The Event protocol section's `dimension_retry` payload is
      reference, not notes, and was updated in place, as were the Layout
      entries for the retry policy, the two engines and the new test file.
+
+## The action bar fits the pane — implemented notes
+
+Found while checking the panel tray (PR #214) and recorded under "Found, not
+done" in "Room for the paper". The document panel's top action bar — the draft
+action, the version stepper, Compare, Export, Next section, Save, Open, Import
+Spec, Attach Document — did not fit the pane. Frontend only: no route, SSE
+event, dependency, env knob, project-format change or VERSION bump.
+
+- **Measured before anything changed**, in Chromium against the built app
+  (backend `create_app()` with an imported master, so the lint badge and
+  *✨ Adapt imported draft* both show):
+  - 1440×900 (pane 778px): *Export ▾*, *Next section →*, *Import Spec* and
+    *Attach Document* each broke onto two lines (bar 64px), and the Adapt
+    button ran 8px under the stepper's `‹`.
+  - 1100×700 (pane 594px): the same four broke (*Next section →* onto three
+    lines; bar 81px), and the Adapt button sat under the whole stepper and
+    Compare (68px of overlap with Compare).
+- **Two causes.** No control carried `whitespace-nowrap`, so the right-hand
+  group squeezed its labels onto more lines. And the left group was
+  `min-w-0` while its Tip wrapper was `shrink-0`: the group shrank below its
+  own content and the draft button overflowed into the stepper beside it.
+  The controls' natural single-line width is ~890–910px, against 738px of
+  content at 1440, so no amount of squeezing would fit one row.
+- **The fix is a wrapping row of four one-line groups**: the draft action
+  (lint badge + draft button, `mr-auto`), the version history (stepper +
+  Compare), the outputs (Export + Next section), the files (Save, Open, Import
+  Spec, Attach Document). Each group is `shrink-0` and the bar is
+  `flex-wrap justify-end gap-x-3 gap-y-2`, so it breaks BETWEEN groups, never
+  inside a label or on top of a neighbour, and a wrapped line sits on the
+  right like the row above it. `actionButton` (the bar's shared class, also
+  used by *Edit freely*) gained `whitespace-nowrap`, as did both draft
+  buttons and the lint badge. The thin divider before Export went: a group
+  that starts a wrapped line would have led with it, and the group gap
+  already separates them.
+- **Wrapping beat the other two approaches.** An overflow menu would have put
+  *Import Spec* and *Attach Document* — both tour anchors the spotlight lands
+  on — inside a closed menu. Shorter labels at narrow widths save ~160px,
+  which still does not make one row at 1440 once the Save caret or a
+  two-digit lint count is there.
+- **After**, same harness (no label wraps, no overlap, nothing clipped, bar
+  `scrollWidth == clientWidth` in every case):
+  - 1100×700 and 1440×900: two rows, bar 83px — with and without the Save
+    caret (a save target), on an empty document (*✨ Draft full section*),
+    and in compare mode (*Exit compare*).
+  - A 440px pane (860-wide window, below the app's minimum): three rows,
+    118px. A 1920×1080 window: one row, 49px.
+  - The honest cost: at the default 1440 window the bar is 19px taller than
+    before (64 → 83px); at 1100 it is 2px taller. Before, that height went
+    to labels broken over two and three lines.
+- **Every `data-tour` and `data-capability` stays on the control it names**;
+  the tour's anchors and the capability contract are untouched, and
+  `TOUR_VERSION` does not move.
+- **Tests**: `frontend/tests/actionBar.test.ts` (3, source-level, registered
+  in `package.json`): the wrapping bar and its four unshrinkable groups with
+  no `min-w-0`; nowrap on the shared action class, both draft buttons and the
+  lint badge; every tour anchor and capability still in the bar. Revert
+  matrix, each reverted in place and restored: the bar not wrapping,
+  the draft group shrinkable again, the action class wrapping, the Adapt
+  button wrapping, the history group shrinkable, the Compare anchor moved
+  off — 1 red each.
+- **Harness trap, again**: killing the harness server by a `server.py`
+  pattern matched the invoking shell's own command line (exit 144, the trap
+  "Choosing research areas registers" records). Kill by the listening port
+  (`ss -ltnp`) instead.
+- **Errata** (append-only, so recorded here): "Room for the paper — implemented
+  notes (the panel tray)" lists under "Found, not done" that the action bar
+  wraps its labels at 1440 and overlaps its left-hand controls at 1100. Both
+  are fixed here.
 
 ## Research and Final QC cost, Tier 1, as shipped — implemented notes (closeout)
 

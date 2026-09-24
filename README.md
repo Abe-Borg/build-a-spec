@@ -1061,9 +1061,13 @@ real saved files before it is trusted. The plan is
 where it stands is
 [`docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`](docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md),
 and nowhere else. It is being built one chunk at a time. So far a user sees
-one change: Final QC's first stage starts a few seconds later (Chunk 2,
-below). Chunks 3 and 4 are built but ship switched off, so they change
-nothing until a measured run says each one is safe and pays.
+one change in an ordinary run: Final QC's first stage starts a few seconds
+later (Chunk 2, below). When a request fails for a passing reason — a rate
+limit, a server error, a dropped connection — a research area or a review
+now carries on from the step that failed instead of starting over (Chunk 5,
+below); that has no switch, and shows only when something fails. Chunks 3
+and 4 are built but ship switched off, so they change nothing until a
+measured run says each one is safe and pays.
 
 ### Measure what research costs (Chunk 1)
 
@@ -1237,6 +1241,55 @@ stored.
   than cache writes; `tools\qc_export_cost_profile.py` shows the same for the
   compliance lens. There is no activity-log line for it: the profilers are
   how you see it.
+
+### A dropped connection resumes instead of starting over (Chunk 5)
+
+A research area — or a Final QC call that searches the web — can take many
+steps: an opening request, then one more every time the provider pauses it
+to finish its web work. A passing failure (a rate limit, a server error, a
+dropped connection) can land halfway through. Every retry used to throw away
+the steps already finished, and paid for, start the call from the top, and
+pay for those steps again.
+
+Now the first retry sends the request that failed again, inside the same
+conversation: the pages already read, the steps already taken and the count
+of steps all carry on. If that retry fails too, the last attempt still starts
+fresh, exactly as every retry used to. So the most this can cost is the one
+attempt it spends on the resume, in the rare case where a conversation keeps
+failing.
+
+- **No switch.** The fresh last attempt is the safety net, which is why this
+  is the one change in the program that ships without an operator switch.
+- **Where it applies:** every retry in research and Final QC follows the
+  rule — research areas, every streamed Final QC call and the batched
+  reviewers — but only a call that has already finished a step has anything
+  to resume, and only a call that searches or fetches the web ever pauses.
+  In practice that is research areas, Final QC's code-compliance review and
+  the reviewers that check its findings. A batched reviewer whose request
+  comes back with a passing error sends that same request again in the next
+  round. A refused batch submission is sent again the same way, reviewer by
+  reviewer.
+- **Only the request's own failure resumes.** If something fails after the
+  provider's answer arrived, while the app was preparing the next step, the
+  retry starts fresh, as before. So does a retry before the call had
+  finished any step: there is nothing to keep.
+- **What does not change:** what each call is asked and what it finds, the
+  number of attempts and the wait between them, and the limits on how many
+  times a call may pause and how many searches it may run — a resumed call
+  gets no fresh allowance. Every response is billed exactly once, and a
+  conversation a fresh start abandons is still billed. The pages a resumed
+  conversation read before the failure still count as sources it read; a
+  conversation abandoned by a fresh start grounds nothing, as before. A Final
+  QC result you already have stays current.
+- **What you see:** the same retry line as before on the research board and
+  in the Review Room — it is true of either kind. The retry event in the
+  trace (Settings → Developer tools → Recent activity shows it) says which
+  kind it was: `"mode": "resume"` or `"mode": "restart"`.
+- **What it saves:** a failure after several finished steps no longer pays
+  for them twice. On a large research area that can be $0.50–2.00 each time
+  it happens. How often it happens has not been measured, and a passing
+  failure cannot be staged on demand; the value is in removing the worst
+  case.
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -1895,9 +1948,11 @@ actions.
   applicable remain visible; a zero-finding lens is therefore not a blank
   assertion that everything was fine. These are concise records of work and
   results, not private model chain-of-thought.
-  Accepted final-attempt queries/retrievals are kept separate from all billed
-  attempts, so failed fetches and evidence from an abandoned retry remain
-  visible for cost/accountability without being allowed to ground a finding.
+  Accepted queries/retrievals — those of the conversation that produced the
+  result, which a resumed retry carries across attempts — are kept separate
+  from all billed attempts, so failed fetches and evidence from a
+  conversation a fresh-start retry abandoned remain visible for
+  cost/accountability without being allowed to ground a finding.
 - **Adversarial verification is seat-by-seat and auditable.** Every candidate
   finding faces a panel of independent Opus 5.5 refuters prompted to *refute*
   it (2 for medium/low, 3 for critical/high). The report preserves every

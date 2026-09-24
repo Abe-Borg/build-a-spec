@@ -96,10 +96,13 @@ from ..reference_docs import (
 from ..research.resend_sanitizer import sanitize_messages_for_resend
 from ..research.retry_policy import (
     DEFAULT_REALTIME_RETRY_POLICY,
+    RETRY_MODE_RESTART,
+    RETRY_MODE_RESUME,
     FailureClass,
     classify_exception,
     compute_backoff_seconds,
     is_retryable_failure_class,
+    retry_mode,
 )
 from ..research.schema import (
     build_web_fetch_tool,
@@ -3247,7 +3250,10 @@ def _verifier_request_suffix(finding: dict, lens: QCLens) -> str:
 @dataclass
 class _CallResult:
     payload: dict | None
-    responses: list[Any]  # the final attempt's responses (grounding + parse)
+    # The final CONVERSATION's responses (grounding + parse). A retry that
+    # resumed carries its conversation across attempts, so this can span
+    # them; a conversation a restart abandoned is in ``billed`` only.
+    responses: list[Any]
     billed: list[Any]  # every billed response across attempts (usage)
     error: str = ""
     api_request_count: int = 0
@@ -3642,8 +3648,21 @@ def _run_streaming_call(
     A ``pause_turn`` resume re-declares the provider container id when the
     paused response carried one: a pending code-execution-called server tool
     can only be resumed inside the container it started in. The id is
-    attempt-local — a retry starts a fresh conversation and must not inherit
-    it — and never enters messages, cacheable content, or ``QCResult``.
+    conversation-local — carried by every continuation, a request resumed
+    after a failure included, and dropped only when a retry RESTARTS the
+    conversation — and never enters messages, cacheable content, or
+    ``QCResult``.
+
+    A transient failure RESUMES the conversation rather than starting it over
+    (cost Tier 1, Chunk 5; ``retry_mode``): when the failed request belongs
+    to a conversation that already has a completed response, and the retry
+    about to run is not the final attempt, the same request is sent again
+    with the conversation so far. Otherwise it RESTARTS, as every retry used
+    to: the abandoned conversation's responses stay billed (``billed``) and
+    stop grounding anything (they are not in ``responses``), and the next
+    attempt begins from the opening request. The final attempt always
+    restarts, and the continuation budget is the conversation's, so a resume
+    never earns a pause loop a second allowance.
 
     ``first_output`` (a staggered launch's leader only) is set three ways,
     and it is idempotent, so all three can fire: on the first streamed
@@ -3685,32 +3704,58 @@ def _run_streaming_call(
         search_ceiling = max(1, max_searches * 2)
         policy = DEFAULT_REALTIME_RETRY_POLICY
         attempts = max(1, policy.max_attempts)
-        billed: list[Any] = []
         api_request_count = 0
         activity_state: dict[str, str] = {"kind": ""}
+
+        def opening_messages() -> list[dict]:
+            return [
+                {
+                    "role": "user",
+                    "content": _qc_user_content(
+                        shared_prefix, request_suffix, cache_ttl
+                    ),
+                }
+            ]
+
+        # The CONVERSATION, hoisted out of the attempt loop so a retry can
+        # RESUME it (cost Tier 1, Chunk 5; ``retry_mode``) — the same rule as
+        # the research fan-out: its messages, its responses, its provider
+        # container, and — as ``len(all_responses)`` — its continuation
+        # count. A RESTART replaces all four; a resume keeps them and sends
+        # the request that failed again.
+        messages: list[dict] = opening_messages()
+        all_responses: list[Any] = []
+        # Conversation-local: every continuation carries it, a resumed
+        # request included; a restart is a new conversation and must not
+        # inherit the abandoned one's provider container.
+        container_id = ""
+        # Responses of conversations a RESTART abandoned — billed, never
+        # grounding. A resume moves nothing here.
+        billed: list[Any] = []
 
         for attempt in range(attempts):
             if should_stop():
                 return _CallResult(
-                    None, [], billed, "Cancelled by user.", api_request_count
+                    None,
+                    all_responses,
+                    # A resumed conversation's responses are billed too.
+                    [*billed, *all_responses],
+                    "Cancelled by user.",
+                    api_request_count,
                 )
             is_last = attempt == attempts - 1
-            all_responses: list[Any] = []
-            # Reset per ATTEMPT, never per continuation — same rule as the
-            # research fan-out. A retry is a new conversation and must not
-            # inherit the failed attempt's provider container.
-            container_id = ""
+            # True only while a request is in flight: the one failure a
+            # resume can honestly send again. Anything raised after a
+            # response arrived (the resend sanitizer, parsing) restarts, as
+            # every retry used to.
+            in_request = False
             try:
-                messages: list[dict] = [
-                    {
-                        "role": "user",
-                        "content": _qc_user_content(
-                            shared_prefix, request_suffix, cache_ttl
-                        ),
-                    }
-                ]
                 completed = False
-                for _ in range(QC_MAX_CONTINUATIONS + 1):
+                # The CONVERSATION's budget — the opening request plus
+                # QC_MAX_CONTINUATIONS continuations, however many attempts
+                # carried it. A failed request adds no response, so sending
+                # it again spends none of it.
+                while len(all_responses) <= QC_MAX_CONTINUATIONS:
                     if should_stop():
                         return _CallResult(
                             None,
@@ -3719,10 +3764,13 @@ def _run_streaming_call(
                             "Cancelled by user.",
                             api_request_count,
                         )
+                    # Every request sent counts, a failed one and the resend
+                    # that follows it both — "client API requests" includes
+                    # retries, as it always has.
                     api_request_count += 1
                     # Fresh copy per request. ``request_kwargs`` — and with it
                     # every cache breakpoint above — stays byte-identical for
-                    # the whole attempt; the container is a top-level argument
+                    # the whole call; the container is a top-level argument
                     # beside it, never inside the system block, the tools, or
                     # ``_qc_user_content``.
                     stream_kwargs = dict(request_kwargs)
@@ -3731,10 +3779,14 @@ def _run_streaming_call(
                     if continuation_cache and _is_continuation(messages):
                         # The continuation tail: beside the container, never
                         # in a block, and only on a resume (the constant says
-                        # why). 5 minutes after this call's 1h markers too.
+                        # why). 5 minutes after this call's 1h markers too. A
+                        # request resumed after a failure is built here from
+                        # the same messages, so it carries the tail exactly as
+                        # the request that failed did.
                         stream_kwargs["cache_control"] = dict(
                             _CONTINUATION_CACHE_CONTROL
                         )
+                    in_request = True
                     try:
                         with client.messages.stream(
                             messages=messages, **stream_kwargs
@@ -3754,6 +3806,7 @@ def _run_streaming_call(
                         # was not never will be, so there is nothing to wait for.
                         if first_output is not None:
                             first_output.set()
+                    in_request = False
                     all_responses.append(response)
                     # Latest nonblank wins: a continuation that omits the field
                     # has not revoked the container.
@@ -3833,7 +3886,20 @@ def _run_streaming_call(
                         api_request_count,
                         failure_class.value,
                     )
-                billed.extend(all_responses)
+                # Resume first, restart last.
+                mode = retry_mode(
+                    progressed=in_request and bool(all_responses),
+                    next_attempt=attempt + 1,
+                    attempts=attempts,
+                )
+                if mode == RETRY_MODE_RESTART:
+                    # A new conversation. The abandoned one's spend stays
+                    # billed (and its evidence attempted-only); its messages
+                    # and its container do not carry over.
+                    billed.extend(all_responses)
+                    all_responses = []
+                    messages = opening_messages()
+                    container_id = ""
                 backoff = compute_backoff_seconds(
                     policy, attempt=attempt, failure_class=failure_class
                 )
@@ -3845,14 +3911,17 @@ def _run_streaming_call(
                         "max_attempts": attempts,
                         "reason": failure_class.value,
                         "backoff_s": round(backoff, 1),
+                        "mode": mode,
                     }
                 )
+                # The next request re-announces its first phase, resumed or
+                # fresh, so the card moves off the retry notice.
                 activity_state["kind"] = ""
                 time.sleep(backoff)
         return _CallResult(
             None,
-            [],
-            billed,
+            all_responses,
+            [*billed, *all_responses],
             "QC call failed after all attempts.",
             api_request_count,
         )
@@ -5569,11 +5638,14 @@ class _BatchSeatState:
         ]
 
     def restart_attempt(self) -> None:
-        """Begin a fresh attempt: a retry is a NEW conversation.
+        """Begin the next attempt on a NEW conversation: the retry that restarts.
 
-        Same rule as the streaming path — the failed attempt's responses stay
-        billed (the spend was real) but its conversation and its provider
-        container are abandoned rather than inherited.
+        Resume first, restart last (``retry_mode``; cost Tier 1, Chunk 5):
+        this is the retry for a seat with no progress to keep, or on its
+        final attempt. Same rule as the streaming path — the abandoned
+        conversation's responses stay billed (the spend was real) but its
+        messages, its provider container and its continuation count are
+        dropped rather than inherited.
         """
         self.billed.extend(self.all_responses)
         self.all_responses = []
@@ -5581,6 +5653,36 @@ class _BatchSeatState:
         self.container_id = ""
         self.attempt += 1
         self.continuations = 0
+
+    def resume_attempt(self) -> None:
+        """Begin the next attempt INSIDE the same conversation: the resume.
+
+        The seat's messages, responses, container and continuation count all
+        carry on, so the next round submits exactly the request that failed —
+        a pause_turn continuation it had already earned, not a fresh start
+        that pays for every finished continuation again. Only the attempt
+        advances, so the attempt ceiling and the backoff read it as they
+        always did, and the continuation budget stays the conversation's.
+        """
+        self.attempt += 1
+
+    def retry(self, *, attempts: int) -> str:
+        """Advance to the next attempt by the resume-first rule; its mode.
+
+        A batch seat's failure is always its request's own — an errored
+        result line, or a submission refused before anything ran — so a
+        completed response is all the progress the rule needs to see.
+        """
+        mode = retry_mode(
+            progressed=bool(self.all_responses),
+            next_attempt=self.attempt + 1,
+            attempts=attempts,
+        )
+        if mode == RETRY_MODE_RESUME:
+            self.resume_attempt()
+        else:
+            self.restart_attempt()
+        return mode
 
     def settle(self, error: str, failure_class: str = "") -> None:
         self.settled = _CallResult(
@@ -5848,7 +5950,11 @@ def _run_batch_calls(
     step is one batch ROUND rather than one request. Every seat still
     unsettled at the top of a round goes into that round's batch, and each
     result either settles its seat, queues a pause_turn continuation, or
-    queues a retry on a fresh conversation.
+    queues a retry — resume first, restart last, the streaming path's rule
+    (cost Tier 1, Chunk 5): a seat whose conversation has progressed
+    re-submits the request that failed, and only a seat with none, or on its
+    final attempt, starts a fresh conversation. A refused submission is
+    retried the same way, seat by seat.
 
     What is deliberately NOT carried over is the live relay: a batch request
     does not stream, so no per-seat activity/search/fetch frames exist to
@@ -6239,9 +6345,9 @@ def _run_batch_calls(
                 return finish("failed", round=round_index + 1, error=message)
             settle_all(exhausted, message, failure_class.value)
             retrying = [key for key in pending if states[key].settled is None]
-            # Keyed on the seats' own attempt counter (read BEFORE
-            # restart_attempt advances it, the _apply_batch_item convention),
-            # never on round_index — see the note above the helper.
+            # Keyed on the seats' own attempt counter (read BEFORE the retry
+            # advances it, the _apply_batch_item convention), never on
+            # round_index — see the note above the helper.
             seat_attempt = max(states[key].attempt for key in retrying)
             backoff = min(
                 _BATCH_SUBMISSION_BACKOFF_CAP_SECONDS,
@@ -6250,7 +6356,11 @@ def _run_batch_calls(
                 ),
             )
             for key in retrying:
-                states[key].restart_attempt()
+                # Nothing ran, so a seat with progress RESUMES: the next
+                # round submits the very messages this round tried to
+                # (cost Tier 1, Chunk 5). One without progress, or on its
+                # final attempt, restarts as before.
+                mode = states[key].retry(attempts=attempts)
                 event_sink(
                     {
                         "type": f"{seat_event_prefix}_retry",
@@ -6259,6 +6369,7 @@ def _run_batch_calls(
                         "max_attempts": attempts,
                         "reason": failure_class.value,
                         "backoff_s": round(backoff, 1),
+                        "mode": mode,
                     }
                 )
             # Cut short by a Stop or the ceiling; the top of the loop
@@ -6525,7 +6636,10 @@ def _apply_batch_item(
             attempt=state.attempt,
             failure_class=failure_class,
         )
-        state.restart_attempt()
+        # Resume first, restart last (cost Tier 1, Chunk 5): a seat whose
+        # conversation had progressed re-submits the request that failed in
+        # the next round; any other seat starts a fresh conversation.
+        mode = state.retry(attempts=attempts)
         event_sink(
             {
                 "type": retry_event,
@@ -6536,6 +6650,7 @@ def _apply_batch_item(
                 # The next round's queue wait is the real backoff here; the
                 # number is reported for parity with the streamed retry line.
                 "backoff_s": round(backoff, 1),
+                "mode": mode,
             }
         )
         return

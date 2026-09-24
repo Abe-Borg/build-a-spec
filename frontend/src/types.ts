@@ -1132,6 +1132,12 @@ export type ResearchRunStatus = "idle" | "running" | "complete" | "failed";
  *  this stream ended without draining. */
 export type ResearchStreamEndStatus = ResearchRunStatus | "superseded";
 
+/** How a research area's or a Final QC call's retry begins, on its
+ *  `{prefix}_retry` event (`backend/research/retry_policy.retry_mode`):
+ *  "resume" sends the failed request again inside the same conversation;
+ *  "restart" starts a fresh one. Informational — nothing folds it yet. */
+export type RetryMode = "resume" | "restart";
+
 export interface ResearchEvent {
   seq: number;
   ts: string;
@@ -1176,6 +1182,11 @@ export interface ResearchEvent {
   max_attempts?: number;
   reason?: string;
   backoff_s?: number;
+  /** On `dimension_retry`: whether the retry picks the same conversation up
+   *  where the failed request left it ("resume"), or starts it over from the
+   *  opening request ("restart" — no progress to keep, or the final
+   *  attempt). Absent from event logs recorded before it existed. */
+  mode?: RetryMode;
   /** On `dimension_complete` / `dimension_failed`: billed web-tool
    *  request counts for the dimension. */
   web_search_requests?: number;
@@ -1710,6 +1721,7 @@ export type QcEvent =
       max_attempts?: number;
       reason?: string;
       backoff_s?: number;
+      mode?: RetryMode;
     })
   | (QcLensEventBase & {
       type: "lens_complete" | "lens_failed";
@@ -1746,6 +1758,7 @@ export type QcEvent =
       max_attempts?: number;
       reason?: string;
       backoff_s?: number;
+      mode?: RetryMode;
     })
   | (QcEventBase & {
       type: "consolidation_complete";
@@ -1804,6 +1817,7 @@ export type QcEvent =
       max_attempts?: number;
       reason?: string;
       backoff_s?: number;
+      mode?: RetryMode;
     })
   | (QcVerifierEventBase & {
       type: "verifier_complete";

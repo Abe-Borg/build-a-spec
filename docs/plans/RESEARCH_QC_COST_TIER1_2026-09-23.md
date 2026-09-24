@@ -1407,7 +1407,133 @@ each as its own commit.
 
 #### As built
 
-*(Filled in by the session that builds this chunk.)*
+Built on 2026-09-24 from `master` at `f3aaf88`. **No gate applies, and there
+is no switch**, as specified. No measurements came with the session (the
+prompt's placeholder was left unfilled, read as "none"), so nothing was
+added to the progress file's Measurements, and — M3 not being recorded — no
+flip was applied under "Also in this session".
+
+Files: `backend/research/retry_policy.py`, `backend/research/engine.py`,
+`backend/qc/engine.py`, `frontend/src/types.ts`, the trust dossier
+(`TrustDeepDiveModal.tsx`, one clause), the new `tests/test_retry_resume.py`,
+the knowing changes in `tests/test_research_engine.py`,
+`tests/test_qc_live_events.py` and `tests/test_qc_audit_report.py`, README
+and CLAUDE.md.
+
+Deviations and additions, each recorded because the spec text is not
+rewritten:
+
+1. **Only a request's own failure resumes (`in_request`).** The rule names
+   two conditions; "re-send the request that failed" implies a third: the
+   failure must be the request's own. `in_request` is True only while the
+   request is in flight (`messages.stream` through `get_final_message()`).
+   A failure after the response arrived — the resend sanitizer, parsing,
+   research's grounding — finds the response appended and the messages
+   possibly not, so there is no request to send again as it stood, and the
+   retry restarts as every retry used to. Both streaming engines therefore
+   pass `progressed = in_request and bool(all_responses)`. The batch has no
+   such window — its failures are always a request's own (an errored result
+   line, a refused submission) — so `_BatchSeatState.retry` reads progress
+   alone. Pinned by `test_a_failure_after_the_response_arrived_restarts` on
+   both engines.
+2. **The rule is one function**, `retry_policy.retry_mode`, beside the
+   policy both engines already import: the ported module's one
+   Build-a-Spec addition, said so in its docstring.
+   `RETRY_MODE_RESUME` / `RETRY_MODE_RESTART` are the wire vocabulary, and
+   `test_every_retry_site_reads_the_one_rule` pins both engines reading the
+   same function.
+3. **The continuation budget is `len(all_responses)`.** `while
+   len(all_responses) <= MAX` replaces `for _ in range(MAX + 1)` in both
+   engines, so the budget is the conversation's by construction and needs no
+   counter carried: a failed request appends no response, so its resend
+   spends none, and a restart empties it with the conversation. The batch
+   keeps its `continuations` counter, which `resume_attempt` carries.
+4. **Every terminal path bills `[*billed, *all_responses]`, and two needed
+   it.** The top-of-attempt Stop read the abandoned pool alone — right while
+   every attempt began from nothing, wrong once a resumed conversation
+   reaches it (a Stop landing in the resume's backoff); pinned. The
+   fallthrough after the attempt loop cannot be reached (every attempt
+   returns or retries, and the last one's failure returns), so its change is
+   consistency only; the revert matrix records it at 0 red, by design.
+5. **`_CallResult.responses` is the final CONVERSATION's**, which a resume
+   carries across attempts; its comment says so. Grounding therefore pools a
+   resumed conversation's pre-failure retrievals with no other change, and a
+   restart still moves the abandoned conversation into `billed`, i.e.
+   attempted-only evidence. Final QC's `api_request_count` still counts
+   every request sent, the failed one and its resend both; its
+   `model_response_count` counts each response once.
+6. **`mode` rides all five retry-emitting sites:** research's
+   `dimension_retry`, the streamed `{prefix}_retry` (lens, consolidation,
+   verifier), and the batch's two `verifier_retry` sites (an errored item, a
+   refused submission). No new event type.
+7. **`_BatchSeatState.retry(attempts=)`** applies the rule, advances the
+   seat, and returns the mode, so the two batch sites cannot apply it
+   differently. The backoff is still read BEFORE the retry advances the
+   attempt (the Batch 1 convention); the refused path's comment now says
+   "the retry", not `restart_attempt`. A streamed lead seat (Chunk 3) is an
+   ordinary `_run_streaming_call` and follows the streaming path.
+8. **The frontend shows nothing new.** `types.ts` gains `RetryMode` and an
+   optional `mode` on the four retry event members. No copy changed: the
+   board's "Retrying (attempt N/M)", the Review Room's "Retrying N/M" and
+   the agent timeline's "retrying in Ns" are accurate for either mode. The
+   mode reaches the activity log and the trace, which mirror every event
+   key.
+9. **The activity state resets on either mode**, so a resumed request
+   re-announces its first phase and the board moves off the retry notice as
+   soon as work resumes, as a restart's always did.
+10. **One trust-dossier clause.** The Research card's bounds said "retries
+    with backoff on transient failures"; they now add that the first picks
+    the conversation up at the step that failed and the last starts it
+    fresh. Nothing else in the dossier describes a retry.
+11. **The spec's research-and-QC tests are ONE assertion set**, parametrized
+    over both engines' call functions (`_run_dimension`, and `_run_lens` on
+    the web-tooled compliance lens), under the names the spec gives: the
+    engines keep separate copies of the loop, so the same test over both is
+    what keeps them together.
+12. **Tests beyond the spec:** the rule's truth table and the one-function
+    pin; `test_a_resumed_continuation_carries_the_tail_the_failed_one_did`
+    (the dependency on Chunk 4: the resent request equals the failed one,
+    byte for byte, tail included, while the opening request carries none);
+    `test_a_stop_during_a_resume_still_bills_the_conversation`;
+    `test_a_failure_after_the_response_arrived_restarts`;
+    `test_a_batched_seat_keeps_its_continuation_budget_across_a_resume` (its
+    pauses search nothing, because a verifier seat's 2× search ceiling, 16,
+    is below the 17 pauses the budget allows);
+    `test_a_batched_seat_on_its_final_attempt_restarts_fresh`;
+    `test_a_research_round_records_the_resume` (through the fan-out, the mode
+    in the round's log); and `test_a_resumed_run_stays_current_like_a_clean_one`,
+    F3 for a chunk with no switch: a run whose compliance lens resumed
+    fingerprints its inputs exactly as a run that never failed.
+13. **Existing tests, as the spec lists.** The two container tests are
+    renamed `test_pause_continuation_echoes_the_container_a_resume_keeps_it_and_a_restart_drops_it`
+    and `test_qc_pause_continuation_echoes_the_container_a_resume_keeps_it_and_a_restart_drops_it`,
+    each now scripted pause → pause → failure (resumed: container kept) →
+    failure (the final attempt: restarted, container dropped) → success; the
+    QC one also asserts the two retry events' modes. The three exact-dict
+    tests gained `"mode": "restart"` and nothing else. Kept green,
+    unchanged: `test_a_retryable_seat_failure_restarts_on_a_fresh_conversation`,
+    `test_retryable_failure_retries_then_succeeds`,
+    `test_retry_success_counts_billed_usage_from_abandoned_attempt` and
+    `test_the_failed_round_bill_counts_a_retried_attempt_exactly_once` — the
+    last two now resume, and their totals (300) are unchanged, the billing
+    invariant working; their "abandoned" wording is left loose, as the spec
+    says.
+14. **One knowing test change the inventory above missed:**
+    `test_failed_fetch_and_abandoned_retry_cannot_ground_final_payload`
+    (`tests/test_qc_audit_report.py`) scripted its abandoned retry as pause →
+    connection failure → success. That retry now resumes, so the page it
+    read is the model's own evidence and grounds the citation, which is the
+    point of the chunk. One more connection failure makes the final
+    attempt's restart the abandonment; the test's name and every assertion
+    stand.
+15. **The release-note draft (§7) is unchanged**; it is accurate as written.
+
+Revert matrix: each mechanism reverted in place, one at a time, restored
+from the exact text read, the tree checked clean afterwards, with the new
+file and the research, live-events, batch-verification, warm-lead,
+continuation-cache, research-rounds, verifier-v3 and stop suites run each
+time. 27 of 29 rows are red; the two at 0 are the unreachable fallthroughs
+(point 4). The counts are in CLAUDE.md's implemented notes.
 
 ---
 

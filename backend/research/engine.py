@@ -75,10 +75,12 @@ from .grounding import (
 from .resend_sanitizer import sanitize_messages_for_resend
 from .retry_policy import (
     DEFAULT_REALTIME_RETRY_POLICY,
+    RETRY_MODE_RESTART,
     FailureClass,
     classify_exception,
     compute_backoff_seconds,
     is_retryable_failure_class,
+    retry_mode,
 )
 from .schema import (
     RESEARCH_ACTIONABILITY_VALUES,
@@ -1831,8 +1833,9 @@ def _dimension_user_content(shared: str, task: str) -> list[dict[str, Any]]:
     posture: the two channels build entirely different requests).
 
     Block 0 — date, project header and the attached reference documents — is
-    byte-identical across every continuation of this dimension's attempt, so
-    it is written to cache once and read thereafter. That matters here more
+    byte-identical across every request this dimension sends (every
+    continuation, resumed or restarted), so it is written to cache once and
+    read thereafter. That matters here more
     than anywhere else in the engine: a ``pause_turn`` continuation re-sends
     the whole conversation, and attached references are the largest thing in
     it, so without this breakpoint a briefed round re-bills them on every
@@ -2201,6 +2204,17 @@ def _run_dimension(
     (:data:`_CONTINUATION_CACHE_CONTROL`) to every request that resumes a
     paused turn, and to nothing else. Off — the default for a direct caller
     — every request is exactly what it always was.
+
+    A transient failure RESUMES the conversation rather than starting it over
+    (cost Tier 1, Chunk 5; :func:`retry_mode`): when the request that failed
+    belongs to a conversation that already has a completed response, and the
+    retry about to run is not the final attempt, the same request is sent
+    again with the conversation so far — messages, responses, container and
+    continuation count all carried. Otherwise it RESTARTS, exactly as every
+    retry used to: the abandoned conversation's responses stay billed, and
+    the next attempt begins from the opening request. The final attempt
+    always restarts. The continuation budget is the conversation's, so a
+    resume never earns a pause loop a second allowance.
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
@@ -2296,9 +2310,33 @@ def _run_dimension(
     policy = DEFAULT_REALTIME_RETRY_POLICY
     attempts_planned = max(1, policy.max_attempts)
 
-    # Responses completed by earlier, retried attempts: a retryable failure
-    # abandons its attempt's conversation but not its billed usage — every
-    # terminal failure reports the cross-attempt aggregate.
+    def _opening_messages() -> list[dict]:
+        return [
+            {
+                "role": "user",
+                "content": _dimension_user_content(shared_context, dimension_task),
+            }
+        ]
+
+    # The CONVERSATION, hoisted out of the attempt loop so a retry can
+    # RESUME it (cost Tier 1, Chunk 5; ``retry_mode``): its messages, its
+    # responses, its provider container, and — as ``len(all_responses)`` —
+    # its continuation count. A RESTART replaces all four; a resume keeps
+    # them and sends the request that failed again.
+    messages: list[dict] = _opening_messages()
+    all_responses: list[Any] = []
+    # Conversation-local, never per continuation and no longer per attempt.
+    # A pending code-execution-called server tool can only be resumed inside
+    # the container it started in, so every continuation of the conversation
+    # carries it — a resumed request included. A restart is a new
+    # conversation, so it must not inherit it: that would point the fresh
+    # request at a provider-side context that no longer belongs to it.
+    container_id = ""
+
+    # Responses of conversations a RESTART abandoned: their billed usage was
+    # real, so every terminal path reports it beside the live conversation's.
+    # A resume moves nothing here — the conversation carries on, and the
+    # terminal ``[*billed_responses, *all_responses]`` counts it once.
     billed_responses: list[Any] = []
 
     for attempt in range(attempts_planned):
@@ -2306,27 +2344,22 @@ def _run_dimension(
             return _failed(
                 "Cancelled by user.",
                 kind=DIMENSION_ERROR_CANCELLED,
-                responses=billed_responses,
+                # A resumed conversation's responses are billed too.
+                responses=[*billed_responses, *all_responses],
             )
         is_last_attempt = attempt == attempts_planned - 1
-        all_responses: list[Any] = []
-        # Reset per ATTEMPT, never per continuation. A retry abandons the
-        # failed attempt's conversation and starts a new one, so inheriting
-        # its container would point the fresh request at a provider-side
-        # context that no longer belongs to it. Continuations *within* this
-        # attempt do carry it — that is the whole obligation.
-        container_id = ""
+        # True only while a request is in flight: the one failure a resume
+        # can honestly send again. Anything raised after a response arrived
+        # (the resend sanitizer, parsing, grounding) restarts, as every
+        # retry used to.
+        in_request = False
         try:
-            messages: list[dict] = [
-                {
-                    "role": "user",
-                    "content": _dimension_user_content(
-                        shared_context, dimension_task
-                    ),
-                }
-            ]
             completed = False
-            for _ in range(RESEARCH_MAX_CONTINUATIONS + 1):
+            # The continuation budget is the CONVERSATION's: the opening
+            # request plus RESEARCH_MAX_CONTINUATIONS continuations, however
+            # many attempts carried it. A failed request adds no response, so
+            # sending it again spends none of the budget.
+            while len(all_responses) <= RESEARCH_MAX_CONTINUATIONS:
                 if should_stop():
                     return _failed(
                         "Cancelled by user.",
@@ -2334,7 +2367,7 @@ def _run_dimension(
                         responses=[*billed_responses, *all_responses],
                     )
                 # Fresh copy per request: ``request_kwargs`` stays byte-
-                # identical for the whole attempt (it leads the cached
+                # identical for the whole dimension (it leads the cached
                 # prefix), and the container rides beside it as a top-level
                 # argument — never inside the system block, the tools, or
                 # any cacheable content.
@@ -2344,9 +2377,13 @@ def _run_dimension(
                 if continuation_cache and _is_continuation(messages):
                     # The continuation tail: beside the container, never in
                     # a block, and only on a resume (the constant says why).
+                    # A request resumed after a failure is built here from
+                    # the same messages, so it carries the tail exactly as
+                    # the request that failed did.
                     stream_kwargs["cache_control"] = dict(
                         _CONTINUATION_CACHE_CONTROL
                     )
+                in_request = True
                 with client.messages.stream(
                     messages=messages, **stream_kwargs
                 ) as stream:
@@ -2361,6 +2398,7 @@ def _run_dimension(
                         activity_state=activity_state,
                     )
                     response = stream.get_final_message()
+                in_request = False
                 all_responses.append(response)
                 # Keep the latest nonblank id: a continuation that omits the
                 # field has not revoked the container, it just didn't repeat
@@ -2444,7 +2482,10 @@ def _run_dimension(
             items = _items_from_payload(payload, dimension.dimension_id)
 
             # Grounding: pool searched + fetched URLs across every response
-            # in the dimension, then validate each item's citations.
+            # of the conversation the model actually saw, then validate each
+            # item's citations. A resumed conversation's retrievals from
+            # before the failure belong to it, so they count; a conversation
+            # a restart abandoned is billed but never grounds anything.
             searched = []
             fetched = []
             for response in all_responses:
@@ -2464,10 +2505,11 @@ def _run_dimension(
                 item.accepted_sources = list(grounding.accepted)
                 item.grounded = grounding.has_any_grounded_citation()
 
-            # Meter the full billed set: a retryable failure abandons its
-            # attempt's conversation but not its billed usage, so a
-            # retry-then-succeed must still account for the earlier spend
-            # (billed_responses) — the meter never under-reports.
+            # Meter the full billed set: a restart abandons a conversation
+            # but not its billed usage, so a retry-then-succeed must still
+            # account for the earlier spend (billed_responses) — the meter
+            # never under-reports. A resumed conversation is all in
+            # all_responses, counted once.
             billed = [*billed_responses, *all_responses]
             tokens = _sum_token_usage(billed)
             return _DimensionOutcome(
@@ -2517,7 +2559,19 @@ def _run_dimension(
                     ),
                     responses=[*billed_responses, *all_responses],
                 )
-            billed_responses.extend(all_responses)
+            # Resume first, restart last.
+            mode = retry_mode(
+                progressed=in_request and bool(all_responses),
+                next_attempt=attempt + 1,
+                attempts=attempts_planned,
+            )
+            if mode == RETRY_MODE_RESTART:
+                # A new conversation. The abandoned one's spend stays
+                # billed; its messages and its container do not carry over.
+                billed_responses.extend(all_responses)
+                all_responses = []
+                messages = _opening_messages()
+                container_id = ""
             backoff = compute_backoff_seconds(
                 policy, attempt=attempt, failure_class=failure_class
             )
@@ -2529,16 +2583,18 @@ def _run_dimension(
                     "max_attempts": attempts_planned,
                     "reason": failure_class.value,
                     "backoff_s": round(backoff, 1),
+                    "mode": mode,
                 }
             )
-            # The fresh attempt starts a new conversation — its first
-            # phase should re-announce itself even if it matches.
+            # The next request re-announces its first phase even if it
+            # matches — a fresh conversation's or a resumed one's alike — so
+            # the board moves off the retry notice as soon as work resumes.
             activity_state["kind"] = ""
             time.sleep(backoff)
     return _failed(
         f"Research failed after {attempts_planned} attempts.",
         kind=DIMENSION_ERROR_EXHAUSTED,
-        responses=billed_responses,
+        responses=[*billed_responses, *all_responses],
     )
 
 

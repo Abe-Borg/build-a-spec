@@ -8,6 +8,12 @@ and nowhere else.** That file also holds the handoff prompt, the session
 procedure, the measurements and the owner decisions. This file is the spec:
 what each chunk builds, why, and how to prove it worked.
 
+**Chunks 3 and 4 are being finished by the Tier 1 finish program** (O7,
+2026-09-24): [`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md)
+and its two plans. Runtime self-checks replace their M3 gate, and each flip
+is a session there (CT-3, WL-2). Their "Flip" and "M3 decides the flip"
+sections below are kept as history; they no longer decide anything.
+
 Written for coding agents that can reason. Each chunk states its intent,
 its constraints, the evidence behind its design, and the files, functions
 and tests it touches. Where the code has moved since this was written, the
@@ -1050,6 +1056,12 @@ rewritten:
 Every mechanism was reverted in place; the matrix is in CLAUDE.md ("Final
 QC's batched phase can stream a lead seat first").
 
+**Finished by the Tier 1 finish program (O7, 2026-09-24).** The flip is no
+longer decided by M3. WL-1 adds a runtime check that the batch reads the
+lead, and WL-2 turns the switch on:
+[`tier1-finish/TIER1_FINISH_CHUNK3_WARM_LEAD_PLAN.md`](tier1-finish/TIER1_FINISH_CHUNK3_WARM_LEAD_PLAN.md),
+tracked in [`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md).
+
 ---
 
 ### Chunk 4 — Cache `pause_turn` continuations
@@ -1291,6 +1303,12 @@ from the exact text read, the tree checked clean after every row, with the
 new file and the research, live-events, batch-verification, warm-lead and
 warm-launch suites run each time. All 22 rows are red; the counts are in
 CLAUDE.md's implemented notes.
+
+**Finished by the Tier 1 finish program (O7, 2026-09-24).** The flip is no
+longer decided by M3. CT-1 makes a refused tail harmless, CT-2 measures what
+the tail saves, and CT-3 turns the switch on:
+[`tier1-finish/TIER1_FINISH_CHUNK4_CONTINUATION_TAIL_PLAN.md`](tier1-finish/TIER1_FINISH_CHUNK4_CONTINUATION_TAIL_PLAN.md),
+tracked in [`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md).
 
 ---
 

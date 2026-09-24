@@ -9,6 +9,15 @@ description or a commit message is not. The spec is
 A new session starts from [How to start a session](#how-to-start-a-session)
 and then follows the [Session procedure](#session-procedure) step by step.
 
+**Chunks 3 and 4 are being finished by another program (O7, 2026-09-24).**
+[`tier1-finish/`](tier1-finish/TIER1_FINISH_TRACKER.md) replaces their M3
+gate with runtime self-checks and then turns both switches on, one session
+and one pull request at a time. Its tracker,
+[`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md),
+is the only record of that work. **This file's flip procedure
+([After the program](#after-the-program)) is retired for Chunks 3 and 4: do
+not run it.** A session asked to flip either chunk starts from that tracker.
+
 **The program is complete** (Chunk 6, the closeout, 2026-09-24). Every
 chunk's code is on `master`. Two switches still ship off. Each flips after
 a measured run passes its test, or on Abraham's waiver of that run. He will
@@ -49,6 +58,12 @@ An open pull request is not a status. The reconcile step finds it on
 GitHub.
 
 ## After the program
+
+> **Superseded for Chunks 3 and 4 by O7 (2026-09-24).** Their flips are now
+> the Tier 1 finish program's sessions CT-3 and WL-2
+> ([`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md)).
+> What follows is kept as the record of how things stood before that; its
+> flip procedure is not to be run.
 
 The closeout (Chunk 6) ended the chunk sequence on 2026-09-24. There is no
 Chunk 7, and the Session procedure has nothing left to pick. Four things were
@@ -366,6 +381,7 @@ record that neither flip can be decided yet (O4, O5).
 | O4 | 2026-09-24 | **Chunk 4's flip (`BUILD_A_SPEC_CONTINUATION_CACHE`), decided by the first flip session as [After the program](#after-the-program) directs: no flip.** The session's prompt left the measurements placeholder unfilled, which is read as "none" (as in O2 and O3). So there is no M3 to apply Chunk 4's test to (the plan, Chunk 4 → "M3 decides the flip"), and no M1 for its "lower uncached input share than M1" to be measured against. The default stays **off**. Nothing was measured, so the flip neither passed nor failed: it is still **owed**. Still needed: M3 with the switch on, from a source checkout — one Research round and one Final QC (the test also fails on a compliance lens or verifier seat refused with `invalid_request`), both profilers on the results, and the error text of anything that failed. M1, the research profiler on projects researched before the trial, is free and is the baseline the test compares against. |
 | O5 | 2026-09-24 | **Chunk 3's flip (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`), decided the same way: no flip.** With no M3 there is no `seat:list-price` row, so no lead ran for the test (the plan, Chunk 3 → "M3 decides the flip") to judge. The default stays **off**, and the flip is still **owed**. Still needed: M3's Final QC half with the switch on — a Final QC large enough that one lineage of verifier seats sharing one copy of the section reaches 20 seats, and the QC profiler on its JSON export, whose `seat:list-price` row says whether a lead ran. One trial serves both chunks: the plan's §8 turns both switches on for the same Research round and Final QC. M2, the QC profiler on the newest Final QC export made before the trial, is free and gives the test its h₀; without it the test takes 0.88. |
 | O6 | 2026-09-24 | **Abraham will not run M3.** Asked for the trial after the first flip session, he answered: "I'm not doing that work." M1, M2 and M4 are not coming either. So Chunk 4 (`BUILD_A_SPEC_CONTINUATION_CACHE`) and Chunk 3 (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) stay **off**, and their flips are **shelved**. They are not abandoned, but nothing planned is waiting on them, and no further flip session is owed. Either flip still needs a measured run after all, or his waiver of the M3 gate for that chunk (the condensing plan's D5 precedent); neither is planned. The release notes stay owed as the plan's §7 says: items 1 and 2 only, while both switches are off. |
+| O7 | 2026-09-24 | **Chunks 3 and 4 are finished by agent sessions, without M3.** Abraham asked for implementation plans for Chunks 3 and 4, carried out by agent sessions one pull request at a time, with no measurement work for him (O6 stands). They are [`tier1-finish/`](tier1-finish/TIER1_FINISH_TRACKER.md)'s two plans and tracker (decision FD1 there): runtime self-checks that can only switch a saving off replace the M3 gate, and each switch then defaults on in a session of its own (CT-3 for Chunk 4, WL-2 for Chunk 3), which Abraham approves by merging its pull request. This file's flip procedure is retired for both chunks, and the tracker is the only record of that work. Until that program's closeout (FIN-1), the root `CLAUDE.md` and `README.md` are not updated (its FD2). |
 
 ## Done checklist (every chunk)
 

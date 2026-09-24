@@ -2,7 +2,7 @@
 
 <!-- TIER1-FINISH-STATUS: IN PROGRESS -->
 
-**Next session:** CT-3 — Turn the continuation tail on
+**Next session:** WL-1 — Check that the batch reads the warm lead
 
 Owner: Abraham. Opened 2026-09-24.
 
@@ -53,7 +53,7 @@ saving on, one pull request per session:
 |---|---|---|---|---|---|
 | CT-1 | Chunk 4 | Survive a rejected continuation tail | done | PR #224 | `cd3ce86` |
 | CT-2 | Chunk 4 | Measure what the continuation tail saves | done | PR #225 | `66c10d8` |
-| CT-3 | Chunk 4 | Turn the continuation tail on | not started | — | — |
+| CT-3 | Chunk 4 | Turn the continuation tail on | done | PR #226 | — |
 | WL-1 | Chunk 3 | Check that the batch reads the warm lead | not started | — | — |
 | WL-2 | Chunk 3 | Turn the warm lead on | not started | — | — |
 | FIN-1 | both | Close out: root docs and the finish line | not started | — | — |

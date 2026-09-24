@@ -1737,7 +1737,7 @@ is a developer tool and has no note.
 - **Which items.** Items 1, 2 and 4 go in any such release: Chunk 2's
   staggered launch is on by default, Chunk 5 has no switch, and Chunk 4's
   continuation tail has defaulted on since the Tier 1 finish program's CT-3
-  (PR #TBD-CT3). Item 3 is *(conditional)*: include it only if
+  (PR #226). Item 3 is *(conditional)*: include it only if
   `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` defaults on in the `backend/settings.py`
   being released. At the closeout both switches were off, each flip owed
   after an M3 pass of that chunk's own test. The Tier 1 finish program (O7)

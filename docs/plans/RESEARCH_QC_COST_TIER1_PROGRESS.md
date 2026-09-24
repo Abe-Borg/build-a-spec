@@ -18,7 +18,7 @@ is the only record of that work. **This file's flip procedure
 ([After the program](#after-the-program)) is retired for Chunks 3 and 4: do
 not run it.** A session asked to flip either chunk starts from that tracker.
 
-**Chunk 4's switch is on (2026-09-24).** That program's CT-3 (PR #TBD-CT3)
+**Chunk 4's switch is on (2026-09-24).** That program's CT-3 (PR #226)
 made `BUILD_A_SPEC_CONTINUATION_CACHE` default on, so where this file says
 two switches ship off, only Chunk 3's (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`)
 still does, until that program's WL-2.

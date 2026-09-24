@@ -91,19 +91,19 @@ Each item mirrors the acceptance criterion with the same ID in its plan
 
 ### CT-1 — Survive a rejected continuation tail
 
-- [ ] CT-1.1 — the `cost_checks` leaf module with one tail latch per engine
-- [ ] CT-1.2 — research re-sends a rejected tail-bearing continuation once, without the tail
-- [ ] CT-1.3 — the same guard in Final QC's `_run_streaming_call`, counting both requests
-- [ ] CT-1.4 — latch unless the tail-free resend is itself rejected with a 400
-- [ ] CT-1.5 — only a tail-bearing stream open is guarded
-- [ ] CT-1.6 — the latch is read on every request and touches nothing else (F3 test)
-- [ ] CT-1.7 — the `cost_checks` diagnostics block, which survives `scrub_data`
-- [ ] CT-1.8 — the conftest resets the latches around every test
-- [ ] CT-1.9 — `tests/test_cost_checks_tail_rejection.py`, with the switch explicit in every test
-- [ ] CT-1.10 — the switch still ships off
-- [ ] CT-1.11 — verified: ruff, pytest, npm test, npm run build
-- [ ] CT-1.12 — revert matrix recorded
-- [ ] CT-1.13 — As built with For FIN-1; root CLAUDE.md and README.md untouched
+- [x] CT-1.1 — the `cost_checks` leaf module with one tail latch per engine — evidence: `backend/cost_checks.py`; `test_cost_checks_is_a_leaf_both_engines_share`, `test_every_read_and_write_takes_the_one_lock`, `test_the_first_latch_wins_and_logs_one_warning`
+- [x] CT-1.2 — research re-sends a rejected tail-bearing continuation once, without the tail — evidence: `test_a_refused_continuation_is_sent_again_once_without_the_tail[research]`
+- [x] CT-1.3 — the same guard in Final QC's `_run_streaming_call`, counting both requests — evidence: `test_a_refused_continuation_is_sent_again_once_without_the_tail[qc]`, `test_a_refused_streamed_verifier_seat_is_sent_again`, `test_a_refused_lens_record_still_reconciles_and_reloads`
+- [x] CT-1.4 — latch unless the tail-free resend is itself rejected with a 400 — evidence: `test_a_resend_refused_too_fails_as_before_and_latches_nothing`, `test_a_resend_that_fails_another_way_latches_then_resumes_without_the_tail` (both engines)
+- [x] CT-1.5 — only a tail-bearing stream open is guarded — evidence: `test_prompt_too_long_is_not_the_tails_refusal`, `test_a_400_on_a_request_without_the_tail_takes_todays_path`, `test_an_error_after_the_stream_opened_is_not_intercepted` (both engines); `test_the_helper_lets_a_failure_inside_the_stream_through_untouched`
+- [x] CT-1.6 — the latch is read on every request and touches nothing else (F3 test) — evidence: `test_the_latch_is_read_on_every_request_after_the_switch`, `test_after_the_latch_a_later_call_sends_exactly_a_switch_off_calls_requests`, `test_a_latch_reaches_a_request_another_thread_builds_next`, `test_a_retained_result_stays_current_after_the_latch`
+- [x] CT-1.7 — the `cost_checks` diagnostics block, which survives `scrub_data` — evidence: `test_diagnostics_report_the_latch_and_survive_the_scrub`
+- [x] CT-1.8 — the conftest resets the latches around every test — evidence: `tests/conftest.py`; `test_the_conftest_resets_the_latches_before_and_after_every_test`, and the pair `test_a_latch_left_set_on_purpose` / `test_the_next_test_starts_with_both_latches_clear`
+- [x] CT-1.9 — `tests/test_cost_checks_tail_rejection.py`, with the switch explicit in every test — evidence: the file's 38 tests; its run helpers take `continuation_cache` as a required keyword
+- [x] CT-1.10 — the switch still ships off — evidence: `backend/settings.py` untouched; `test_continuation_cache_ships_switched_off` unchanged and green
+- [x] CT-1.11 — verified: ruff, pytest, npm test, npm run build — evidence: the plan's CT-1 As built, "Verification"
+- [x] CT-1.12 — revert matrix recorded — evidence: the plan's CT-1 As built, "Revert matrix"
+- [x] CT-1.13 — As built with For FIN-1; root CLAUDE.md and README.md untouched — evidence: the plan's CT-1 As built and its For FIN-1 list; `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md` prints nothing
 
 ### CT-2 — Measure what the continuation tail saves
 

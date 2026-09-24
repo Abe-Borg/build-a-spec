@@ -377,7 +377,7 @@ changes none of them.
 
 ### As built
 
-*Not started.*
+*Built on 2026-09-24; the record follows the list below.*
 
 When you build this session, append here:
 - what was built;
@@ -388,6 +388,352 @@ When you build this session, append here:
   traps, in CLAUDE.md's own style), the Layout entries to add or change,
   any erratum an earlier CLAUDE.md section now needs, and anything the root
   README must say.
+
+#### CT-1 as built (2026-09-24)
+
+Built from `master` at `a82abc3`, on branch
+`claude/trusting-thompson-ltr3tk`. The switch still ships off:
+`backend/settings.py` is untouched, and
+`test_continuation_cache_ships_switched_off` is unchanged and green.
+
+**What was built**
+
+- **`backend/cost_checks.py`** (new): the leaf that holds the self-checks'
+  state. For CT-1, one continuation-tail latch per engine
+  (`ENGINE_RESEARCH = "research"`, `ENGINE_QC = "qc"`), each a `_Latch`
+  of `reason` / `detail` / `since`, under one module lock.
+  - `continuation_tail_enabled(engine)` is the read.
+  - `disable_continuation_tail(engine, *, reason, detail="")` is the
+    write: the first latch wins, one WARNING on `buildaspec.cost_checks`.
+  - `is_tail_rejection(exc)` is the classifier: an
+    `anthropic.BadRequestError` whose text is not "prompt is too long".
+  - `exception_detail(exc)` formats the detail.
+  - `snapshot()` is the diagnostics block; `reset_for_tests()` clears it.
+  - Every entry point an engine calls catches its own exceptions and logs
+    them at DEBUG; a failed read answers `True`, which leaves the tail as
+    the switch set it.
+- **The guard** — `_open_stream`, one copy in each engine, placed beside
+  `_CONTINUATION_CACHE_CONTROL` and `_is_continuation`.
+  - A `contextlib.contextmanager` over one `ExitStack`: the stream is
+    opened with `stack.enter_context(client.messages.stream(...))` inside
+    one `try`, which covers the SDK (the request is sent when the stream
+    context is ENTERED) and the fakes (which raise from `stream(...)`).
+  - On a tail rejection it opens the same request again with every
+    argument but `cache_control`, at once. It latches unless that resend
+    is itself a `BadRequestError`. A resend that fails any other way
+    latches, then raises into the ordinary retry path.
+  - It yields `(stream, carried)`: `carried` is whether the request that
+    OPENED carried the tail, so CT-2 never credits the tail with a
+    resend.
+  - The `yield` sits outside the `try`, so anything raised after the open
+    reaches the caller untouched.
+- **The call sites.** `_run_dimension` and `_run_streaming_call` open every
+  request through the helper. The tail condition is now
+  `continuation_cache and cost_checks.continuation_tail_enabled(engine) and _is_continuation(messages)`.
+  Final QC's copy takes a `count_request` callback, a `nonlocal` counter
+  in `_run_streaming_call` called just before the resend is sent. So the
+  resend is counted even when it raises, and the loop's own increment
+  still counts the first request.
+- **Diagnostics.** `diagnostics.snapshot()` gains a top-level
+  `cost_checks` block, filled from `cost_checks.snapshot()`. It is read
+  without the session guard, and it reaches `/api/diagnostics` and the
+  support bundle's `snapshot.json` through the same `scrub_data` as the
+  rest of the payload.
+- **`tests/conftest.py`**: `_fresh_session` calls
+  `cost_checks.reset_for_tests()` before and after the `yield`, beside
+  `reset_thinking_display_probe()`.
+- **`tests/test_cost_checks_tail_rejection.py`** (new, 38 tests; below).
+
+**Deviations from the spec, and why**
+
+1. **The interface.** Beside the suggested functions:
+   - `exception_detail(exc)`, so the detail's format and its
+     200-character, one-line clip live in one place that both engines
+     call;
+   - the constants `ENGINE_RESEARCH`, `ENGINE_QC`, `TAIL_ENGINES`,
+     `REASON_REJECTED` and `DETAIL_MAX_CHARS`.
+
+   The reason vocabulary is closed per behavior: the tail accepts only
+   `rejected` for now (`_TAIL_REASONS`). CT-2 adds `unprofitable`; WL-1
+   adds its own for the warm lead. Anything else is logged at DEBUG and
+   ignored, and switches nothing off.
+2. **The snapshot is grouped by behavior**:
+   `{"continuation_tail": {"research": {...}, "qc": {...}}}`, not the
+   spec's flat per-engine map. WL-1's warm-lead block then sits beside
+   `continuation_tail` rather than among the engine names. Each entry
+   holds exactly the spec's five keys:
+   - `setting_on`: the live switch;
+   - `enabled`: the checks' verdict alone, `False` once latched. The tail
+     is sent only when both are true;
+   - `reason`, and `detail`;
+   - `since`: seconds since the epoch, or `None`.
+3. **It imports less than the leaf rule allows**: the standard library,
+   `anthropic` and `settings`. CT-1 needs nothing from `usage_ledger`;
+   CT-2 may add it for the rates.
+4. **Only `Exception` latches.** A `KeyboardInterrupt` or `SystemExit`
+   raised by the resend propagates without latching, as the engines
+   re-raise those anyway.
+5. **The latch is consulted on every request, opening ones included.**
+   The condition is the spec's order — switch, latch, is-continuation — so
+   the latch is read on every request after the switch, not only on
+   continuations. It costs one lock acquisition per request, and pins
+   CT-1.6 literally.
+6. **The detail never reaches a record.** It lives only in the latch
+   (diagnostics) and the one WARNING. A call that recovered records
+   nothing of the refusal, and the refused request's error text is
+   absent from the profile and the `QCResult` alike (pinned).
+7. **The stale "M3" comments were left for CT-3.** These are the "MEASURED
+   BY M3" comments above `_CONTINUATION_CACHE_CONTROL` in both engines,
+   and `settings.py`'s "flips only on a recorded M3 pass". They describe
+   the gate FD1 replaced, so they went stale when the plans merged, not
+   with this session. CT-3's steps 2 and 4 rewrite them at the flip, when
+   CT-2's check exists to name. The comments this session touched — the
+   per-round and per-run pins in both engines — now name the latch as the
+   one deliberate exception to "one round, one answer".
+8. **Tests beyond the spec.**
+   - The resend tests run over BOTH engines as one assertion set (Tier 1
+     Chunk 5's reason: the engines keep separate copies of the guard).
+   - The latch is pinned as read on every request after the switch (a
+     spy).
+   - One latch reaches a request another thread builds next.
+   - A lens record with a resend in it still reconciles and reloads
+     (`QCResult.from_dict`).
+   - The helper is tested directly: `carried`, the SDK's
+     refuse-on-`__enter__` shape, and a failure inside the stream passing
+     through untouched.
+   - Every read and write takes the one lock (a counting lock: a race
+     cannot be forced deterministically, but the lock can be counted).
+   - Sixteen threads latch once.
+   - The leaf rule is checked by parsing the module's imports.
+   - The conftest reset is pinned from the source, and by a pair of tests.
+
+**Knowing changes to existing tests:** none. No existing assertion changed;
+`tests/conftest.py` gains the reset (a fixture, not a test).
+
+**The tests** (`tests/test_cost_checks_tail_rejection.py`). Every test that
+runs an engine passes `continuation_cache=`; the run helpers take it as a
+required keyword, so the rule is structural.
+
+- Both engines (parametrized over research's governing-codes dimension and
+  Final QC's compliance lens):
+  - `test_a_refused_continuation_is_sent_again_once_without_the_tail`:
+    three requests, the resend equal to the refused one minus the tail
+    (container kept), no retry and no sleep, only the two responses
+    billed, Final QC counting (3, 2), this engine latched and not the
+    other, the detail, and nothing of the refusal in the record.
+  - `test_a_resend_refused_too_fails_as_before_and_latches_nothing`
+  - `test_a_resend_that_fails_another_way_latches_then_resumes_without_the_tail`:
+    a 429 on the resend; one retry, mode `resume`; the resumed request
+    equal to the resend; Final QC counting (4, 2).
+  - `test_prompt_too_long_is_not_the_tails_refusal`
+  - `test_a_400_on_a_request_without_the_tail_takes_todays_path`: the
+    opening request, and the switch off.
+  - `test_an_error_after_the_stream_opened_is_not_intercepted`: a 400
+    raised while relaying.
+  - `test_the_latch_is_read_on_every_request_after_the_switch`
+  - `test_after_the_latch_a_later_call_sends_exactly_a_switch_off_calls_requests`
+    (the spec's "second round"; for Final QC, a second run).
+- Research:
+  - `test_a_latch_reaches_a_request_another_thread_builds_next`: one
+    dimension's opening is held on an event until another's refusal
+    latches.
+  - `test_two_dimensions_refused_at_once_latch_once_and_both_complete`: a
+    barrier holds both tail-bearing continuations until both are built;
+    two asks, one latch, one WARNING.
+- Final QC:
+  - `test_a_refused_lens_record_still_reconciles_and_reloads`
+  - `test_a_refused_streamed_verifier_seat_is_sent_again`: verdict counts
+    (1, 1) and (3, 2).
+  - `test_a_retained_result_stays_current_after_the_latch` (F3): the
+    fingerprint equals a switch-off run's, the manifest names none of it,
+    and `matches_inputs` holds with the latch set and after it is
+    cleared.
+- Diagnostics: `test_diagnostics_report_the_latch_and_survive_the_scrub`.
+  It checks the clear state, the latched state, that
+  `scrub_data(raw) == raw == diagnostics.snapshot()["cost_checks"]`, that
+  `/api/diagnostics` carries the block, and that no key matches the
+  redaction key pattern.
+- `cost_checks` itself:
+  - `test_only_a_400_other_than_too_long_is_a_tail_rejection`
+  - `test_the_first_latch_wins_and_logs_one_warning`
+  - `test_the_detail_is_one_line_and_clipped`
+  - `test_a_malformed_call_never_raises_and_switches_nothing_off`
+  - `test_many_threads_latch_once`
+  - `test_every_read_and_write_takes_the_one_lock`
+  - `test_cost_checks_is_a_leaf_both_engines_share`
+- The helper, on both engines:
+  - `test_the_helper_says_whether_the_request_that_opened_carried_the_tail`
+  - `test_the_helper_guards_the_sdks_shape_a_refusal_on_entering_the_stream`
+  - `test_the_helper_lets_a_failure_inside_the_stream_through_untouched`
+- The reset:
+  - `test_the_conftest_resets_the_latches_before_and_after_every_test`
+  - the pair `test_a_latch_left_set_on_purpose` /
+    `test_the_next_test_starts_with_both_latches_clear`.
+
+**Verification** (Linux container, from the repository root)
+
+- `.venv/bin/python -m ruff check .`: all checks passed.
+- `.venv/bin/python -m pytest -q`: 2911 passed, 64 skipped (9 min 5 s).
+  That run collected the new file before
+  `test_every_read_and_write_takes_the_one_lock` was added; that test
+  passed on its own, and the new file passed eight runs in a row before
+  it and 38 of 38 after it (the revert matrix's baseline run: 208 passed
+  across the seven suites).
+- `npm test` (in `frontend/`): 421 passed, 0 failed.
+- `npm run build`: built; the only warning is the existing chunk-size one.
+- `tests/test_tier1_finish_tracker.py` and `tests/test_docs_consistency.py`
+  pass with this As built and the ticks in place.
+- `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md`
+  prints nothing.
+
+**Revert matrix.** Each mechanism was reverted in place, one at a time, in
+the working tree. The runs used the new file plus the suites that exercise
+the same code: `test_continuation_cache.py`, `test_research_engine.py`,
+`test_qc_live_events.py`, `test_retry_resume.py`,
+`test_qc_batch_warm_lead.py` and `test_diagnostics.py`. After each run the
+exact text read was restored, and the file checked byte-identical. "Red"
+counts failing tests, and names the new file's where it helps.
+
+48 rows, 48 red.
+
+| Mechanism reverted | Red |
+|---|---|
+| `cost_checks`: the latch never read (always enabled) | 16 |
+| a later latch overwrites the first | 2 |
+| any reason accepted | 1 |
+| the detail not clipped | 1 |
+| "prompt is too long" counted as the tail's | 3 |
+| any error counted as a 400 | 3 (two are Chunk 5's `test_a_resumed_continuation_carries_the_tail_the_failed_one_did`, which pins that a connection error on a tail-bearing continuation is never the tail's) |
+| no WARNING | 2 |
+| no time recorded | 1 |
+| the snapshot's `enabled` always `True` | 1 |
+| the snapshot's `setting_on` not the live switch | 1 |
+| the error type dropped from the detail | 3 |
+| a read without the lock | 1 |
+| a write without the lock | 1 |
+| the snapshot without the lock | 1 |
+| reset without the lock | 1 |
+| reset clears nothing | 41 (latches leak into six files) |
+| research: no guard (the stream opened as before CT-1) | 7 |
+| research: the latch not read | 4 |
+| research: the latch read before the switch | 1 |
+| research: the latch read on continuations only | 1 |
+| research: the resend keeps the tail | 5 |
+| research: the resend drops the container | 1 |
+| research: no latch when the resend opens | 7 |
+| research: a latch though the resend is refused with a 400 too | 1 |
+| research: no latch when the resend fails another way | 1 |
+| research: `carried` stays `True` after the resend | 2 |
+| research: only the `stream(...)` call guarded, not entering it | 1 |
+| research: errors after the open intercepted too | 2 |
+| research: a request without the tail resent too | 1 |
+| QC: no guard | 7 |
+| QC: the latch not read | 3 |
+| QC: the latch read before the switch | 1 |
+| QC: the latch read on continuations only | 1 |
+| QC: the resend keeps the tail | 5 |
+| QC: the resend drops the container | 1 |
+| QC: no latch when the resend opens | 6 |
+| QC: a latch though the resend is refused with a 400 too | 1 |
+| QC: no latch when the resend fails another way | 1 |
+| QC: `carried` stays `True` after the resend | 2 |
+| QC: only the `stream(...)` call guarded, not entering it | 1 |
+| QC: errors after the open intercepted too | 2 |
+| QC: a request without the tail resent too | 3 (two are existing tests: `test_a_lead_that_fails_before_streaming_still_releases_the_batch` and `test_shared_invalid_request_accounts_for_every_unstarted_verifier_seat`) |
+| QC: the resend not counted | 6 |
+| QC: the resend counted only once it opens | 2 |
+| `diagnostics.snapshot()` without the `cost_checks` block | 1 |
+| conftest: no reset before the `yield` | 1 |
+| conftest: no reset after the `yield` | 1 |
+| conftest: no reset at all | 38 (the pair, the source pin, and leaks into five more files) |
+
+The two "no guard" rows leave `_open_stream` defined but unused, so the
+helper's own tests stay green there: the call sites are proven separately
+from the helper.
+
+**For FIN-1**
+
+- **CLAUDE.md implemented notes** — a section "A refused continuation
+  tail costs one request — implemented notes (Tier 1 finish, CT-1)", in
+  CLAUDE.md's own style. The why and the traps:
+  - *Why a guard, before any measurement.* A refused tail was the tail's
+    one unbounded failure. `invalid_request` is not retryable, so every
+    paused research area and compliance review would fail, on every run.
+    With the guard, the worst a refusal costs is one extra request per
+    engine per app session.
+  - *The SDK sends at `__enter__`, the fakes raise at `stream(...)`.* One
+    `try` around `stack.enter_context(client.messages.stream(...))`
+    covers both. The `yield` must stay OUTSIDE that `try`: inside it, a
+    failure thrown into the generator would be caught and "resent", and
+    `contextmanager` then raises "generator didn't stop after throw()".
+  - *The resend is not a retry.* It goes at once, with no backoff, with
+    the same messages and every other argument, the container included.
+    Nothing is appended for the refused request, which returned no
+    response and billed nothing. Final QC counts it as a request ("client
+    API requests" includes retries), counted before it is sent so a
+    resend that raises is still counted. Research counts no requests.
+  - *Latch on proof.* A 400 that survives removing the tail was not the
+    tail's, so no latch. A resend that fails any other way does latch
+    (the 400 went with the tail); then the ordinary retry path resumes the
+    conversation (Tier 1 Chunk 5), and the resumed continuation is built
+    after the latch, so it goes without the tail.
+  - *"prompt is too long" is never the tail's*: the same pattern and the
+    same `str(exc)` as the chat engine's thinking-display degrade and its
+    too-long retry.
+  - *Read on every request, after the switch.* This is the one deliberate
+    exception to Tier 1 Chunk 4's "one round, one answer": the latch can
+    only REMOVE the tail, in every thread, from the next request on.
+    Separate latches per engine, because a refusal is a property of a
+    request shape on one model.
+  - *Where the state lives.* In memory, per process, OFF-only. It is
+    never in a request, a record, a usage total, a project file, a brief
+    or the QC input manifest (F3 pinned). Only in the one WARNING and the
+    diagnostics block.
+  - *Test traps.*
+    - "Two refused at once" needs both tail-bearing continuations built
+      before either is refused: a `threading.Barrier(2)` in the fake's
+      `stream`, before it pops the scripted refusal.
+    - "Every thread" holds one dimension's opening request on an event set
+      by the latch.
+    - A race cannot be forced deterministically, so the lock is proven by
+      counting it.
+    - The F3 comparison has to pin `QC_BATCH_VERIFICATION` to the
+      transport the runs used, because the staleness check rebuilds the
+      manifest with the live setting.
+- **Layout** — add:
+  - `backend/cost_checks.py`: "the cost self-checks' state: one
+    continuation-tail latch per engine (`research`, `qc`), OFF-only,
+    in-memory, per process; `continuation_tail_enabled` /
+    `disable_continuation_tail` / `is_tail_rejection` /
+    `exception_detail` / `snapshot` / `reset_for_tests`; a leaf both
+    engines import; one WARNING on `buildaspec.cost_checks` when a latch
+    is set".
+  - `tests/test_cost_checks_tail_rejection.py`.
+
+  Change:
+  - `research/engine.py` and `qc/engine.py` gain `_open_stream` (copied,
+    `(stream, carried)`, QC's with `count_request`) and the latch read in
+    the tail condition;
+  - `diagnostics.py`'s snapshot gains the top-level `cost_checks` block;
+  - `tests/conftest.py` resets the latches around every test;
+  - the `settings.py` Layout entry's `CONTINUATION_CACHE` note, "pinned
+    per round/run", gains "(the self-check latch can only remove the
+    tail)".
+- **Errata** for earlier CLAUDE.md sections:
+  - "A paused call reads its own cache (Research/QC cost Tier 1, Chunk
+    4)", and the Layout entries for both engines, say the switch is
+    pinned once per round and per run: "one round, one answer". The CT-1
+    latch is the one exception.
+  - "Research and Final QC cost, Tier 1, as shipped (closeout)" says that
+    if the provider refused the tail, "every paused research area and
+    compliance review would fail with a 400". Since CT-1, a refusal costs
+    one resend per engine per app session.
+- **README** — in the continuation-tail material and the
+  `BUILD_A_SPEC_CONTINUATION_CACHE` Configuration row: a continuation the
+  provider refuses because of the tail is sent again without it, and the
+  tail switches off for that engine until the app restarts. It is logged
+  once to the activity log and shown in Settings → Developer tools (the
+  diagnostics `cost_checks` block; CT-2 adds the Developer tools line).
 
 ---
 

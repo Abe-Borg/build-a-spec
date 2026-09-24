@@ -550,11 +550,15 @@ def test_the_setting_reaches_the_qc_run(monkeypatch) -> None:
         assert sum("cache_control" in req for req in client.requests) == tails
 
 
-def test_continuation_cache_ships_switched_off() -> None:
+def test_continuation_cache_ships_switched_on() -> None:
     """Read from the source, so no developer's environment can move it.
 
-    The default flips only on a recorded M3 pass (the plan's Chunk 4
-    "Flip"), which replaces this test with ``..._ships_switched_on``.
+    The Tier 1 finish program's CT-3 turned the default on, without the
+    measured trial the flip once waited on (its decision FD1): the runtime
+    self-checks in ``backend.cost_checks`` switch the tail off for an engine
+    the provider refuses it on, or once it has provably cost more than it
+    saved. It replaced ``test_continuation_cache_ships_switched_off``; an
+    operator switches the tail off with ``BUILD_A_SPEC_CONTINUATION_CACHE=0``.
     """
     source = Path(settings.__file__).read_text(encoding="utf-8")
     calls = [
@@ -572,5 +576,5 @@ def test_continuation_cache_ships_switched_off() -> None:
     assert isinstance(call.func, ast.Name) and call.func.id == "_bool_env"
     assert [ast.literal_eval(arg) for arg in call.args] == [
         "BUILD_A_SPEC_CONTINUATION_CACHE",
-        False,
+        True,
     ]

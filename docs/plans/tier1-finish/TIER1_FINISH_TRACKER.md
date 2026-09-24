@@ -27,7 +27,7 @@ then follows the [Session procedure](#session-procedure) step by step.
 
 Tier 1 of the research and Final QC cost program
 (`docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md`) built two savings that
-still ship **off**:
+shipped **off**:
 - Chunk 4, the continuation tail (`BUILD_A_SPEC_CONTINUATION_CACHE`);
 - Chunk 3, the warm lead (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`).
 
@@ -52,7 +52,7 @@ saving on, one pull request per session:
 | ID | Plan | Title | Status | PR | Merge commit |
 |---|---|---|---|---|---|
 | CT-1 | Chunk 4 | Survive a rejected continuation tail | done | PR #224 | `cd3ce86` |
-| CT-2 | Chunk 4 | Measure what the continuation tail saves | done | PR #225 | — |
+| CT-2 | Chunk 4 | Measure what the continuation tail saves | done | PR #225 | `66c10d8` |
 | CT-3 | Chunk 4 | Turn the continuation tail on | not started | — | — |
 | WL-1 | Chunk 3 | Check that the batch reads the warm lead | not started | — | — |
 | WL-2 | Chunk 3 | Turn the warm lead on | not started | — | — |
@@ -122,14 +122,14 @@ Each item mirrors the acceptance criterion with the same ID in its plan
 
 ### CT-3 — Turn the continuation tail on
 
-- [ ] CT-3.1 — the flip-readiness run, with the switch on from the environment
-- [ ] CT-3.2 — `CONTINUATION_CACHE` defaults to `True`, and its comment says why
-- [ ] CT-3.3 — `test_continuation_cache_ships_switched_on` replaces the ships-off pin
-- [ ] CT-3.4 — every claim outside the root files that the tail is off is true again
-- [ ] CT-3.5 — the Tier 1 plan's §7 item 4 is always included
-- [ ] CT-3.6 — verified: ruff, pytest, npm test, npm run build
-- [ ] CT-3.7 — reverting the default turns the new pin red
-- [ ] CT-3.8 — As built with For FIN-1; root CLAUDE.md and README.md untouched
+- [x] CT-3.1 — the flip-readiness run, with the switch on from the environment — evidence: the plan's CT-3 As built, "Flip readiness": 1 failed, 2943 passed, 64 skipped; the one failure fixed and named (`test_qc_verifier_v3.py`'s `_run` passes the switch explicitly)
+- [x] CT-3.2 — `CONTINUATION_CACHE` defaults to `True`, and its comment says why — evidence: `backend/settings.py`; the plan's CT-3 As built, "What was built"
+- [x] CT-3.3 — `test_continuation_cache_ships_switched_on` replaces the ships-off pin — evidence: `tests/test_continuation_cache.py::test_continuation_cache_ships_switched_on` (the same `ast` walk over the source)
+- [x] CT-3.4 — every claim outside the root files that the tail is off is true again — evidence: `docs/RELEASE_WINDOWS.md` (with the Cost self-checks and Switching it off rows), `TrustDeepDiveModal.tsx`'s Research and Final QC cards, both engines' comments, `backend/cost_checks.py`; the plan's CT-3 As built, "Copy (R9)" and deviation 3
+- [x] CT-3.5 — the Tier 1 plan's §7 item 4 is always included — evidence: `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` §7, "Which items" and item 4; no version bump, `release_notes.py` entry or tag
+- [x] CT-3.6 — verified: ruff, pytest, npm test, npm run build — evidence: the plan's CT-3 As built, "Verification"
+- [x] CT-3.7 — reverting the default turns the new pin red — evidence: the plan's CT-3 As built, "Revert matrix", first row
+- [x] CT-3.8 — As built with For FIN-1; root CLAUDE.md and README.md untouched — evidence: the plan's CT-3 As built and its For FIN-1 list; `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md` prints nothing
 
 ### WL-1 — Check that the batch reads the warm lead
 

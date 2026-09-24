@@ -126,9 +126,9 @@ def _run_client(
         # would be pinning the wrong contract. Its own coverage lives in
         # tests/test_qc_batch_verification.py.
         batch_verification=False,
-        # None reads settings.CONTINUATION_CACHE, off by default; the
-        # continuation-tail tests below pass it explicitly (cost Tier 1,
-        # Chunk 4).
+        # None reads settings.CONTINUATION_CACHE, on by default since the
+        # Tier 1 finish program's CT-3; the continuation-tail tests below
+        # pass it explicitly (cost Tier 1, Chunk 4).
         continuation_cache=continuation_cache,
         event_sink=event_sink or events.append,
         should_stop=should_stop,

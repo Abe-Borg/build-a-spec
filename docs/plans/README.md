@@ -6,7 +6,7 @@ Owner: Abraham.
 
 **[Tier 1 finish: Chunks 3 and 4](tier1-finish/TIER1_FINISH_TRACKER.md)**
 — the live program (opened 2026-09-24). It finishes the two Tier 1 savings
-that still ship off: the continuation tail (Chunk 4) and the warm lead
+that shipped off: the continuation tail (Chunk 4) and the warm lead
 (Chunk 3). There is no owner-run measurement (O6): runtime self-checks,
 which watch the runs the app makes anyway and can only switch a saving off,
 replace the M3 gate. Then each switch turns on (decision FD1). There are six

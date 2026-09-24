@@ -1,10 +1,11 @@
 """Cost self-checks: runtime watchers that can only switch a saving OFF.
 
-Tier 1 of the research and Final QC cost program built two savings that ship
-off until a measured trial proves them, and that trial is not coming (the
-Tier 1 progress file's O6). The Tier 1 finish program (decision FD1,
+Tier 1 of the research and Final QC cost program built two savings that
+shipped off until a measured trial proved them, and that trial is not coming
+(the Tier 1 progress file's O6). The Tier 1 finish program (decision FD1,
 ``docs/plans/tier1-finish/``) replaces the trial with checks that watch the
-runs the app makes anyway, and this module holds their state.
+runs the app makes anyway, and this module holds their state. With the
+checks below in place, the continuation tail defaults on (session CT-3).
 
 The first check is the **continuation tail's guard** (session CT-1). The
 tail is a top-level ``cache_control`` on a streamed request that resumes a

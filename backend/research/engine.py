@@ -1879,11 +1879,18 @@ def _dimension_user_content(shared: str, task: str) -> list[dict[str, Any]]:
 # previous request's server-tool results (it does so whenever a request uses
 # caching at all); a top-level automatic breakpoint lands on the
 # continuation's last block and walks back up to 20 positions to reach the
-# last such entry, where no breakpoint could before. MEASURED BY M3, not
-# assumed: whether the re-sent content matches those entries byte for byte
-# is the provider's business. If it does not, each continuation pays the
-# 5-minute write premium on what it re-sends (+25% on that part) instead —
-# which M3's flip rule catches (writes growing faster than reads).
+# last such entry, where no breakpoint could before. Whether the re-sent
+# content matches those entries byte for byte is the provider's business,
+# and no trial measured it: the switch defaults on under the Tier 1 finish
+# program's FD1, and the cost self-checks (``backend.cost_checks``) watch it
+# instead. A provider that refuses the tail costs one resend
+# (``_open_stream``, CT-1). If the entries do not match, a continuation that
+# ran no server tool pays the 5-minute write premium on what it re-sends
+# (+25% on that part) instead of reading it — the loss CT-2's value check
+# (``cost_checks.observe_continuation``) measures, switching research's tail
+# off once six or more measured continuations have together cost more than
+# they saved. One that ran a server tool gains even then: a later iteration
+# reads the entry the tail wrote.
 #
 # Only on a CONTINUATION. A first request's tail is the unique brief, so a
 # breakpoint there is a pure write surcharge (the documented "prompt ends in
@@ -2757,8 +2764,9 @@ def run_requirements_research(
     dimension resumes the same way whatever the environment does mid-run —
     with one deliberate exception: the cost self-check's latch
     (``backend.cost_checks``), read on every request, can only REMOVE the
-    tail, from the next request on, once the provider has refused it. It
-    changes how a resume is cached, never what any dimension is asked.
+    tail, from the next request on, once the provider has refused it or it
+    has provably cost more than it saved. It changes how a resume is
+    cached, never what any dimension is asked.
 
     ``event_sink`` receives progress dicts: ``research_started`` (with the
     id→title roster), then live per-worker activity as it happens

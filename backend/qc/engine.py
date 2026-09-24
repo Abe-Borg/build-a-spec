@@ -3382,10 +3382,17 @@ def _qc_user_content(
 # entries after the previous request's server-tool results (whenever a
 # request carries any breakpoint); a top-level automatic breakpoint lands on
 # the continuation's last block and walks back up to 20 positions to reach
-# the last such entry. MEASURED BY M3, not assumed: if the re-sent content
-# does not match those entries, each continuation pays the 5-minute write
-# premium on what it re-sends (+25% on that part), and M3's flip rule
-# catches it (writes growing faster than reads).
+# the last such entry. No trial measured whether the re-sent content matches
+# those entries: the switch defaults on under the Tier 1 finish program's
+# FD1, and the cost self-checks (``backend.cost_checks``) watch it instead.
+# A provider that refuses the tail costs one resend (``_open_stream``,
+# CT-1). If the entries do not match, a continuation that ran no server tool
+# pays the 5-minute write premium on what it re-sends (+25% on that part)
+# instead of reading it — the loss CT-2's value check
+# (``cost_checks.observe_continuation``) measures, switching Final QC's tail
+# off once six or more measured continuations have together cost more than
+# they saved. One that ran a server tool gains even then: a later iteration
+# reads the entry the tail wrote.
 #
 # Only on a CONTINUATION (a first request's tail is the unique per-call
 # suffix, where a breakpoint is a pure write surcharge). The shortest TTL
@@ -7349,7 +7356,8 @@ def run_final_qc(
     # resumes alike. The batched transport never carries it. One deliberate
     # exception to "one run, one answer": the cost self-check's latch
     # (``backend.cost_checks``), read on every request, can only REMOVE the
-    # tail, from the next request on, once the provider has refused it.
+    # tail, from the next request on, once the provider has refused it or it
+    # has provably cost more than it saved.
     continuation_cache = (
         settings.CONTINUATION_CACHE
         if continuation_cache is None

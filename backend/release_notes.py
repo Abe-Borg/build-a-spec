@@ -256,6 +256,33 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 ),
             ),
             ReleaseSection(
+                title="Research",
+                items=(
+                    ReleaseItem(
+                        title="Choosing areas no longer starts a round",
+                        body=(
+                            "Choose areas… in the Research panel now only "
+                            "records which areas the next round should "
+                            "research. The choice stays on screen, and "
+                            "Research again runs just those areas when you "
+                            "press it. Nothing starts until then."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A second research round shows its progress",
+                        body=(
+                            "Every research round after the first used to "
+                            "look finished while it ran: the panel said "
+                            "complete, showed none of the agents at work, and "
+                            "kept Research again clickable until the round "
+                            "ended. A round now shows as running, with its "
+                            "agents and a Stop button, from the moment you "
+                            "start it."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
                 title="What a review costs",
                 items=(
                     ReleaseItem(

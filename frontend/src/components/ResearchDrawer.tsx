@@ -29,6 +29,11 @@ import {
   trimUrl,
   type DimLive,
 } from "../lib/researchAgents";
+import {
+  chosenResearchAreas,
+  researchAgainPlan,
+  toggleResearchArea,
+} from "../lib/researchAreas";
 import AgentActivityModal from "./AgentActivityModal";
 import ConfirmDialog from "./ConfirmDialog";
 import ResearchReportModal from "./ResearchReportModal";
@@ -41,7 +46,9 @@ interface Props {
   referenceDocCount: number;
   research: ResearchSnapshot | null;
   busy: boolean;
-  onStart: (scope?: ResearchScope, dimensionIds?: string[]) => void;
+  /** Resolves true when the server accepted the round (see App's
+   *  onStartResearch); the chosen areas are cleared only then. */
+  onStart: (scope?: ResearchScope, dimensionIds?: string[]) => Promise<boolean>;
   onStop: () => void;
   onEditDoc: (ops: EditOp[]) => void;
   /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
@@ -314,10 +321,20 @@ export default function ResearchDrawer({
   // Which agent's full activity modal is open; null = closed. Torn down
   // with the research state itself (reset / failed status refresh).
   const [agentDetailId, setAgentDetailId] = useState<string | null>(null);
+  // The areas chosen for the NEXT round. Choosing only registers: the one
+  // control that starts a round from it is Research again, which clears it
+  // once the server has accepted that round.
   const [pickerOpen, setPickerOpen] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
   useEffect(() => {
-    if (!research) setAgentDetailId(null);
+    if (!research) {
+      setAgentDetailId(null);
+      // A workspace transition clears the snapshot. A choice made against
+      // the outgoing workspace's areas must not ride into the next one —
+      // module ids repeat across projects, so it would still "fit".
+      setPicked([]);
+      setPickerOpen(false);
+    }
   }, [research]);
   // Focus fallback for the modal: the opener card unmounts with the board
   // when the run completes mid-view, so closing then restores focus to the
@@ -356,6 +373,12 @@ export default function ResearchDrawer({
   // nothing has been researched, so picking areas is just the first round
   // wearing a different label.
   const pickable = rounds > 0 && !running && areas.length > 0;
+  // What Research again will run — one plan read by the label, the tooltip
+  // and the click, so the three cannot describe different rounds. Nothing
+  // chosen (or everything) is a full round; a true subset runs only it.
+  const chosen = chosenResearchAreas(areas, picked);
+  const plan = researchAgainPlan(areas, picked);
+  const subset = plan.scope === "selected" ? plan : null;
   // Research carried from another section of the same project — a session
   // seeded from a project brief. Server-derived beside the coverage join
   // (the seed recorded how many rounds it installed); the drawer labels and
@@ -382,33 +405,74 @@ export default function ResearchDrawer({
       : "";
 
   const startDisabled = !profileComplete || running || busy;
+  const chosenCount = subset?.dimensionIds.length ?? 0;
   const startTip = !profileComplete
     ? "Complete the project profile first — city, state, country, and client — via the form below or in chat."
     : running
       ? "Research is already running."
       : busy
         ? "Finish the current turn first."
-        : rounds > 0
-          ? `Run a full round over all ${research?.coverage?.total ?? 0} research areas (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, a requirement found again is confirmed in place, and each agent is told what this session already established so it looks for what is new, changed, or wrong.${carriedBrief}${referenceBrief}`
-          : `Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).${referenceBrief}`;
+        : subset
+          ? `Run round ${rounds + 1} over only the ${chosenCount} area${
+              chosenCount === 1 ? "" : "s"
+            } you chose: ${subset.titles.join(", ")} (uses your API key). The other ${
+              areas.length - chosenCount
+            } area${areas.length - chosenCount === 1 ? " is" : "s are"} not researched again. What it finds is ADDED to the ${items.length} finding(s) you already have — nothing is replaced, and each agent is told what this session already established.${referenceBrief}`
+          : rounds > 0
+            ? `Run a full round over all ${research?.coverage?.total ?? 0} research areas (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, a requirement found again is confirmed in place, and each agent is told what this session already established so it looks for what is new, changed, or wrong.${carriedBrief}${referenceBrief}`
+            : `Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).${referenceBrief}`;
   const startLabel = running
     ? board.total > 0
       ? `Researching… (${board.doneCount}/${board.total})`
       : "Research in progress…"
-    : retryable
-      ? "Re-run all areas"
-      : rounds > 0
-        ? carriedOnly
-          ? `Research again (round ${rounds + 1}, briefed)`
-          : `Research again (round ${rounds + 1})`
-        : "Research requirements";
+    : subset
+      ? `Research again: ${chosenCount} area${chosenCount === 1 ? "" : "s"} (round ${
+          rounds + 1
+        })`
+      : retryable
+        ? "Re-run all areas"
+        : rounds > 0
+          ? carriedOnly
+            ? `Research again (round ${rounds + 1}, briefed)`
+            : `Research again (round ${rounds + 1})`
+          : "Research requirements";
   // The full round is the quiet option whenever a targeted retry exists —
   // it is the more expensive of the two and rarely the one that is wanted.
+  // A round over areas the user chose is the action they set up, so it is
+  // the primary one.
   const startButtonClass = running
     ? "border-accent/40 bg-raised text-ink-dim"
-    : rounds > 0 || startDisabled
-      ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent disabled:opacity-40"
-      : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25";
+    : subset && !startDisabled
+      ? "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25"
+      : rounds > 0 || startDisabled
+        ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent disabled:opacity-40"
+        : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25";
+  /** The main button: the chosen areas when there is a true subset, else a
+   *  full round. The choice was for THIS round, so once the server has
+   *  accepted it the next round starts from "all areas" again; a refused
+   *  start keeps the choice for the retry. */
+  const researchAgain = async () => {
+    const started =
+      plan.scope === "selected"
+        ? await onStart("selected", plan.dimensionIds)
+        : await onStart("all");
+    if (started) {
+      setPicked([]);
+      setPickerOpen(false);
+    }
+  };
+  const chooseLabel =
+    chosen.length > 0
+      ? `${chosen.length} of ${areas.length} area${areas.length === 1 ? "" : "s"} chosen`
+      : "Choose areas…";
+  const choiceSummary =
+    chosen.length === 0
+      ? `None chosen — Research again runs all ${areas.length} areas.`
+      : subset
+        ? `Research again runs only ${
+            chosenCount === 1 ? "this area" : `these ${chosenCount} areas`
+          }.`
+        : `All ${areas.length} areas — the same as a full round.`;
   const retryLabel = `Retry ${gaps.length} incomplete area${
     gaps.length === 1 ? "" : "s"
   }`;
@@ -464,26 +528,37 @@ export default function ResearchDrawer({
         )}
         {pickable && (
           <Tip
-            tip="Research only the areas you pick — the jurisdiction changed, or an owner standard did. What it finds is ADDED to the rounds already recorded."
+            tip="Choose which areas the next round researches — the jurisdiction changed, or an owner standard did. Choosing starts nothing: the round runs when you press Research again, and what it finds is ADDED to the rounds already recorded."
             className="shrink-0"
           >
             <button
-              className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+              className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors hover:border-accent hover:text-accent ${
+                chosen.length > 0
+                  ? "border-accent/60 bg-accent/10 text-accent"
+                  : "border-edge bg-raised text-ink-dim"
+              }`}
               onClick={() => setPickerOpen((v) => !v)}
-              disabled={startDisabled}
-              /* Shares research.run with the other two scopes — the
-                 updates.manage precedent recorded below. */
+              aria-expanded={pickerOpen}
+              /* Never disabled: choosing starts nothing, so it is safe
+                 while a turn streams. Shares research.run with the scopes
+                 it sets up — the updates.manage precedent recorded below. */
               data-capability="research.run"
             >
-              Choose areas…
+              {chooseLabel}
             </button>
           </Tip>
         )}
         {retryable && !running && (
           <Tip tip={retryTip} className="shrink-0">
             <button
-              className="rounded-md border border-accent/70 bg-accent/15 px-2 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/25 disabled:pointer-events-none disabled:opacity-40"
-              onClick={() => onStart("gaps")}
+              className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none disabled:opacity-40 ${
+                // One primary action at a time: a round over areas the
+                // user chose outranks the retry it would otherwise be.
+                subset
+                  ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent"
+                  : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25"
+              }`}
+              onClick={() => void onStart("gaps")}
               disabled={startDisabled}
               /* Shares research.run: one capability — "run requirements
                  research" — offered at two scopes, the updates.manage
@@ -497,7 +572,7 @@ export default function ResearchDrawer({
         <Tip tip={startTip} className="shrink-0">
           <button
             className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none ${startButtonClass}`}
-            onClick={() => onStart("all")}
+            onClick={() => void researchAgain()}
             disabled={startDisabled}
             data-tour="research-start"
             data-capability="research.run"
@@ -521,11 +596,23 @@ export default function ResearchDrawer({
         )}
       </div>
 
+      {/* The picker only RECORDS a choice — nothing in it starts a round.
+          Research again is the one control that runs the chosen areas; the
+          old in-picker "Research N selected areas" button made choosing and
+          starting one click, which is not what choosing means. */}
       {pickerOpen && pickable && (
-        <div className="mt-2 rounded-md border border-edge bg-raised/60 px-3 py-2">
+        <div
+          className="mt-2 rounded-md border border-edge bg-raised/60 px-3 py-2"
+          role="group"
+          aria-label="Research areas for the next round"
+          data-testid="research-area-picker"
+        >
           <p className="text-[11px] text-ink-faint">
-            Research these areas again. What a round finds is{" "}
-            <span className="text-ink-dim">added</span> to the rounds already
+            Choose the areas the next round researches.{" "}
+            <span className="text-ink-dim">
+              Nothing starts until you press Research again
+            </span>
+            , and what that round finds is added to the rounds already
             recorded — nothing already found is removed or replaced.
           </p>
           <ul className="mt-1.5 space-y-1">
@@ -538,9 +625,7 @@ export default function ResearchDrawer({
                     checked={picked.includes(area.dimension_id)}
                     onChange={() =>
                       setPicked((prev) =>
-                        prev.includes(area.dimension_id)
-                          ? prev.filter((id) => id !== area.dimension_id)
-                          : [...prev, area.dimension_id],
+                        toggleResearchArea(prev, area.dimension_id),
                       )
                     }
                   />
@@ -566,32 +651,46 @@ export default function ResearchDrawer({
               </li>
             ))}
           </ul>
-          <div className="mt-2 flex items-center gap-2">
-            <button
-              className="rounded-md border border-accent/70 bg-accent/15 px-2 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/25 disabled:pointer-events-none disabled:opacity-40"
-              onClick={() => {
-                onStart("selected", picked);
-                setPickerOpen(false);
-                setPicked([]);
-              }}
-              disabled={startDisabled || picked.length === 0}
-              data-capability="research.run"
-            >
-              {`Research ${picked.length} selected area${
-                picked.length === 1 ? "" : "s"
-              }`}
-            </button>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
-              onClick={() => {
-                setPickerOpen(false);
-                setPicked([]);
-              }}
+              onClick={() => setPickerOpen(false)}
+              title="Keep this choice and close the list — the round runs when you press Research again"
             >
-              Cancel
+              Done
             </button>
+            <button
+              className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => setPicked([])}
+              disabled={chosen.length === 0}
+            >
+              Clear
+            </button>
+            <span className="text-[11px] text-ink-faint" aria-live="polite">
+              {choiceSummary}
+            </span>
           </div>
         </div>
+      )}
+
+      {/* The registered choice, visible with the list closed — the user's
+          record that it took, and what Research again is about to run. */}
+      {!pickerOpen && pickable && chosen.length > 0 && (
+        <p className="mt-1 text-[11px] text-ink-faint" data-testid="research-area-choice">
+          Next round:{" "}
+          <span className="text-ink-dim">
+            {subset
+              ? subset.titles.join(", ")
+              : `all ${areas.length} areas (a full round)`}
+          </span>{" "}
+          — runs when you press Research again.{" "}
+          <button
+            className="text-accent hover:underline"
+            onClick={() => setPicked([])}
+          >
+            Clear
+          </button>
+        </p>
       )}
 
       {status === "failed" && research?.error && (

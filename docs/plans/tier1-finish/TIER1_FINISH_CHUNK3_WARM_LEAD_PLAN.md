@@ -927,10 +927,433 @@ more than it could have saved, switches itself off, and the rest is bounded
 
 ### As built
 
-*Not started.*
+*Built on 2026-09-24; the record follows the paragraph below.*
 
 When you build this session, append here what WL-1's As built lists, plus
 both flip-readiness runs' counts.
+
+#### WL-2 as built (2026-09-24)
+
+Built from `master` at `4eb1d70` (WL-1's merge), on branch
+`claude/sharp-archimedes-qvlx9k`. **Merging it turns the warm lead on for
+everyone running from `master`.** `BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`
+switches it off (PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`;
+Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`). The reconcile step
+filled in WL-1's merge commit, `4eb1d70`.
+
+**Flip readiness (WL-2.1).** Both runs were made before the flip, on
+`4eb1d70` plus only the reconcile edit.
+
+- **The whole backend suite with `BUILD_A_SPEC_QC_BATCH_WARM_LEAD=1`** in
+  the environment: **2990 passed, 64 skipped, none failed** (415.63 s).
+  `test_warm_lead_ships_switched_off` passed (deviation 1). No other test
+  failed, and the same suite with the switch off passes too (Verification,
+  below), so no test's outcome depends on the default.
+- **The Final QC tests with both lineage minimums at the floor of 8**, with
+  the spec's scratch plugin (outside the repository, never committed) and
+  `-o log_cli=true --log-cli-level=INFO`. `-k "qc or QC or final"` selected
+  444 tests: **442 passed, 2 failed** (2610 deselected; 45.1 s).
+  - **Phases that picked a lead**, counted two ways that agree:
+    - The live log holds 25 `buildaspec.qc` lines containing
+      `one streamed first`. (The output file holds 26, because pytest
+      repeats one of them in a failure report.) A line is written per
+      lead, not per phase.
+    - So the plugin also wrapped the engine's `_run_batch_calls` and
+      `_pick_warm_leads`, passing every argument and result through
+      untouched, to count phases. It counted **206 batched verification
+      phases. The gate was open in 158 of them, and 23 picked a lead,
+      25 leads in all**: two phases had two lineages large enough.
+    - `test_the_lineage_minimums_are_never_below_eight` also calls
+      `_pick_warm_leads` directly, twice. Those two calls are not phases,
+      and are left out of the counts.
+  - By file, `tests/test_qc_batch_warm_lead.py` ran 26 phases, 20 of them
+    with a lead (22 leads). `tests/test_qc_warm_launch.py` ran 6, 3 of them
+    with one lead each. **Outside the lead's own test file, 419 tests ran
+    and none failed; 3 of its 180 phases picked a lead.** The Tier 1
+    closeout's run of the same method counted 3 of 138.
+  - WL-1's check judged 20 lineages: 18 read `too_few` and 2 `not_warm`.
+    None latched: the run logged no `the warm lead is switched off`
+    WARNING. At the floor, a lineage of 8 seats has 7 batched seats, one
+    short of 8 measured, so it always reads `too_few` (WL-1's deviation 7).
+  - The two failures (deviation 2) are both in
+    `tests/test_qc_batch_warm_lead.py`, and both pin the shipped minimum of
+    20 that the plugin lowers to 8:
+    - `test_a_lineage_below_the_minimum_has_no_lead` asserts
+      `_warm_lead_minimum(...) == 20` directly.
+    - `test_the_switch_off_is_todays_batch_exactly` runs an 8-seat lineage
+      "below the shipped minimum of 20" with the switch on, and asserts
+      that every seat is batched.
+
+    Both pass the switch explicitly, and both passed in the first run.
+  - `tests/test_cost_checks_warm_lead.py` (WL-1's) matches none of the
+    `-k` terms, so it did not run here. It ran in the first run, and every
+    engine run in it passes `batch_warm_lead=True`.
+
+**What was built**
+
+- **`backend/settings.py`**:
+  `QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", True)`.
+  The comment's first paragraph (what a lead does, the minimums and the
+  wait) is unchanged. The paragraph that began "OFF by default,
+  deliberately" is replaced. It now says:
+  - the lead has been on since WL-2, without the measured trial the flip
+    once waited on;
+  - a lead pays only if a batch request can read the entry a streamed
+    request wrote, and no document says whether it can;
+  - FD1 replaced the trial with WL-1's self-check, which can only switch
+    the lead off, until the app restarts;
+  - the check reads only the usage the batch already reported, and nothing
+    is sent to test the provider;
+  - once at least 8 batched seats are measured, the check switches the lead
+    off when fewer than half of them read the lead's copy, or when the lead
+    cost more than it could have saved even if the batch alone would have
+    read nothing;
+  - what the check cannot see is bounded: about the lead's own batch
+    discount per large lineage per run ($0.20–$0.35 at typical sizes,
+    B.6), and a wait of at most `QC_WARM_WAIT_SECONDS`;
+  - a lead that fails is an ordinary failed seat;
+  - `0` switches it off;
+  - it stays out of the QC input manifest (F3).
+- **`backend/qc/engine.py`**: only the block comment above
+  `LINEAGE_WEB_TOOLED` changed. It said the switch ships off, and now says:
+  - the lead has been on by default since WL-2, because WL-1's self-check
+    watches every run that sends one;
+  - what the check cannot see is bounded: the lead's discount, a failed
+    seat, and the wait;
+  - `=0` switches it off.
+
+  No engine code changed. The gate, `run_final_qc`'s pin and the check
+  are Chunk 3's and WL-1's.
+- **`tests/test_qc_batch_warm_lead.py`**: `test_warm_lead_ships_switched_on`
+  replaces `test_warm_lead_ships_switched_off`. It is the same `ast` walk
+  over `backend/settings.py`, now expecting
+  `["BUILD_A_SPEC_QC_BATCH_WARM_LEAD", True]`, and its docstring says why
+  the default moved and how an operator switches the lead off. The module
+  docstring's "with the switch off (its shipped default)" now says the
+  switch shipped off until WL-2.
+- **Copy (R9)**: everything outside the root files that the flip made
+  false.
+  - **The trust dossier's Final QC card**
+    (`frontend/src/components/TrustDeepDiveModal.tsx`). The sentence that
+    began "An optional setting, off by default, sends one seat of a large
+    group first" is replaced. It now says:
+    - when twenty or more seats read the same copy of the document, one of
+      them is sent first, at full price;
+    - the batch goes out once that seat begins answering, after at most
+      45 seconds;
+    - that seat shows its activity, and the report prices it at full
+      price;
+    - after each such review the app reads the batch's own usage report;
+      if the batch did not read that copy, or the seat cost more than it
+      could have saved, the app stops doing this until a restart;
+    - Settings → Developer tools → Cost self-checks shows what it found.
+  - **`docs/RELEASE_WINDOWS.md`**, in the Final QC section:
+    - **Streamed lead seat** is now ordinary release QA ("on by default
+      since the Tier 1 finish program's WL-2"). It sets no environment
+      variable, and says the batch goes out once the lead begins answering
+      (at most 45 seconds later). It adds that on a section too small for
+      any group to reach 20 seats, no seat streams ahead of the batch and
+      the methodology does not mention a lead.
+    - A new row, **The warm lead's Cost self-checks line**, takes the
+      checks that used to sit at the end of the Streamed lead seat row. The
+      line reads `on · nothing checked yet` before any lead has been sent,
+      and `on · last check: …` after one. It reads `off for this session`
+      only beside the WARNING that switched it off, and then the next
+      Final QC streams no lead. A restart switches it back on.
+    - A new row, **Switching the warm lead off**: `"0"` set before start,
+      in both shells. Then no seat streams ahead of the batch, every
+      `cost_multiplier` is 0.5, the methodology has no lead step, the
+      profiler has no `seat:list-price` row, and the Cost self-checks
+      row's last line reads `Warm lead: switched off in settings`.
+    - In the Chunk 4 section, the Cost self-checks row's clause about its
+      last line now reads `Warm lead (Final QC): on · …`, the default since
+      WL-2.
+  - **`backend/cost_checks.py`'s module docstring**: with the checks in
+    place, both savings default on, the tail since CT-3 and the warm lead
+    since WL-2.
+  - **The Tier 1 progress file** gains a dated note under CT-3's. Chunk 3's
+    switch is on too since this PR, so neither switch the file says ships
+    off still does, and neither flip waited on M3. Its closeout text is
+    left as the record it is.
+  - **The Tier 1 plan** gains two appended notes. The text they qualify is
+    unchanged.
+    - After §8's M3, a dated *M3 superseded* note: the trial was never
+      run. Its procedure still works, and its two `= "1"` lines now set
+      the default.
+    - After §10.3, a *Superseded* note. §10.3 ends "That is why the chunk
+      ships switched off, and its default flips only on an M3 pass".
+- **The release-note draft** (WL-2.5), in
+  `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` §7:
+  - Item 3 lost its conditional marker and gained one sentence:
+    "Verification may start a few seconds later, and if this turns out not
+    to help, the app stops doing it by itself until you restart it."
+  - The "Which items" bullet says all four items go in any such release.
+  - No version bump, no `backend/release_notes.py` entry, no tag (F7).
+- **The methodology note, checked, unchanged (WL-2.4).** `docx_export`
+  adds the "Streamed lead seat" step only
+  `if qc_streamed_lead_seats(qc_result)`. The report modal adds it only when
+  `qcStreamedLeadSeats(report) > 0`. Both read the records, never the
+  setting. They are pinned by
+  `test_the_methodology_sentence_is_the_same_in_both_projections` and by
+  `frontend/tests/qcReport.test.ts`'s `qcStreamedLeadSeats` cases.
+
+**Deviations from the spec, and why**
+
+1. **The ships-off pin passed the first flip-readiness run.** The spec
+   allowed it to fail ("Only `test_warm_lead_ships_switched_off` may
+   fail"). It passed, as an `ast` pin must: the environment cannot reach
+   it. CT-3's run showed the same.
+2. **The floor-8 run failed two tests, and neither depended on the
+   default.**
+   - The spec reads any failure other than the pin as a test that depended
+     on the default, fixed by passing the switch explicitly. These two
+     already pass it, and both passed in the first run. What they pin is
+     the shipped minimum of 20, which the plugin lowers.
+   - Passing the switch would change nothing, and weakening them would
+     unpin the minimum. So neither changed.
+   - The Tier 1 closeout's run of this method left
+     `tests/test_qc_batch_warm_lead.py` out for this reason (it ran "the
+     QC tests outside the lead seat's test file"). The spec's command
+     keeps the file in, so its two minimum pins fail by design. Outside
+     that file, nothing failed.
+3. **Phases were counted by wrapping two engine functions, beside the INFO
+   lines.** The spec counts the `one streamed first` lines, but those count
+   leads, not phases: a phase with two large lineages writes two. So the
+   plugin also wrapped `_run_batch_calls` and `_pick_warm_leads`, to count
+   phases, open gates and leads. Its lead count agrees with the lines (25).
+4. **The copy sweep went past the spec's list.** The spec names the
+   dossier, the release checklist's lead rows, and "any comment the grep
+   found". The grep also found four more claims, and R9 says each must be
+   true at this merge (every change is listed above):
+   - `backend/cost_checks.py`'s module docstring;
+   - the lead test file's module docstring;
+   - the Tier 1 progress file, which said Chunk 3's switch still ships
+     off;
+   - the Tier 1 plan's §8 and §10.3, which make M3 the gate.
+
+   The plans index (`docs/plans/README.md`) was left alone. Its "Chunks 3
+   and 4 shipped off" is past tense, and its "Chunks 3 and 4 only if
+   flipped by then" stays true, since both are. FIN-1 closes out that
+   entry.
+5. **§7 changed in three more places than item 3 and its bullet**, as
+   CT-3's did for item 4:
+   - the block's intro names what WL-2 added;
+   - "Where it goes" drops "so leaving out a conditional item leaves a
+     clean list", since no conditional item is left;
+   - the summary sentence covers all four items.
+6. **The dossier says a little more than the spec asks.** The spec lists
+   what to say: that the lead is on, when it happens, that the report
+   prices the seat at full price, and that the app stops if the batch does
+   not read the seat's copy. The new sentence also says:
+   - the second reason the app stops: the seat cost more than it could
+     have saved;
+   - where to see the result (Settings → Developer tools → Cost
+     self-checks);
+   - two numbers, "twenty or more seats" and "at most 45 seconds". These
+     are the shipped lineage minimum (`_WARM_LEAD_MIN_SEATS_*`) and
+     `QC_WARM_WAIT_SECONDS`'s default. The dossier's contract is that
+     every number in it is real, so a change to either default must change
+     this sentence too.
+
+**Knowing changes to existing tests**
+
+- `test_warm_lead_ships_switched_off` → `test_warm_lead_ships_switched_on`
+  (WL-2.3).
+- `tests/test_qc_batch_warm_lead.py`'s module docstring, its "off means
+  off" bullet, now says the switch shipped off until WL-2. The tests under
+  it are unchanged, since each sets the switch it runs itself.
+- Nothing else. The flip-readiness runs found no test that depended on the
+  default.
+
+**The tests.** No new test. The pin is WL-2.3's replacement. Everything the
+flip turns on was already tested with the switch passed explicitly (R7) by
+Chunk 3 and WL-1: the lead, its pricing, every exit from the phase, the
+check and its latch.
+
+**Verification** (Linux container, from the repository root)
+
+- `.venv/bin/python -m ruff check .`: all checks passed.
+- `.venv/bin/python -m pytest -q` with the new default (no environment
+  variable): 2990 passed, 64 skipped (406.73 s). WL-1 also ended at 2990:
+  the pin was replaced, not added.
+- The same suite with `BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`, to show that no
+  test depends on the lead being on: 2990 passed, 64 skipped
+  (406.37 s). The same count, because every test that runs a lead sets
+  the switch itself (R7), and the pin reads the source.
+- A third run checked that claim: the whole suite with the new default and
+  the shipped minimums, counted by the same wrappers (no minimum lowered).
+  Leads ran only in tests that set the switch themselves: 46 of 249
+  batched phases picked one, 21 in `tests/test_qc_batch_warm_lead.py`, 23
+  in `tests/test_cost_checks_warm_lead.py` and 2 in
+  `tests/test_continuation_cache.py`. That run's one failure,
+  `tests/test_preserved_chrome_lint.py::test_readiness_and_the_model_read_the_same_chrome`,
+  came from `npm run build` rebuilding `frontend/dist` at the same moment
+  (the app mounts `frontend/dist/assets` when it starts). The test passes
+  on its own, and it passed in both full runs above.
+- `npm test` (in `frontend/`): 438 passed, 0 failed.
+- `npm run build`: built; the only warning is the existing chunk-size one.
+- `tests/test_tier1_finish_tracker.py` and `tests/test_docs_consistency.py`
+  pass with this As built and the ticks in place (18 passed).
+- `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md`
+  prints nothing.
+
+**Revert matrix.** Each mechanism was reverted in place, one at a time, by
+a script: it replaced one exact snippet, ran the suites, restored the exact
+text it read, and checked the file byte-identical. The working tree's diff
+was byte-identical at the end. Every row ran
+`tests/test_qc_batch_warm_lead.py`, `tests/test_cost_checks_warm_lead.py`,
+`tests/test_qc_batch_verification.py` and `tests/test_qc_warm_launch.py`
+(131 tests). "Red" counts failing tests.
+
+5 rows, 5 red. The baseline passed 131 of 131, and after the last row the
+suites passed 131 of 131 again, the new pin among them (WL-2.7).
+
+| Mechanism reverted | Red |
+|---|---|
+| the default back to `False` | 1 (`test_warm_lead_ships_switched_on`) |
+| `run_final_qc` reads an unset switch as off, not from the setting | 1 (`test_the_setting_reaches_the_run`) |
+| the gate ignores the self-check's latch (WL-1) | 2 (`test_a_batch_that_writes_the_prefix_switches_the_lead_off_for_the_next_run`, `test_the_latch_stops_the_next_phase_picking_a_lead`) |
+| the self-check never latches (WL-1) | 10 |
+| no lead is ever picked | 40 (19 in the lead's own test file, 21 in WL-1's) |
+
+The first two rows are the flip itself: the default, and `run_final_qc`
+reading it when a caller passes nothing. The third and fourth show that
+the default now switched on still runs through WL-1's gate and latch: take
+either away, and a lead the batch does not read can no longer switch
+itself off. The last shows that 40 of these tests really run a lead.
+
+**Found in passing, not done.** `tests/test_cost_checks_warm_lead.py`'s
+module docstring says the check reads, per batched seat, "its first billed
+response's first iteration". Since WL-1's deviation 12 it reads the reply to
+the first batch the seat rode (`first_reply`), never `billed[0]`, and a seat
+whose first batch brought no reply is unmeasured. The flip did not make this
+false, and WL-2's spec does not list the file, so it is left for FIN-1
+(below).
+
+**For FIN-1**
+
+WL-1's For FIN-1 list still stands, as do CT-1's, CT-2's and CT-3's. This
+adds what the flip itself changes.
+
+- **README** (`README.md`), in "## Research and Final QC cost (Tier 1)"
+  unless another section is named:
+  - **The paragraph "Chunks 3 and 4 are built but ship switched off …"**
+    (about line 1076). CT-3's list rewrites it for Chunk 4. After WL-2 both
+    are on by default, without the measured run, under the Tier 1 finish
+    program's self-checks.
+    - Its second sentence stays true: each rests on provider behaviour
+      that only a real run can confirm. That is now why the self-checks
+      watch real runs.
+    - Its first sentence is false, and so are "Each turns on only when a
+      measured run … until then changes nothing" and "so both stay off".
+    - O6 still stands: no measured run is planned.
+  - **The heading "### Final QC's batched review can warm its own copy
+    first (Chunk 3, switched off)"** (about line 1160) becomes "on by
+    default". In its intro, "With this switch on, when one of those
+    groups…" becomes "When one of those groups…".
+  - **Its bullet "Off by default, deliberately. … `=1` switches it on for
+    a trial"** (about lines 1173–1178). It should say:
+    - the lead has been on by default since WL-2;
+    - after each Final QC that sent a lead, the app reads how many of the
+      batched seats read the lead's copy, and if fewer than half did, or
+      the lead cost more than it could have saved, the lead switches off
+      until the app restarts (WL-1);
+    - `=0` switches it off, in both the PowerShell and the Command Prompt
+      forms of `"0"`.
+
+    WL-1's For FIN-1 README item says the same about the check; fold the
+    two into this one bullet.
+  - **"What changes when it is on"** (about line 1179) becomes "What
+    changes".
+  - **"Measured, not modelled"** (about lines 1202–1207): "on a Final QC
+    made with the switch on" becomes "on a Final QC that sent a lead". Add
+    that Developer tools → Cost self-checks shows the last check.
+  - **"Where to see it"** (about lines 1208–1211): beside the lead's own
+    line, add the check's one INFO line per judged lineage, and the one
+    WARNING it writes when it switches the lead off.
+  - **"(and so does a streamed lead seat, when
+    `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` is on)"** (about line 2118, in
+    "## Shipped in v0.9.0 (Batch 4: Final QC) and still current"): the lead
+    is on by default, so "(and so does a streamed lead seat)".
+  - **The Configuration rows**, in "## Configuration":
+    - `BUILD_A_SPEC_QC_BATCH_VERIFICATION` (about line 2829): "except a
+      streamed lead seat's when `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` is on"
+      becomes "except a streamed lead seat's
+      (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`)".
+    - `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` (about line 2830): the default is
+      `1`, and "**off** until a measured run shows it pays" goes. Say that
+      WL-1's check switches the lead off for the rest of the session when
+      the batch does not read its copy or it cost more than it could have
+      saved, and what `0` does.
+- **CLAUDE.md implemented notes**: a section "The warm lead is on by
+  default — implemented notes (Tier 1 finish, WL-2)", in CLAUDE.md's own
+  style. FIN-1 may fold it into its one consolidated section. The why and
+  the traps:
+  - *Why it could flip without M3* (FD1). WL-1's check switches the lead
+    off when the batch does not read its copy (h₁ < 0.5) or when the lead
+    cost more than it could have saved (h₀* ≤ 0). It reads only usage the
+    batch already reported. What it cannot see is bounded: a lead that is
+    read but was not needed costs about its own discount ($0.20–$0.35 per
+    large lineage per run); the batch waits at most
+    `QC_WARM_WAIT_SECONDS`; and a failed lead is an ordinary failed seat.
+    Merging this PR was Abraham's approval.
+  - *The pin reads the source.* The flip-readiness run with `=1` passed
+    the old ships-off pin, as CT-3's run did. The new pin is the same
+    `ast` walk.
+  - *A floor-8 run must leave the lead's own test file out, or expect two
+    failures.* `test_a_lineage_below_the_minimum_has_no_lead` and
+    `test_the_switch_off_is_todays_batch_exactly` pin the shipped minimum
+    of 20. At the floor they fail by design. The closeout's method left
+    the file out; WL-2's spec command kept it in.
+  - *Count phases, not INFO lines.* `one streamed first` is written once
+    per lead, and one phase can send two. And
+    `test_the_lineage_minimums_are_never_below_eight` calls
+    `_pick_warm_leads` directly, so a wrapper around it also counts two
+    calls that are not phases.
+  - *At the floor, the check never judges an 8-seat lineage* (7 batched
+    seats; WL-1's deviation 7). So a floor-8 run exercises the lead, not
+    the latch.
+- **Layout.**
+  - `backend/settings.py` (the entry's lines 143–147): `QC_BATCH_WARM_LEAD`
+    "(BUILD_A_SPEC_QC_BATCH_WARM_LEAD, default OFF — cost Tier 1 Chunk 3's
+    streamed lead seat; flips on only on a recorded M3 pass; …)" becomes
+    "default ON since the Tier 1 finish program's WL-2; WL-1's warm-lead
+    check can only remove it, until a restart; 0 switches it off". WL-1's
+    For FIN-1 corrects the same entry's M3 clause; the two edits are one.
+  - `tests/test_qc_batch_warm_lead.py`: "and the default read from the
+    source" becomes "and the default (on) read from the source".
+- **Errata** for earlier CLAUDE.md sections:
+  - "Final QC's batched phase can stream a lead seat first — implemented
+    notes (Research/QC cost Tier 1, Chunk 3)":
+    - "**It ships switched off.**" It has been on by default since WL-2.
+      WL-1's For FIN-1 already corrects the same section's "waits for an
+      M3 pass".
+    - "Flip readiness, measured once" says every QC test outside the new
+      file (369) passed at the floor. WL-2's re-run: 419 outside the file,
+      none failed.
+    - Its erratum 1 says "with `QC_BATCH_WARM_LEAD` on, one seat per large
+      lineage IS streamed". That is now the default.
+  - "Research and Final QC cost, Tier 1, as shipped — implemented notes
+    (closeout)":
+    - "Chunk 3 … It ships off (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`)": on by
+      default since WL-2.
+    - "**Two switches ship off, for different reasons.**" and "Each
+      default flips only on an M3 pass": both are on (CT-3 and WL-2), and
+      neither flip waited on M3 (FD1). CT-3's list says only Chunk 3's is
+      off until WL-2; after WL-2, neither is.
+    - "items 3 and 4 only if their switch defaults on in the release":
+      all four items ship since WL-2.
+    - "3 of 138 batch phases picked a lead": WL-2's re-run of the same
+      method counted 3 of 180 outside the lead's own file (more tests
+      since).
+- **The plans index and the Tier 1 progress file.** FIN-1's own step 5
+  closes these out: `docs/plans/README.md`'s Tier 1 entry ("Chunks 3 and 4
+  only if flipped by then": both are) and the progress file's "After the
+  program" table. WL-2 added only the progress file's dated note.
+- **A stale test docstring** (Found in passing, above).
+  `tests/test_cost_checks_warm_lead.py`'s module docstring: "its first
+  billed response's first iteration" becomes "the first iteration of its
+  reply to the first batch it rode", per WL-1's deviation 12.
 
 ---
 

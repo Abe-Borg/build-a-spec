@@ -1726,28 +1726,26 @@ lifts.** It is one `ReleaseSection` for `backend/release_notes.py`: the
 section title, then one `ReleaseItem` per numbered entry, the bold line as
 its `title` and the paragraph under it as its `body`. The wording is the
 chunks' own, apart from what the Tier 1 finish program's flip sessions added
-(CT-3: item 4's last sentence, and item 4 in the summary sentence). Chunk 1
-is a developer tool and has no note.
+(CT-3: item 4's last sentence, and item 4 in the summary sentence; WL-2:
+item 3's last sentence, and item 3 in the summary sentence). Chunk 1 is a
+developer tool and has no note.
 
 - **Which release owes it.** Whichever release next ships from `master`.
   None of this program is in a 1.21.0 tagged at the project-workspace
   closeout commit (`a273ab7`), so that release needs none of it. A release
   cut from `master` at or after `02b2985` (Chunk 5's merge) carries all of
   it.
-- **Which items.** Items 1, 2 and 4 go in any such release: Chunk 2's
-  staggered launch is on by default, Chunk 5 has no switch, and Chunk 4's
-  continuation tail has defaulted on since the Tier 1 finish program's CT-3
-  (PR #226). Item 3 is *(conditional)*: include it only if
-  `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` defaults on in the `backend/settings.py`
-  being released. At the closeout both switches were off, each flip owed
-  after an M3 pass of that chunk's own test. The Tier 1 finish program (O7)
-  replaced that gate with runtime self-checks; its WL-2 is the session that
-  turns Chunk 3 on
+- **Which items.** All four go in any such release: Chunk 2's staggered
+  launch is on by default, Chunk 5 has no switch, Chunk 4's continuation
+  tail has defaulted on since the Tier 1 finish program's CT-3 (PR #226),
+  and Chunk 3's warm lead since its WL-2 (PR #228). At the closeout both
+  switches were off, each flip owed after an M3 pass of that chunk's own
+  test. The Tier 1 finish program (O7) replaced that gate with runtime
+  self-checks, then turned both switches on
   ([`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md)).
 - **Where it goes.** If the release's entry already has a section on cost
   (1.21.0's has "What a review costs"), the items can join it instead.
-  Keep them in this order either way, so leaving out a conditional item
-  leaves a clean list.
+  Keep them in this order either way.
 
 **Section title:** What research and Final QC cost
 
@@ -1768,14 +1766,14 @@ is a developer tool and has no note.
    it from the top. The app now retries the step that failed and carries on.
    If that retry fails too, the last attempt still starts fresh.
 
-3. **Batched verification reuses what it already paid for** —
-   *(conditional: only if `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` defaults on in
-   the released build)*
+3. **Batched verification reuses what it already paid for**
 
    When many of Final QC's verifying reviewers work from the same copy of
    your section, one of them now starts first, at full price, so the rest of
    the batch can read its copy instead of each storing their own. The report
    lists that reviewer at full price, so the cost it shows stays exact.
+   Verification may start a few seconds later, and if this turns out not to
+   help, the app stops doing it by itself until you restart it.
 
 4. **Long research stops paying twice for what it already read**
 
@@ -1787,11 +1785,12 @@ is a developer tool and has no note.
    stops doing it by itself until you restart it.
 
 **For the release's summary paragraph**, if it mentions this program, one
-sentence covers the three unconditional items: "Research and Final QC pay
-less for the same work: four of Final QC's reviewers now share one stored
-copy of your section instead of each paying for its own, a long research
-area reuses what it already read instead of paying for it again, and a
-dropped connection no longer starts a research area over."
+sentence covers all four items: "Research and Final QC pay less for the same
+work: four of Final QC's reviewers now share one stored copy of your section
+instead of each paying for its own, and so do its verifying reviewers when
+many of them read the same copy; a long research area reuses what it already
+read instead of paying for it again; and a dropped connection no longer
+starts a research area over."
 
 ### The per-chunk drafts
 
@@ -1883,6 +1882,14 @@ Chunk 3's half needs a Final QC that produces enough findings for at least
 one lineage to reach its minimum. The QC profiler's `seat:list-price` row
 shows whether a lead ran. If there is no such row, say so; that half of the
 trial then waits for a larger run.
+
+*M3 superseded (2026-09-24).* It was never run (O6), and neither flip waits
+on it any more: the Tier 1 finish program (O7) turned both switches on under
+runtime self-checks that watch the runs the app makes anyway (its CT-3 and
+WL-2,
+[`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md)).
+The procedure above still works as written; its two `= "1"` lines now set
+what is already the default.
 
 **M4 — after.** After the program's switches are on in normal use, run M1's
 and M2's commands again on new runs. Chunk 6 records the result.
@@ -2014,6 +2021,12 @@ readable by the batch requests that follow it. Caches are per workspace
 and are not documented as separate for the two paths. But nothing states
 the sharing outright either. That is why the chunk ships switched off, and
 its default flips only on an M3 pass.
+
+*Superseded (2026-09-24).* M3 was never run (O6). The Tier 1 finish program
+(O7) replaced it with a runtime check of this arithmetic on every run that
+sends a lead (its WL-1, `backend/cost_checks.py`; the Chunk 3 finish
+plan's Appendix B), and its WL-2 turned the default on
+([`tier1-finish/TIER1_FINISH_TRACKER.md`](tier1-finish/TIER1_FINISH_TRACKER.md)).
 
 ### 10.4 Chunk 5: resumes
 

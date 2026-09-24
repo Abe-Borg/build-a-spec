@@ -418,7 +418,7 @@ function QcBatchLine({ live }: { live: QcLiveState }) {
       className={`flex items-center gap-1.5 rounded border px-2 py-1.5 text-[10px] ${
         failed
           ? "border-warn/30 bg-warn/5 text-warn"
-          : "border-line bg-paper-2 text-ink-dim"
+          : "border-edge bg-bg/70 text-ink-dim"
       }`}
     >
       {!done && !failed && <span className="agent-dot" aria-hidden="true" />}

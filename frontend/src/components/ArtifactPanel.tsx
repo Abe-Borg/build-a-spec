@@ -2058,7 +2058,7 @@ function ReferenceDocumentsStrip({
                 </p>
               </div>
               <button
-                className="shrink-0 text-ink-faint hover:text-danger"
+                className="shrink-0 text-ink-faint hover:text-err"
                 onClick={() => onRemove(doc.rid)}
                 disabled={busy}
                 title={`Remove ${doc.title}`}

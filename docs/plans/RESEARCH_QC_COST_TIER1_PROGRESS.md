@@ -10,11 +10,13 @@ A new session starts from [How to start a session](#how-to-start-a-session)
 and then follows the [Session procedure](#session-procedure) step by step.
 
 **The program is complete** (Chunk 6, the closeout, 2026-09-24). Every
-chunk's code is on `master`. Two switches still ship off, each with its flip
-owed after a measured run, and the release notes are owed to the next
+chunk's code is on `master`. Two switches still ship off. Each flips after
+a measured run passes its test, or on Abraham's waiver of that run. He will
+not run one and has waived neither (O6), so both flips are **shelved**: no
+session is waiting on anything. The release notes are owed to the next
 release. [After the program](#after-the-program) says what is left and how
-to do it. A session that applies the owed flips starts there, not from the
-Session procedure.
+to do it. A session that applies a flip starts there, not from the Session
+procedure.
 
 ## Status
 
@@ -49,9 +51,9 @@ GitHub.
 ## After the program
 
 The closeout (Chunk 6) ended the chunk sequence on 2026-09-24. There is no
-Chunk 7, and the Session procedure has nothing left to pick. Four things are
-still owed. None of them is code a session can write on its own, because
-each one waits on a real run.
+Chunk 7, and the Session procedure has nothing left to pick. Four things were
+still owed at the close. None of them is code a session can write on its
+own, because each one waits on a real run.
 
 | What | Why it is owed | Who | Cost |
 |---|---|---|---|
@@ -59,6 +61,17 @@ each one waits on a real run.
 | **Chunk 4's flip** (`BUILD_A_SPEC_CONTINUATION_CACHE`) | It ships off, and flips only on an M3 pass of its own test (the plan, Chunk 4 → "M3 decides the flip"). | a flip session | — |
 | **Chunk 3's flip** (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) | It ships off, and flips only on an M3 pass of its own test (the plan, Chunk 3 → "M3 decides the flip"). | a flip session | — |
 | **The release notes** | Whichever release next ships from `master` owes the plan's §7 "Release-note draft (Tier 1)". | that release's closeout | — |
+
+**Shelved on 2026-09-24 (O6).** Abraham will not run M3, and M1, M2 and M4
+are not coming either. So the first three rows wait on a run that is not
+planned, and no flip session is owed: a session given no measurements can
+only record that it decided nothing (O4, O5). Only the release notes are
+still owed. Either switch can still turn on, in one of two ways:
+- A measured run arrives after all. The steps below then apply as written.
+- Abraham waives the M3 gate for a chunk, as he waived the condensing
+  plan's paid recall check (D5). A flip session given that waiver
+  ([Starting a flip session](#starting-a-flip-session) says how) records it
+  as step 4 says, and flips the chunk by step 5.
 
 **Two free baselines make M3's verdict sharper, and both read files you
 already have.**
@@ -83,8 +96,11 @@ plan's Chunk 6, step 3).
 ### Starting a flip session
 
 Once M3 has been run, give a new session this prompt, with the
-measurements filled in. Run M3 first: a flip session given no measurements
-can decide nothing, and only records that it could not (O4, O5).
+measurements filled in. To turn a chunk on without M3 instead, put
+Abraham's waiver where the measurements go, naming the chunk, for example:
+`Owner waiver: flip Chunk 4 without M3.` Step 4 says what a waiver
+changes. A flip session given neither can decide nothing, and only records
+that it could not (O4, O5).
 
 ```text
 Apply the owed flips of the "Research and Final QC cost, Tier 1" program in
@@ -122,8 +138,13 @@ have them; the error text of anything that failed):
    If the prompt carries no M3, or a chunk's half of it is missing (Chunk
    3's needs a `seat:list-price` row), change nothing for that chunk, and say
    which run is still needed.
-5. **Flip each chunk that passed, as its own commit.** Its "Flip" section
-   lists the parts. In full:
+   - **An owner waiver is the one exception.** If the prompt says Abraham
+     waives the M3 gate for a chunk, that waiver is the chunk's decision.
+     Record it as the chunk's row, saying the switch turns on unmeasured (a
+     waiver, not a pass), and flip the chunk by step 5. A chunk the waiver
+     does not name is decided as above.
+5. **Flip each chunk that passed or was waived, as its own commit.** Its
+   "Flip" section lists the parts. In full:
    - its default in `backend/settings.py`;
    - `test_..._ships_switched_off` replaced by `..._ships_switched_on`, still
      read from the source with `ast`;
@@ -133,7 +154,7 @@ have them; the error text of anything that failed):
      chunk's "It ships switched off";
    - the trust dossier's Research and Final QC cards, re-read against the new
      default;
-   - `docs/plans/README.md`'s "flip owed" line.
+   - `docs/plans/README.md`'s line on the two flips ("shelved" since O6).
 6. **For a chunk that failed,** leave the default off. Record the numbers
    and the likely cause (the plan's "Fail" bullet). Say whether the flip is
    still owed (a larger run could pass it) or abandoned.
@@ -299,7 +320,7 @@ Two exceptions:
 | Chunk 3 | nothing new. M3, after Chunk 4, tests it: Chunk 3 ships switched off. | — |
 | Chunk 4 | **M3**: from a source checkout, run one Research round and one Final QC with the new switches on. Paste both profilers' output, plus the error text of anything that failed. Chunks 3 and 4 each flip their default only on a pass of their own test. | only the runs themselves |
 | Chunk 5 | M3, if it has not been done yet. | as above |
-| Chunk 6 | nothing: the program is complete. M3 is still owed for the two switches that ship off, and the flips it decides are applied by a flip session ([After the program](#after-the-program)). | only the runs themselves |
+| Chunk 6 | nothing: the program is complete. M3 was owed for the two switches that ship off. None is planned (O6), so both stay off, and their flips are shelved ([After the program](#after-the-program)). | — |
 
 The exact commands for M1–M4 are in the plan's §8.
 
@@ -344,6 +365,7 @@ record that neither flip can be decided yet (O4, O5).
 | O3 | 2026-09-24 | **Chunk 6's flip step, applied by the closeout session as the plan directs.** No M3 is recorded: the session's prompt left the measurements placeholder unfilled, which is read as "none", and M1, M2 and M4 are empty too. So neither default flips. Chunk 3 (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) and Chunk 4 (`BUILD_A_SPEC_CONTINUATION_CACHE`) both ship **off**, each with its flip owed after an M3 pass of its own test. This is recorded in `docs/plans/README.md` and under [After the program](#after-the-program). Step 3 (revisit Chunk 3 against M4) does not apply: its default is off, and there is no M4. |
 | O4 | 2026-09-24 | **Chunk 4's flip (`BUILD_A_SPEC_CONTINUATION_CACHE`), decided by the first flip session as [After the program](#after-the-program) directs: no flip.** The session's prompt left the measurements placeholder unfilled, which is read as "none" (as in O2 and O3). So there is no M3 to apply Chunk 4's test to (the plan, Chunk 4 → "M3 decides the flip"), and no M1 for its "lower uncached input share than M1" to be measured against. The default stays **off**. Nothing was measured, so the flip neither passed nor failed: it is still **owed**. Still needed: M3 with the switch on, from a source checkout — one Research round and one Final QC (the test also fails on a compliance lens or verifier seat refused with `invalid_request`), both profilers on the results, and the error text of anything that failed. M1, the research profiler on projects researched before the trial, is free and is the baseline the test compares against. |
 | O5 | 2026-09-24 | **Chunk 3's flip (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`), decided the same way: no flip.** With no M3 there is no `seat:list-price` row, so no lead ran for the test (the plan, Chunk 3 → "M3 decides the flip") to judge. The default stays **off**, and the flip is still **owed**. Still needed: M3's Final QC half with the switch on — a Final QC large enough that one lineage of verifier seats sharing one copy of the section reaches 20 seats, and the QC profiler on its JSON export, whose `seat:list-price` row says whether a lead ran. One trial serves both chunks: the plan's §8 turns both switches on for the same Research round and Final QC. M2, the QC profiler on the newest Final QC export made before the trial, is free and gives the test its h₀; without it the test takes 0.88. |
+| O6 | 2026-09-24 | **Abraham will not run M3.** Asked for the trial after the first flip session, he answered: "I'm not doing that work." M1, M2 and M4 are not coming either. So Chunk 4 (`BUILD_A_SPEC_CONTINUATION_CACHE`) and Chunk 3 (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) stay **off**, and their flips are **shelved**. They are not abandoned, but nothing planned is waiting on them, and no further flip session is owed. Either flip still needs a measured run after all, or his waiver of the M3 gate for that chunk (the condensing plan's D5 precedent); neither is planned. The release notes stay owed as the plan's §7 says: items 1 and 2 only, while both switches are off. |
 
 ## Done checklist (every chunk)
 

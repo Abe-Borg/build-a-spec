@@ -8,10 +8,10 @@ import {
   startTutorialScenario,
   startTutorialWorkspace,
 } from "./api";
+import { markOnboardingCompleted } from "./onboardingCompletion";
 import {
   clearOnboardingProgress,
   loadOnboardingProgress,
-  markOnboardingCompleted,
   saveOnboardingProgress,
 } from "./onboardingStorage";
 import { TOUR, TOUR_VERSION } from "./tour";

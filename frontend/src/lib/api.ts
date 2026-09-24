@@ -16,6 +16,7 @@ import type {
   HarvestPreview,
   Health,
   NextSectionOptions,
+  OnboardingCompletionPayload,
   NextSectionRequest,
   ProjectBriefInspection,
   ProjectBriefManifest,
@@ -1650,6 +1651,30 @@ export async function saveUiPreferences(
     body: JSON.stringify(payload),
   });
   if (!resp.ok) throw new Error(`ui preferences save ${resp.status}`);
+}
+
+/**
+ * The tour version this install last finished. On disk for the panel tray's
+ * reason (the packaged app's WebView forgets browser storage every launch),
+ * and in a file of its own: `PUT /api/ui/preferences` replaces the layout's
+ * file whole, so the two must never share one.
+ */
+export async function getOnboardingCompletion(): Promise<OnboardingCompletionPayload> {
+  const resp = await fetch("/api/ui/onboarding");
+  if (!resp.ok) throw new Error(`onboarding completion ${resp.status}`);
+  return resp.json();
+}
+
+/** Remember that the tour was finished, for every later launch. */
+export async function saveOnboardingCompletion(
+  completedVersion: number,
+): Promise<void> {
+  const resp = await fetch("/api/ui/onboarding", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ completed_version: completedVersion }),
+  });
+  if (!resp.ok) throw new Error(`onboarding completion save ${resp.status}`);
 }
 
 export class UpdateInstallError extends Error {

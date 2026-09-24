@@ -106,11 +106,11 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, StrictBool, StringConstraints
+from pydantic import BaseModel, Field, StrictBool, StrictInt, StringConstraints
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from . import diagnostics, settings, sessions, ui_preferences
+from . import diagnostics, onboarding_state, settings, sessions, ui_preferences
 from .api_key_store import (
     delete_api_key,
     key_status,
@@ -705,6 +705,19 @@ class UiPreferencesRequest(BaseModel):
             StringConstraints(pattern=ui_preferences.PANEL_ID_PATTERN.pattern),
         ]
     ] = Field(default_factory=list, max_length=ui_preferences.MAX_HIDDEN_PANELS)
+
+
+class OnboardingCompletionRequest(BaseModel):
+    """Body of ``PUT /api/ui/onboarding``: the tour version just finished.
+
+    Strict where the file reader is lenient, for the reason the panel
+    layout's body is: it only ever comes from the app's own frontend, so a
+    string, a boolean or a version outside the range is a bug to refuse.
+    """
+
+    completed_version: Annotated[
+        StrictInt, Field(ge=1, le=onboarding_state.MAX_COMPLETION_VERSION)
+    ]
 
 
 class NextSectionRequest(BaseModel):
@@ -8963,6 +8976,53 @@ def create_app(
             hidden_panels=len(preferences.hidden_panels),
         )
         return {"ok": True, **preferences.to_dict()}
+
+    # --- Tutorial completion (the empty chat's tutorial chip) ------------
+
+    @app.get("/api/ui/onboarding")
+    def ui_onboarding_get() -> dict:
+        """The tour version this install last finished; null when none.
+
+        On disk for the panel tray's reason: the packaged app's WebView
+        forgets its browser storage between launches (see
+        ``backend/onboarding_state.py``). Its own file, never a key in the
+        panel layout's, because that file is replaced whole on every save.
+        """
+        state = onboarding_state.load_onboarding_state()
+        return {"ok": True, **state.to_dict()}
+
+    @app.put("/api/ui/onboarding")
+    def ui_onboarding_put(body: OnboardingCompletionRequest) -> Any:
+        """Remember that the tour was finished, for every later launch.
+
+        Not session state: New session and Open project leave it alone, it
+        needs no workspace lease, and a failed write says so — the frontend
+        already shows the tour as finished for this launch either way.
+        """
+        state = onboarding_state.OnboardingState(
+            completed_version=body.completed_version
+        )
+        try:
+            onboarding_state.save_onboarding_state(state)
+        except OSError:
+            _api_log.warning(
+                "Could not write the tutorial completion file", exc_info=True
+            )
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "error": (
+                        "Finishing the tutorial could not be saved, so the "
+                        "app will offer it as new the next time it opens."
+                    ),
+                    "code": "write_failed",
+                },
+                status_code=500,
+            )
+        _trace_capture.app_event(
+            "onboarding_completed", completed_version=body.completed_version
+        )
+        return {"ok": True, **state.to_dict()}
 
     # --- Self-update (Phase 5) ----------------------------------------------
 

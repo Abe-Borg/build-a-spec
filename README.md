@@ -1062,8 +1062,8 @@ where it stands is
 [`docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`](docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md),
 and nowhere else. It is being built one chunk at a time. So far a user sees
 one change: Final QC's first stage starts a few seconds later (Chunk 2,
-below). Chunk 3 is built but ships switched off, so it changes nothing until
-a measured run says it pays.
+below). Chunks 3 and 4 are built but ship switched off, so they change
+nothing until a measured run says each one is safe and pays.
 
 ### Measure what research costs (Chunk 1)
 
@@ -1191,6 +1191,52 @@ rest can read the copy it stored.
   many reviewers share the copy, which group, and whether the wait ended on
   the lead's first output (`warm`), the time limit (`timeout`) or a Stop
   (`stopped`).
+
+
+### A paused call reads its own cache (Chunk 4, switched off)
+
+A research area — or a Final QC call that searches the web — sometimes has
+more web work to do than one reply allows, so the provider pauses it and the
+app resumes it by sending the whole conversation again: the instructions,
+your section, and every search result and page the call has read so far.
+Nothing after the section's shared copy was marked for caching, so every
+resume paid the full input price for a conversation it had already sent.
+With this switch on, a resumed request carries one automatic cache
+breakpoint at its end, where it can read what the paused request already
+stored.
+
+- **Off by default, deliberately.** The provider documents this request
+  shape as allowed, but if it ever refused it, every paused research area
+  and every paused compliance review would fail. So it is proven on a real
+  run first (the plan's M3), and stays off until then.
+  `BUILD_A_SPEC_CONTINUATION_CACHE=1` switches it on for a trial. In
+  PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "1"`; in Command
+  Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=1`.
+- **What changes when it is on:** only a resumed request, and only by one
+  setting added beside the request — never inside your section or the
+  conversation. A first request never carries it: its end is unique to it,
+  so storing it would only cost. Only a call that searches or fetches the
+  web can pause, so what resumes this way is research areas, Final QC's
+  code-compliance review, and the streamed reviewers that check its findings
+  (a streamed lead seat included); the app gives the same treatment to any
+  other streamed Final QC call, should one ever pause. The batched verifier
+  transport never carries it: its rounds are minutes apart, and a 5-minute
+  copy has usually expired by the next one. What each call is asked and what
+  it finds are unchanged, and a Final QC result you already have stays
+  current.
+- **What it saves:** on each resume, the conversation it sends again is
+  billed at the cache-read price — a tenth of the input price on research's
+  model, a twentieth on Final QC's — instead of the full price, plus a write
+  premium on what is new since the last resume. How much that is depends on
+  how often your runs pause. If the provider's stored copy turns out not to
+  match what is sent again, each resume pays about 25% more on what it
+  re-sends instead, which is exactly what the trial checks for.
+- **Measured, not modelled:** after a Research round with the switch on,
+  `tools\research_cost_profile.py` should show a lower uncached share than a
+  round without it on the areas that paused, with cache reads growing faster
+  than cache writes; `tools\qc_export_cost_profile.py` shows the same for the
+  compliance lens. There is no activity-log line for it: the profilers are
+  how you see it.
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -2686,6 +2732,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
+| `BUILD_A_SPEC_CONTINUATION_CACHE` | `0` | Continuation caching (Chunk 4 of the cost program, **off** until a measured run shows the provider accepts it and it pays): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "1"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=1`. |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
 | `BUILD_A_SPEC_QC_EFFORT` | `high` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback that sets both phases. |

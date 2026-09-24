@@ -16,9 +16,10 @@ file defends has four halves:
   seats' are priced at the batch rate;
 * **every exit** — the lead's billed record reaches the report on every path
   out of the phase, and the phase's last frame counts it;
-* **off means off** — with the switch off (its shipped default) the phase is
-  the batch it was before this chunk, byte for byte, and a retained Final QC
-  result stays current with the switch in either position (the plan's F3).
+* **off means off** — with the switch off (its shipped default until the
+  Tier 1 finish program's WL-2 turned it on) the phase is the batch it was
+  before this chunk, byte for byte, and a retained Final QC result stays
+  current with the switch in either position (the plan's F3).
 
 Every wait here is an event, never a real sleep (the Windows lesson in
 CLAUDE.md, "A test that had only ever run on Linux").
@@ -1160,11 +1161,16 @@ def test_a_lineage_is_what_the_seats_send_not_which_lens_asked() -> None:
     assert len({engine._spec_lineage_key(specs[f"seat-{i}-0"]) for i in range(8)}) == 1
 
 
-def test_warm_lead_ships_switched_off() -> None:
+def test_warm_lead_ships_switched_on() -> None:
     """Read from the source, so no developer's environment can move it.
 
-    The default flips only on a recorded M3 pass (the plan's Chunk 3
-    "Flip"), which replaces this test with its switched-on twin.
+    The Tier 1 finish program's WL-2 turned the default on, without the
+    measured trial the flip once waited on (its decision FD1): the warm
+    lead's self-check in ``backend.cost_checks`` (WL-1) switches the lead off
+    for the rest of the app session when the batch does not read its copy, or
+    when it cost more than it could have saved. It replaced
+    ``test_warm_lead_ships_switched_off``; an operator switches the lead off
+    with ``BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0``.
     """
     tree = ast.parse(Path(settings.__file__).read_text(encoding="utf-8"))
     calls = [
@@ -1182,7 +1188,7 @@ def test_warm_lead_ships_switched_off() -> None:
     assert isinstance(call.func, ast.Name) and call.func.id == "_bool_env"
     assert [ast.literal_eval(arg) for arg in call.args] == [
         "BUILD_A_SPEC_QC_BATCH_WARM_LEAD",
-        False,
+        True,
     ]
 
 

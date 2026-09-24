@@ -963,11 +963,17 @@ function Dossier() {
               pauses or has to retry — which the API prices at half. Nothing
               about the review changes; batched requests are not streamed, so
               the panel board reports how many seats have returned instead of
-              showing each seat’s activity as it happens. An optional setting,
-              off by default, sends one seat of a large group first, streamed
-              at full price, so the rest of the batch can read its cached copy
-              of your document; that seat shows its activity like any streamed
-              one, and the report prices it at full price.
+              showing each seat’s activity as it happens. When twenty or more
+              seats read the same copy of your document, one of them is sent
+              first, streamed at full price, and the batch goes out once it
+              begins answering (after at most 45 seconds), so the rest can
+              read its cached copy instead of each paying to store their own;
+              that seat shows its activity like any streamed one, and the
+              report prices it at full price. After each such review the app
+              reads the batch’s own usage report, and if the batch did not
+              read that copy, or the seat cost more than it could have saved,
+              it stops doing this until you restart it (Settings → Developer
+              tools → Cost self-checks shows what it found).
               Refuted findings are kept and shown in the report rather than
               quietly deleted. The verifiers also judge the proposed fix as
               untrusted input, and must reject one that is partial, ambiguous,

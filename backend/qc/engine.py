@@ -5973,14 +5973,18 @@ def _sleep_interruptibly(
 # ordinary seat with an ordinary record (cost_multiplier 1.0), which the mixed-
 # rate accounting has handled since v1.12.0; what it costs is its own batch
 # discount. Whether a batch request can read an entry a streamed request wrote
-# is not documented, which is why the switch (settings.QC_BATCH_WARM_LEAD)
-# ships off. No measured trial will settle it (the Tier 1 finish program's
-# FD1); the warm lead's self-check does instead (``cost_checks``, WL-1): after
-# a phase that ends normally and sent a lead, ``check_leads`` hands each such
-# lineage's usage to ``cost_checks.check_warm_leads``, which switches the lead
-# off for the rest of the app session when the batch did not read its copy or
-# it cost more than it could have saved, and ``_run_batch_calls`` picks no
-# lead once it has.
+# is not documented, and no measured trial will settle it (the Tier 1 finish
+# program's FD1). The switch (settings.QC_BATCH_WARM_LEAD) is on by default
+# anyway, since that program's WL-2, because the warm lead's self-check
+# watches every run that sends one (``cost_checks``, WL-1): after a phase that
+# ends normally and sent a lead, ``check_leads`` hands each such lineage's
+# usage to ``cost_checks.check_warm_leads``, which switches the lead off for
+# the rest of the app session when the batch did not read its copy or it cost
+# more than it could have saved, and ``_run_batch_calls`` picks no lead once
+# it has. What the check cannot see is bounded: a lead that is read but was
+# not needed costs about its own batch discount, a failed lead is an ordinary
+# failed seat, and the batch waits at most ``QC_WARM_WAIT_SECONDS`` for the
+# lead's first output. BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0 switches it off.
 
 LINEAGE_WEB_TOOLED = "web-tooled"
 LINEAGE_NO_WEB = "no-web"

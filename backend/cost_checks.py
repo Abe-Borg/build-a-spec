@@ -5,7 +5,8 @@ shipped off until a measured trial proved them, and that trial is not coming
 (the Tier 1 progress file's O6). The Tier 1 finish program (decision FD1,
 ``docs/plans/tier1-finish/``) replaces the trial with checks that watch the
 runs the app makes anyway, and this module holds their state. With the
-checks below in place, the continuation tail defaults on (session CT-3).
+checks below in place, both savings default on: the continuation tail since
+session CT-3, and the warm lead since session WL-2.
 
 The first check is the **continuation tail's guard** (session CT-1). The
 tail is a top-level ``cache_control`` on a streamed request that resumes a

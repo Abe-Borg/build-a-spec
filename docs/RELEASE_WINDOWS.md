@@ -318,27 +318,37 @@ invisible to CI and expensive to the user.
       before. Press Stop while the three are queued: they are recorded as
       cancelled, and the activity log shows one "share a cached prefix" line
       ending `(stopped)`.
-- [ ] **Streamed lead seat** (cost Tier 1, Chunk 3 — **off by default**, so
-      this row runs only when trialling it). From a source checkout, set
-      `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "1"` (Command Prompt:
-      `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=1`) and run Final QC on a section
-      big enough that one kind of finding faces at least 20 verifier seats
-      (ten or more medium findings from lenses without web tools, say). In
-      the Review Room, one seat of that group shows live activity while the
-      rest wait on the batch; the batch line counts it when it finishes. In
-      the report, that seat's usage is priced at list (the JSON export shows
-      its `cost_multiplier` as 1.0, every batched seat's as 0.5), the
-      methodology lists **Streamed lead seat**, and
+- [ ] **Streamed lead seat** (cost Tier 1, Chunk 3 — **on by default** since
+      the Tier 1 finish program's WL-2). Run Final QC on a section big enough
+      that one kind of finding faces at least 20 verifier seats (ten or more
+      medium findings from lenses without web tools, say). In the Review
+      Room, one seat of that group shows live activity while the rest wait
+      on the batch, which goes out once that seat begins answering (at most
+      45 seconds later); the batch line counts it when it finishes. In the
+      report, that seat's usage is priced at list (the JSON export shows its
+      `cost_multiplier` as 1.0, every batched seat's as 0.5), the methodology
+      lists **Streamed lead seat**, and
       `.\.venv\Scripts\python tools\qc_export_cost_profile.py "<the JSON export>"`
-      shows a `seat:list-price:<group>` row. Afterwards Settings →
-      Developer tools → Environment → **Cost self-checks** reads
-      `Warm lead (Final QC): on · last check: …`, with how many of that
-      group's batched seats read the lead's copy. It reads `off for this
-      session` only when the activity log also holds the `Cost self-check:
-      the warm lead is switched off` WARNING, and then the next Final QC
-      streams no lead. With the switch off (the default) none of that
-      appears, the methodology does not mention a lead, and the row reads
-      `Warm lead: switched off in settings`.
+      shows a `seat:list-price:<group>` row. On a section too small for any
+      group to reach 20 seats, no seat streams ahead of the batch and the
+      methodology does not mention a lead.
+- [ ] **The warm lead's Cost self-checks line.** Before any Final QC has
+      sent a lead, Settings → Developer tools → Environment → **Cost
+      self-checks** ends with `Warm lead (Final QC): on · nothing checked
+      yet`. After the Final QC above it reads `Warm lead (Final QC): on ·
+      last check: …`, with how many of that group's batched seats read the
+      lead's copy. It reads `off for this session` only when the activity
+      log also holds the `Cost self-check: the warm lead is switched off`
+      WARNING, and then the next Final QC streams no lead: every seat rides
+      the batch at the batch rate, and the methodology does not mention a
+      lead. Restarting the app switches it back on.
+- [ ] **Switching the warm lead off.** Set
+      `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"` (Command Prompt:
+      `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`) before you start the app, and
+      run the same Final QC: no seat streams ahead of the batch, every seat's
+      `cost_multiplier` is 0.5, the methodology does not mention a lead, the
+      profiler shows no `seat:list-price` row, and the Cost self-checks row's
+      last line reads `Warm lead: switched off in settings`.
 
 ### A paused call reads its own cache (cost Tier 1, Chunk 4 — on by default)
 
@@ -372,8 +382,8 @@ they decided.
       measured yet`), then `Continuation tail, Final QC: on · …`. Neither
       line reads `off for this session` unless the activity log also holds
       the WARNING that switched it off. A last line covers the warm lead
-      (`Warm lead: switched off in settings`, its default; the Streamed lead
-      seat row above covers it on).
+      (`Warm lead (Final QC): on · …`, its default since WL-2; the Final QC
+      rows above cover it).
 - [ ] **Switching it off.** Set `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`
       (Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`) before you
       start the app: the Cost self-checks row reads `Continuation tail:

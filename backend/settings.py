@@ -491,16 +491,25 @@ QC_WARM_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_WARM_WAIT_SECONDS", 45, minimum
 # `qc.engine._WARM_LEAD_MIN_SEATS_*` seats (never fewer than 8) gets a lead,
 # and the wait is `QC_WARM_WAIT_SECONDS` (0 makes this switch inert).
 #
-# OFF by default, deliberately: a lead pays for itself only if the batch can
+# ON by default since the Tier 1 finish program's WL-2, without the measured
+# trial the flip once waited on. A lead pays for itself only if the batch can
 # read the entry a STREAMED request wrote, and no document states that the two
-# transports share it. No measured trial will settle that (the Tier 1 finish
-# program's FD1): instead, after every batched phase that ends normally and
-# sent a lead, a runtime self-check (`backend.cost_checks`, session WL-1) reads
-# the usage the batch reported and switches the lead off for the rest of the
-# app session when the batch did not read the lead's copy or the lead cost
-# more than it could have saved. Not in the QC input manifest: it changes how
-# one seat is sent, never what any seat is asked (the plan's F3).
-QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", False)
+# transports share it; decision FD1 (docs/plans/tier1-finish/) replaced the
+# trial that was to settle it with a runtime self-check
+# (backend/cost_checks.py, session WL-1) that can only switch the lead OFF,
+# until the app restarts. After every batched phase that ends normally and
+# sent a lead, it reads the usage the batch already reported (nothing is sent
+# to test the provider) and, once at least 8 batched seats are measured,
+# switches the lead off when fewer than half of them read the lead's copy, or
+# when the lead cost more than it could have saved even if the batch alone
+# would have read nothing. What it cannot see is bounded: a lead the batch
+# reads but did not need, or one on a lineage it cannot measure, costs about
+# its own batch discount per large lineage per run ($0.20-$0.35 at typical
+# sizes, the Chunk 3 finish plan's B.6), and the batch waits at most
+# `QC_WARM_WAIT_SECONDS` for the lead's first output. A lead that fails is an
+# ordinary failed seat. 0 switches it off. Not in the QC input manifest: it
+# changes how one seat is sent, never what any seat is asked (the plan's F3).
+QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", True)
 
 # Continuations read their own cache (Research/QC cost Tier 1, Chunk 4). A
 # research area, or a streamed Final QC call carrying web tools, can pause

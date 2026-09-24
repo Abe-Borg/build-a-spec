@@ -17205,9 +17205,10 @@ program stands, what is still owed and the flip session's prompt are in
 release notes a release can lift are the plan's §7 "Release-note draft
 (Tier 1)".
 
-- **Nothing was measured.** Every session's prompt left the measurements
-  placeholder unfilled, so M1–M4 are all empty and every gate took its
-  no-measurement branch (the progress file's O2 and O3). Chunk 2 ships on
+- **Nothing was measured.** No session was given a measurement (Chunks
+  2–6 each record the placeholder left unfilled), so M1–M4 are all empty
+  and every gate took its no-measurement branch (the progress file's O2
+  and O3). Chunk 2 ships on
   under F5's documented-guarantee branch, and Chunk 5 under its own rule
   (the final attempt always restarts). Neither saving has been measured.
   The QC profiler's "Phase 1" line, on the first real Final QC export made
@@ -17222,9 +17223,26 @@ release notes a release can lift are the plan's §7 "Release-note draft
   "M3 decides the flip"). A flip is one commit per chunk, applied by a flip
   session. The progress file gives that session's prompt and its seven
   steps.
-- **Flip readiness, re-measured on the final tree.** Pending: the
-  closeout re-runs the suite with both switches on before its pull
-  request opens, and records the result here.
+- **Flip readiness, re-measured on the final tree.** Chunk 3 measured it
+  before Chunks 4 and 5 changed the same loops, and Chunk 4 before Chunk 5.
+  So the closeout ran it again, with both switches on through the
+  environment and two scratch pytest plugins (not committed): one lowers
+  the lead minimums, and one runs a record-only copy of Chunk 4's
+  breakpoint guard on every request the fakes capture.
+  - The whole suite, with the minimums as shipped: 2,833 passed, 64
+    skipped, none failed. The guard saw 2,370 streamed requests (57 of them
+    carrying the continuation tail) and 938 batched ones (none carrying
+    it), with no violation.
+  - Chunk 3's own method, the QC tests outside the lead seat's test file
+    (`-k "qc or QC or final"`) with both minimums at the floor of 8: 403
+    passed, none failed. 3 of 138 batch phases picked a lead, so the lead
+    path really ran. The guard found no violation in 1,460 streamed and
+    618 batched requests.
+
+  Each chunk's `..._ships_switched_off` pin reads the default from the
+  source, so the environment could not reach it in either run; the flip
+  replaces it. Everything else passes either way, so a flip is still one
+  commit per chunk.
 - **The release notes are owed, not written** (F7). The plan's §7 now holds
   one block, shaped as a `ReleaseSection`: items 1 and 2 (Chunks 2 and 5)
   always, and items 3 and 4 only if their switch defaults on in the release.

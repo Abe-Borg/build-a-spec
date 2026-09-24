@@ -306,9 +306,9 @@ The exact commands for M1–M4 are in the plan's §8.
 
 Each entry is dated, and says which chunk's build it was taken on.
 
-**None had been recorded at the closeout (2026-09-24).** Every chunk's
-session came with the placeholder unfilled, so every gate took its
-no-measurement branch (O2, O3). So no effect of this program has been
+**None had been recorded at the closeout (2026-09-24).** No chunk's
+session was given a measurement, so every gate took its no-measurement
+branch (O2, O3). So no effect of this program has been
 measured yet, Chunk 2's included, which ships on.
 [After the program](#after-the-program) says what each measurement is still
 good for.

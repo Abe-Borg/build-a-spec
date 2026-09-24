@@ -1579,8 +1579,8 @@ time. 27 of 29 rows are red; the two at 0 are the unreachable fallthroughs
 
 Built on 2026-09-24 from `master` at `02b2985`. No measurements came with
 the session: the prompt's placeholder was left unfilled, read as "none", as
-every earlier session read it. **The closeout changed no code.** Its files
-are the progress file, this plan, README, CLAUDE.md and
+the sessions for Chunks 2–5 read theirs. **The closeout changed no code.**
+Its files are the progress file, this plan, README, CLAUDE.md and
 `docs/plans/README.md`.
 
 The ten steps, as they went:
@@ -1590,7 +1590,7 @@ The ten steps, as they went:
    open, and unrelated). Chunk 6's own merge commit stays blank, because no
    later chunk session exists to fill it; the flip session's step 2 does.
 2. **Flip, if owed.** No M3 is recorded, so neither default flips. That is
-   recorded three places: owner decision O3; `docs/plans/README.md` ("Chunk
+   recorded in three places: owner decision O3; `docs/plans/README.md` ("Chunk
    3 shipped off; flip owed after M3. Chunk 4 shipped off; flip owed after
    M3."); and the progress file's new "After the program".
 3. **Revisit Chunk 3 against M4.** Does not apply: its default is off, and
@@ -1644,8 +1644,25 @@ rewritten:
 3. **O3.** The flip step's outcome is recorded as an owner-decision row,
    because O2 is the precedent: a gate the plan directs, applied by a
    session.
-4. **Flip readiness, re-measured on the final tree.** Pending: re-run
-   with both switches on before the pull request opens.
+4. **Flip readiness, re-measured on the final tree.** Chunk 3 measured it
+   before Chunks 4 and 5 changed the same loops, and Chunk 4 before Chunk 5.
+   The closeout ran it again with both switches on through the environment,
+   using two scratch pytest plugins that are not committed: one lowers the
+   lead minimums, and one runs a record-only copy of Chunk 4's breakpoint
+   guard on every captured request.
+   - The whole suite, with the minimums as shipped: 2,833 passed, 64
+     skipped, none failed. The guard saw 2,370 streamed requests (57
+     carrying the tail) and 938 batched ones (none carrying it), with no
+     violation.
+   - Chunk 3's selection (`-k "qc or QC or final"`, outside
+     `tests/test_qc_batch_warm_lead.py`) with both minimums at the floor of
+     8: 403 passed, none failed. 3 of 138 batch phases picked a lead, so the
+     lead path ran. The guard found no violation in 1,460 streamed and 618
+     batched requests.
+
+   Each chunk's `..._ships_switched_off` pin reads the default from the
+   source, so it passed in both runs; the flip replaces it. Everything else
+   passes either way, so a flip is still one commit per chunk.
 5. **The README intro now says what is true at the close.** The old intro
    said every change "is measured on real saved files before it is
    trusted". That is F8's intent, not what happened: nothing was measured,

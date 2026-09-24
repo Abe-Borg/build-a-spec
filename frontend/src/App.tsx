@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type {
   ChatMessage,
   CompactionInfo,
@@ -128,7 +135,7 @@ import OnboardingOverlay from "./components/OnboardingOverlay";
 import NewSessionDialog from "./components/NewSessionDialog";
 import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
 import { installExternalLinkHandler } from "./lib/externalLinks";
-import { consumeTutorialUpdateInvitation } from "./lib/onboardingStorage";
+import { onboardingCompletion } from "./lib/onboardingCompletion";
 import {
   useOnboarding,
   type DrawerName,
@@ -354,10 +361,19 @@ export default function App() {
       }),
     );
   }, []);
-  // Consumed once per app launch, and owned here rather than in Chat because
-  // the chat pane remounts on a new session (see sessionNonce below) — read
-  // there, starting a session would quietly retire the notice.
-  const [tutorialUpdated] = useState(consumeTutorialUpdateInvitation);
+  // Whether this install has finished the guided tour: the empty chat's
+  // tutorial chip stops pulsing and offers it "again" once it has. The server
+  // keeps it (lib/onboardingCompletion.ts) because the packaged app's WebView
+  // forgets browser storage between launches. Null until read, and the chip
+  // renders a neutral state for null, so it never changes under the user.
+  // Read here, once, and not in Chat: the chat pane remounts per session.
+  const tourCompleted = useSyncExternalStore(
+    onboardingCompletion.subscribe,
+    onboardingCompletion.get,
+  );
+  useEffect(() => {
+    void onboardingCompletion.load();
+  }, []);
   // Bumped when the session is replaced wholesale, and used as the React key
   // of both panes so their whole subtree is discarded rather than reused.
   // Component-local state below App is otherwise unreachable from the wipe
@@ -3432,7 +3448,7 @@ export default function App() {
           discipline={activeDiscipline}
           onStartOnboarding={onboarding.start}
           tourActive={onboarding.phase.kind !== "idle"}
-          tutorialUpdated={tutorialUpdated}
+          tourCompleted={tourCompleted}
           onStop={onStop}
           uploading={fileLoading !== null}
           prefill={prefill}

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage, CompactionInfo, Figure } from "../types";
 import { starterPrompts } from "../lib/tour";
-import { hasCompletedOnboarding } from "../lib/onboardingStorage";
+import type { OnboardingCompleted } from "../lib/onboardingCompletion";
 import { condensedDividerIndex } from "../lib/compaction";
 import { CondensedDivider, CondensedSummaryModal } from "./CondensedDivider";
 import MessageBubble from "./MessageBubble";
@@ -38,11 +38,10 @@ interface Props {
   figuresById?: Map<string, Figure>;
   /** Remove a figure (forwarded to each figure card). */
   onDeleteFigure?: (fid: string) => void;
-  /** One-shot "the tutorial has been updated since you took it" invitation.
-   *  Owned by App because it is consumed once per app launch and this pane
-   *  remounts on a new session — consuming it here would mean starting a
-   *  session silently retired a notice the user may not have acted on. */
-  tutorialUpdated?: boolean;
+  /** Whether this install has finished the guided tour; null while the saved
+   *  answer is being read (lib/onboardingCompletion.ts). Owned by App because
+   *  this pane remounts on a new session. */
+  tourCompleted?: OnboardingCompleted;
   /** Where the model's view of this conversation was condensed (compaction
    *  plan Phase 3), or null. Draws a divider; the transcript itself is never
    *  condensed. */
@@ -62,7 +61,7 @@ export default function Chat({
   prefill,
   figuresById,
   onDeleteFigure,
-  tutorialUpdated = false,
+  tourCompleted = null,
   compaction = null,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -111,7 +110,10 @@ export default function Chat({
       el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
-  const toured = hasCompletedOnboarding();
+  // Null while the saved answer is read: no pulse and a blank subtitle, so
+  // neither a first-timer nor a returning user sees the chip change.
+  const toured = tourCompleted === true;
+  const tourKnown = tourCompleted !== null;
 
   // The divider sits before the first turn still sent word for word. It is
   // a sibling of the bubbles, never a prop on one: MessageBubble is memoized
@@ -159,22 +161,22 @@ export default function Chat({
                     onClick={onStartOnboarding}
                     disabled={busy || tourActive}
                     className={`rounded-xl border border-accent/50 bg-accent/10 px-4 py-2.5 transition-colors hover:border-accent hover:bg-accent/15 disabled:pointer-events-none disabled:opacity-40 ${
-                      tourActive || (toured && !tutorialUpdated)
-                        ? ""
-                        : "chip-pulse"
+                      tourActive || toured || !tourKnown ? "" : "chip-pulse"
                     }`}
                   >
                     <span className="block text-sm text-ink">
                       🧭 {p.label}
                     </span>
-                    <span className="mt-0.5 block text-[11px] text-ink-faint">
+                    <span
+                      className={`mt-0.5 block text-[11px] text-ink-faint ${
+                        tourActive || tourKnown ? "" : "invisible"
+                      }`}
+                    >
                       {tourActive
                         ? "You are taking it right now"
-                        : tutorialUpdated
-                          ? "Full tutorial updated — see every feature"
-                          : toured
-                            ? "Take the full interactive tutorial again"
-                            : "Full interactive tutorial · uses an actual spec"}
+                        : toured
+                          ? "Take the full interactive tutorial again"
+                          : "Full interactive tutorial · uses an actual spec"}
                     </span>
                   </button>
                 ) : (

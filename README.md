@@ -1848,6 +1848,15 @@ however you end it, it comes back exactly as it was.
   tour back up where you left it — but only when
   the server agrees the same protected workspace is still live. Help restarts
   it or jumps straight to any named chapter. Reduced motion is honored.
+- **Finishing the tour is remembered between launches.** Once you have taken
+  it to the end, the empty chat's tutorial chip stops pulsing and reads *Take
+  the full interactive tutorial again* — also after you close and reopen the
+  app. The packaged app's WebView keeps no browser storage between launches,
+  so the app keeps this in its own small file, `onboarding_state.json`, in
+  the app config folder beside `ui_preferences.json`: one number, the tour
+  version you finished, nothing about any project. A missing or damaged file
+  just means the tour is offered as new. `GET` and `PUT /api/ui/onboarding`
+  read and write it. Ending the tour early does not count as finishing it.
 
 ## Shipped in v1.0.0 (Batch 5: Redline export + version diff) and still current
 
@@ -2455,6 +2464,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/release-notes (+ seen),
                          /api/ui/preferences (GET / PUT: the panel tray's
                          remembered layout),
+                         /api/ui/onboarding (GET / PUT: the finished tour's
+                         version, remembered between launches),
                          /api/session/unsaved|bundle, /api/usage,
                          /api/update/check|install,
                          /api/trace/viewer, /api/project/save + load/load-file
@@ -2494,6 +2505,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   app_paths.py           platformdirs config locations            [ported from Spec Critic]
   ui_preferences.py      the panel tray's layout on disk (ui_preferences.json
                          in the config dir): lenient read, strict atomic write
+  onboarding_state.py    the finished tour's version on disk
+                         (onboarding_state.json, its own file): lenient read,
+                         strict atomic write
   diagnostics.py         always-on rotating activity log + crash capture
                          (faulthandler, exception hooks, unclean-shutdown
                          marker) + the /api/diagnostics* snapshot/tail/
@@ -2632,7 +2646,9 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          document resolvers, readiness, and step actions
   src/lib/useOnboarding.ts  tutorial lifecycle: showcase workspace start,
                          scenario swap, chapter jump, restore, resume persistence
-  src/lib/onboardingStorage.ts  "tour completed" flag + the resume record
+  src/lib/onboardingStorage.ts  the tour's resume record (one launch only)
+  src/lib/onboardingCompletion.ts  whether the tour was finished, read from
+                         and saved to the server (it must outlive the launch)
   src/lib/panelTray.ts   the panel tray's vocabulary and pure rules: fold,
                          leave out, the tour's lock, the folded bar's counts
   src/components/        Chat (starter chips), MessageBubble (markdown),

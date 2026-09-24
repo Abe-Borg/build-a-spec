@@ -442,6 +442,154 @@ def test_a_dimension_without_any_container_is_unaffected():
     assert all("container" not in req for req in client.requests)
 
 
+# ---------------------------------------------------------------------------
+# The continuation tail (Research/QC cost Tier 1, Chunk 4)
+# ---------------------------------------------------------------------------
+
+# Every key a research request carried before the switch existed. A request
+# with the switch off carries exactly these (plus ``container`` when a pause
+# supplies one).
+_TODAYS_REQUEST_KEYS = {
+    "model",
+    "max_tokens",
+    "system",
+    "tools",
+    "thinking",
+    "output_config",
+    "messages",
+}
+
+
+def _pausing_scripts() -> dict[str, list]:
+    """Governing codes pauses twice before it completes; the rest never do.
+
+    The second pause ends on a pending search, the block a real pause is
+    resumed from — so the continuation's LAST block is re-sent paused
+    content, which is what the tail lands on.
+    """
+    return _scripts(
+        governing_codes=[
+            pause_response(searched_urls=["https://a.gov/one"]),
+            pause_response(
+                searched_urls=["https://a.gov/two"], pending_query="still running"
+            ),
+            research_response(
+                items=[_item("Resumed.", ["https://a.gov/one"])],
+                searched_urls=["https://a.gov/one"],
+            ),
+        ]
+    )
+
+
+def _governing(client) -> list[dict]:
+    return [
+        req
+        for req in client.requests
+        if DIM_KEYS["governing_codes"] in user_text(req["messages"])
+    ]
+
+
+def test_a_research_continuation_carries_the_automatic_breakpoint_when_on():
+    """With the switch on, a resume reads what its pause already cached.
+
+    Every request that RESUMES a paused turn carries one top-level automatic
+    breakpoint at the shortest TTL, and nothing else changes. A first request
+    carries none: its tail is the unique brief, where a breakpoint is a pure
+    write surcharge. Dimensions that never paused are untouched.
+    """
+    import backend.research.engine as engine
+
+    client = SequencedFakeClient(_pausing_scripts())
+    profile = run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        continuation_cache=True,
+    )
+    status = next(
+        s for s in profile.dimension_statuses if s.dimension_id == "governing_codes"
+    )
+    assert status.status == "completed"
+
+    first, *continuations = _governing(client)
+    assert len(continuations) == 2
+    assert "cache_control" not in first
+    assert first["messages"][-1]["role"] == "user"
+    for request in continuations:
+        assert request["messages"][-1]["role"] == "assistant"
+        # 5 minutes: no ``ttl`` key at all, the provider's default.
+        assert request["cache_control"] == {"type": "ephemeral"}
+        # A plain dict per request — the SDK serializes it as JSON, and a
+        # shared object would let one request's mutation reach the next.
+        assert type(request["cache_control"]) is dict
+        assert request["cache_control"] is not engine._CONTINUATION_CACHE_CONTROL
+        # The ONE key the switch adds; everything else is today's.
+        assert set(request) - set(first) == {"cache_control"}
+        assert set(first) == _TODAYS_REQUEST_KEYS
+    assert continuations[0]["cache_control"] is not continuations[1]["cache_control"]
+    # The last re-sent block is the pending search, carrying no marker.
+    last_block = continuations[1]["messages"][-1]["content"][-1]
+    assert getattr(last_block, "type", "") == "server_tool_use"
+    assert getattr(last_block, "cache_control", None) is None
+
+    others = [
+        req
+        for req in client.requests
+        if DIM_KEYS["governing_codes"] not in user_text(req["messages"])
+    ]
+    assert len(others) == 3
+    assert all("cache_control" not in req for req in others)
+
+
+def test_the_switch_off_sends_todays_research_requests_exactly(monkeypatch):
+    """Off — the shipped default — is today's request, byte for byte.
+
+    Proven against the switch-on run of the SAME scripted turns: taking out
+    the one top-level key the switch adds gives back exactly what the off run
+    sent, request for request, and every off request carries today's keys and
+    nothing else. The turns are built once and shared by both runs (a pending
+    search's id is minted per call), and the clock is pinned (the date leads
+    block 0), so the only thing that can differ is the switch.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    import backend.research.engine as engine
+
+    fixed = datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(engine, "current_datetime", lambda *_a, **_k: fixed)
+    scripts = _pausing_scripts()
+
+    def run(switch: bool) -> SequencedFakeClient:
+        client = SequencedFakeClient(scripts)
+        run_requirements_research(
+            DEFAULT_MODULE,
+            PROFILE,
+            client,
+            model="claude-sonnet-5",
+            max_tokens=4096,
+            continuation_cache=switch,
+        )
+        return client
+
+    off, on = run(False), run(True)
+
+    def canonical(request: dict) -> str:
+        return json.dumps(request, sort_keys=True, default=repr)
+
+    assert len(off.requests) == len(on.requests) == 6
+    without_tail = [
+        {key: value for key, value in request.items() if key != "cache_control"}
+        for request in on.requests
+    ]
+    assert sorted(map(canonical, off.requests)) == sorted(map(canonical, without_tail))
+    assert all(set(request) == _TODAYS_REQUEST_KEYS for request in off.requests)
+    # ...and the on run really did differ, on the two continuations alone.
+    assert sum("cache_control" in request for request in on.requests) == 2
+
+
 def _dimension_events(events: list[dict], dimension_id: str) -> list[dict]:
     return [e for e in events if e.get("dimension_id") == dimension_id]
 

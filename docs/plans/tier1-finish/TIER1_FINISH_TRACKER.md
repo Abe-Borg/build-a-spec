@@ -148,14 +148,14 @@ Each item mirrors the acceptance criterion with the same ID in its plan
 
 ### WL-2 — Turn the warm lead on
 
-- [ ] WL-2.1 — both flip-readiness runs, with the number of phases that picked a lead
-- [ ] WL-2.2 — `QC_BATCH_WARM_LEAD` defaults to `True`, and both comments say why
-- [ ] WL-2.3 — `test_warm_lead_ships_switched_on` replaces the ships-off pin
-- [ ] WL-2.4 — every claim outside the root files that the lead is off is true again
-- [ ] WL-2.5 — the Tier 1 plan's §7 item 3 is always included
-- [ ] WL-2.6 — verified: ruff, pytest, npm test, npm run build
-- [ ] WL-2.7 — reverting the default turns the new pin red
-- [ ] WL-2.8 — As built with For FIN-1; root CLAUDE.md and README.md untouched
+- [x] WL-2.1 — both flip-readiness runs, with the number of phases that picked a lead — evidence: the plan's WL-2 As built, "Flip readiness (WL-2.1)": the whole suite with the switch on, 2990 passed, 64 skipped, none failed; at the floor of 8, 442 of 444 passed and 23 of 206 batched phases picked a lead (25 leads); the two failures pin the shipped minimum of 20 (deviation 2)
+- [x] WL-2.2 — `QC_BATCH_WARM_LEAD` defaults to `True`, and both comments say why — evidence: `backend/settings.py` (`_bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", True)` and its comment) and the block comment above `LINEAGE_WEB_TOOLED` in `backend/qc/engine.py`
+- [x] WL-2.3 — `test_warm_lead_ships_switched_on` replaces the ships-off pin — evidence: `tests/test_qc_batch_warm_lead.py::test_warm_lead_ships_switched_on`, the same `ast` walk over the source, expecting `True`
+- [x] WL-2.4 — every claim outside the root files that the lead is off is true again — evidence: the plan's WL-2 As built, "Copy (R9)" and deviation 4; the methodology note is still gated on the records (`qc_streamed_lead_seats` / `qcStreamedLeadSeats`)
+- [x] WL-2.5 — the Tier 1 plan's §7 item 3 is always included — evidence: `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` §7 ("All four go in any such release"; item 3 has no conditional marker); no version bump, `backend/release_notes.py` entry or tag
+- [x] WL-2.6 — verified: ruff, pytest, npm test, npm run build — evidence: the plan's WL-2 As built, "Verification" (pytest 2990 passed with the new default and with the switch off)
+- [x] WL-2.7 — reverting the default turns the new pin red — evidence: the plan's WL-2 As built, "Revert matrix" (5 rows, 5 red; the default back to `False` turns `test_warm_lead_ships_switched_on` red, and it passes again once restored)
+- [x] WL-2.8 — As built with For FIN-1; root CLAUDE.md and README.md untouched — evidence: the plan's WL-2 As built and its For FIN-1 list; `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md` prints nothing
 
 ### FIN-1 — Close out: root docs and the finish line
 

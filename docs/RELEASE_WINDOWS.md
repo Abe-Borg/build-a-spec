@@ -334,6 +334,28 @@ invisible to CI and expensive to the user.
       default) none of that appears and the methodology does not mention a
       lead.
 
+### A paused call reads its own cache (cost Tier 1, Chunk 4 — off by default)
+
+These rows run only when trialling the switch (the plan's M3), from a source
+checkout, with `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "1"` (Command Prompt:
+`set BUILD_A_SPEC_CONTINUATION_CACHE=1`) set before `.\.venv\Scripts\python main.py`.
+
+- [ ] **A research round completes.** Run Research on a project whose areas
+      search a lot (a new jurisdiction, say): every area completes, and none
+      fails with `invalid_request_error` — a provider that refused the
+      resumed request's automatic breakpoint would fail every area that
+      paused, which is why the switch ships off. Save the project, then
+      `.\.venv\Scripts\python tools\research_cost_profile.py "<the saved .baspec>"`
+      shows cache reads on the areas that ran longest, and a lower uncached
+      share than a comparable round made without the switch.
+- [ ] **Final QC completes.** With the switch still on, run Final QC: the
+      code-compliance lens completes, with no `invalid_request_error`.
+      Compared with a Final QC made without the switch,
+      `.\.venv\Scripts\python tools\qc_export_cost_profile.py "<the JSON export>"`
+      shows that lens's cache reads rising and its uncached input falling.
+- [ ] **Off is unchanged.** With the switch unset (the default), both runs
+      behave exactly as before: nothing in either profiler moves.
+
 ### Redline export (v1.0.0)
 
 - [ ] Open a redline in **real Word**: the reviewing pane shows

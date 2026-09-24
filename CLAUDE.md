@@ -145,7 +145,12 @@ backend/
                            cost Tier 1 Chunk 3's streamed lead seat; flips on
                            only on a recorded M3 pass; inert at a zero
                            QC_WARM_WAIT_SECONDS; pinned per run, never in the
-                           QC input manifest);
+                           QC input manifest); CONTINUATION_CACHE
+                           (BUILD_A_SPEC_CONTINUATION_CACHE, default OFF —
+                           cost Tier 1 Chunk 4's continuation tail, research
+                           and QC alike; flips on only on a recorded M3 pass;
+                           pinned per round/run, never in the QC input
+                           manifest);
                            REDLINE_COMMENTS (BUILD_A_SPEC_REDLINE_COMMENTS,
                            default ON — redline Phase 3, owner decision 9;
                            0 = the redline without comments byte for byte;
@@ -345,7 +350,14 @@ backend/
                            symmetric evidence date (_evidence_date), each
                            dimension's latest-dated error, the profile date
                            and project; returns base itself when nothing is
-                           new (the idempotence)
+                           new (the idempotence). Cost Tier 1 Chunk 4:
+                           run_requirements_research(continuation_cache=)
+                           pins settings.CONTINUATION_CACHE beside the clock,
+                           and _run_dimension adds the continuation tail — a
+                           fresh dict(_CONTINUATION_CACHE_CONTROL), top-level
+                           cache_control beside container — to a request
+                           _is_continuation calls a resume, and to nothing
+                           else (the engines keep separate copies)
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -503,7 +515,17 @@ backend/
                            round and poll, and joined by finish() — every
                            terminal path — before the last frame and the
                            outcome; _BatchPhaseOutcome.streamed_keys makes
-                           run_final_qc record them at cost_multiplier 1.0
+                           run_final_qc record them at cost_multiplier 1.0.
+                           Chunk 4: with CONTINUATION_CACHE on (continuation_
+                           cache=, pinned in run_final_qc and threaded to
+                           every streamed call — lenses, grouping calls,
+                           streamed seats, the leads), _run_streaming_call
+                           adds the continuation tail — a fresh
+                           dict(_CONTINUATION_CACHE_CONTROL), top-level
+                           cache_control beside container — to a request
+                           _is_continuation calls a resume, and to nothing
+                           else; _qc_request_kwargs and the batched params
+                           never carry it
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
@@ -2391,6 +2413,27 @@ tests/
                            pinned at the source: the half-height cap, hidden
                            not unmounted, every drawer inside the tray and the
                            two modals outside it, App's ordered saves and lock
+  test_continuation_cache.py
+                           [Research/QC cost Tier 1, Chunk 4] the continuation
+                           tail across both engines: a guard that counts every
+                           captured request's breakpoints and TTL order (and
+                           itself refuses the shapes it exists to catch); the
+                           batched transport never carrying it; a streamed
+                           lead and a paused grouping call reaching it; the
+                           container riding beside it with the cached blocks
+                           unchanged; F3 on both verifier transports; the
+                           setting reaching a round and a run; and the default
+                           read from the source. The per-engine on / off-is-
+                           today pairs live beside the engines' other
+                           continuation tests (test_research_engine.py,
+                           test_qc_live_events.py)
+  frontend/tests/themeTokens.test.ts
+                           every Tailwind colour utility in src/**/*.tsx names
+                           an index.css --color-* token, a default-palette
+                           colour at a shade the installed theme.css defines,
+                           or a built-in keyword (every string literal, read
+                           by the TypeScript parser, interpolations included;
+                           a class list the shape check would skip fails too)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -16630,6 +16673,263 @@ the draft is below.
   > half the panel, so opening a long panel scrolls inside it instead of
   > squeezing the specification off the screen. Your layout is remembered
   > the next time you open the app.
+
+## A paused call reads its own cache — implemented notes (Research/QC cost Tier 1, Chunk 4)
+
+Chunk 4 of `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` (where the
+program stands is `docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`, and only
+there). **It ships switched off.** No route, SSE event type, dependency,
+project-format change, version bump or `release_notes.py` entry; one env knob
+(`BUILD_A_SPEC_CONTINUATION_CACHE`). The plan's Chunk 4 **As built** carries
+the deviations; this section is the why and the traps.
+
+- **Why a resume paid full price.** A `pause_turn` continuation re-sends the
+  whole conversation — the brief, then every paused assistant turn with its
+  thinking, search results and fetched pages — and nothing after block 0
+  carried a breakpoint, so every resume billed all of it as uncached input.
+  The interview's answer, a tail marker on the last message dict, cannot be
+  ported: both fan-outs re-send `response.content` verbatim as SDK block
+  objects, so there is no dict to hang `cache_control` on, and adding one
+  would change what the pause contract says to re-send.
+- **The way around it is a request argument, not a block.** A top-level
+  `cache_control` asks the provider to put an automatic breakpoint on the
+  request's last cacheable block itself, walking back past a block that
+  cannot carry one. The re-sent content stays byte for byte what the pause
+  contract says, and the one addition lives beside `container` in the
+  per-request `stream_kwargs` copy — never in `request_kwargs`, never in a
+  block (F2). `_qc_request_kwargs` stays the ONE request shape both QC
+  transports build from.
+- **Only on a continuation** (`_is_continuation`: the conversation ends on
+  the assistant; the pause contract adds no synthetic user turn). A first
+  request's end is the unique brief, where a breakpoint is a pure write
+  surcharge.
+- **Five minutes, in both TTL families.** The reader is the next
+  continuation, seconds later. After research's and the web-toolless lenses'
+  5-minute explicit markers it keeps the request uniform; after a verifier
+  seat's 1-hour markers it is a shorter-lived breakpoint AFTER longer-lived
+  ones, which the ordering rule allows — PR #82's 400 was the reverse. A
+  1-hour tail would pay 2.0× input instead of 1.25× for an entry nothing
+  reads after five minutes.
+- **Slots.** Every request that carries it has exactly three explicit
+  markers (the last tool, the system block, block 0), so it is the fourth —
+  the provider's limit. A continuation's last block is re-sent paused
+  content, which never carries an explicit marker, so the documented 400 (an
+  explicit marker on the last block with a different TTL) cannot arise.
+- **Why it should work, and what it costs if it does not — measured by M3,
+  never assumed.** Server tools write a 5-minute entry after their tool
+  results whenever a request uses caching; a continuation re-sends that
+  content verbatim, so a breakpoint at its end walks back (at most 20
+  positions) to the last such entry, which nothing after block 0 could reach
+  before. The worst case — the entries do not match what is re-sent — costs
+  each continuation the 5-minute write premium on its re-sent turn (+25% on
+  that part). M3 would show cache writes rising while reads do not, and the
+  flip rule catches exactly that.
+- **The batched transport never carries it.** Batch rounds are minutes
+  apart, so the 5-minute entries have usually expired by the next round; a
+  tail would pay the write premium on the whole re-sent turn and read
+  nothing. A 1-hour batch tail is a separate decision for a later
+  measurement. A Chunk 3 lead IS an ordinary streamed call, so its
+  continuations carry it; its batch does not.
+- **Every streamed QC call gets it, through the one loop.**
+  `run_final_qc(continuation_cache=)` pins the switch once (`None` = the
+  setting, the Chunks 2 and 3 precedent) and threads it to `_run_lens`,
+  `_consolidate_candidates` → `_run_consolidation_call`, the streamed
+  `_verify_one`, and `_run_batch_calls`' leads, all into
+  `_run_streaming_call`. In practice only a call with web tools can pause —
+  research dimensions, `code_compliance` and its seats — but nothing depends
+  on which call pauses: a grouping call that paused would resume the same
+  way, and a test pins it. Research pins the switch beside the clock, once
+  per round, for the same reason: one round, one answer.
+- **A fresh dict per request from a read-only constant.**
+  `_CONTINUATION_CACHE_CONTROL` is a `MappingProxyType`, so no request can
+  mutate the shared value, and each request gets `dict(...)`: the SDK
+  JSON-serializes the argument, which a mappingproxy is not. One copy per
+  engine — copied, not imported, the engines' standing posture.
+- **Off is today's request, byte for byte**, pinned per engine: the same
+  scripted turns run both ways under a pinned clock, and removing the one key
+  from the on run gives the off run, request for request.
+- **F3.** How a resume is cached is not a review input: nothing about it
+  reaches the QC input manifest, so a retained Final QC result stays current
+  with the switch in either position — pinned on BOTH verifier transports.
+  The transport itself IS a manifest input
+  (`configuration.batch_verification`), and the staleness check rebuilds the
+  manifest with the live setting, so each run is compared under the
+  transport it used. The first cut ran the streamed transport against the
+  batched default and went red for the transport, not the switch.
+- **SDK floor, unchanged.** `requirements.txt` allows `anthropic>=1.0`;
+  1.0.0 in a scratch venv put `cache_control` and `container`, as given, in
+  the body of a `messages.stream(...)` call against a mock transport.
+- **Test traps.** (1) A grouping request's marker is
+  `[[QC-CONSOLIDATE:<bucket id>]]`. `tests/test_qc_warm_launch.py`'s
+  `_WatchedClient` adds `bucket:` only when it NAMES a call, so a script keyed
+  with that prefix matched nothing, the fake answered the grouping call with
+  its default singleton partition, and the "paused grouping call" never
+  paused — the guard's own count of tails is what caught it. (2) A
+  mappingproxy compares equal to a dict, so `== {"type": "ephemeral"}` cannot
+  pin the fresh copy; `type(...) is dict` does. (3) `tests/fakes.py`'s
+  `SequencedFakeClient.requests` also holds every batched seat's params (the
+  batch fake resolves them through the same scripts), so a test about which
+  transport sent what keeps its own record of the streamed calls
+  (`_StreamLog`).
+- **The guard ran once over the whole suite.** Beyond the five scenarios
+  `test_no_request_exceeds_four_breakpoints` captures, a scratch pytest
+  plugin (not committed) ran the same checks on every research and QC
+  request the full suite sends, with `BUILD_A_SPEC_CONTINUATION_CACHE=1`.
+  Over the 2,782 tests that passed it checked 2,238 streamed requests (43
+  carrying the tail) and 904 batched ones (none), with no violation. The same
+  run is the flip-readiness check: the only failure was the README knob test,
+  which had read README before its row landed mid-run, and it passes on the
+  finished tree with the switch on and off.
+- **Tests: `tests/test_continuation_cache.py` (10)**, plus the research pair
+  in `tests/test_research_engine.py` and the QC pair in
+  `tests/test_qc_live_events.py` (whose `_run_client` gained
+  `continuation_cache=`, default `None` — a knowing helper change). Revert
+  matrix — each mechanism reverted in place, one at a time, restored from the
+  exact text read, and the tree checked clean after every row (the new file
+  and the research, live-events, batch-verification, warm-lead and
+  warm-launch suites run each time):
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | research: no tail in `_run_dimension` | 5 |
+  | research: the round not passing the switch to a dimension | 5 |
+  | research: `None` not reading the setting | 1 |
+  | research: the tail on first requests too (no continuation gate) | 5 |
+  | research: the constant itself, not a fresh dict | 1 |
+  | research: the tail at 1 hour | 3 |
+  | QC: no tail in `_run_streaming_call` | 8 |
+  | QC: the tail on first requests too (no continuation gate) | 8 |
+  | QC: the constant itself, not a fresh dict | 1 |
+  | QC: the tail at 1 hour | 5 |
+  | QC: `_run_lens` not forwarding | 6 |
+  | QC: `run_final_qc` not passing it to a lens | 6 |
+  | QC: `run_final_qc` not passing it to consolidation | 2 |
+  | QC: `_consolidate_candidates` not passing it to a grouping call | 2 |
+  | QC: `_run_consolidation_call` not forwarding | 2 |
+  | QC: `_verify_one` not forwarding | 4 |
+  | QC: `run_final_qc` not passing it to a streamed seat | 4 |
+  | QC: `_run_batch_calls` not passing it to a lead | 2 |
+  | QC: `run_final_qc` not passing it to the batch phase | 2 |
+  | QC: `None` not reading the setting | 1 |
+  | QC: the tail added to batched params too | 1 |
+  | the shipped default on | 1 |
+
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Final QC cost + speed" (v1.8.0) says "**The TTL is uniform across every
+     breakpoint in a request**". It is uniform across every EXPLICIT marker;
+     with `CONTINUATION_CACHE` on, a streamed seat's continuation also
+     carries the 5-minute tail, the one shorter-lived breakpoint the
+     ordering rule allows because it comes last.
+  2. The same section's "**No messages-tail breakpoint (deliberate)**" is
+     right about an explicit marker — there is still no dict to hang one on —
+     but a top-level automatic breakpoint needs none, and behind the switch a
+     resume now carries one. The NOTE it points to now sits above
+     `_qc_request_kwargs`, and is rewritten.
+  3. "Attached documents reach the research and QC teams" calls a research
+     dimension's block-0 marker the "Third breakpoint (inside the limit of
+     four)". On a continuation with the switch on, the automatic tail is the
+     fourth, so any further explicit marker in that request would be a 400 on
+     every resume; `_dimension_user_content`'s docstring now says so.
+  4. "Final QC phase 2 is batched" (v1.12.0): "Both paths call it; pinned by
+     a byte-comparison of a streamed and a batched seat's request." Still
+     true of what `_qc_request_kwargs` builds. With the switch on, a streamed
+     seat's CONTINUATION also carries the top-level tail, which a batched
+     continuation never does — by design, and only beside the request.
+
+## Undefined colour tokens are caught — implemented notes
+
+Three classes named colours the theme does not define, and Tailwind v4
+generates no CSS for those, silently. The `@theme` in
+`frontend/src/index.css` adds the app's tokens to Tailwind's default palette
+without resetting it, so `amber-500` is a real colour and `danger` is not.
+Frontend only: no route, SSE event, dependency, env knob, project-format
+change or version bump, and no release-note item (the draft line is below).
+
+- **The three.** Final QC's batch line (`QCDrawer.tsx`, `QcBatchLine`) used
+  `border-line bg-paper-2`. The undefined border colour fell back to
+  `currentColor` and drew a bright line, the same defect PR #214 fixed on the
+  Documents strip. It now uses that strip's `border-edge bg-bg/70`, and keeps
+  `text-ink-dim`. Help's "Update failed" line (`HelpModal.tsx`, About) used
+  `text-danger`, so a failed update rendered in the ordinary text colour. The
+  Documents strip's ✕ used `hover:text-danger`, so its hover did nothing.
+  Both now use the house error colour `text-err`.
+- **`frontend/tests/themeTokens.test.ts` keeps it fixed.** It reads every
+  string literal in `src/**/*.tsx`, not only `className=`, because class
+  lists also live in constants and lookup tables (`AgentActivityModal`'s
+  `PILLS`). The literals come from the TypeScript parser (`typescript`, a
+  dev dependency the build already uses), never a regex; see the review
+  finding below. A string is read as a class list only when every token has a
+  class's shape. Its colour-utility tokens (text, bg, border and its side
+  forms, ring, ring-offset, outline, divide, fill, stroke, the gradient stops,
+  caret, decoration, placeholder) must name one of three things: an
+  `index.css` `--color-*` token, a default colour at a shade the palette
+  defines, or `white` / `black` / `transparent` / `current` / `inherit`.
+  Variants, `!` and opacity suffixes are stripped first. Each prefix's
+  non-colour values (`text-sm`, `border-2`, `border-t`, `bg-clip-text`,
+  numbers and percentages, arbitrary `[…]`/`(…)`) are skipped.
+- **The default palette is read from the installed
+  `node_modules/tailwindcss/theme.css`,** not hard-coded. It is the palette
+  the build actually has (4.3.3 here, which adds `mauve`, `mist`, `olive` and
+  `taupe`), so an upgrade cannot leave the test's list behind. `npm test`
+  therefore needs `npm ci` first, which CI already does. A bare family
+  (`amber`) and a missing shade (`amber-550`) both fail, because Tailwind
+  generates nothing for either.
+- **A template literal's `${…}` is scanned too, and the first cut missed
+  it.** A conditional class list is usually written as quoted strings inside
+  an interpolation, and the QC batch line is exactly that. The first draft
+  cut interpolations out, and restoring `border-line bg-paper-2` stayed
+  green. The parser walks the expressions inside every interpolation.
+- **The first scan skipped a third of the class lists, and review caught
+  it** (Codex, PR #216). A list is scanned only if every token has a
+  class's shape, and the first shape check refused two common forms. Any
+  list with a decimal spacing class (`py-1.5`, `mt-0.5`) was refused, and so
+  was any arbitrary opacity (`bg-accent/[0.06]`) or arbitrary value with an
+  opacity (`border-[#d4a04c]/60`). Codex named the second form: the
+  `bg-accent/[0.06]` list meant a bad `border-accent/30` beside it stayed
+  green. A diagnostic found the first form was far wider. The regex lexer
+  added a second gap. It paired a stray backtick or apostrophe in a comment
+  or JSX text with the next one, and swallowed every real class string in
+  between. The scan read 1,504 colour utilities. `src` holds 2,162, counted
+  by a plain grep for a colour prefix before a theme or palette colour, and
+  the scan now reads all 2,162. The shape check accepts decimals, arbitrary
+  values and opacities, and arbitrary variants. A new test ("no class list
+  is skipped by the shape check") fails on any literal whose utilities name
+  a real colour but which the shape check would skip. Only prose
+  (`"…to-dos…"`) is still refused, and it names no real colour.
+- **One word is allowlisted as prose.** `FollowUpsPanel`'s `todo: "to-do"`
+  label has the shape of a gradient stop. The scan cannot tell a one-word
+  string from a one-class list by shape, so `PROSE` names that word. Add to
+  it only a word the scan actually misreads.
+- **Tests: 6** in the new file, registered in `package.json`'s explicit
+  `node --test` list. `npm test` 406, `npm run build` clean.
+- **Revert matrix.** Each change was reverted in place, and the exact text
+  restored after:
+
+  | Reverted | Tests red |
+  |---|---|
+  | QC batch line back to `border-line bg-paper-2` | 1 (names both tokens) |
+  | Help's `text-err` back to `text-danger` | 1 |
+  | the ✕'s `hover:text-err` back to `hover:text-danger` | 1 |
+  | no recursion into `${…}` (first draft's lexer) | 1 (the unit pin; the QC row above was green without it) |
+  | a bare family accepted | 1 |
+  | the `to-do` allowlist | 1 |
+  | opacity suffixes kept on the colour | 2 |
+  | Codex's case: `border-accent/30` beside `bg-accent/[0.06]` made undefined | 1 (green before the fix) |
+  | a class beside `py-1.5` made undefined | 1 (green before the fix) |
+  | the shape check back to its first form | 3 |
+  | template literals not read | 1 |
+  | the parser not walking below the file | 2 |
+  | only whole-number opacity stripped | 2 |
+
+- **Release-note draft**, for whichever release carries it: "Final QC's
+  batch-progress line no longer draws a bright border, and a failed update in
+  Help → About shows in red."
+- **Erratum** (these notes are append-only): "Room for the paper —
+  implemented notes (the panel tray)" lists, under "Found, not done",
+  `QCDrawer`'s batch-progress line with the same undefined
+  `border-line bg-paper-2` pair. It is fixed here, along with two
+  `text-danger` classes that section did not know about.
 
 ## The action bar fits the pane — implemented notes
 

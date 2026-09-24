@@ -31,6 +31,7 @@ SPEC_FILE = {"CT": CHUNK4_PLAN, "WL": CHUNK3_PLAN, "FIN": TRACKER}
 STATUSES = ("not started", "done", "blocked")
 EMPTY_CELLS = {"", "—", "-"}
 
+TITLE = "# Tier 1 finish — tracker"
 STATUS_LINE = re.compile(r"<!-- TIER1-FINISH-STATUS: (IN PROGRESS|COMPLETE) -->")
 BANNER_OPEN = "<!-- TIER1-FINISH-BANNER -->"
 BANNER_CLOSE = "<!-- /TIER1-FINISH-BANNER -->"
@@ -241,9 +242,30 @@ def test_statuses_change_in_order() -> None:
     )
 
 
+def _latest_started() -> tuple[int, str] | None:
+    """The last session that has begun, and how the tracker shows it.
+
+    A session has begun once its row is done or blocked, or, for the first
+    session that is not done, once it has ticked an item. Its reconcile step
+    (Session procedure, step 2.3) comes before any of that, so from then on
+    every done row before it must carry its merge commit.
+    """
+    rows = _status_rows()
+    items, _titles = _checklists()
+    latest: tuple[int, str] | None = None
+    for i, row in enumerate(rows):
+        if row["status"] in {"done", "blocked"}:
+            latest = (i, f"is {row['status']}")
+        else:
+            if any(ticked for _item, ticked, _rest in items.get(row["id"], [])):
+                latest = (i, "has ticked items")
+            break
+    return latest
+
+
 def test_finished_rows_name_their_pull_request_and_merge() -> None:
     rows = _status_rows()
-    done = [i for i, row in enumerate(rows) if row["status"] == "done"]
+    latest = _latest_started()
     for i, row in enumerate(rows):
         if row["status"] in {"done", "blocked"}:
             assert PR_CELL.fullmatch(row["pr"]), (
@@ -252,10 +274,12 @@ def test_finished_rows_name_their_pull_request_and_merge() -> None:
             )
         else:
             assert row["pr"] in EMPTY_CELLS, f"{row['id']} is not started, yet names a PR"
-        if row["status"] == "done" and done and i != done[-1]:
+        if row["status"] == "done" and latest is not None and i < latest[0]:
+            later = rows[latest[0]]["id"]
             assert MERGE_CELL.fullmatch(row["merge"]), (
-                f"{row['id']} is done and a later session is done too, so the later "
-                f"session had to fill in {row['id']}'s merge commit (reconcile, step 2.3)"
+                f"{row['id']} is done and {later} {latest[1]}, so {later}'s reconcile "
+                f"step (Session procedure, step 2.3) had to fill in {row['id']}'s merge "
+                f"commit first, not leave {row['merge']!r}"
             )
         if row["status"] != "done":
             assert row["merge"] in EMPTY_CELLS, f"{row['id']} is not done, yet has a merge commit"
@@ -358,21 +382,55 @@ def test_the_completion_banner_appears_exactly_when_every_session_is_done() -> N
         )
         return
     assert (opens, closes, completes) == (1, 1, 1), (
-        "a COMPLETE tracker carries one banner block and one completion line at the top"
+        "a COMPLETE tracker carries one banner block and one completion line, at the "
+        "top (the next test checks where)"
+    )
+
+
+def test_the_top_of_the_tracker_reads_in_a_fixed_order() -> None:
+    """The first lines say where the program stands, so their order is fixed:
+    the title, the status line, then (COMPLETE only) the banner block and the
+    completion line, then the Next-session line. Blank lines may separate
+    them and nothing else may; inside the banner's code block, not even a
+    blank line may."""
+    marker = _marker()
+    # (what the line must be, what to call it, whether blank lines may precede it)
+    expected: list[tuple[str | re.Pattern[str], str, bool]] = [
+        (TITLE, "the title", True),
+        (f"<!-- TIER1-FINISH-STATUS: {marker} -->", "the status line", True),
+    ]
+    if marker == "COMPLETE":
+        expected += [
+            (BANNER_OPEN, "the banner's opening comment", True),
+            ("```text", "the fence opening the banner", True),
+            *[
+                (line, f"line {n} of the banner", False)
+                for n, line in enumerate(_canonical_banner(), start=1)
+            ],
+            ("```", "the fence closing the banner", False),
+            (BANNER_CLOSE, "the banner's closing comment", True),
+            (COMPLETE_LINE, "the completion line", True),
+        ]
+    expected.append((NEXT_LINE, "the Next-session line", True))
+    order = (
+        "the title, the status line, "
+        + ("the banner block, the completion line, " if marker == "COMPLETE" else "")
+        + "the Next-session line"
     )
     raw = _read(TRACKER).splitlines()
-    start = next(i for i, line in enumerate(raw) if line.strip() == BANNER_OPEN)
-    end = next(i for i, line in enumerate(raw) if line.strip() == BANNER_CLOSE)
-    status_heading = next(i for i, line in enumerate(raw) if line.strip() == "## Status")
-    assert start < end < status_heading, "the banner block sits above the Status table"
-    block = raw[start + 1 : end]
-    assert block and block[0].strip() == "```text" and block[-1].strip() == "```", (
-        "the banner block holds the banner in one ```text code block"
-    )
-    assert [line.rstrip() for line in block[1:-1]] == _canonical_banner(), (
-        "the banner block must hold the completion banner exactly as the "
-        "'When every session is done' section gives it"
-    )
+    i = 0
+    for want, label, blank_ok in expected:
+        while blank_ok and i < len(raw) and not raw[i].strip():
+            i += 1
+        assert i < len(raw), f"the tracker ends before {label}; its top must read: {order}"
+        line = raw[i].rstrip()
+        found = want.match(line) is not None if isinstance(want, re.Pattern) else line == want
+        assert found, (
+            f"line {i + 1} reads {line!r} where {label} belongs: the tracker's top must "
+            f"read {order}, in that order, with only blank lines between them (and none "
+            "inside the banner's code block)"
+        )
+        i += 1
 
 
 def test_the_completion_banner_is_big_and_plain() -> None:

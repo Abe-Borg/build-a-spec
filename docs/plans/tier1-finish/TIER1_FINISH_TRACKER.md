@@ -66,8 +66,9 @@ saving on, one pull request per session:
     the PR number in the PR column.
   - The row reaches `master` only when the PR merges, so on `master`
     "done" always means merged.
-  - The next session fills in the merge commit. FIN-1's own merge commit
-    stays blank, because no session comes after it.
+  - The next session fills in the merge commit in its reconcile step,
+    before it ticks an item or marks itself blocked. FIN-1's own merge
+    commit stays blank, because no session comes after it.
 - **blocked**: the session cannot be built safely as specified.
   - The row names the pull request that records why, with code evidence.
   - Abraham decides what happens next. A later session never works around
@@ -255,6 +256,8 @@ recorded in the [Decision log](#decision-log).
         waiting on.
    3. Fill in the merge commit of every `done` row whose cell is blank,
       from the GitHub API or `git log origin/master`. This rides your PR.
+      Do it first: from the moment your session ticks an item or is marked
+      blocked, the tracker test requires it.
 3. **Pick the session.** Take the first row that is not `done`.
    - If it is `blocked`, stop and tell Abraham. Never work around a
      blocked session.
@@ -270,7 +273,8 @@ recorded in the [Decision log](#decision-log).
      **For FIN-1** list. Append to the spec text; never rewrite it.
    - **If the current code makes the spec unsafe, stop.**
      - Mark the row `blocked`, with the code evidence, in a PR that carries
-       only that record, titled `Tier 1 finish — <ID>: blocked`.
+       only that record and step 2.3's merge commits, titled
+       `Tier 1 finish — <ID>: blocked`.
      - Set the Next-session line to `none — <ID> is blocked; Abraham decides`.
      - Tell Abraham.
 5. **Verify** from the repository root, and fix everything before you push.
@@ -455,13 +459,18 @@ big letters.
    - Tick every FIN-1 item, with evidence.
    - Change the status line from `<!-- TIER1-FINISH-STATUS: IN PROGRESS -->`
      to `<!-- TIER1-FINISH-STATUS: COMPLETE -->`.
-   - Directly under the status line, add, each on its own line:
-     1. the opening comment `<!-- TIER1-FINISH-BANNER -->`;
-     2. the completion banner below, in a `text` code block;
-     3. the closing comment `<!-- /TIER1-FINISH-BANNER -->`;
-     4. a blank line;
-     5. `**ALL WORK IN BOTH TIER 1 FINISH PLANS IS COMPLETE.**`
-   - Set the Next-session line to `none — the program is complete`.
+   - Directly under the status line, add these, in this order, each on its
+     own line. Blank lines may separate them; nothing else may.
+     1. The opening comment `<!-- TIER1-FINISH-BANNER -->`.
+     2. The completion banner below, exactly as given, in a `text` code
+        block (three backticks and `text`, the banner's seven lines, three
+        backticks), with no blank line inside it.
+     3. The closing comment `<!-- /TIER1-FINISH-BANNER -->`.
+     4. `**ALL WORK IN BOTH TIER 1 FINISH PLANS IS COMPLETE.**`
+   - The Next-session line comes right after them. Set it to
+     `none — the program is complete`.
+   - The top of this file then reads: the title, the status line, the
+     banner block, the completion line, the Next-session line.
    - Run `tests/test_tier1_finish_tracker.py`. It checks all of this.
 8. **Open the PR**, and drive it to merge. Its title:
 
@@ -478,7 +487,7 @@ big letters.
 - **FIN-1.4** The root `CLAUDE.md` has one consolidated implemented-notes section for this program, with errata for every earlier section that says a switch ships off, and Layout entries for every file the program added or changed.
 - **FIN-1.5** The Tier 1 plan's §7 includes all four items. The Tier 1 progress file records both flips as done, and `docs/plans/README.md` marks this program complete. There is no version bump, no `backend/release_notes.py` entry and no tag.
 - **FIN-1.6** Verified: ruff, the full pytest suite, `npm test` and `npm run build` are all clean.
-- **FIN-1.7** This tracker's status line is COMPLETE, the banner block and the bold completion line are at the top, the Next-session line reads `none — the program is complete`, and `tests/test_tier1_finish_tracker.py` passes.
+- **FIN-1.7** This tracker's status line is COMPLETE; directly under it sit the banner block, then the bold completion line, then the Next-session line, which reads `none — the program is complete`; and `tests/test_tier1_finish_tracker.py` passes.
 
 ### As built
 

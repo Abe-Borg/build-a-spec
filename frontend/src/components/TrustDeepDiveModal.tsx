@@ -886,10 +886,12 @@ function Dossier() {
               Per-dimension search budgets (up to 40 searches and 12 fetches for
               governing codes) with a hard 2× runaway ceiling; up to 16
               continuations when the API pauses a long-running turn; retries with
-              backoff on transient failures, with the tokens each attempt burned
-              still counted. Aggregators, Q&amp;A sites, other AI assistants’
-              outputs, trade forums, and DIY content farms are blocked for both
-              search and fetch. A single fetched page is capped so one enormous
+              backoff on transient failures — the first picks the conversation
+              up at the step that failed, the last starts it fresh — with the
+              tokens each attempt burned still counted. Aggregators, Q&amp;A
+              sites, other AI assistants’ outputs, trade forums, and DIY
+              content farms are blocked for both search and fetch. A single
+              fetched page is capped so one enormous
               code page cannot swamp the run. One dimension failing never cancels
               the others — you get a profile flagged as partial; all four failing
               fails cleanly with nothing corrupted. Stopping discards the run,

@@ -2427,8 +2427,9 @@ tests/
                            every Tailwind colour utility in src/**/*.tsx names
                            an index.css --color-* token, a default-palette
                            colour at a shade the installed theme.css defines,
-                           or a built-in keyword (string literals and their
-                           ${…} interpolations, prose left alone)
+                           or a built-in keyword (every string literal, read
+                           by the TypeScript parser, interpolations included;
+                           a class list the shape check would skip fails too)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -16852,7 +16853,9 @@ change or version bump, and no release-note item (the draft line is below).
 - **`frontend/tests/themeTokens.test.ts` keeps it fixed.** It reads every
   string literal in `src/**/*.tsx`, not only `className=`, because class
   lists also live in constants and lookup tables (`AgentActivityModal`'s
-  `PILLS`). A string is read as a class list only when every token has a
+  `PILLS`). The literals come from the TypeScript parser (`typescript`, a
+  dev dependency the build already uses), never a regex; see the review
+  finding below. A string is read as a class list only when every token has a
   class's shape. Its colour-utility tokens (text, bg, border and its side
   forms, ring, ring-offset, outline, divide, fill, stroke, the gradient stops,
   caret, decoration, placeholder) must name one of three things: an
@@ -16872,14 +16875,30 @@ change or version bump, and no release-note item (the draft line is below).
   it.** A conditional class list is usually written as quoted strings inside
   an interpolation, and the QC batch line is exactly that. The first draft
   cut interpolations out, and restoring `border-line bg-paper-2` stayed
-  green. `stringLiterals` now recurses into each interpolation. That covers
-  one level of braces, which is every case in `src` today.
+  green. The parser walks the expressions inside every interpolation.
+- **The first scan skipped a third of the class lists, and review caught
+  it** (Codex, PR #216). A list is scanned only if every token has a
+  class's shape, and the first shape check refused two common forms. Any
+  list with a decimal spacing class (`py-1.5`, `mt-0.5`) was refused, and so
+  was any arbitrary opacity (`bg-accent/[0.06]`) or arbitrary value with an
+  opacity (`border-[#d4a04c]/60`). Codex named the second form: the
+  `bg-accent/[0.06]` list meant a bad `border-accent/30` beside it stayed
+  green. A diagnostic found the first form was far wider. The regex lexer
+  added a second gap. It paired a stray backtick or apostrophe in a comment
+  or JSX text with the next one, and swallowed every real class string in
+  between. The scan read 1,504 colour utilities. `src` holds 2,162, counted
+  by a plain grep for a colour prefix before a theme or palette colour, and
+  the scan now reads all 2,162. The shape check accepts decimals, arbitrary
+  values and opacities, and arbitrary variants. A new test ("no class list
+  is skipped by the shape check") fails on any literal whose utilities name
+  a real colour but which the shape check would skip. Only prose
+  (`"…to-dos…"`) is still refused, and it names no real colour.
 - **One word is allowlisted as prose.** `FollowUpsPanel`'s `todo: "to-do"`
   label has the shape of a gradient stop. The scan cannot tell a one-word
   string from a one-class list by shape, so `PROSE` names that word. Add to
   it only a word the scan actually misreads.
-- **Tests: 5** in the new file, registered in `package.json`'s explicit
-  `node --test` list. `npm test` 405, `npm run build` clean.
+- **Tests: 6** in the new file, registered in `package.json`'s explicit
+  `node --test` list. `npm test` 406, `npm run build` clean.
 - **Revert matrix.** Each change was reverted in place, and the exact text
   restored after:
 
@@ -16888,10 +16907,16 @@ change or version bump, and no release-note item (the draft line is below).
   | QC batch line back to `border-line bg-paper-2` | 1 (names both tokens) |
   | Help's `text-err` back to `text-danger` | 1 |
   | the ✕'s `hover:text-err` back to `hover:text-danger` | 1 |
-  | no recursion into `${…}` | 1 (the unit pin; the QC row above was green without it) |
+  | no recursion into `${…}` (first draft's lexer) | 1 (the unit pin; the QC row above was green without it) |
   | a bare family accepted | 1 |
   | the `to-do` allowlist | 1 |
   | opacity suffixes kept on the colour | 2 |
+  | Codex's case: `border-accent/30` beside `bg-accent/[0.06]` made undefined | 1 (green before the fix) |
+  | a class beside `py-1.5` made undefined | 1 (green before the fix) |
+  | the shape check back to its first form | 3 |
+  | template literals not read | 1 |
+  | the parser not walking below the file | 2 |
+  | only whole-number opacity stripped | 2 |
 
 - **Release-note draft**, for whichever release carries it: "Final QC's
   batch-progress line no longer draws a bright border, and a failed update in

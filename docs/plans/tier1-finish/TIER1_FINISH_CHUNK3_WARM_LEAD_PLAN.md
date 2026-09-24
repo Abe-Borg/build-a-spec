@@ -1222,6 +1222,14 @@ the default now switched on still runs through WL-1's gate and latch: take
 either away, and a lead the batch does not read can no longer switch
 itself off. The last shows that 40 of these tests really run a lead.
 
+**Found in passing, not done.** `tests/test_cost_checks_warm_lead.py`'s
+module docstring says the check reads, per batched seat, "its first billed
+response's first iteration". Since WL-1's deviation 12 it reads the reply to
+the first batch the seat rode (`first_reply`), never `billed[0]`, and a seat
+whose first batch brought no reply is unmeasured. The flip did not make this
+false, and WL-2's spec does not list the file, so it is left for FIN-1
+(below).
+
 **For FIN-1**
 
 WL-1's For FIN-1 list still stands, as do CT-1's, CT-2's and CT-3's. This
@@ -1342,6 +1350,10 @@ adds what the flip itself changes.
   closes these out: `docs/plans/README.md`'s Tier 1 entry ("Chunks 3 and 4
   only if flipped by then": both are) and the progress file's "After the
   program" table. WL-2 added only the progress file's dated note.
+- **A stale test docstring** (Found in passing, above).
+  `tests/test_cost_checks_warm_lead.py`'s module docstring: "its first
+  billed response's first iteration" becomes "the first iteration of its
+  reply to the first batch it rode", per WL-1's deviation 12.
 
 ---
 

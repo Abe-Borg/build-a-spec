@@ -155,7 +155,7 @@ Each item mirrors the acceptance criterion with the same ID in its plan
 - [x] WL-2.5 — the Tier 1 plan's §7 item 3 is always included — evidence: `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` §7 ("All four go in any such release"; item 3 has no conditional marker); no version bump, `backend/release_notes.py` entry or tag
 - [x] WL-2.6 — verified: ruff, pytest, npm test, npm run build — evidence: the plan's WL-2 As built, "Verification" (pytest 2990 passed with the new default and with the switch off)
 - [x] WL-2.7 — reverting the default turns the new pin red — evidence: the plan's WL-2 As built, "Revert matrix" (5 rows, 5 red; the default back to `False` turns `test_warm_lead_ships_switched_on` red, and it passes again once restored)
-- [x] WL-2.8 — As built with For FIN-1; root CLAUDE.md and README.md untouched — evidence: the plan's WL-2 As built and its For FIN-1 list; `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md` prints nothing
+- [x] WL-2.8 — As built with For FIN-1; root CLAUDE.md and README.md untouched — evidence: the plan's WL-2 As built, its "Found in passing" note and its For FIN-1 list; `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md` prints nothing
 
 ### FIN-1 — Close out: root docs and the finish line
 

@@ -1,0 +1,15 @@
+{
+  "name": "Build-a-Spec",
+  "install": ".cursor/install.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": ".cursor/run-backend.sh"
+    },
+    {
+      "name": "frontend-dev",
+      "command": ".cursor/run-frontend.sh"
+    }
+  ],
+  "ports": [8756, 5173]
+}

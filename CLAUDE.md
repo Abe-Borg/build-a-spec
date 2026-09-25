@@ -141,15 +141,20 @@ backend/
                            staggered-launch bound; 0 = every QC call at once;
                            pinned once per run by run_final_qc, never in the
                            QC input manifest); QC_BATCH_WARM_LEAD
-                           (BUILD_A_SPEC_QC_BATCH_WARM_LEAD, default OFF —
-                           cost Tier 1 Chunk 3's streamed lead seat; flips on
-                           only on a recorded M3 pass; inert at a zero
+                           (BUILD_A_SPEC_QC_BATCH_WARM_LEAD, default ON since
+                           the Tier 1 finish program's WL-2 — cost Tier 1
+                           Chunk 3's streamed lead seat; WL-1's warm-lead
+                           check can only remove it, until a restart; 0
+                           switches it off; inert at a zero
                            QC_WARM_WAIT_SECONDS; pinned per run, never in the
                            QC input manifest); CONTINUATION_CACHE
-                           (BUILD_A_SPEC_CONTINUATION_CACHE, default OFF —
-                           cost Tier 1 Chunk 4's continuation tail, research
-                           and QC alike; flips on only on a recorded M3 pass;
-                           pinned per round/run, never in the QC input
+                           (BUILD_A_SPEC_CONTINUATION_CACHE, default ON since
+                           the Tier 1 finish program's CT-3 — cost Tier 1
+                           Chunk 4's continuation tail, research and QC
+                           alike; the cost self-checks can only remove it,
+                           per engine, until a restart; 0 switches it off;
+                           pinned per round/run (the self-check latch can
+                           only remove the tail), never in the QC input
                            manifest);
                            REDLINE_COMMENTS (BUILD_A_SPEC_REDLINE_COMMENTS,
                            default ON — redline Phase 3, owner decision 9;
@@ -367,7 +372,19 @@ backend/
                            abandoned responses; opening messages; container
                            cleared); in_request marks a request's own
                            failure, the only kind a resume sends again;
-                           dimension_retry carries mode
+                           dimension_retry carries mode. Tier 1 finish
+                           (CT-1/CT-2): every request opens through
+                           _open_stream (a copied contextmanager over one
+                           ExitStack yielding (stream, carried_tail): a
+                           tail-bearing open refused with a 400 is sent
+                           again at once without cache_control, and
+                           research's tail latches unless the resend is a
+                           400 too); the tail condition reads switch, then
+                           cost_checks.continuation_tail_enabled, then
+                           _is_continuation, on every request; right after
+                           the append, a response whose request carried the
+                           tail goes to cost_checks.observe_continuation with
+                           all_responses[0] (the conversation's opening)
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -564,7 +581,25 @@ backend/
                            attempts; _BatchSeatState gains resume_attempt()
                            (attempt += 1, everything else carried) and
                            retry(attempts=) → the mode, read by
-                           _apply_batch_item and the refused-submission path
+                           _apply_batch_item and the refused-submission path.
+                           Tier 1 finish: CT-1/CT-2 give _run_streaming_call
+                           research's guard and hook (its own copy of
+                           _open_stream, with a count_request callback so the
+                           resend is counted before it is sent — Final QC's
+                           api_request_count counts both requests); WL-1 gates
+                           the lead pick on cost_checks.warm_lead_enabled()
+                           (after the switch and the wait), gives _WarmLead its
+                           members (the lead first), records how each lead's
+                           wait ended (release_outcomes), extracts
+                           streamed_leads() (the one "a lead that sent a
+                           request" rule the pricing and the check read), and
+                           adds _BatchSeatState.first_round / first_reply (the
+                           reply to the first batch the provider ACCEPTED;
+                           never part of the record); check_leads() hands
+                           each streamed lead's lineage to
+                           cost_checks.check_warm_leads at the NORMAL end
+                           only, after fold_leads(wait=True), under its own
+                           try (a gathering failure never fails the phase)
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
@@ -644,7 +679,39 @@ backend/
                            any of it (key_status masked + scrub_data); the
                            snapshot's session block carries
                            last_context_sizes (Project workspace Phase 5A —
-                           per-block sizes, never text)
+                           per-block sizes, never text), and a TOP-LEVEL
+                           cost_checks block (Tier 1 finish: the process's
+                           self-check state from cost_checks.snapshot(), read
+                           without the session guard — not session state —
+                           and every key surviving scrub_data)
+  cost_checks.py           [Tier 1 finish] the cost self-checks' state — runtime
+                           watchers that can only switch a saving OFF,
+                           in memory, one per process (an app restart
+                           re-arms them; never in a request, record, usage
+                           total, project file, brief or the QC input
+                           manifest). A leaf (stdlib, settings, usage_ledger,
+                           anthropic) both engines import, one module lock.
+                           The continuation tail: one latch per engine
+                           (research, qc) — continuation_tail_enabled /
+                           disable_continuation_tail / is_tail_rejection (a
+                           BadRequestError that is not "prompt is too long") /
+                           exception_detail (one line, 200 chars) for CT-1's
+                           refusal guard; first_iteration_usage +
+                           observe_continuation (exact, bound or unmeasured
+                           per the Chunk 4 plan's Appendix A, in Decimal at
+                           twelve significant digits; `unprofitable` after
+                           six measured observations summing below zero) for
+                           CT-2's value check. The warm lead (WL-1):
+                           warm_lead_enabled / disable_warm_lead /
+                           check_warm_leads(WarmLeadLineage…) (Appendix B's
+                           h₁, p, C and h₀*; `not_read` below h₁ = 0.5,
+                           `unprofitable` at h₀* ≤ 0; `not_warm`, `too_few`
+                           and `kept` never latch). Closed reason vocabulary
+                           (rejected / unprofitable / not_read) pinned by the
+                           frontend; one WARNING on buildaspec.cost_checks per
+                           latch, one INFO per judged lineage; snapshot() is
+                           the diagnostics block (continuation_tail +
+                           warm_lead), reset_for_tests() the conftest's reset
   app_paths.py             [PORT: Spec Critic src/core/app_paths.py]
   api_key_store.py         [PORT: Spec Critic src/core/api_key_store.py + save_api_key]
                            Batch 2 adds key_status (masked, never leaks) + delete_api_key
@@ -670,7 +737,11 @@ backend/
                            the exact opposite of the 1h subtotal above. add()
                            now rejects bools (isinstance(True, int) is True)
                            and snapshot() DERIVES includes_estimated_output
-                           from the counter.
+                           from the counter. Tier 1 finish (CT-2) adds
+                           model_rates(model): the public rate accessor, a
+                           copy of what _rates returns (its unknown-model
+                           fallback included), which cost_checks reads
+                           instead of copying the rate table.
                            The context gauge is deliberately NOT here: it lives on
                            SessionState.last_context_tokens (a gauge, not spend —
                            the ledger's snapshot/merge tutorial plumbing is
@@ -1739,6 +1810,22 @@ frontend/src/
                            CONTEXT_BLOCK_LABELS, which is pinned against
                            conversation.CONTEXT_SIZE_KEYS so a block the
                            backend adds cannot drop out of the row
+  lib/costChecks.ts        [Tier 1 finish, CT-2 + WL-1] Developer tools'
+                           "Cost self-checks" row: costCheckLines renders the
+                           diagnostics cost_checks block in plain words — the
+                           continuation tail one line per engine
+                           (TAIL_ENGINE_LABELS, the backend's order: on and
+                           what was measured with its est. saving/loss, off
+                           for this session and why, or switched off in
+                           settings once), then the warm lead (its last
+                           check per lineage, the latch's evidence, or why it
+                           is off). CHECK_REASON_TEXT and
+                           WARM_LEAD_VERDICT_TEXT are pinned against
+                           backend/cost_checks.py; a missing, older or
+                           malformed snapshot renders "not reported", never
+                           throws; types.ts carries CostChecksSnapshot /
+                           ContinuationTailCheck / WarmLeadCheck /
+                           WarmLeadLineageCheck on DiagnosticsSnapshot
   lib/debriefQueue.ts      [v1.11.0] the completion-debrief queue's pure
                            state: remember-on-terminal-frame vs
                            flush-when-allowed, latest-wins per kind, fired-
@@ -1946,7 +2033,10 @@ frontend/src/
                            trace runs, the bundle; a SIBLING of the settings
                            backdrop; Session state's Context makeup row —
                            Project workspace Phase 5A — renders
-                           last_context_sizes through lib/contextSizes.ts)
+                           last_context_sizes through lib/contextSizes.ts;
+                           Environment's "Cost self-checks" row — Tier 1
+                           finish — renders one Row per line of
+                           lib/costChecks.ts's costCheckLines)
                            / FollowUpsPanel (v1.16.0 "Waiting on
                            you") / ProjectFactsPanel (v1.17.0 "Project
                            facts") / ProjectPanel (Project workspace Phase 2
@@ -1989,8 +2079,14 @@ tools/research_cost_profile.py
                            own legacy_round_key hash (copied, never imported:
                            the research engine loads the API client)
 tests/
-  conftest.py              hermetic env + fresh session per test
-  fakes.py                 scripted fake streaming client (text + tool_use turns)
+  conftest.py              hermetic env + fresh session per test; the autouse
+                           _fresh_session also calls cost_checks.
+                           reset_for_tests() before AND after every test (Tier
+                           1 finish), beside reset_thinking_display_probe()
+  fakes.py                 scripted fake streaming client (text + tool_use turns);
+                           usage(..., iterations=) attaches usage.iterations
+                           only when supplied (Tier 1 finish, CT-2), entries
+                           as given (dicts or objects)
   test_app.py              API surface: SSE round-trips, tool loop, rollback,
                            undo/redo, export, project save/resume, lint/standards
   test_spec_doc.py         document model units: ids, transactions, versions,
@@ -2452,7 +2548,8 @@ tests/
                            at a zero wait); F3; the methodology sentence equal
                            in both projections and only for a run that sent a
                            lead; the QC profiler's seat:list-price row; the
-                           floor of 8; and the default read from the source
+                           floor of 8; and the default (on, since the Tier 1
+                           finish program's WL-2) read from the source
   test_ui_preferences.py   the panel tray's remembered layout: defaults with no
                            file (a read creates none), a save read back by a
                            NEW app, not session state (reset + mid-turn), the
@@ -2481,7 +2578,8 @@ tests/
                            container riding beside it with the cached blocks
                            unchanged; F3 on both verifier transports; the
                            setting reaching a round and a run; and the default
-                           read from the source. The per-engine on / off-is-
+                           (on, since the Tier 1 finish program's CT-3) read
+                           from the source. The per-engine on / off-is-
                            today pairs live beside the engines' other
                            continuation tests (test_research_engine.py,
                            test_qc_live_events.py)
@@ -2527,6 +2625,73 @@ tests/
                            the API client, and the wiring pinned at the
                            source: App's one read, the chip holding still
                            while unknown, the retired v1 invitation
+  test_cost_checks_tail_rejection.py
+                           [Tier 1 finish, CT-1] a refused continuation tail
+                           costs one request: the resend (same messages and
+                           container, no tail, at once, Final QC counting
+                           both) over BOTH engines as one assertion set; no
+                           latch when the resend is a 400 too, a latch then
+                           the ordinary resume when it fails another way;
+                           "prompt is too long", a tail-free 400 and an error
+                           after the open untouched; the latch read on every
+                           request after the switch, in every thread, and
+                           once for two refusals at once; F3; the helper
+                           directly; the diagnostics block through scrub_data;
+                           the counting lock; the leaf rule; the conftest
+                           reset (a pair of tests). Every engine run passes
+                           continuation_cache= (a required keyword)
+  test_cost_checks_tail_value.py
+                           [Tier 1 finish, CT-2] the tail's value check:
+                           Appendix A by hand (exact, the expired-opening
+                           `missed` term, bound, Final QC on its own model,
+                           nothing read skipped), iterations as dicts and
+                           objects, a multi-iteration or pending-call
+                           continuation unmeasured, the single-iteration
+                           allowlist, fourteen malformed usages; the latch
+                           (five losses no, the sixth yes, break-even never,
+                           a sub-millionth loss still a loss, persistence,
+                           a refusal never relabelled); both engines' hooks
+                           end to end (by identity), the measurement
+                           invisible to every request, record, total and
+                           manifest; model_rates the ledger's own
+  test_cost_checks_warm_lead.py
+                           [Tier 1 finish, WL-1] the warm lead's check:
+                           Appendix B by hand (h₁, the median p, C, h₀*),
+                           the 95% seat threshold, `not_read` below one half,
+                           `unprofitable` at a break-even of zero, too few,
+                           `not_warm`; the latch, one WARNING, one INFO per
+                           lineage, the counting lock; end to end (kept and
+                           recorded, `not_read` switching the next run's lead
+                           off, `unprofitable`, web-tooled measured and not,
+                           a round-ceiling failure still measured, a paused
+                           seat by its first reply, a retried seat only by
+                           its FIRST batch, a refused submission never a
+                           first batch, a failed or timed-out lead not
+                           judged, the check only after the join); every
+                           exit that is never measured; invisibility with
+                           the hand-off patched out too; diagnostics through
+                           scrub_data. Every engine run passes
+                           batch_warm_lead=True and a nonzero wait
+  test_tier1_finish_tracker.py
+                           [Tier 1 finish] the program's tracker cannot say
+                           where it stands wrong: one status line, every
+                           session in order with its PR and merge commit,
+                           titles agreeing across the tracker and both
+                           plans, checklists mirroring the acceptance
+                           items with evidence on every tick, the
+                           Next-session line, and the completion banner +
+                           line exactly when every row is done, in a fixed
+                           order at the top
+  frontend/tests/costChecks.test.ts
+                           [Tier 1 finish, CT-2 + WL-1] every state's line
+                           (switched off in settings, on and measured,
+                           rejected, unprofitable beside a later saving, the
+                           warm lead's kept / too few / not warm / not read
+                           with its evidence), malformed and older snapshots
+                           never throwing, and the reason, engine and
+                           verdict vocabularies pinned against
+                           backend/cost_checks.py; the modal renders the
+                           helper's lines
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -17552,6 +17717,350 @@ release notes a release can lift are the plan's §7 "Release-note draft
      its measurement "is Abraham's M2 run, and the progress file records
      it." No M2 was recorded by the program's close. The M2 slot is empty,
      and Chunk 2's effect is unmeasured (above).
+
+## The two shelved savings are on, and watch themselves — implemented notes (Tier 1 finish)
+
+The Tier 1 finish program (`docs/plans/tier1-finish/`: the tracker and two
+plans, one for each chunk) finished the two savings the research and Final QC
+cost program had built and shipped **off**: Tier 1 Chunk 4's continuation tail
+(`BUILD_A_SPEC_CONTINUATION_CACHE`) and Chunk 3's warm lead
+(`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`). It ran as six sessions, one pull request
+each, on 2026-09-24 and 2026-09-25:
+- CT-1 (PR #224) made a refused tail harmless;
+- CT-2 (PR #225) measures what the tail saves;
+- CT-3 (PR #226) turned the tail on;
+- WL-1 (PR #227) checks that the batch reads the warm lead;
+- WL-2 (PR #228) turned the warm lead on;
+- FIN-1, this closeout, folded everything into this file and the README.
+
+**Both switches now default on**, and `0` switches either off. The program
+added no route, no SSE event type, no environment variable (R3), no
+dependency, no project-format change, no QC schema or protocol bump, no
+version bump and no `backend/release_notes.py` entry. The tracker is the
+record of where it stood; each plan's **As built** sections carry every
+deviation and full revert matrix, and this section is the why and the traps.
+
+- **Why the measured trial was replaced (FD1).** Each switch was to flip only
+  after M3, a measured run of that chunk's own test, and the owner will run
+  no measurement (the Tier 1 progress file's O6). So FD1 amended the Tier 1
+  plan's F5 for these two switches. A switch may default on when a runtime
+  self-check removes its one unbounded failure and switches it off on a
+  measured loss, and what the check cannot measure is bounded. The checks
+  watch the runs the app makes anyway. The owner merged every PR, so merging
+  CT-3's and WL-2's was his approval of each flip. F8 (measure, don't model)
+  still holds: the checks measure real runs, and nothing is decided from a
+  model of what they would show.
+- **The root README and this file were frozen until the closeout (FD2).**
+  Each session wrote what they would have received under its As built's
+  "For FIN-1" list, and FIN-1 folded it in. The rule overrode this file's
+  ground rule to keep both current; it applied for this program only, and
+  it is spent.
+- **`backend/cost_checks.py` holds the state, under four rules.**
+  - *Nothing is sent to test the provider* (R5). The checks read only the
+    responses to requests the app was already sending.
+  - *OFF only, in memory, one per process* (R6). A latch, once set, stays
+    set until the process ends, and an app restart re-arms it. Nothing is
+    persisted, and nothing reaches a request, a record, a usage total or the
+    meter, a project file, a brief or the QC input manifest. So a retained
+    Final QC result stays current through any latch (F3, pinned).
+  - *A leaf* (R8): the standard library, `settings`, `usage_ledger` and
+    `anthropic`, and nothing else, because both engines import it. It is the
+    one exception to copy-don't-import besides the ledger: its state is one
+    per process, not one per engine copy. Engine-side helpers, such as the
+    stream-open guard, are still copied. One module lock guards every read
+    and write, because research runs four dimension threads and Final QC up
+    to eight workers.
+  - *Every key survives redaction* (R10). No key contains `token` unless an
+    `s` follows it (`tracing.redaction`'s `token(?!s)`), and a test runs the
+    block through `scrub_data`.
+
+  Every entry point an engine calls catches its own exceptions and logs them
+  at DEBUG. A check that fails leaves the saving as the switch set it (a
+  failed read answers "enabled"). The reason vocabulary is closed:
+  `rejected`, `unprofitable` and `not_read`. The first latch wins, whatever
+  its reason: a tail refused and later measured at a loss stays `rejected`.
+  Each latch writes one WARNING on `buildaspec.cost_checks`
+  (`Cost self-check: … is switched off … until the app restarts (<reason>)`),
+  and the warm lead's check also writes one INFO line per lineage it judges.
+  Nothing is logged per request. The thresholds are module constants, not
+  knobs (R3): a new knob needs a README row, which FD2 forbade.
+- **CT-1: a refused tail costs one request.** A refused tail was the tail's
+  one unbounded failure. A 400 is `invalid_request`, which is not
+  retryable, so every paused research area and compliance review would
+  have failed, on every run. Each engine now opens every request through its
+  own copy of `_open_stream`, a `contextmanager` over one `ExitStack` that
+  yields `(stream, carried_tail)`.
+  - *The SDK and the fakes fail in different places.* The SDK sends the
+    request when the stream context is ENTERED; the fakes raise from
+    `stream(...)`. One `try` around
+    `stack.enter_context(client.messages.stream(...))` covers both. The
+    `yield` must stay OUTSIDE that `try`. Inside it, a failure thrown into
+    the generator would be caught and "resent", and `contextmanager` then
+    raises "generator didn't stop after throw()".
+  - *What counts as a refusal* (`is_tail_rejection`): a `BadRequestError`
+    raised while opening a stream that carried the tail, whose text is not
+    "prompt is too long". That is the same rule the chat engine's
+    thinking-display degrade uses: a prompt that is too long fails with or
+    without the tail. A 400 on a request without the tail, any other status,
+    and any error raised after the stream opened all take the old path,
+    unchanged.
+  - *The resend is not a retry.* It goes at once, with no backoff, and with
+    the same messages and every other argument, the container included.
+    Nothing is appended for the refused request, which returned no response
+    and billed nothing. Final QC counts it as a request ("client API
+    requests" includes retries) through a `count_request` callback called
+    BEFORE it is sent, so a resend that raises is still counted. Research
+    counts no requests.
+  - *Latch on proof.* A 400 that survives removing the tail was not the
+    tail's: no latch, and the call fails as it always did. A resend that
+    fails any other way does latch (the 400 went with the tail), and then
+    the ordinary retry path resumes the conversation (Tier 1 Chunk 5). The
+    resumed continuation is built after the latch, so it goes without the
+    tail.
+  - *Read on every request, after the switch, in every thread.* The
+    condition is: the switch, then `continuation_tail_enabled(engine)`, then
+    `_is_continuation(messages)`. This is the one deliberate exception to
+    Tier 1 Chunk 4's "one round, one answer": the latch can only REMOVE the
+    tail, from the next request on. Each engine (`research`, `qc`) has its
+    own latch, because a refusal is a property of a request shape on one
+    model.
+- **CT-2: the tail measures what it saves** (the Chunk 4 plan's Appendix A).
+  Right after each response is appended, a response to a request that
+  carried the tail goes to `observe_continuation`, with the conversation's
+  opening response (`all_responses[0]`). The hook reads `carried_tail`,
+  never `"cache_control" in stream_kwargs`, because the resend dropped the
+  tail. Each observation is one of three kinds:
+  - *exact*: both first iterations are known.
+    S = R·(u − r) − W·(w − u). R is what the continuation read beyond the
+    opening's explicit prefix, and W what it wrote beyond the prefix it had
+    to rewrite (`missed`, an expired entry, which is never charged to the
+    tail).
+  - *bound*: the continuation ran one model iteration and read something,
+    but the opening's first iteration is unknown.
+    S_max = read·(u − r) − write·(w − u), an upper bound on S while the
+    prefix's entry is alive, which it always is here. A bound that read
+    nothing is skipped.
+  - *unmeasured*: anything else, counted and never guessed.
+
+  Once one engine has six or more measured observations summing below zero,
+  it latches `unprofitable`. Every term is exact or an upper bound, so it
+  latches only on a proven loss. It keeps observing afterwards, for
+  diagnostics.
+  - *Two continuations the plan's formula got wrong are now unmeasured.*
+    A continuation that ran a server tool inside itself saves at least
+    (R + W)·(u − r) ≥ 0: a later iteration reads the entry the tail
+    wrote, so its first iteration understates the saving, and summing it
+    could latch a tail that was saving money. A continuation that answers a
+    pending tool call has its first iteration behind the provider's own
+    breakpoint, and the write it reports includes the new tool result.
+  - *The top-level usage stands in only when the response provably ran one
+    iteration.* The content must hold only `text`, `thinking`,
+    `redacted_thinking` and `tool_use` blocks, and the usage must report no
+    `*_requests` above zero. That is an allowlist, so a block type this code
+    has never seen reads as unmeasured.
+  - *The GA endpoint reports no `usage.iterations`* (SDK 1.8.0: the field is
+    typed only on the beta usage type, and a GA response carrying it keeps it
+    as a list of plain dicts; both shapes are read). So in practice only a
+    paused conversation's closing request is measurable. The latch's sum is
+    a proven loss on the requests it measures, not across every
+    continuation. In the bad case, the check could switch off a tail that
+    was saving money overall. That is the safe direction: a latch can only
+    remove a saving, never add a cost.
+  - *Traps.*
+    - `PRICING` divides in floats: `0.20 / 1_000_000` is
+      `2.0000000000000002e-07`, so twelve exact break-evens summed a hair
+      below zero and latched. The arithmetic is `Decimal`, with each rate
+      taken to twelve significant digits (`_rate`).
+    - The dollar figures round AWAY from zero (`_usd`), so a proven loss of
+      a tenth of a millionth of a dollar never reads as a saving of `0.0`
+      beside `unprofitable`.
+    - A bool is an int, and a `None` cache count means zero.
+    - One lock acquisition per observation, latch included: a reader never
+      sees a count without the latch it earned.
+    - A test pins "the opening response" by identity (`is`), because the
+      fake returns the scripted object and `SimpleNamespace` compares by
+      value.
+- **WL-1: the warm lead checks that the batch reads its copy** (the Chunk 3
+  plan's Appendix B). Whether a batch request can read an entry a streamed
+  request wrote is undocumented. So after every batched phase that ends
+  NORMALLY and sent a lead, `check_leads()` hands each lead's lineage to
+  `check_warm_leads`. It runs after `fold_leads(wait=True)`: an unjoined
+  lead has no record, so it is not "streamed" and would be skipped. It
+  never runs after a Stop, the wall-clock ceiling, a refused or id-less
+  submission, a failed results read or the settlement window, whose seats
+  are an incomplete sample.
+  - *Per batched seat:* the first iteration of its reply to the FIRST batch
+    it rode. The seat read the prefix when read ≥ 0.95·(read + write). A
+    seat with no such reply, no readable first iteration or read + write = 0
+    is unmeasured.
+  - *Per lineage, with at least 8 measured seats:*
+    - h₁, the share that read the prefix;
+    - p, the median prefix;
+    - C, the lead's list-price cost;
+    - h₀* = [(n − 1)·b·h₁·Δ·p − (1 − b)·C] / (n·b·Δ·p), with Δ the 1-hour
+      write rate minus the read rate, both from `usage_ledger.model_rates`.
+  - *The rules:* `not_read` when h₁ < 0.5; `unprofitable` when h₀* ≤ 0
+    (read as the numerator N ≤ 0, so an odd rate table cannot divide by
+    zero); otherwise `kept`. One run can latch, and then the next phase picks
+    no lead: the gate reads `warm_lead_enabled()` after the switch and the
+    wait. There is deliberately **no rule on h₀* > 0**, because h₀ (what the
+    batch reads without a lead) is never observed. A lead that is read but
+    was not needed is kept, at about its own batch discount ($0.20–$0.35 per
+    large lineage per run).
+  - *`not_warm` and `too_few` never latch.* A lead whose wait timed out, or
+    whose first request failed (its `finally` releases the wait, so the
+    outcome still reads `warm`), left the batch nothing to read. Judging it
+    would latch falsely exactly when a lead is worth the most. So `warm`
+    requires the wait's outcome to be `warm` AND
+    `api_request_count == len(billed)`.
+  - *Traps.*
+    - **Read each seat's FIRST batch, never `billed[0]`** (Codex, PR #227).
+      A seat whose first item errored is retried in a later round, where it
+      can read a copy an earlier BATCHED seat stored, so counting its retry
+      keeps a lead the first round never read.
+      `_BatchSeatState.first_round` is marked when the provider accepts a
+      batch; a refused submission ran nothing, so it is no seat's first
+      batch.
+    - A lineage of exactly 8 seats has 7 batched seats and is never judged.
+      A web-tooled seat that searched in its first reply is unmeasured on
+      the GA endpoint, so web-tooled lineages mostly read `too_few`.
+    - An invisibility baseline must patch out the engine's hand-off too, not
+      only the check. Otherwise a hand-off that writes back passes in both
+      arms (the revert matrix's first run caught exactly that).
+    - A lineage's values sit six levels down in the diagnostics payload,
+      which is `scrub_data`'s depth bound, so they must be scalars.
+- **The two flips (CT-3, WL-2).** Each replaced its `..._ships_switched_off`
+  pin with `..._ships_switched_on`, the same `ast` walk over the source. The
+  flip-readiness runs with `=1` in the environment PASSED the old pins,
+  which is the point of an `ast` pin: no environment can reach it.
+  - *CT-3's run* (1 failed, 2943 passed) found one test that depended on
+    the default. `tests/test_qc_verifier_v3.py` scripts a 400 right after a
+    pause. With the tail on, CT-1's guard resent the continuation, the
+    resend took the next scripted item, succeeded, and latched the tail.
+    The file's `_run` now passes `continuation_cache=False`, and a tail-on
+    twin
+    (`test_a_400_that_outlives_the_tail_still_spares_the_shared_breaker`)
+    pins the new regime. It runs with `QC_MAX_WORKERS=1`, because the fake
+    routes scripts by title and a finding's two seats share one queue.
+    Lesson: a test that scripts a 400 right after a pause must say which
+    regime it pins.
+  - *WL-2's runs:* 2990 passed with `=1`. The Final QC tests at the lineage
+    floor of 8 gave 442 of 444 passing, and 23 of 206 batched phases picked
+    a lead (25 leads). Outside the lead's own test file, 419 tests passed
+    and 3 of 180 phases picked a lead. The two failures pin the shipped
+    minimum of 20, which the floor plugin lowers. So a floor-8 run must leave
+    `tests/test_qc_batch_warm_lead.py` out, or expect those two. Count
+    phases, not `one streamed first` lines: one phase can send two leads.
+    At the floor, a lineage is 8 seats, so the check never judges it; such a
+    run exercises the lead, not the latch.
+  - *Copy that moved with the flips (R9):* `settings.py`'s comments (each
+    names FD1, its checks and the bounded worst case, and that `0` switches
+    it off); both engines' comments, which no longer say "MEASURED BY M3";
+    the trust dossier's Research and Final QC cards (the lead: twenty or
+    more seats, at most 45 seconds, priced at full price, switched off
+    until a restart if the batch does not read its copy; the dossier's
+    contract is that those numbers are real);
+    `docs/RELEASE_WINDOWS.md`'s rows (on by default, a Cost self-checks
+    row, a switching-off row, for each); and the Tier 1 plan's §7, whose
+    four items now all ship.
+- **Where it shows.** `diagnostics.snapshot()` carries a TOP-LEVEL
+  `cost_checks` block. It is process state, not session state, so it is
+  read without the session guard.
+  - `continuation_tail.<engine>` holds `setting_on`, `enabled`, `reason`,
+    `detail`, `since`, `measured`, `exact`, `bound`, `unmeasured`,
+    `saving_usd` and `last_observed_at`.
+  - `warm_lead` holds `setting_on`, `enabled`, `reason`, `detail`, `since`
+    and `last_check` (`at`, and per lineage: kind, seats, measured,
+    unmeasured, read share, prefix, lead cost, break-even share and
+    verdict).
+
+  Developer tools' Environment section renders it as the "Cost self-checks"
+  row, through `lib/costChecks.ts`. Its reason, engine and verdict
+  vocabularies are pinned against the backend file, and a missing, older or
+  malformed snapshot renders "not reported" and never throws.
+  `tests/conftest.py` resets every latch before AND after every test.
+- **Revert matrices** (in full in each plan's As built). Every mechanism
+  was reverted in place, one at a time, by a script that restored the exact
+  text it read. Every row went red:
+
+  | Session | Rows | The heaviest rows |
+  |---|---|---|
+  | CT-1 | 48, 48 red | reset clears nothing → 41; the conftest resets nothing → 38; the latch never read → 16; no guard in either engine → 7 each |
+  | CT-2 | 49, 49 red | reset leaves the observations → 28; iterations read only as dicts → 26 (the fakes' records are objects); the snapshot without counts → 25; `observe_continuation` records nothing → 24; bound path gone → 18 |
+  | CT-3 | 5, 5 red | the tail never sent → 16; the default back to off → 1 |
+  | WL-1 | 51, 51 red | reset leaves the warm lead → 47; no warm-lead block → 26; the check never runs → 15; C at the batch rate → 13; `billed[0]` again → 1 |
+  | WL-2 | 5, 5 red | no lead ever picked → 40; the check never latches → 10; the default back to off → 1 |
+
+  Two first runs found green rows, and each got a stronger test before its
+  matrix was recorded. CT-2: unmeasured observations counted toward the six
+  (its test observed the losses first). WL-1: a seat read from its last
+  response, and hand-off sabotage (deviation 11).
+- **Tests.** `tests/test_cost_checks_tail_rejection.py` (38),
+  `tests/test_cost_checks_tail_value.py` (29, or 32 with parametrized
+  cases), `tests/test_cost_checks_warm_lead.py` (43, or 45),
+  `tests/test_tier1_finish_tracker.py` and `frontend/tests/costChecks.test.ts`
+  (17). Every engine run in them passes the switch it exercises explicitly
+  (R7), so neither flip changed one of them. WL-2 ended the backend suite at
+  2990 passed, 64 skipped, with the switch on and with it off.
+- **The release notes are owed, not written** (F7). The Tier 1 plan's §7
+  now includes all four items, and whichever release next ships from
+  `master` owes them.
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Final QC phase 2 is batched" (v1.12.0) says
+     `tests/test_qc_verifier_v3.py` pins `batch_verification=False`. Since
+     CT-3 its `_run` also passes `continuation_cache=False` for its
+     post-response-400 contract, and a tail-on twin pins CT-1's behaviour.
+  2. "Developer tools + always-on diagnostics" (v1.6.0) lists the snapshot
+     as app/tracing/logging/key/workspace/session/usage. It also carries the
+     top-level `cost_checks` block, read without the session guard.
+  3. "Final QC's batched phase can stream a lead seat first (Research/QC
+     cost Tier 1, Chunk 3)":
+     - "**It ships switched off.**" It has been on by default since WL-2
+       (PR #228).
+     - "The default … waits for an M3 pass." No M3 was run. FD1 replaced
+       it with WL-1's check, and WL-2's merge was the owner's approval.
+     - "Flip readiness, measured once" counted 369 QC tests outside the
+       new file at the floor. WL-2's re-run: 419, none failed.
+     - Its erratum 1, "with `QC_BATCH_WARM_LEAD` on, one seat per large
+       lineage IS streamed": that is now the default.
+  4. "A paused call reads its own cache (Research/QC cost Tier 1, Chunk 4)":
+     - "**It ships switched off.**" It has been on by default since CT-3
+       (PR #226).
+     - "measured by M3 … The worst case … costs each continuation the
+       5-minute write premium on its re-sent turn". That holds only for a
+       continuation that runs no server tool; one that does gains even
+       then. "M3 would show … and the flip rule catches exactly that": no
+       M3 was run. CT-2's runtime check catches it on the continuations it
+       can measure.
+     - "one round, one answer": the CT-1/CT-2 latch is the one exception,
+       read on every request, and it can only remove the tail.
+  5. "Research and Final QC cost, Tier 1, as shipped (closeout)":
+     - "Chunk 3 … It ships off" and "Chunk 4 … It ships off": both are on
+       by default, since WL-2 and CT-3.
+     - "**Two switches ship off, for different reasons.** … if the provider
+       refused it, every paused research area and compliance review would
+       fail with a 400 … Each default flips only on an M3 pass … applied by
+       a flip session. The progress file gives that session's prompt": since
+       CT-1 a refusal costs one resend per engine per app session. Neither
+       flip waited on M3. The flips were this program's CT-3 and WL-2, each
+       landing after its self-checks, and the progress file's "After the
+       program" table now marks both done.
+     - "Everything else passes either way, so a flip is still one commit per
+       chunk" stopped holding at CT-1, whose guard met
+       `test_qc_verifier_v3.py`'s scripted 400. CT-3 made that test pass the
+       switch explicitly.
+     - "Each chunk's `..._ships_switched_off` pin": both are now
+       `..._ships_switched_on` pins.
+     - "items 3 and 4 only if their switch defaults on in the release": all
+       four items ship.
+     - "3 of 138 batch phases picked a lead": WL-2's re-run of the same
+       method counted 3 of 180 outside the lead's own test file.
+  6. The Layout's entries for `settings.py`, both engines, `diagnostics.py`,
+     `usage_ledger.py`, `DeveloperToolsModal`, `tests/conftest.py`,
+     `tests/fakes.py` and the two pin files are maintained current, so they
+     were corrected in place (including the two defaults' "flips on only on
+     a recorded M3 pass").
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

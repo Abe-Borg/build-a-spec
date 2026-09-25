@@ -55,7 +55,7 @@ saving on, one pull request per session:
 | CT-2 | Chunk 4 | Measure what the continuation tail saves | done | PR #225 | `66c10d8` |
 | CT-3 | Chunk 4 | Turn the continuation tail on | done | PR #226 | `14c1185` |
 | WL-1 | Chunk 3 | Check that the batch reads the warm lead | done | PR #227 | `4eb1d70` |
-| WL-2 | Chunk 3 | Turn the warm lead on | done | PR #228 | — |
+| WL-2 | Chunk 3 | Turn the warm lead on | done | PR #228 | `3bb5201` |
 | FIN-1 | both | Close out: root docs and the finish line | not started | — | — |
 
 ### What each status means

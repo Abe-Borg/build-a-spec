@@ -17731,7 +17731,8 @@ each, on 2026-09-24 and 2026-09-25:
 - CT-3 (PR #226) turned the tail on;
 - WL-1 (PR #227) checks that the batch reads the warm lead;
 - WL-2 (PR #228) turned the warm lead on;
-- FIN-1, this closeout, folded everything into this file and the README.
+- FIN-1 (PR #229), the closeout, folded everything into this file and the
+  README.
 
 **Both switches now default on**, and `0` switches either off. The program
 added no route, no SSE event type, no environment variable (R3), no
@@ -17990,6 +17991,7 @@ deviation and full revert matrix, and this section is the why and the traps.
   | CT-3 | 5, 5 red | the tail never sent → 16; the default back to off → 1 |
   | WL-1 | 51, 51 red | reset leaves the warm lead → 47; no warm-lead block → 26; the check never runs → 15; C at the batch rate → 13; `billed[0]` again → 1 |
   | WL-2 | 5, 5 red | no lead ever picked → 40; the check never latches → 10; the default back to off → 1 |
+  | FIN-1 | 15, 14 red | the finish line itself (status line, banner, completion line, Next-session line, row, ticks) → 1–2 each; only a README Configuration row dropped stays green, because the docs test checks a knob is named somewhere, not what its row says |
 
   Two first runs found green rows, and each got a stronger test before its
   matrix was recorded. CT-2: unmeasured observations counted toward the six

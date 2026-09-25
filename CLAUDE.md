@@ -17746,7 +17746,7 @@ deviation and full revert matrix, and this section is the why and the traps.
   plan's F5 for these two switches. A switch may default on when a runtime
   self-check removes its one unbounded failure and switches it off on a
   measured loss, and what the check cannot measure is bounded. The checks
-  watch the runs the app makes anyway. The owner merged every PR, so merging
+  watch the runs the app makes anyway. The owner merges every PR, so merging
   CT-3's and WL-2's was his approval of each flip. F8 (measure, don't model)
   still holds: the checks measure real runs, and nothing is decided from a
   model of what they would show.

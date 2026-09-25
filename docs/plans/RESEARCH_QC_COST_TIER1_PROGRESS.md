@@ -28,6 +28,19 @@ made `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` default on, so neither switch this
 file says ships off still does. Neither flip waited on M3: each rests on that
 program's runtime self-checks, which can only switch a saving off (O7).
 
+**Both flips are done, and the Tier 1 finish program is complete
+(2026-09-25).** Chunk 4's continuation tail turned on in that program's CT-3
+(PR #226, merge `14c1185`), and Chunk 3's warm lead in its WL-2 (PR #228,
+merge `3bb5201`). Each is watched by a runtime self-check that can only
+switch it off until the app restarts, and `0` switches either off for good
+(`BUILD_A_SPEC_CONTINUATION_CACHE`, `BUILD_A_SPEC_QC_BATCH_WARM_LEAD`). Its
+closeout, FIN-1, folded the program into the root `CLAUDE.md` and
+`README.md` and marked the two flip rows in
+[After the program](#after-the-program) done. M3 was never run and is no
+longer owed for either flip. The one thing this file still owes is the
+release notes: the plan's §7, all four items, to whichever release next
+ships from `master`.
+
 **The program is complete** (Chunk 6, the closeout, 2026-09-24). Every
 chunk's code is on `master`. Two switches still ship off. Each flips after
 a measured run passes its test, or on Abraham's waiver of that run. He will
@@ -83,8 +96,8 @@ own, because each one waits on a real run.
 | What | Why it is owed | Who | Cost |
 |---|---|---|---|
 | **M3**, the trial (the plan's §8) | It is the only thing that can decide the two flips below. | Abraham | only the runs themselves |
-| **Chunk 4's flip** (`BUILD_A_SPEC_CONTINUATION_CACHE`) | It ships off, and flips only on an M3 pass of its own test (the plan, Chunk 4 → "M3 decides the flip"). | a flip session | — |
-| **Chunk 3's flip** (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) | It ships off, and flips only on an M3 pass of its own test (the plan, Chunk 3 → "M3 decides the flip"). | a flip session | — |
+| **Chunk 4's flip** (`BUILD_A_SPEC_CONTINUATION_CACHE`) — **done** | It ships off, and flips only on an M3 pass of its own test (the plan, Chunk 4 → "M3 decides the flip"). **Done without M3 (O7):** the Tier 1 finish program's CT-3 turned it on, behind its self-checks. | the Tier 1 finish program's CT-3 (PR #226, `14c1185`) | — |
+| **Chunk 3's flip** (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`) — **done** | It ships off, and flips only on an M3 pass of its own test (the plan, Chunk 3 → "M3 decides the flip"). **Done without M3 (O7):** the Tier 1 finish program's WL-2 turned it on, behind its self-check. | the Tier 1 finish program's WL-2 (PR #228, `3bb5201`) | — |
 | **The release notes** | Whichever release next ships from `master` owes the plan's §7 "Release-note draft (Tier 1)". | that release's closeout | — |
 
 **Shelved on 2026-09-24 (O6).** Abraham will not run M3, and M1, M2 and M4

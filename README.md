@@ -1063,25 +1063,33 @@ and nowhere else.
 
 **The program is complete** (six chunks, closed 2026-09-24), and no release
 carries it yet: whichever release next ships from `master` owes its release
-notes. In an ordinary run a user sees one change: Final QC's first stage
-starts a few seconds later (Chunk 2, below). When a request fails for a
-passing reason — a rate limit, a server error, a dropped connection — a
-research area or a review carries on from the step that failed instead of
-starting over (Chunk 5, below). That has no switch, and shows only when
-something fails. Those two rest on documented provider behaviour and the
-test suite. No measurement of a real run had been recorded when the program
-closed, so what they save is still unmeasured; the profilers below are how
-to measure it.
+notes. In an ordinary run a user sees at most two changes: Final QC's first
+stage starts a few seconds later (Chunk 2, below), and on a section large
+enough, its batched verification waits for one reviewer to start answering
+first (Chunk 3, below). When a request fails for a passing reason — a rate
+limit, a server error, a dropped connection — a research area or a review
+carries on from the step that failed instead of starting over (Chunk 5,
+below). That has no switch, and shows only when something fails. Chunks 2
+and 5 rest on documented provider behaviour and the test suite. No
+measurement of a real run had been recorded when the program closed, so
+what they save is still unmeasured; the profilers below are how to measure
+it.
 
-Chunks 3 and 4 are built but ship switched off. Each rests on provider
+Chunks 3 and 4 shipped switched off at first. Each rests on provider
 behaviour that only a real run can confirm: whether a batch can read a copy
 a separately streamed request stored (Chunk 3), and whether a resumed
 request's automatic cache breakpoint is accepted and read (Chunk 4). Each
-turns on only when a measured run (the plan's M3) passes its own test, or
-when the owner waives that run for it, and until then changes nothing.
-Neither is planned (the progress file's O6, 2026-09-24), so both stay off.
-The progress file's "After the program" section says how either would
-happen.
+was to turn on only when a measured run (the plan's M3) passed its own test,
+and no such run is planned (the progress file's O6, 2026-09-24). So a
+second program, the **Tier 1 finish**
+([`docs/plans/tier1-finish/TIER1_FINISH_TRACKER.md`](docs/plans/tier1-finish/TIER1_FINISH_TRACKER.md),
+complete), replaced that run with **cost self-checks** that watch the runs
+the app makes anyway and can only switch a saving off
+([below](#the-cost-self-checks-watch-both-savings-tier-1-finish)), and then
+turned both on. **Both are on by default**, and `0` switches either off
+(Configuration, below). No measured run has been made of either, so what
+they save is unmeasured too; Settings → Developer tools → Cost self-checks
+and the profilers are how to see it.
 
 ### Measure what research costs (Chunk 1)
 
@@ -1157,7 +1165,7 @@ to check.
   copy, whether they were released by the first output (`warm`), the time
   limit (`timeout`) or a Stop (`stopped`), and how long they waited.
 
-### Final QC's batched review can warm its own copy first (Chunk 3, switched off)
+### Final QC's batched review can warm its own copy first (Chunk 3, on by default)
 
 Final QC's verifying reviewers run as a Message Batches request at half
 price, and most of them read the same cached copy of your section: every
@@ -1165,18 +1173,25 @@ reviewer checking a finding from a lens without web tools reads one copy,
 and every reviewer checking a code-compliance finding (they carry web search
 and fetch) reads another. Inside a batch, how many of them read a stored
 copy and how many pay to store their own is up to how the provider
-schedules the batch. With this switch on, when one of those groups has at
-least 20 reviewers, one of them is sent first, on its own and at full
-price, and the batch goes out only once it has started answering, so the
-rest can read the copy it stored.
+schedules the batch. When one of those groups has at least 20 reviewers,
+one of them is sent first, on its own and at full price, and the batch goes
+out only once it has started answering, so the rest can read the copy it
+stored.
 
-- **Off by default, deliberately.** It pays only if a batch request can read
+- **On by default, and watched.** It pays only if a batch request can read
   a copy a separately streamed request stored, and the provider does not
-  document that either way. It stays off until a measured run shows it does
-  (the plan's M3). `BUILD_A_SPEC_QC_BATCH_WARM_LEAD=1` switches it on for a
-  trial. In PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "1"`; in
-  Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=1`.
-- **What changes when it is on:** only how one reviewer per large group is
+  document that either way. It shipped off to wait for a measured run (the
+  plan's M3); none is planned, so the Tier 1 finish program turned it on
+  (session WL-2) with a self-check in place of the run. After each Final QC
+  that sent a lead, the app reads how many of the batched reviewers read the
+  lead's copy. If fewer than half did, or the lead cost more than it could
+  have saved, the lead switches off until the app restarts, and the next
+  Final QC sends none
+  ([the cost self-checks](#the-cost-self-checks-watch-both-savings-tier-1-finish),
+  below). `BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0` switches it off for good. In
+  PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`; in Command
+  Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`.
+- **What changes:** only how one reviewer per large group is
   sent. Its request is byte for byte what it would have been inside the
   batch, and its verdict counts exactly like any other seat's, so the
   review, its findings and a Final QC result you already have (it stays
@@ -1199,19 +1214,22 @@ rest can read the copy it stored.
   it. That is why only groups of 20 or more qualify (the plan's fallback,
   used because no measurement of a real batch was recorded); the app never
   lets that minimum fall below 8.
-- **Measured, not modelled:** on a Final QC made with the switch on,
+- **Measured, not modelled:** on a Final QC that sent a lead,
   `tools\qc_export_cost_profile.py` shows the lead as its own
   `seat:list-price:<group>` row, and the batched row beside it should read
   nearly its whole shared copy (Cache read against 1h write). If there is no
   `seat:list-price` row, no group was large enough and the run says nothing
-  about this switch.
+  about this switch. Settings → Developer tools → Cost self-checks shows the
+  app's own last check: how many batched reviewers it measured, what share
+  read the shared copy, and the share below which the lead pays for itself.
 - **Where to see it:** each lead writes one line to the activity log: how
   many reviewers share the copy, which group, and whether the wait ended on
   the lead's first output (`warm`), the time limit (`timeout`) or a Stop
-  (`stopped`).
+  (`stopped`). The self-check writes one `Warm lead check:` line per group
+  it judges (numbers only), and one WARNING when it switches the lead off.
 
 
-### A paused call reads its own cache (Chunk 4, switched off)
+### A paused call reads its own cache (Chunk 4, on by default)
 
 A research area — or a Final QC call that searches the web — sometimes has
 more web work to do than one reply allows, so the provider pauses it and the
@@ -1219,18 +1237,25 @@ app resumes it by sending the whole conversation again: the instructions,
 your section, and every search result and page the call has read so far.
 Nothing after the section's shared copy was marked for caching, so every
 resume paid the full input price for a conversation it had already sent.
-With this switch on, a resumed request carries one automatic cache
-breakpoint at its end, where it can read what the paused request already
-stored.
+Now a resumed request carries one automatic cache breakpoint at its end,
+where it can read what the paused request already stored.
 
-- **Off by default, deliberately.** The provider documents this request
-  shape as allowed, but if it ever refused it, every paused research area
-  and every paused compliance review would fail. So it is proven on a real
-  run first (the plan's M3), and stays off until then.
-  `BUILD_A_SPEC_CONTINUATION_CACHE=1` switches it on for a trial. In
-  PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "1"`; in Command
-  Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=1`.
-- **What changes when it is on:** only a resumed request, and only by one
+- **On by default, and watched.** The provider documents this request shape
+  as allowed, but if it ever refused it, every paused research area and
+  every paused compliance review would fail — which is why it shipped off,
+  to be proven on a real run first (the plan's M3). None is planned, so the
+  Tier 1 finish program made a refusal harmless and turned it on (session
+  CT-3). A resumed request the provider refuses because of the breakpoint
+  is sent once more without it, at once, and the breakpoint switches off
+  for that engine — research or Final QC — until the app restarts. So a
+  refusal costs one extra request per engine per session, never a failed
+  research area or review. A second check switches it off the same way once
+  six or more resumes it can measure have cost more than they saved
+  ([the cost self-checks](#the-cost-self-checks-watch-both-savings-tier-1-finish),
+  below). `BUILD_A_SPEC_CONTINUATION_CACHE=0` switches it off for good. In
+  PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command
+  Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`.
+- **What changes:** only a resumed request, and only by one
   setting added beside the request — never inside your section or the
   conversation. A first request never carries it: its end is unique to it,
   so storing it would only cost. Only a call that searches or fetches the
@@ -1247,14 +1272,18 @@ stored.
   model, a twentieth on Final QC's — instead of the full price, plus a write
   premium on what is new since the last resume. How much that is depends on
   how often your runs pause. If the provider's stored copy turns out not to
-  match what is sent again, each resume pays about 25% more on what it
-  re-sends instead, which is exactly what the trial checks for.
-- **Measured, not modelled:** after a Research round with the switch on,
+  match what is sent again, a resume that runs no web search of its own pays
+  about 25% more on what it re-sends instead (one that does still comes out
+  ahead, because a later step inside it reads what the breakpoint stored),
+  and that loss is what the app's value check measures and switches off.
+- **Measured, not modelled:** after a Research round,
   `tools\research_cost_profile.py` should show a lower uncached share than a
-  round without it on the areas that paused, with cache reads growing faster
-  than cache writes; `tools\qc_export_cost_profile.py` shows the same for the
-  compliance lens. There is no activity-log line for it: the profilers are
-  how you see it.
+  round made with the switch off on the areas that paused, with cache reads
+  growing faster than cache writes; `tools\qc_export_cost_profile.py` shows
+  the same for the compliance lens. Settings → Developer tools → Cost
+  self-checks shows what the app itself measured, per engine: how many
+  resumes it could measure and their estimated saving or loss. A switch-off
+  writes one WARNING to the activity log.
 
 ### A dropped connection resumes instead of starting over (Chunk 5)
 
@@ -1304,6 +1333,76 @@ failing.
   it happens. How often it happens has not been measured, and a passing
   failure cannot be staged on demand; the value is in removing the worst
   case.
+
+### The cost self-checks watch both savings (Tier 1 finish)
+
+Chunks 3 and 4 are on by default without the measured run they were waiting
+for, so the app watches them itself, on the runs it makes anyway. There are
+three checks, and each reads only what the provider already reports about
+requests the app was sending anyway: **nothing is ever sent to test the
+provider.**
+
+- **A refused resume (Chunk 4).** If the provider ever refuses a resumed
+  request because of its cache breakpoint (an error as the request is
+  sent), the app sends the same request once more without it, at once, and
+  the call carries on as if the breakpoint had never been there. The
+  breakpoint then switches off for that engine — research and Final QC are
+  watched separately — for the rest of the session. So the worst a refusal
+  can cost is one extra request per engine per app session. If the request
+  is refused again without the breakpoint, the breakpoint was not the
+  problem: nothing switches off, and the call fails exactly as it always
+  would have. A "prompt is too long" error is never read as the
+  breakpoint's.
+- **What a resume saves (Chunk 4).** Every resumed request that carried the
+  breakpoint is measured where the provider's usage report shows what it
+  read and stored — in practice, a resume that ran no web search inside
+  itself, typically a call's closing request. The rest are counted as not
+  measurable, never guessed. Once six or more measured resumes of one engine
+  add up to a loss, even on the most generous reading (every cache read
+  credited to the breakpoint), the breakpoint switches off for that engine
+  for the rest of the session. A resume that searched the web inside itself
+  is not measurable, and on the provider's documented caching it comes out
+  ahead even when the stored copy does not match; so a switch-off can at
+  worst give up that saving along with the loss, and never costs more than
+  having the switch off.
+- **Whether the batch reads the warm lead (Chunk 3).** After every Final QC
+  whose batched verification sent a lead and finished normally — not
+  stopped, timed out or refused — the app reads, for each large group,
+  whether each batched reviewer's first reply read the shared copy of your
+  section (at least 95% of it) or stored its own. With at least 8 reviewers
+  measured: if fewer than half read it, the batch is not reading the lead's
+  copy; if the lead cost more than it could have saved even had the batch
+  alone read nothing, it lost money. Either way the lead switches off for
+  the rest of the session, and the next Final QC sends none. A lead whose
+  batch went out before its copy was ready (its wait timed out, or its
+  first request failed) is not judged. A lead that is read but turns out
+  not to have been needed (the batch would have read the copy anyway) cannot
+  be told apart from one that was, and is kept: that costs about the lead's
+  own batch discount, $0.20–0.35 per large group per run.
+- **Off only until a restart.** A check can only switch a saving off, never
+  on, and what it decided lives in memory only: nothing is written to a
+  project, a project brief, a report, a Final QC result or the usage meter,
+  and a Final QC result you already have stays current. Restarting the app
+  re-arms both savings. The settings switch them off for good:
+  `BUILD_A_SPEC_CONTINUATION_CACHE=0` and `BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`
+  (Configuration, below).
+- **Where to see it:** Settings → Developer tools → **Cost self-checks**
+  shows one line per engine for the resume breakpoint (on, what was
+  measured and its estimated saving or loss, or "off for this session" and
+  why) and one line for the warm lead (the last check's numbers, or why it
+  is off). The first time a check switches a saving off it writes one
+  WARNING to the activity log (`Cost self-check: … switched off … until the
+  app restarts`); the warm lead's check also writes one `Warm lead check:`
+  line per group it judges, numbers only. The support bundle's snapshot
+  carries the same `cost_checks` block.
+- **What they cannot see:** where the provider reports no per-step usage — a
+  resume that searched the web inside itself, or a reviewer that searched in
+  its first reply — nothing is measured and the saving stays on. The worst
+  case there is bounded: about 25% more on what a resume that runs no search
+  of its own re-sends, about the lead's own discount per large group per
+  run, and a batch that waits at most `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`
+  (45 s by default) for the lead. A group of exactly 8 reviewers is never
+  judged: it has only 7 batched reviewers to measure.
 
 ## Shipped in v1.20.0 (Next section in one click)
 
@@ -2115,7 +2214,7 @@ actions.
   runs through the Message Batches API at half token price — one submission
   per round, and `_run_batch_calls` adds a round whenever a seat pauses or has
   to retry — while the rest of the review runs at list price (and so does a
-  streamed lead seat, when `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` is on), so the
+  streamed lead seat), so the
   meter keeps them in separate buckets —
   one bucket can only carry one rate. The drawer's "This session's QC" line and
   the launch confirmation sum **both**; reading only the list-priced one
@@ -2394,7 +2493,7 @@ Shipped in v0.5.0 (Phase 5) and still current:
 - **Compliance audit.** One click audits the draft against the Phase 4 requirements profile, with Spec Critic's trust model intact: only **grounded** requirements control; `[UNVERIFIED]` items can at most earn a confirm-with-authority advisory; `[PROCESS]` items are excluded. Output: a coverage matrix (`represented / missing / contradicted / unclear`, every controlling requirement always classified — a skipped one reports `unclear`, never invisible) with evidence quotes + click-to-jump element ids, advisory findings, a staleness marker when the draft moves past the audited version, and a **compliance closing section in the `.docx` export**. Full multi-spec reviews still belong to Spec Critic.
 - **Windows packaging + auto-update.** Spec Critic's release pipeline, cloned: PyInstaller one-folder build (`packaging/windows/build-a-spec.spec`, bundling the built frontend + pywebview/WebView2), Inno Setup installer with its own stable AppId, and the serverless GitHub-Releases updater — `latest.json` manifest fetched https-only (redirect-downgrade guarded), installer **SHA-256-verified before it ever runs**, once-a-day throttle, skip-this-version, and an update pill in the header. `docs/RELEASE_WINDOWS.md` is the runbook; `--version`/`--selfcheck` smoke-test the frozen exe; a version-consistency gate keeps settings/package.json/tag aligned (and runs in pytest).
 - **Session tracing.** The ported Spec Critic tracing core (JSONL spans + events, background writer, credential redaction, prompt-hash dedup, deep mode) records turns — now with per-round detail and prompt material — plus every REST request and state-changing action (edits, exports, project saves/loads, QC dispositions, stops, key changes, frontend errors), research runs, audits, Final QC, and imports. Every record carries a run/process identity and monotonic sequence; requests carry a correlation id, stable outcome code, timing, and workspace generation before/after. The live run metadata checkpoints capture counts by event/span/request outcome, token totals, queue count/byte high-water marks, categorized drops, write failures, active-run storage, and open spans, so the diagnostic system reports its own gaps. Runs are local-only, env-gated (`BUILD_A_SPEC_TRACE`, default on), storage-bounded by age/count/bytes (with the byte ceiling also preventing one active run's JSONL payload from growing without bound), and viewable through the self-contained HTML viewer at `GET /api/trace/viewer` (no network, dynamic event filters).
-- **Always-on activity log + Developer tools.** Every launch writes a rotating local log beneath its own `<log-root>/process-<uuid>/` directory (`BUILD_A_SPEC_LOG`, default on: requests, errors with tracebacks, crashes via `faulthandler` and exception hooks, an unclean-shutdown marker) — the only place output survives in the packaged windowed build, where stdout/stderr go to devnull. Credential-shaped substrings are redacted from normal messages and exception text before file formatting. Historical log runs are storage-bounded by age/count/bytes without pruning the current launch, another live process, or recent unclean-shutdown evidence. **Settings → Developer tools** shows process/server identity, document shape and generation, import evidence, research/audit/QC worker state, trace coverage and writer health, recent activity, the log tail, retention results, and the trace-run list. Its one-click **diagnostics bundle** contains the point-in-time snapshot, the current launch's bounded log rotations, read-only/redacted legacy flat logs, the flushed current trace, bounded event/span tails from up to three completed prior runs, an exact inclusion/truncation manifest, and a time-ordered recent-incident index; live sibling runs are identified but never copied. The artifacts are local-only but may contain draft text, prompts, document titles, file paths, and error context; treat both folders and every exported bundle as sensitive project data.
+- **Always-on activity log + Developer tools.** Every launch writes a rotating local log beneath its own `<log-root>/process-<uuid>/` directory (`BUILD_A_SPEC_LOG`, default on: requests, errors with tracebacks, crashes via `faulthandler` and exception hooks, an unclean-shutdown marker) — the only place output survives in the packaged windowed build, where stdout/stderr go to devnull. Credential-shaped substrings are redacted from normal messages and exception text before file formatting. Historical log runs are storage-bounded by age/count/bytes without pruning the current launch, another live process, or recent unclean-shutdown evidence. **Settings → Developer tools** shows process/server identity, document shape and generation, import evidence, research/audit/QC worker state, trace coverage and writer health, recent activity, the log tail, retention results, the trace-run list, and the cost self-checks (what each one has measured, and whether it has switched a saving off for the session). Its one-click **diagnostics bundle** contains the point-in-time snapshot, the current launch's bounded log rotations, read-only/redacted legacy flat logs, the flushed current trace, bounded event/span tails from up to three completed prior runs, an exact inclusion/truncation manifest, and a time-ordered recent-incident index; live sibling runs are identified but never copied. The artifacts are local-only but may contain draft text, prompts, document titles, file paths, and error context; treat both folders and every exported bundle as sensitive project data.
 
 Shipped in v0.4.0 (Phase 4) and still current (the near-verbatim port of Spec Critic's requirements-research fan-out, pointed at drafting):
 
@@ -2522,6 +2621,12 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   onboarding_state.py    the finished tour's version on disk
                          (onboarding_state.json, its own file): lenient read,
                          strict atomic write
+  cost_checks.py         the cost self-checks (Tier 1 finish): in-memory,
+                         per-process latches that can only switch the
+                         continuation tail (per engine) or the warm lead
+                         off, the tail's refusal guard + value check and
+                         the warm lead's read check; a leaf both engines
+                         import; Developer tools' Cost self-checks row
   diagnostics.py         always-on rotating activity log + crash capture
                          (faulthandler, exception hooks, unclean-shutdown
                          marker) + the /api/diagnostics* snapshot/tail/
@@ -2817,7 +2922,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
-| `BUILD_A_SPEC_CONTINUATION_CACHE` | `0` | Continuation caching (Chunk 4 of the cost program, **off** until a measured run shows the provider accepts it and it pays): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "1"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=1`. |
+| `BUILD_A_SPEC_CONTINUATION_CACHE` | `1` | Continuation caching (Chunk 4 of the cost program, on by default since the Tier 1 finish program's session CT-3): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. Watched by the cost self-checks: a resume the provider refuses because of the breakpoint is sent once more without it, and the breakpoint switches off for that engine (research or Final QC) until the app restarts; six or more measured resumes that together cost more than they saved switch it off the same way (Settings → Developer tools → Cost self-checks). `0` switches it off: no request carries it. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`. |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
 | `BUILD_A_SPEC_QC_EFFORT` | `high` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback that sets both phases. |
@@ -2826,8 +2931,8 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding can never be `disputed` and a single reviewer's refusal deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |
-| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | `1` | Submit phase 2 (the verifier seats) through the Message Batches API at 50% of standard token prices — one batch per round, a round added whenever a seat pauses or retries — same prompts, seats, adjudication and audit records; no live per-seat frames, except a streamed lead seat's when `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` is on. `0` streams the seats through the thread pool instead. |
-| `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` | `0` | Streamed lead seat (Chunk 3 of the cost program, **off** until a measured run shows it pays): when one cache group in the batched phase has at least 20 verifier seats (never fewer than 8), one of them is sent first, on its own at list price, and the batch goes out only after it starts answering, so the rest can read the copy it stored. Same request bytes and verdict rules; the report prices that seat at list and says so in its methodology; a retained Final QC result stays current either way. Inert when `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` is `0`. |
+| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | `1` | Submit phase 2 (the verifier seats) through the Message Batches API at 50% of standard token prices — one batch per round, a round added whenever a seat pauses or retries — same prompts, seats, adjudication and audit records; no live per-seat frames, except a streamed lead seat's (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`). `0` streams the seats through the thread pool instead. |
+| `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` | `1` | Streamed lead seat (Chunk 3 of the cost program, on by default since the Tier 1 finish program's session WL-2): when one cache group in the batched phase has at least 20 verifier seats (never fewer than 8), one of them is sent first, on its own at list price, and the batch goes out only after it starts answering (at most `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` later), so the rest can read the copy it stored. Same request bytes and verdict rules; the report prices that seat at list and says so in its methodology; a retained Final QC result stays current either way. Watched by a cost self-check: after each Final QC that sent a lead, the app reads how many batched seats read its copy, and if fewer than half did, or the lead cost more than it could have saved, the lead switches off until the app restarts (Settings → Developer tools → Cost self-checks). `0` switches it off: every seat rides the batch. In PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`. Inert when `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` is `0`. |
 | `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |
 | `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` | `7200` | Wall-clock ceiling on the batched phase (floor 60). A runaway guard, not a target: unsettled seats fail and the run reads partial. |
 | `BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS` | `20` | Ceiling on batch rounds (each carries the seats that still need a continuation or a retry). |

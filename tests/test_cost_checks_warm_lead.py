@@ -8,9 +8,12 @@ so after every batched phase that ENDS NORMALLY and sent a lead, the engine
 hands each such lineage to ``cost_checks.check_warm_leads``, which reads the
 usage the batch already reported (the Chunk 3 plan's Appendix B):
 
-- per batched seat, its first billed response's first iteration: it read the
-  shared prefix when read / (read + write) ≥ 0.95; a seat whose first
-  iteration cannot be read is unmeasured, counted and never guessed;
+- per batched seat, the first iteration of its reply to the first batch it
+  rode (``_BatchSeatState.first_reply``, never ``billed[0]``: a seat retried
+  in a later round could read a copy an earlier batched seat stored): it read
+  the shared prefix when read / (read + write) ≥ 0.95; a seat whose first
+  batch brought no reply, or whose first iteration cannot be read, is
+  unmeasured, counted and never guessed;
 - per lineage, with at least 8 measured seats: h₁ (the share that read), p
   (the median prefix), C (what the lead cost at list) and the break-even
   h₀* = [(n − 1)·b·h₁·Δ·p − (1 − b)·C] / (n·b·Δ·p);

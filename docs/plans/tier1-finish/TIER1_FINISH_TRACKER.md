@@ -1,8 +1,22 @@
 # Tier 1 finish — tracker
 
-<!-- TIER1-FINISH-STATUS: IN PROGRESS -->
+<!-- TIER1-FINISH-STATUS: COMPLETE -->
 
-**Next session:** FIN-1 — Close out: root docs and the finish line
+<!-- TIER1-FINISH-BANNER -->
+```text
+   ###    ##       ##          ########   #######  ##    ## ########
+  ## ##   ##       ##          ##     ## ##     ## ###   ## ##
+ ##   ##  ##       ##          ##     ## ##     ## ####  ## ##
+##     ## ##       ##          ##     ## ##     ## ## ## ## ######
+######### ##       ##          ##     ## ##     ## ##  #### ##
+##     ## ##       ##          ##     ## ##     ## ##   ### ##
+##     ## ######## ########    ########   #######  ##    ## ########
+```
+<!-- /TIER1-FINISH-BANNER -->
+
+**ALL WORK IN BOTH TIER 1 FINISH PLANS IS COMPLETE.**
+
+**Next session:** none — the program is complete
 
 Owner: Abraham. Opened 2026-09-24.
 
@@ -55,8 +69,8 @@ saving on, one pull request per session:
 | CT-2 | Chunk 4 | Measure what the continuation tail saves | done | PR #225 | `66c10d8` |
 | CT-3 | Chunk 4 | Turn the continuation tail on | done | PR #226 | `14c1185` |
 | WL-1 | Chunk 3 | Check that the batch reads the warm lead | done | PR #227 | `4eb1d70` |
-| WL-2 | Chunk 3 | Turn the warm lead on | done | PR #228 | — |
-| FIN-1 | both | Close out: root docs and the finish line | not started | — | — |
+| WL-2 | Chunk 3 | Turn the warm lead on | done | PR #228 | `3bb5201` |
+| FIN-1 | both | Close out: root docs and the finish line | done | PR #229 | — |
 
 ### What each status means
 
@@ -159,13 +173,13 @@ Each item mirrors the acceptance criterion with the same ID in its plan
 
 ### FIN-1 — Close out: root docs and the finish line
 
-- [ ] FIN-1.1 — every merge commit but FIN-1's own is filled in
-- [ ] FIN-1.2 — every session's For FIN-1 list is done, or its exceptions are explained
-- [ ] FIN-1.3 — the root `README.md` is updated
-- [ ] FIN-1.4 — the root `CLAUDE.md` is updated
-- [ ] FIN-1.5 — the Tier 1 plan, the Tier 1 progress file and `docs/plans/README.md` are updated
-- [ ] FIN-1.6 — verified: ruff, pytest, npm test, npm run build
-- [ ] FIN-1.7 — this tracker is COMPLETE, with the banner at the top
+- [x] FIN-1.1 — every merge commit but FIN-1's own is filled in — evidence: the tracker's Status table (WL-2's `3bb5201` filled in by the reconcile step); FIN-1's As built, "Reconcile"
+- [x] FIN-1.2 — every session's For FIN-1 list is done, or its exceptions are explained — evidence: FIN-1's As built, "Every For FIN-1 list, worked through" (each of the five lists, item by item, with where it was done or why not)
+- [x] FIN-1.3 — the root `README.md` is updated — evidence: `README.md`: "## Research and Final QC cost (Tier 1)" (both subsections on by default, the new "The cost self-checks watch both savings (Tier 1 finish)"), both Configuration rows at `1`; FIN-1's As built, "The root README.md"
+- [x] FIN-1.4 — the root `CLAUDE.md` is updated — evidence: `CLAUDE.md`: "The two shelved savings are on, and watch themselves — implemented notes (Tier 1 finish)" with its six errata, and the Layout's new and changed entries; FIN-1's As built, "The root CLAUDE.md"
+- [x] FIN-1.5 — the Tier 1 plan, the Tier 1 progress file and `docs/plans/README.md` are updated — evidence: `docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md` §7 (all four items), `docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md` (the dated note and the two flip rows marked done), `docs/plans/README.md` (this program complete); no version bump, `release_notes.py` entry or tag
+- [x] FIN-1.6 — verified: ruff, pytest, npm test, npm run build — evidence: FIN-1's As built, "Verification": ruff clean, 2990 passed and 64 skipped, `npm test` 438 passed, `npm run build` built
+- [x] FIN-1.7 — this tracker is COMPLETE, with the banner at the top — evidence: the top of this file; `tests/test_tier1_finish_tracker.py` passes; FIN-1's As built, "The finish line, reverted"
 
 ## Rules
 
@@ -491,7 +505,250 @@ big letters.
 
 ### As built
 
-*Not started.*
+*Built on 2026-09-25; the record follows.*
+
+#### FIN-1 as built (2026-09-25)
+
+Built from `master` at `3bb5201` (WL-2's merge), on branch
+`claude/tier1-finish-close-out-qm6zk9`. No code changed: FIN-1 is the root
+`README.md`, the root `CLAUDE.md`, three plan files, this tracker and one
+test docstring.
+
+**Reconcile (FIN-1.1).** No open pull request's title started with
+`Tier 1 finish`. The reconcile step filled in WL-2's merge commit, `3bb5201`
+(`git log origin/master`: "Merge pull request #228"). Every other row
+already had its merge commit. FIN-1's own stays blank, because no session
+comes after it.
+
+**Every For FIN-1 list, worked through (FIN-1.2).** Each item is either
+done where it says, or explained here.
+
+- CT-1's list:
+  - *CLAUDE.md notes.* Folded into the one consolidated section (CT-1's
+    guard, `cost_checks.py`'s rules, and the test traps).
+  - *Layout.* `cost_checks.py` and `test_cost_checks_tail_rejection.py`
+    were added. Both engines' `_open_stream`, the diagnostics block, the
+    conftest reset and the `settings.py` note "(the self-check latch can only
+    remove the tail)" were edited in place.
+  - *Errata.* "One round, one answer" (erratum 4) and the closeout's "would
+    fail with a 400" (erratum 5).
+  - *README.* The refusal's resend and its switch-off are in the Chunk 4
+    subsection, the new self-checks subsection and the Configuration row.
+- CT-2's list:
+  - *CLAUDE.md notes.* Folded into the consolidated section (Appendix A, the
+    two unmeasured shapes, GA's missing iterations, and the traps).
+  - *Layout.* `cost_checks.py`'s value check, `usage_ledger.model_rates`,
+    `lib/costChecks.ts`, both test files, both engines' hooks, the modal's
+    row and `fakes.usage(iterations=)`.
+  - *Errata.* The worst case, and "the flip rule catches exactly that"
+    (erratum 4). The third item was an instruction about CT-1's own README
+    note ("CT-2 adds the Developer tools line"). It needs no erratum: the
+    README now names the Developer tools row.
+  - *README.* "What it saves", "Measured, not modelled" and the new
+    subsection.
+- CT-3's list:
+  - *README.* Every item: the paragraph "Chunks 3 and 4 are built but ship
+    switched off", the heading, the "Off by default" bullet (with both
+    shells' `"0"`), "What it saves", "Measured, not modelled" and the
+    Configuration row.
+  - *CLAUDE.md notes.* Folded into "The two flips".
+  - *Layout.* The `settings.py` entry.
+  - *Errata.* The Chunk 4 section's "It ships switched off" (erratum 4).
+    "Final QC phase 2 is batched" on `test_qc_verifier_v3.py` (erratum 1).
+    Every closeout item (erratum 5).
+- WL-1's list:
+  - *CLAUDE.md notes.* Folded into the consolidated section, with the
+    `first_reply` trap first among its traps.
+  - *Layout.* `cost_checks.py`'s warm-lead check, the Chunk 3 part of
+    `qc/engine.py`'s entry, `lib/costChecks.ts` and `types.ts`,
+    `test_cost_checks_warm_lead.py`, and the frontend test.
+  - *Errata.* The Layout's `settings.py` M3 clause, which was corrected in
+    place because the Layout is maintained current. The Chunk 3 section's
+    "waits for an M3 pass" (erratum 3). The closeout's M3 clause (erratum 5).
+  - *README.* Folded into the warm lead's "On by default, and watched"
+    bullet, as WL-2's list asks.
+- WL-2's list:
+  - *README.* Every item: the paragraph, the heading, "With this switch
+    on" (now "When one of those groups"), the "Off by default" bullet,
+    "What changes when it is on", "Measured, not modelled", "Where to see
+    it" (the `Warm lead check:` INFO line and the WARNING), the Batch 4
+    sentence ("and so does a streamed lead seat"), and the
+    `BUILD_A_SPEC_QC_BATCH_VERIFICATION` and
+    `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` rows.
+  - *CLAUDE.md notes.* Folded into "The two flips", with the floor-8 and
+    count-the-phases traps.
+  - *Layout.* The `settings.py` entry and `test_qc_batch_warm_lead.py`'s
+    "the default (on)".
+  - *Errata.* The Chunk 3 section's "It ships switched off", its "Flip
+    readiness" 369 and its erratum 1 (erratum 3). The closeout's four items
+    and "3 of 138" (erratum 5).
+  - *The plans index and the progress file.* Done by step 5 below.
+  - *The stale test docstring.* `tests/test_cost_checks_warm_lead.py` now
+    says each seat is read from its reply to the first batch it rode
+    (`first_reply`), never `billed[0]`.
+
+**The root `README.md` (FIN-1.3).** Nothing still true was removed. Every
+line taken out was made false by a flip, or was reworded around a true
+clause. In "## Research and Final QC cost (Tier 1)":
+- The intro now counts at most two changes a user sees: Chunk 2's few
+  seconds, and the warm lead's wait on a large enough section.
+- The paragraph on Chunks 3 and 4 now says both shipped off, why, that no
+  M3 is planned, and that the Tier 1 finish program replaced it with
+  self-checks and turned both on. It links the tracker.
+- The warm lead's subsection is now "(Chunk 3, on by default)". Its "On by
+  default, and watched" bullet says what switches it off, and gives `=0` in
+  both shells. "What changes", "Measured, not modelled" (with the Developer
+  tools row) and "Where to see it" (with the INFO line and the WARNING) are
+  updated.
+- The continuation tail's subsection is now "(Chunk 4, on by default)".
+  Its bullet gives the refusal's one resend, the value check and `=0` in
+  both shells. "What it saves" takes CT-2's correction: a resume that
+  searched inside itself still comes out ahead. "Measured, not modelled"
+  compares with a round made with the switch off, and names the Developer
+  tools row and the WARNING.
+- A new subsection, "The cost self-checks watch both savings (Tier 1
+  finish)", covers:
+  - the three checks, and what each one watches;
+  - what switches a saving off, and that it stays off only until a restart
+    (nothing persisted, and a retained Final QC result stays current);
+  - where to see it (Settings → Developer tools → Cost self-checks, the
+    WARNING, the INFO line and the support bundle's `cost_checks` block);
+  - that nothing is sent to test the provider;
+  - what the checks cannot see, and why that is bounded.
+
+Elsewhere in the README:
+- Both Configuration rows show `1`, say what switches each saving off at
+  runtime, and say what `0` does, in both shells.
+- The `BUILD_A_SPEC_QC_BATCH_VERIFICATION` row, and the Batch 4 sentence
+  about the session's QC cost, no longer make the lead conditional.
+- Two additions beyond the spec, both add-only: the Developer tools
+  sentence under "Always-on activity log" now lists the cost self-checks,
+  and the architecture tree gains a `cost_checks.py` entry.
+
+The grep for `CONTINUATION_CACHE`, `WARM_LEAD`, `switched off`,
+`off by default` and `M3` left only sentences that are now true.
+
+**The root `CLAUDE.md` (FIN-1.4).**
+- **One implemented-notes section,** "The two shelved savings are on, and
+  watch themselves — implemented notes (Tier 1 finish)", placed before
+  "## Source-of-truth pointers into Claude-Spec-Critic". It covers FD1 and
+  FD2; `cost_checks.py` and R5, R6, R8 and R10; CT-1's guard; CT-2's
+  arithmetic and its limits; WL-1's checks and their limits; the two flips
+  and their flip-readiness runs; where the state shows; a revert-matrix
+  table with each session's row count and heaviest rows (the full tables
+  stay in the plans); the tests; the owed release notes; and six errata.
+- **Layout, edited in place.**
+  - New entries: `backend/cost_checks.py`, `frontend/src/lib/costChecks.ts`
+    (with `types.ts`'s types), `tests/test_cost_checks_tail_rejection.py`,
+    `tests/test_cost_checks_tail_value.py`,
+    `tests/test_cost_checks_warm_lead.py`,
+    `tests/test_tier1_finish_tracker.py` and
+    `frontend/tests/costChecks.test.ts`.
+  - Changed entries: `backend/settings.py` (both defaults ON, with their
+    latches), `backend/research/engine.py` and `backend/qc/engine.py` (the
+    guard, the hooks and the lead gate), `backend/diagnostics.py` (the
+    top-level `cost_checks` block), `backend/usage_ledger.py`
+    (`model_rates`), `DeveloperToolsModal` (the row), `tests/conftest.py`
+    (the reset), `tests/fakes.py` (`usage(iterations=)`), and the two pin
+    files' "default (on)".
+- **Errata,** in the new section:
+  1. "Final QC phase 2 is batched": `test_qc_verifier_v3.py` also pins the
+     tail off.
+  2. "Developer tools + always-on diagnostics": the snapshot's new
+     top-level block.
+  3. The Chunk 3 section: ships off, M3, 369, and its erratum 1.
+  4. The Chunk 4 section: ships off, the worst case, M3, and "one round,
+     one answer".
+  5. The closeout: every item.
+  6. The Layout's own corrections, made in place.
+
+**The other files (FIN-1.5).**
+- *The Tier 1 plan's §7* already included all four items: CT-3 made item 4
+  unconditional, and WL-2 made item 3. Its "Which items" bullet says all
+  four go in any such release, so FIN-1 changed nothing there.
+- *The Tier 1 progress file* gains a dated note under CT-3's and WL-2's:
+  both flips are done (PR #226 `14c1185`, PR #228 `3bb5201`), M3 is no
+  longer owed, and only the release notes are. In "After the program", the
+  two flip rows now read **done**, naming the session and PR, and the text
+  they carried is kept. No history row was rewritten.
+- *`docs/plans/README.md`:* the Tier 1 finish entry is **complete**, and the
+  Tier 1 entry's shelved-flips sentence now says both were turned on, and
+  that all four release-note items are owed.
+- No version bump, no `backend/release_notes.py` entry and no tag (F7). The
+  Tier 1 release notes, all four items, stay owed to whichever release next
+  ships from `master`.
+
+**Deviations from the spec, and why**
+
+1. **One section, not five.** Each session's For FIN-1 list offered a
+   section of its own. The spec asks for one consolidated section, and FIN-1
+   wrote one. Each session's material is a bullet group within it.
+2. **The revert matrices are summarized, not copied.** The five full tables
+   hold 158 rows between them, and they stay where they were recorded, in
+   the plans' As built sections. The CLAUDE.md section gives each session's
+   count, its heaviest rows, and the rows each first run found green.
+3. **Two errata beyond the spec's minimum.** "Final QC phase 2 is batched"
+   (CT-3's list asked for it). "Developer tools + always-on diagnostics": its
+   snapshot list is now incomplete, and it is the section a reader of the
+   diagnostics surface starts from.
+4. **Two README additions beyond the spec.** Both add to lists the program
+   made incomplete: the Developer tools sentence, and the architecture tree
+   (which has no `usage_ledger.py` either, so only the new module was
+   added).
+5. **No revert matrix for code.** FIN-1 changed no mechanism. What can go
+   red is the tracker's shape and the docs' consistency, and those were
+   reverted instead (below).
+
+**Knowing changes to existing tests.** One docstring
+(`tests/test_cost_checks_warm_lead.py`, WL-2's found-in-passing). No
+assertion changed.
+
+**Verification** (Linux container, from the repository root, in a fresh
+`.venv` from `requirements.txt`)
+
+- `.venv/bin/python -m ruff check .`: all checks passed.
+- `.venv/bin/python -m pytest -q`: 2990 passed, 64 skipped (6 min 39 s). WL-2
+  also ended at 2990: FIN-1 added no test.
+- `npm test` (in `frontend/`): 438 passed, 0 failed.
+- `npm run build`: built; the only warning is the existing chunk-size one. It
+  ran after pytest finished, not beside it (WL-2's lesson: a rebuild of
+  `frontend/dist` under a running suite fails a test that mounts it).
+- `tests/test_tier1_finish_tracker.py` and `tests/test_docs_consistency.py`
+  pass with the tracker COMPLETE.
+- `git diff --name-only origin/master...HEAD -- CLAUDE.md README.md` lists
+  both files, as FIN-1 alone may.
+
+**The finish line, reverted** (each change reverted in place, one at a time,
+the exact text restored after; the tracker and docs-consistency tests run
+each time):
+
+15 rows. 14 went red, and one stayed green, as it should (below). The
+baseline passed 18 of 18, and so did the run after the last row.
+
+| Reverted | Red |
+|---|---|
+| the status line back to `IN PROGRESS` | 2 (the banner test and the top-order test) |
+| the banner block removed | 2 (the same two) |
+| the completion line removed | 2 (the same two) |
+| the Next-session line still names FIN-1 | 1 (`test_the_next_session_line_names_the_first_unfinished_session`) |
+| FIN-1's row left `not started` | 2 (the Next-session test and the banner test) |
+| FIN-1's row `done` without its PR | 1 (`test_finished_rows_name_their_pull_request_and_merge`) |
+| a FIN-1 tick without evidence | 1 (`test_ticks_match_each_sessions_status`) |
+| a FIN-1 item left unticked | 1 (the same) |
+| WL-2's merge commit left blank | 1 (`test_finished_rows_name_their_pull_request_and_merge`) |
+| a blank line inside the banner's code block | 1 (`test_the_top_of_the_tracker_reads_in_a_fixed_order`) |
+| one banner character changed | 1 (the same) |
+| the banner moved below the completion line | 1 (the same) |
+| a line of prose between the banner and the completion line | 1 (the same) |
+| README: every mention of `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` gone | 1 (`test_the_readme_documents_every_app_env_knob`) |
+| README: only the `BUILD_A_SPEC_CONTINUATION_CACHE` Configuration row dropped | 0 — green, as expected |
+
+The last row is green because `test_the_readme_documents_every_app_env_knob`
+checks that the README names every knob somewhere, and the Chunk 4 and
+self-checks subsections still name it. No test pins what a Configuration
+row says, by design: the rows are prose. So the two rows' defaults (`1`)
+rest on this session's reading, recorded under "The root README.md"
+above.
 
 ## When every session is done
 

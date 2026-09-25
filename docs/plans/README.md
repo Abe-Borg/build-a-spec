@@ -5,18 +5,23 @@ Owner: Abraham.
 ## Active
 
 **[Tier 1 finish: Chunks 3 and 4](tier1-finish/TIER1_FINISH_TRACKER.md)**
-— the live program (opened 2026-09-24). It finishes the two Tier 1 savings
-that shipped off: the continuation tail (Chunk 4) and the warm lead
-(Chunk 3). There is no owner-run measurement (O6): runtime self-checks,
-which watch the runs the app makes anyway and can only switch a saving off,
-replace the M3 gate. Then each switch turns on (decision FD1). There are six
-sessions, one pull request each: CT-1, CT-2 and CT-3
-([Chunk 4's plan](tier1-finish/TIER1_FINISH_CHUNK4_CONTINUATION_TAIL_PLAN.md)),
-WL-1 and WL-2 ([Chunk 3's plan](tier1-finish/TIER1_FINISH_CHUNK3_WARM_LEAD_PLAN.md)),
-and the closeout, FIN-1. The root `CLAUDE.md` and `README.md` are not
-updated until FIN-1 (FD2). Where it stands, the session procedure, the
-handoff prompt and the rules live ONLY in the
-[tracker](tier1-finish/TIER1_FINISH_TRACKER.md); start there, not here.
+— **complete** (opened 2026-09-24, closed 2026-09-25 by FIN-1; its code is
+all on `master`). It finished the two Tier 1 savings that shipped off: the
+continuation tail (Chunk 4) and the warm lead (Chunk 3). There was no
+owner-run measurement (O6): runtime self-checks, which watch the runs the
+app makes anyway and can only switch a saving off, replaced the M3 gate,
+and then each switch turned on (decision FD1). **Both now default on**, and
+`0` switches either off; Settings → Developer tools → Cost self-checks shows
+what the checks have decided. Six sessions, one pull request each: CT-1,
+CT-2 and CT-3
+([Chunk 4's plan](tier1-finish/TIER1_FINISH_CHUNK4_CONTINUATION_TAIL_PLAN.md);
+PRs #224–#226), WL-1 and WL-2
+([Chunk 3's plan](tier1-finish/TIER1_FINISH_CHUNK3_WARM_LEAD_PLAN.md);
+PRs #227 and #228), and the closeout, FIN-1, which folded the program into
+the root `CLAUDE.md` and `README.md` (FD2). The only thing still owed is the
+Tier 1 release notes (below). The record of how it ran, the rules and the
+decisions live ONLY in the [tracker](tier1-finish/TIER1_FINISH_TRACKER.md)
+and the two plans' As built sections.
 
 **[Research and Final QC cost, Tier 1](RESEARCH_QC_COST_TIER1_2026-09-23.md)**
 — **complete** (opened 2026-09-23, closed 2026-09-24 by Chunk 6; its code is
@@ -29,14 +34,15 @@ research cost profiler measures the effect. Six chunks, one per session.
 Chunk 2's staggered launch ships on, and Chunk 5's resume has no switch.
 **Chunks 3 and 4 shipped off. Each flip needed a measured run (M3), and on
 2026-09-24 the owner said none is coming (O6), so both were shelved. The
-same day he asked for them to be finished without one (O7): see Tier 1
-finish, above.** No
-measurement of a real run was recorded during the program, so none of its
-savings has been measured yet. Whichever release next ships from
-`master` owes the plan's §7 "Release-note draft (Tier 1)": Chunks 2 and 5
-always, Chunks 3 and 4 only if flipped by then. Where it stands, the
-shelved flips and how one would be applied, the measurements and the owner
-decisions live ONLY in [`RESEARCH_QC_COST_TIER1_PROGRESS.md`](RESEARCH_QC_COST_TIER1_PROGRESS.md)
+same day he asked for them to be finished without one (O7), and the Tier 1
+finish program (above) turned both on: Chunk 4 in CT-3 (PR #226), Chunk 3
+in WL-2 (PR #228), each watched by its runtime self-check.** No
+measurement of a real run was recorded during either program, so none of
+the savings has been measured yet. Whichever release next ships from
+`master` owes the plan's §7 "Release-note draft (Tier 1)", all four items:
+Chunks 2 and 5, and Chunks 3 and 4, which are on by default. Where it
+stands, the measurements and the owner decisions live ONLY in
+[`RESEARCH_QC_COST_TIER1_PROGRESS.md`](RESEARCH_QC_COST_TIER1_PROGRESS.md)
 (its "After the program" section); start there, not here.
 
 **[Project workspace](project-workspace/README.md)** — the live program

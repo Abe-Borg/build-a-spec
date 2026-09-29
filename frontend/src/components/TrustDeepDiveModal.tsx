@@ -1167,7 +1167,7 @@ function Dossier() {
         <Runtime
           n={7}
           title="Attaching a reference document"
-          trigger="Attach a Word file, PDF, text file, XML, or CSV as background."
+          trigger="Attach a Word file, PDF, text file, XML, CSV, or Markdown file as background."
           runs={
             <>
               The text is extracted (a PDF page by page, with{" "}

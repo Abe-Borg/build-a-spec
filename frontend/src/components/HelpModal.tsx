@@ -216,9 +216,10 @@ function HowToUse({
               <>
                 An owner’s design standard, a basis-of-design narrative, a data
                 sheet, a previous section — as <Tag>.docx</Tag>,{" "}
-                <Tag>.pdf</Tag>, <Tag>.txt</Tag>, <Tag>.xml</Tag>, or{" "}
-                <Tag>.csv</Tag>. Reference documents are background the model
-                reads on demand; they never become part of the specification.
+                <Tag>.pdf</Tag>, <Tag>.txt</Tag>, <Tag>.xml</Tag>,{" "}
+                <Tag>.csv</Tag>, or Markdown (<Tag>.md</Tag>). Reference
+                documents are background the model reads on demand; they never
+                become part of the specification.
               </>
             ),
           },
@@ -386,7 +387,7 @@ function Workflows() {
         title="Draft against an owner's standard"
         tagline="Reference documents — read from, never edited."
         steps={[
-          "Attach the owner standard, basis of design, or data sheet (.docx, .pdf, .txt, .xml, or .csv) from the document panel.",
+          "Attach the owner standard, basis of design, or data sheet (.docx, .pdf, .txt, .xml, .csv, or .md) from the document panel.",
           "Say what it is and what you want done with it. The model opens it on demand rather than being fed it every turn.",
           "It extracts requirements and drafts them in spec language — it never pastes the attachment's wording into a provision, and never cites it as authority for a code requirement.",
           "For a PDF, ask where something came from: the extracted text carries [page N] markers it can cite back to you.",

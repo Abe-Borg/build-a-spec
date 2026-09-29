@@ -932,16 +932,23 @@ backend/
                            next_seq property (Project workspace Phase 3): the
                            floor a pull mints new rids past
   reference_extract.py     the attachment → text boundary: REFERENCE_KINDS
-                           (.docx/.pdf/.txt/.xml/.csv) + labels, kind-for-filename,
+                           (.docx/.pdf/.txt/.xml/.csv/.md/.markdown — the two
+                           Markdown spellings share one kind, md, label
+                           "Markdown") + labels, kind-for-filename,
                            sanitize_reference_filename (keeps the file's own
-                           extension — the shared sanitizer appends .docx),
-                           extract_reference_document dispatch. docx delegates to
+                           extension, whichever spelling of its kind it came
+                           with — the shared sanitizer appends .docx, and a
+                           kind's canonical extension would turn .markdown into
+                           .markdown.md), extract_reference_document dispatch.
+                           docx delegates to
                            the importer behind inspect_docx_package; pdf is pypdf
                            per page with [page N] markers (page cap, owner-password
-                           unlock, no-text-layer refusal); txt/xml/csv decode
+                           unlock, no-text-layer refusal); txt/xml/csv/md decode
                            through a BOM/UTF-8/cp1252/latin-1 ladder with a NUL
-                           binary guard, structure kept verbatim. Blocking — worker
-                           thread only
+                           binary guard, structure kept verbatim (Markdown is
+                           never rendered, and its lines are kept exactly —
+                           _VERBATIM_LINE_KINDS: no trailing-space strip, no
+                           blank-run collapse). Blocking — worker thread only
   templates.py             reusable semantic templates: TemplateCatalog (curated
                            + personal libraries, preview→commit two-phase create,
                            Exact vs AI-Generalize, import/export/instantiate);
@@ -18197,6 +18204,89 @@ SSE event, dependency, project-format change or version bump.
   sections are recorded here): "Conversation engine invariants → Adaptive
   thinking" says interview effort defaults to `high`. It is `medium` since
   this change.
+
+## Markdown attaches as a reference document — implemented notes
+
+Owner ask (Abraham, 2026-09-29): make sure the app accepts Markdown in the
+upload for other documents and information. It did not: *Attach Document*
+took `.docx`, `.pdf`, `.txt`, `.xml` and `.csv`, and a `.md` was refused
+with "That file type is not supported as a reference". A master import stays
+Word-only (it has to build a SectionFormat tree from a Word package). No
+route, SSE event, dependency, env knob, project-format change or version
+bump.
+
+- **Two spellings, one kind.** `REFERENCE_KINDS` maps both `.md` and
+  `.markdown` to `md`, labelled "Markdown". Other spellings (`.mdown`,
+  `.mkd`) were left out; a file using one can be renamed.
+- **Read as written, never rendered.** Markdown goes through the same
+  `_extract_plain_text` as `.txt`, `.xml` and `.csv`: the decode ladder
+  (UTF-16 BOM → UTF-8 → cp1252 → latin-1, the fallback disclosed), the NUL
+  guard against a renamed binary, line endings to `\n` and control
+  characters dropped. Its headings, lists, tables and emphasis markers stay,
+  because they are the document's outline and the model reads Markdown
+  natively; rendering to plain text would lose the outline and gain nothing.
+- **Its lines are kept exactly** (`_VERBATIM_LINE_KINDS`, caught in review
+  on PR #234, Codex). The first cut shared the other text types' tidying —
+  trailing whitespace stripped, blank-line runs collapsed to one — and
+  called that "read as written". It is not, for Markdown: two trailing
+  spaces are a hard line break, and trailing spaces and blank lines inside a
+  fenced or indented code block are the code. A Markdown file now keeps
+  every line between its first and last line with text, byte for byte;
+  `.txt`, `.xml` and `.csv` are tidied exactly as before (pinned by the same
+  bytes read both ways).
+- **A file keeps the spelling it came with.** `sanitize_reference_filename`
+  used the kind's first extension, so with two spellings `notes.markdown`
+  would have been stored as `notes.markdown.md`. The new
+  `reference_extension_for_filename(filename, kind=)` returns the extension
+  the name already carries for that kind, else the canonical one, and both
+  the sanitizer and the binary-guard message (which now names `.markdown`
+  rather than `.md`) read it.
+- **Every list of types moved together**: the native dialog's filter
+  (`main._REFERENCE_OPEN_FILE_TYPES`, still pywebview-valid), the browser
+  picker's `accept`, the Attach Document tooltip, Help (two places), the
+  trust dossier's card 7, the `reference-docs` tour step's body (no step
+  order changed, so `TOUR_VERSION` stays), the `ReferenceDoc.kind` comment in
+  `types.ts`, README, and a release-checklist row for the packaged picker.
+- **The stable prompt changed.** `_REFERENCE_DOC_POLICY` now names Markdown
+  among the kinds and says to use its outline to find the way around it and
+  never carry its markup into a provision. Tools render first, so every chat
+  session writes its cached prefix once more after the update. The QC lens
+  and verifier prompts do not embed this policy, and nothing about it is in
+  the QC input manifest, so no retained Final QC result reads stale.
+- **Older builds open a project that carries a Markdown attachment.**
+  `ReferenceDoc.from_dict` accepts any kind string and `kind_label` falls
+  back to the kind itself, so an older build shows the attachment's type as
+  "md" and reads it normally. The same holds for a project brief.
+- **The type list is now pinned three ways.**
+  `test_every_picker_and_the_model_name_every_supported_type` holds the
+  browser picker's `accept` list and the native filter's patterns to exactly
+  `REFERENCE_KINDS`, and requires the stable policy to name every kind's
+  label. Before this, only the native filter was held to the set (by
+  `test_close_prompt.py`), so a type added to the backend could silently
+  stay unselectable in the browser.
+- **Tests**: 8 new in `tests/test_reference_docs.py` (Markdown kept as
+  written — headings, a table, a list, a link, bold; its lines kept exactly
+  while a `.txt` of the same bytes is tidied; only line endings, control
+  characters and the blank lines at either end normalized; the label
+  reaching the panel, the stub and the tool header; both spellings keeping
+  their own name; the binary guard naming `.markdown`; a Windows-1252 and a
+  UTF-16 Markdown file; the three-way type pin), plus `.md` and `.markdown`
+  added to the every-type and unsupported-type tests. Revert matrix, each
+  mechanism reverted in place and restored from the exact text read (the
+  reference-doc and close-prompt suites run each time): the `.md` mapping →
+  7 red; the `.markdown` mapping → 5; the `md` label → 2; the
+  filename-spelling fix → 2; the extension in the binary guard's message →
+  1; the browser `accept` list without Markdown → 1; the native filter
+  without it → 2 (this pin and `test_close_prompt`'s); the stable policy
+  back to its old line → 1; and for the review fix, Markdown not verbatim →
+  2, its trailing whitespace stripped → 2, its blank-line runs collapsed →
+  1, whitespace-only lines at the end kept → 1 (green on the first run —
+  the test's trailing lines were empty, not whitespace — so the test gained
+  them before this was recorded).
+- **Release note**: an "Attach Markdown files" item in a new "Reference
+  documents" section of the unreleased 1.21.0 entry (v1.20.0 was the latest
+  published release, checked through the Releases API), in the same commit
+  as the change.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

@@ -24,6 +24,16 @@ Supported kinds, and why each is read the way it is
           Also decoded verbatim: for these two the structure *is* the content
           — a CSV's rows and an XML's tags are exactly what makes the file
           worth reading — so nothing is parsed away or flattened.
+``md``    Markdown (``.md`` or ``.markdown``), decoded verbatim like the three
+          above and never rendered. Its headings, lists, tables and emphasis
+          markers are the document's outline, and the model reads Markdown as
+          written, so rendering it to plain text would only throw the outline
+          away. Its lines are kept exactly, which the other text types' are
+          not: their trailing whitespace is dropped and their blank-line runs
+          collapse to one, but in Markdown two trailing spaces are a hard
+          line break, and trailing spaces and blank lines inside a code block
+          are the code. Only line endings (to ``\n``), control characters and
+          blank lines at the very start and end are normalized.
 
 Everything here is pure CPU over the uploaded bytes and must run on a worker
 thread; see the event-loop rule in ``backend/app.py``.
@@ -55,6 +65,11 @@ REFERENCE_KINDS: dict[str, str] = {
     ".txt": "txt",
     ".xml": "xml",
     ".csv": "csv",
+    # Two spellings, one kind. The first listed is the canonical extension
+    # (``reference_extension_for_kind``); a file keeps whichever it came with
+    # (``sanitize_reference_filename``).
+    ".md": "md",
+    ".markdown": "md",
 }
 
 # Display names for the panel list and the model's context stub. The stub says
@@ -66,6 +81,7 @@ REFERENCE_KIND_LABELS: dict[str, str] = {
     "txt": "text",
     "xml": "XML",
     "csv": "CSV",
+    "md": "Markdown",
 }
 
 # Runaway breaker, not a quality limit (the MAX_TOOL_ROUNDS posture): the
@@ -79,6 +95,11 @@ MAX_PDF_PAGES = 1_000
 # file with fifty blank lines between sections would spend real tokens on
 # nothing.
 MAX_CONSECUTIVE_BLANK_LINES = 1
+
+# Kinds whose lines are kept exactly as written: no trailing whitespace is
+# stripped and no run of blank lines is collapsed. Markdown only — there both
+# can be meaning (a hard line break, the inside of a code block).
+_VERBATIM_LINE_KINDS = frozenset({"md"})
 
 # C0 controls have no meaning in extracted reference text; tabs and newlines
 # do. DEL goes too. Anything left would only confuse the model or the panel.
@@ -98,7 +119,7 @@ class ReferenceExtractError(ValueError):
 
 
 def supported_extensions_phrase() -> str:
-    """``.docx, .pdf, .txt, .xml, or .csv`` — for user-facing messages."""
+    """``.docx, .pdf, .txt, .xml, .csv, .md, or .markdown`` — for messages."""
     extensions = list(REFERENCE_KINDS)
     return ", ".join(extensions[:-1]) + f", or {extensions[-1]}"
 
@@ -126,6 +147,21 @@ def reference_extension_for_kind(kind: str) -> str:
     return ""
 
 
+def reference_extension_for_filename(filename: str, *, kind: str) -> str:
+    """The extension ``filename`` already carries for ``kind``, else the
+    kind's canonical one.
+
+    A kind can have more than one spelling (``.md`` and ``.markdown``), and a
+    file keeps the one it arrived with: ``notes.markdown`` must not become
+    ``notes.markdown.md``.
+    """
+    lowered = (filename or "").lower()
+    for extension, known in REFERENCE_KINDS.items():
+        if known == kind and lowered.endswith(extension):
+            return extension
+    return reference_extension_for_kind(kind)
+
+
 def sanitize_reference_filename(filename: str, *, kind: str) -> str:
     """A path-free display name that keeps the attachment's own type.
 
@@ -133,7 +169,7 @@ def sanitize_reference_filename(filename: str, *, kind: str) -> str:
     ``.docx`` to anything else, which would rename ``acme.pdf`` and then send
     it to the wrong extractor.
     """
-    extension = reference_extension_for_kind(kind) or ".txt"
+    extension = reference_extension_for_filename(filename, kind=kind) or ".txt"
     return sanitize_source_filename(
         filename, extension=extension, fallback=f"attachment{extension}"
     )
@@ -157,7 +193,11 @@ def extract_reference_document(
         return _extract_docx(source_bytes)
     if kind == "pdf":
         return _extract_pdf(source_bytes)
-    return _extract_plain_text(source_bytes, kind=kind)
+    return _extract_plain_text(
+        source_bytes,
+        kind=kind,
+        extension=reference_extension_for_filename(filename, kind=kind),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +329,7 @@ def _extract_pdf(source_bytes: bytes) -> ReferenceExtraction:
 
 
 # ---------------------------------------------------------------------------
-# Plain text, CSV, XML
+# Plain text, CSV, XML, Markdown
 # ---------------------------------------------------------------------------
 
 
@@ -317,33 +357,39 @@ def _decode(source_bytes: bytes) -> tuple[str, str]:
     return source_bytes.decode("latin-1"), "Latin-1"
 
 
-def _extract_plain_text(source_bytes: bytes, *, kind: str) -> ReferenceExtraction:
+def _extract_plain_text(
+    source_bytes: bytes, *, kind: str, extension: str = ""
+) -> ReferenceExtraction:
     text, encoding = _decode(source_bytes)
     if "\x00" in text:
-        # Reached by a binary file renamed to .txt/.csv/.xml. The decode
+        # Reached by a binary file renamed to .txt/.csv/.xml/.md. The decode
         # ladder ends in Latin-1, which never raises, so this is the only
         # place binary content can be caught.
         raise ReferenceExtractError(
             f"That file does not contain readable text (it looks like "
-            f"binary data with a .{kind} name)."
+            f"binary data with a {extension or '.' + kind} name)."
         )
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.translate(_CONTROL_TRANSLATION)
 
+    # Markdown keeps its lines exactly: two trailing spaces are a hard line
+    # break, and trailing spaces and blank-line runs inside a fenced or
+    # indented code block are the code. Every other text type is tidied.
+    verbatim = kind in _VERBATIM_LINE_KINDS
     lines: list[str] = []
     block_count = 0
     blank_run = 0
     for raw in text.split("\n"):
-        line = raw.rstrip()
+        line = raw if verbatim else raw.rstrip()
         if line.strip():
             blank_run = 0
             block_count += 1
             lines.append(line)
             continue
         blank_run += 1
-        if blank_run <= MAX_CONSECUTIVE_BLANK_LINES and lines:
-            lines.append("")
-    while lines and not lines[-1]:
+        if lines and (verbatim or blank_run <= MAX_CONSECUTIVE_BLANK_LINES):
+            lines.append(line if verbatim else "")
+    while lines and not lines[-1].strip():
         lines.pop()
 
     warnings: list[str] = []

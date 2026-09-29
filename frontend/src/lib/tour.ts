@@ -482,7 +482,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Attach background without polluting the spec",
         body:
-          "Up to 20 DOCX, PDF, TXT, XML, or CSV files attach here, within a shared 100,000-token budget the panel meters as they accumulate. Each row reports kind, extracted blocks, truncation, tracked-change Accept-All, PDF page markers, and tabular/XML structure. The assistant sees a one-line summary every turn and opens the full text only when it needs it, so a long standard does not inflate the cost of every later message. They save with the project but stay out of the spec, lint, diff, QC, readiness, and document export.",
+          "Up to 20 DOCX, PDF, TXT, XML, CSV, or Markdown files attach here, within a shared 100,000-token budget the panel meters as they accumulate. Each row reports kind, extracted blocks, truncation, tracked-change Accept-All, PDF page markers, and tabular/XML structure. The assistant sees a one-line summary every turn and opens the full text only when it needs it, so a long standard does not inflate the cost of every later message. They save with the project but stay out of the spec, lint, diff, QC, readiness, and document export.",
       },
     ],
   },

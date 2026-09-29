@@ -44,7 +44,6 @@ import hashlib
 import json
 import logging
 import math
-import re
 import threading
 import time
 import uuid
@@ -111,6 +110,7 @@ from ..research.schema import (
     build_web_fetch_tool,
     build_web_search_tool,
     extract_tool_use_block,
+    last_tagged_json_object,
 )
 from ..runtime_context import (
     current_date_iso,
@@ -623,13 +623,14 @@ def _canonical_usage(usage: dict[str, int]) -> dict[str, int]:
     """Ignore representational zero entries when reconciling usage ledgers."""
     return {key: value for key, value in usage.items() if value != 0}
 
-_FINDINGS_JSON_TAG = re.compile(r"<qc_json>\s*(\{.*\})\s*</qc_json>", re.DOTALL)
-_VERDICT_JSON_TAG = re.compile(
-    r"<qc_verdict_json>\s*(\{.*\})\s*</qc_verdict_json>", re.DOTALL
-)
-_CONSOLIDATION_JSON_TAG = re.compile(
-    r"<qc_consolidation_json>\s*(\{.*\})\s*</qc_consolidation_json>", re.DOTALL
-)
+# The tagged-JSON fallback's tag NAMES (not patterns): ``_parse`` hands each
+# to ``research.schema.last_tagged_json_object``, which takes the LAST
+# complete object, so a draft written before the final JSON cannot swallow
+# it (the 5.5 prompting upgrade, P55-1; these were greedy ``\{.*\}``
+# patterns taking everything from the first ``{`` to the last ``}``).
+_FINDINGS_JSON_TAG = "qc_json"
+_VERDICT_JSON_TAG = "qc_verdict_json"
+_CONSOLIDATION_JSON_TAG = "qc_consolidation_json"
 
 
 # ---------------------------------------------------------------------------
@@ -3308,20 +3309,19 @@ def _response_text(response: Any) -> str:
     return "\n".join(chunks)
 
 
-def _parse(all_responses: list[Any], tool_name: str, json_tag: re.Pattern) -> dict | None:
+def _parse(all_responses: list[Any], tool_name: str, json_tag: str) -> dict | None:
+    """Structured-then-text parse, newest response first.
+
+    ``json_tag`` is the fallback's tag NAME (``_FINDINGS_JSON_TAG`` and its
+    siblings); the last complete tagged object in a response wins.
+    """
     for response in reversed(all_responses):
         payload = extract_tool_use_block(response, tool_name)
         if isinstance(payload, dict):
             return payload
     for response in reversed(all_responses):
-        match = json_tag.search(_response_text(response))
-        if not match:
-            continue
-        try:
-            payload = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
+        payload = last_tagged_json_object(_response_text(response), json_tag)
+        if payload is not None:
             return payload
     return None
 
@@ -3713,7 +3713,7 @@ def _run_streaming_call(
     request_suffix: str,
     tools: list[dict],
     tool_name: str,
-    json_tag: re.Pattern,
+    json_tag: str,
     model: str,
     max_tokens: int,
     effort: str,
@@ -5426,7 +5426,7 @@ class _CallSpec:
     request_suffix: str
     tools: tuple[dict, ...]
     tool_name: str
-    json_tag: Any
+    json_tag: str
     model: str
     max_tokens: int
     effort: str

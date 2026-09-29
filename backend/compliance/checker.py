@@ -24,8 +24,6 @@ done" — full multi-spec reviews still belong to Spec Critic.
 """
 from __future__ import annotations
 
-import json
-import re
 import time
 from typing import Any
 
@@ -41,7 +39,7 @@ from ..research.retry_policy import (
     compute_backoff_seconds,
     is_retryable_failure_class,
 )
-from ..research.schema import extract_tool_use_block
+from ..research.schema import extract_tool_use_block, last_tagged_json_object
 from ..runtime_context import date_context_block
 from ..spec_doc.model import SpecSection
 from ..spec_modules import SpecModule
@@ -58,9 +56,10 @@ COVERAGE_STATUSES: tuple[str, ...] = (
 
 FINDING_SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "low")
 
-_COMPLIANCE_JSON_TAG_PATTERN = re.compile(
-    r"<compliance_json>\s*(\{.*\})\s*</compliance_json>", re.DOTALL
-)
+# The tagged-JSON fallback's tag NAME: ``last_tagged_json_object`` takes the
+# last complete object (the 5.5 prompting upgrade, P55-1; this was a greedy
+# ``\{.*\}`` pattern, so a draft before the final JSON parsed as nothing).
+_COMPLIANCE_JSON_TAG = "compliance_json"
 
 
 class ComplianceAuditError(RuntimeError):
@@ -373,14 +372,9 @@ def _parse_audit_payload(response: Any) -> tuple[dict | None, str]:
     payload = extract_tool_use_block(response, COMPLIANCE_TOOL_NAME)
     if isinstance(payload, dict):
         return payload, "structured"
-    match = _COMPLIANCE_JSON_TAG_PATTERN.search(_response_text(response))
-    if match:
-        try:
-            payload = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            return None, "no_payload"
-        if isinstance(payload, dict):
-            return payload, "text_fallback"
+    payload = last_tagged_json_object(_response_text(response), _COMPLIANCE_JSON_TAG)
+    if payload is not None:
+        return payload, "text_fallback"
     return None, "no_payload"
 
 

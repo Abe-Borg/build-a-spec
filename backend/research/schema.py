@@ -26,6 +26,8 @@ the default cost.
 """
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from .. import settings
@@ -177,31 +179,104 @@ def requirements_research_tool(*, model: str | None = None) -> dict[str, Any]:
     return tool
 
 
+def _block_field(block: object, field: str) -> Any:
+    """One field of a content block, whether an SDK object or a plain dict."""
+    value = getattr(block, field, None)
+    if value is None and isinstance(block, dict):
+        value = block.get(field)
+    return value
+
+
 def extract_tool_use_block(response: object, tool_name: str) -> dict[str, Any] | None:
     """Return the input dict of the last ``tool_use`` block named ``tool_name``.
 
     Walks the response's content blocks (SDK objects or plain dicts) in
     reverse so the model's final call wins. Returns ``None`` when absent.
+
+    An exact name wins wherever it appears in the response. Only when no
+    block matches exactly is a name that differs in letter case alone
+    accepted (``str.casefold``), the last such block again winning: the
+    Sonnet 5.5 prompting guide says the model occasionally calls a declared
+    tool by a name that differs only in case, and to accept the call when
+    the match is unambiguous. It is unambiguous here because every output
+    tool this app declares (research, the three Final QC tools, the fact
+    harvest, the template pass and the audit) is lowercase snake_case, each
+    request declares exactly one of them, and no two differ only in case.
+    The chat does NOT use this function: its tools are dispatched by exact
+    name, and a mis-cased chat call gets an ``is_error`` result naming the
+    right tool instead (``conversation._run_tool``).
     """
     content = getattr(response, "content", None)
     if content is None and isinstance(response, dict):
         content = response.get("content")
+    wanted = tool_name.casefold()
+    fallback: dict[str, Any] | None = None
     for block in reversed(list(content or [])):
-        block_type = getattr(block, "type", None)
-        if block_type is None and isinstance(block, dict):
-            block_type = block.get("type")
-        if block_type != "tool_use":
+        if _block_field(block, "type") != "tool_use":
             continue
-        name = getattr(block, "name", None)
-        if name is None and isinstance(block, dict):
-            name = block.get("name")
-        if name != tool_name:
+        name = _block_field(block, "name")
+        if not isinstance(name, str):
             continue
-        tool_input = getattr(block, "input", None)
-        if tool_input is None and isinstance(block, dict):
-            tool_input = block.get("input")
-        if isinstance(tool_input, dict):
+        tool_input = _block_field(block, "input")
+        if not isinstance(tool_input, dict):
+            continue
+        if name == tool_name:
             return tool_input
+        if fallback is None and name.casefold() == wanted:
+            fallback = tool_input
+    return fallback
+
+
+# The prompt-JSON fallback's bound. A real reply holds one tagged block,
+# occasionally a draft followed by the final one; this caps the pairs of
+# opening and closing tags one text is searched through, so a reply that
+# somehow repeats a tag hundreds of times cannot cost a quadratic parse.
+_TAGGED_JSON_MAX_ATTEMPTS = 64
+
+
+def last_tagged_json_object(text: str, tag: str) -> dict[str, Any] | None:
+    """The LAST complete ``<tag>{...}</tag>`` JSON object in ``text``.
+
+    The tagged-JSON fallback every fan-out keeps for a text detour
+    (``<research_json>``, ``<qc_json>``, ``<qc_verdict_json>``,
+    ``<qc_consolidation_json>``, ``<compliance_json>``). The Sonnet 5.5
+    prompting guide warns the model occasionally writes a draft before its
+    final JSON, and to take neither everything from the first ``{`` to the
+    last ``}`` nor the first block: the greedy pattern this replaces did
+    the former, so a draft followed by the final answer parsed as nothing.
+
+    Every opening tag is tried from the last to the first, each against the
+    closing tags after it in order; the first candidate that is exactly one
+    JSON object (whitespace aside) wins. So the final block wins over a
+    draft, a final block that does not parse falls back to the draft that
+    does, a draft left unclosed does not swallow the final block, and braces
+    nested inside the JSON are fine. Returns ``None`` when nothing parses.
+    """
+    if not text or not tag:
+        return None
+    opening = f"<{tag}>"
+    if opening not in text:
+        return None
+    closing = f"</{tag}>"
+    starts = [m.end() for m in re.finditer(re.escape(opening), text)]
+    ends = [m.start() for m in re.finditer(re.escape(closing), text)]
+    attempts = 0
+    for start in reversed(starts):
+        for end in ends:
+            if end < start:
+                continue
+            attempts += 1
+            if attempts > _TAGGED_JSON_MAX_ATTEMPTS:
+                return None
+            candidate = text[start:end].strip()
+            if not (candidate.startswith("{") and candidate.endswith("}")):
+                continue
+            try:
+                value = json.loads(candidate)
+            except (ValueError, RecursionError):
+                continue
+            if isinstance(value, dict):
+                return value
     return None
 
 

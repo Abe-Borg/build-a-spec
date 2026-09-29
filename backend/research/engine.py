@@ -37,7 +37,6 @@ import contextlib
 import dataclasses
 import hashlib
 import json
-import re
 import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping
@@ -91,6 +90,7 @@ from .schema import (
     build_web_fetch_tool,
     build_web_search_tool,
     extract_tool_use_block,
+    last_tagged_json_object,
     requirements_research_tool,
 )
 
@@ -144,9 +144,10 @@ RESEARCH_DEFAULT_MAX_SEARCHES = 24
 RESEARCH_DEFAULT_MAX_FETCHES = 8
 
 # Tagged-JSON fallback for the rare text detour (tool_choice stays absent).
-_RESEARCH_JSON_TAG_PATTERN = re.compile(
-    r"<research_json>\s*(\{.*\})\s*</research_json>", re.DOTALL
-)
+# The tag NAME: ``schema.last_tagged_json_object`` takes the last complete
+# object, so a draft written before the final JSON cannot swallow it (the
+# 5.5 prompting upgrade, P55-1; this was a greedy ``\{.*\}`` pattern).
+_RESEARCH_JSON_TAG = "research_json"
 
 # Fixed category → rendered-section mapping. Unknown categories (text
 # fallbacks can carry anything) land in OTHER rather than dropping.
@@ -2030,15 +2031,10 @@ def _parse_research_payload(all_responses: list[Any]) -> tuple[dict | None, str]
         if isinstance(payload, dict):
             return payload, "structured"
     for response in reversed(all_responses):
-        text = _collect_response_text(response)
-        match = _RESEARCH_JSON_TAG_PATTERN.search(text)
-        if not match:
-            continue
-        try:
-            payload = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
+        payload = last_tagged_json_object(
+            _collect_response_text(response), _RESEARCH_JSON_TAG
+        )
+        if payload is not None:
             return payload, "text_fallback"
     return None, "no_payload"
 

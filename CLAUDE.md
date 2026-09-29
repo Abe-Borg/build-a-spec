@@ -100,7 +100,8 @@ backend/
   settings.py              models (claude-sonnet-5-5 default), SDK transport
                            (SDK_MAX_RETRIES / API_TIMEOUT_SECONDS — the SDK's
                            own defaults made explicit, Batch 9), effort levels
-                           (interview high / research high, dialed back
+                           (interview MEDIUM since 2026-09-29 — Sonnet 5.5
+                           recalibrated the levels; research high, dialed back
                            2026-07-28 from xhigh — cost; Final QC's is now
                            PER PHASE — QC_LENS_EFFORT high / QC_VERIFIER_EFFORT
                            medium, both falling back to an explicitly-set
@@ -18153,6 +18154,49 @@ event, dependency, env knob, project-format change or VERSION bump.
   2. The same section says `LICENSE` is bundled so the notice travels with
      every installed copy. It still is, and the installer now also shows
      the terms and requires them accepted before anything is copied.
+
+## The chat interview runs at medium effort — implemented notes
+
+Owner decision (Abraham, 2026-09-29), right after the interview and research
+moved to Sonnet 5.5 (commit `4c8e0eb`): the chat interview runs on Sonnet 5.5
+at **medium** effort. `settings.INTERVIEW_EFFORT` defaults to `"medium"`
+(was `"high"`); `BUILD_A_SPEC_INTERVIEW_EFFORT` still overrides it. No route,
+SSE event, dependency, project-format change or version bump.
+
+- **Why.** Sonnet 5.5 recalibrated its effort levels from Sonnet 5's, so the
+  `"high"` chosen for Sonnet 5 no longer means what it meant. Anthropic's
+  Sonnet 5.5 migration guidance starts multi-step tool work at `"medium"`,
+  and a drafting turn is exactly that. Research stays at `"high"`; the fact
+  harvest and the template pass were already `"medium"`; Final QC is
+  untouched. Nothing was measured: this is the owner's call on the model's
+  documented recalibration, not a result.
+- **The condensing summary moves with it, and must.** The summary call is a
+  fork of the chat request (compaction Phase 3) and reads `INTERVIEW_EFFORT`
+  too. An effort change invalidates the messages cache the fork exists to
+  read, so the two must always agree; `test_chat_compaction.py` compares the
+  fork's `output_config` with the chat's rather than a literal.
+- **Cache.** Effort is part of what a cached messages prefix is valid for, so
+  the first turn of each session after the update writes the chat's cache
+  once more. The system prompt and tools are unchanged.
+- **No QC staleness.** Interview effort is not in the QC input manifest, so a
+  retained Final QC result stays current.
+- **Copy moved with it:** the trust dossier's model table, its chat-turn
+  card and its condensing card (research's card stays `"high"`); README's
+  `BUILD_A_SPEC_INTERVIEW_EFFORT` row and the adaptive-thinking line in the
+  "still current" v0.9.0 section; `settings.py`'s comment; and a 1.21.0
+  release-note item in the Chat section, which also announces the Sonnet 5.5
+  move — `4c8e0eb` added none. v1.20.0 was the newest published release
+  (checked through the Releases API), so 1.21.0 is not frozen.
+- **Tests.** `tests/test_settings.py::test_the_chat_interview_ships_at_medium_effort`
+  reads both defaults (interview `medium`, research `high`) from the source
+  with `ast`, so a developer's environment cannot make it pass or fail.
+  `test_app.py::test_chat_streams_deltas_and_updates_history` now asserts
+  the request carries `settings.INTERVIEW_EFFORT` rather than a literal.
+  Reverting the default to `"high"` turns the pin red.
+- **Erratum** (these notes are append-only, so corrections to earlier
+  sections are recorded here): "Conversation engine invariants → Adaptive
+  thinking" says interview effort defaults to `high`. It is `medium` since
+  this change.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

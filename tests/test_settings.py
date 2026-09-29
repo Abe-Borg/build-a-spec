@@ -237,3 +237,29 @@ def test_a_one_seat_standard_panel_warns_at_settings_load(monkeypatch):
         root.removeHandler(sink)
         monkeypatch.delenv(knob, raising=False)
         importlib.reload(settings)
+
+
+def test_the_chat_interview_ships_at_medium_effort():
+    """Interview turns default to "medium" (owner decision, 2026-09-29;
+    "high" before it). Sonnet 5.5 recalibrated its effort levels from
+    Sonnet 5's, and Anthropic's migration guidance starts multi-step tool
+    work at "medium". Research stays at "high". Read from the source, not the
+    loaded value, so a developer's own environment cannot make this pass or
+    fail."""
+    source = Path(settings.__file__).read_text(encoding="utf-8")
+    defaults = {}
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in ("INTERVIEW_EFFORT", "RESEARCH_EFFORT")
+        ):
+            call = node.value
+            assert isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_effort_env"
+            name, default = (arg.value for arg in call.args)
+            defaults[node.targets[0].id] = (name, default)
+    assert defaults == {
+        "INTERVIEW_EFFORT": ("BUILD_A_SPEC_INTERVIEW_EFFORT", "medium"),
+        "RESEARCH_EFFORT": ("BUILD_A_SPEC_RESEARCH_EFFORT", "high"),
+    }

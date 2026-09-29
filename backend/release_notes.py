@@ -229,6 +229,19 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "open them."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Chat and research run on Claude Sonnet 5.5",
+                        body=(
+                            "The assistant you chat with and the research "
+                            "agents moved from Claude Sonnet 5 to the newer "
+                            "Claude Sonnet 5.5, at the same price. Sonnet "
+                            "5.5 measures reasoning effort on a new scale, "
+                            "so the chat now reasons at medium effort, "
+                            "where Anthropic suggests starting for "
+                            "multi-step drafting work like this. Research "
+                            "still reasons at high."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(

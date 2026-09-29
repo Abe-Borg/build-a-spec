@@ -2444,8 +2444,9 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   the same turn, so buying it an hour would be paying for a lifetime
   nothing uses.
 - **Adaptive thinking, wired properly.** Requests state
-  `thinking: adaptive` explicitly with effort knobs (interview `high`,
-  research `high` — see below), and thinking blocks are preserved verbatim
+  `thinking: adaptive` explicitly with effort knobs (interview `medium`
+  since 2026-09-29, `high` before it; research `high` — see below), and
+  thinking blocks are preserved verbatim
   across tool-use continuation rounds as the API requires — the previous
   code dropped them, a latent 400 on real drafting turns. Output ceilings
   sit at the model max (128k tokens), so nothing the app controls
@@ -2908,7 +2909,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5-5` | Model for interview/drafting turns. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The model's context window: the context gauge's denominator (the header's "142k / 1M" pill) and what the chat's backstop measures a request against — past 85% of it the oldest turns are condensed before sending. Pair it with a model override whose window differs; set lower, conversations are condensed earlier. |
-| `BUILD_A_SPEC_INTERVIEW_EFFORT` | `high` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`). |
+| `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary uses it too. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's. |
 | `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
 | `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |

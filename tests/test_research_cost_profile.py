@@ -433,8 +433,8 @@ def test_the_cost_arithmetic_matches_the_pricing_table(tmp_path):
 def test_an_unpriced_research_model_falls_back_the_way_the_meter_does(monkeypatch):
     monkeypatch.setattr(settings, "RESEARCH_MODEL", "claude-unpriced-9")
     model, rates, source = research_cost_profile._pricing_for("")
-    assert model == settings.MODEL_SONNET_5
-    assert rates == settings.PRICING[settings.MODEL_SONNET_5]
+    assert model == settings.MODEL_SONNET_55
+    assert rates == settings.PRICING[settings.MODEL_SONNET_55]
     assert "claude-unpriced-9" in source and "falling back" in source
 
 

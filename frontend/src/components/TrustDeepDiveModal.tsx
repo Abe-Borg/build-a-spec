@@ -419,7 +419,7 @@ function DataFlowDiagram() {
           Anthropic API
         </text>
         <text x="412" y="96" {...small}>
-          Claude Sonnet 5
+          Claude Sonnet 5.5
         </text>
         <text x="412" y="112" {...faint}>
           interview · drafting · research
@@ -624,7 +624,7 @@ function Dossier() {
             [
               "Interview, drafting, research",
               <>
-                Claude Sonnet 5 <Mono>(claude-sonnet-5)</Mono>
+                Claude Sonnet 5.5 <Mono>(claude-sonnet-5-5)</Mono>
               </>,
               "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “high” for both the interview and research. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
             ],
@@ -775,7 +775,7 @@ function Dossier() {
               figures and reference documents — never their contents.
             </>
           }
-          model="Claude Sonnet 5, effort “high”."
+          model="Claude Sonnet 5.5, effort “high”."
           bounds={
             <>
               At most 8 web searches and 4 fetches per round; a hard ceiling of
@@ -810,7 +810,7 @@ function Dossier() {
             </>
           }
           sent="Identical to a normal turn."
-          model="Claude Sonnet 5 — one ordinary turn."
+          model="Claude Sonnet 5.5 — one ordinary turn."
           bounds={
             <>
               Same atomicity as any turn: the entire first pass is{" "}
@@ -882,7 +882,7 @@ function Dossier() {
           }
           model={
             <>
-              Claude Sonnet 5, effort “high” — four concurrent long-running
+              Claude Sonnet 5.5, effort “high” — four concurrent long-running
               conversations. When the API pauses one, the next step asks it to
               read what the conversation re-sends from its cache instead of
               paying full price for it again. If the service ever refuses
@@ -1200,7 +1200,7 @@ function Dossier() {
               prompt cache once and re-read from there by every agent in the run.
             </>
           }
-          model="Claude Sonnet 5, only when it chooses to open one during a turn you started."
+          model="Claude Sonnet 5.5, only when it chooses to open one during a turn you started."
           bounds={
             <>
               The model is instructed never to paste reference wording into a
@@ -1238,7 +1238,7 @@ function Dossier() {
               costs essentially nothing on every subsequent turn.
             </>
           }
-          model="Claude Sonnet 5, within the turn you started."
+          model="Claude Sonnet 5.5, within the turn you started."
           bounds="A figure is an exhibit. The model is instructed never to place a normative requirement only in a figure — enforceable words live in a provision."
         />
 
@@ -1257,7 +1257,7 @@ function Dossier() {
             </>
           }
           sent="A tiny payload of text, replaced wholesale each turn."
-          model="Claude Sonnet 5, inside the turn."
+          model="Claude Sonnet 5.5, inside the turn."
           bounds="Panel actions — research, QC, export, undo, save — are deliberately excluded from what a chip may propose."
         />
 
@@ -1512,7 +1512,7 @@ function Dossier() {
               and the Final QC report itself are not sent.
             </>
           }
-          model="Claude Sonnet 5, effort “medium” — one call, only when you press Run; never on export, save or Next section."
+          model="Claude Sonnet 5.5, effort “medium” — one call, only when you press Run; never on export, save or Next section."
           bounds={
             <>
               One request with one output tool and a cap of 40 proposals; a very
@@ -1561,7 +1561,7 @@ function Dossier() {
               arrive fresh with every message.
             </>
           }
-          model="Claude Sonnet 5, effort “high” — the chat's own model and settings."
+          model="Claude Sonnet 5.5, effort “high” — the chat's own model and settings."
           bounds={
             <>
               One summary at a time, at most 64,000 output tokens; after a

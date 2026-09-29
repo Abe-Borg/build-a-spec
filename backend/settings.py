@@ -23,6 +23,11 @@ VERSION = "1.21.0"
 # --- Models -----------------------------------------------------------------
 
 MODEL_SONNET_5 = "claude-sonnet-5"
+# Sonnet 5.5 superseded Sonnet 5 as the interview/research default (2026-09-29):
+# same $2/$10 list price and cache multiples (VERIFIED on the pricing page).
+# Sonnet 5 stays in PRICING and the strict-capable list so an env override on
+# it, and retained records, are still priced and strict.
+MODEL_SONNET_55 = "claude-sonnet-5-5"
 # Opus 4.8 is not a default anywhere; it is reachable only through the model
 # env overrides (BUILD_A_SPEC_QC_MODEL / _RESEARCH_MODEL / _INTERVIEW_MODEL)
 # and stays in PRICING and the strict-capable model list so an override on
@@ -46,7 +51,7 @@ MODEL_OPUS_5 = "claude-opus-5"
 # BUILD_A_SPEC_QC_MODEL override on it are still priced and strict.
 MODEL_OPUS_55 = "claude-opus-5-5"
 
-INTERVIEW_MODEL_DEFAULT = MODEL_SONNET_5
+INTERVIEW_MODEL_DEFAULT = MODEL_SONNET_55
 INTERVIEW_MODEL = (
     os.environ.get("BUILD_A_SPEC_INTERVIEW_MODEL", "").strip()
     or INTERVIEW_MODEL_DEFAULT
@@ -325,7 +330,7 @@ ELIDE_FETCHED_PAGE_TEXT = _bool_env("BUILD_A_SPEC_ELIDE_FETCHED_PAGES", True)
 
 RESEARCH_MODEL = (
     os.environ.get("BUILD_A_SPEC_RESEARCH_MODEL", "").strip()
-    or MODEL_SONNET_5
+    or MODEL_SONNET_55
 )
 RESEARCH_MAX_TOKENS = _int_env("BUILD_A_SPEC_RESEARCH_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
 RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
@@ -584,10 +589,17 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 # $10 / 1,000 requests ($0.01 each); web fetch has no per-request fee (token
 # cost only). Keep this current when Anthropic's list pricing moves.
 #
-# A model absent from this table is metered at MODEL_SONNET_5's rates
+# A model absent from this table is metered at MODEL_SONNET_55's rates
 # (``usage_ledger._rates``) — every QC dollar figure would silently
 # under-report, so a new QC model MUST land here in the same change.
 PRICING: dict[str, dict[str, float]] = {
+    MODEL_SONNET_55: {
+        "input": 2.0 / 1_000_000,
+        "output": 10.0 / 1_000_000,
+        "cache_read": 0.20 / 1_000_000,
+        "cache_write": 2.50 / 1_000_000,
+        "cache_write_1h": 4.00 / 1_000_000,
+    },
     MODEL_SONNET_5: {
         "input": 2.0 / 1_000_000,
         "output": 10.0 / 1_000_000,

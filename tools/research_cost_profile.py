@@ -605,8 +605,8 @@ def _pricing_for(model_override: str) -> tuple[str, dict[str, float], str]:
         )
     # ``usage_ledger._rates`` does the same for an unpriced model; say so.
     return (
-        settings.MODEL_SONNET_5,
-        dict(settings.PRICING[settings.MODEL_SONNET_5]),
+        settings.MODEL_SONNET_55,
+        dict(settings.PRICING[settings.MODEL_SONNET_55]),
         f"this build's PRICING table, falling back from the unpriced research "
         f"model `{model}` the way the app's own meter does",
     )

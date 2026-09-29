@@ -708,7 +708,7 @@ own **Conversation condensing** line in Settings. It is a fork of the last
 turn's request, so it reads that turn's cache instead of paying for the
 whole conversation again, and every later message re-reads a far shorter
 conversation. At 600,000 tokens a summary costs roughly $0.25–0.50 (an
-estimate at Sonnet 5 list prices; the usage line is the real number), and
+estimate at Sonnet 5.5 list prices; the usage line is the real number), and
 it pays for itself within a handful of later messages. **Settings →
 Developer tools → Session state → Condensed conversation** shows the
 record's sizes (never its text).
@@ -2902,7 +2902,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | Env var | Default | Effect |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | API key; overrides keyring/file, never persisted. |
-| `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5` | Model for interview/drafting turns. |
+| `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5-5` | Model for interview/drafting turns. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The model's context window: the context gauge's denominator (the header's "142k / 1M" pill) and what the chat's backstop measures a request against — past 85% of it the oldest turns are condensed before sending. Pair it with a model override whose window differs; set lower, conversations are condensed earlier. |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `high` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`). |
@@ -2919,7 +2919,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_API_TIMEOUT_SECONDS` | `600` | Per-request read/write timeout for every model call (a streaming reply counts between chunks). The connect timeout stays the SDK's 5 s regardless. Floor 30. |
 | `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |
 | `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `1` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn keeps each page's address and title, with the passages the reply quoted written into a note where the text was, and an older project is trimmed the same way when opened. **On by default** since its live check (`tools\fetch_elision_canary.py --run`) passed on 2026-09-23. The check's first run was refused on an earlier version of the trim that kept citations into the dropped text; the trim now removes those citations. `0` keeps page text in saved history, as earlier versions did. |
-| `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
+| `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
 | `BUILD_A_SPEC_CONTINUATION_CACHE` | `1` | Continuation caching (Chunk 4 of the cost program, on by default since the Tier 1 finish program's session CT-3): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. Watched by the cost self-checks: a resume the provider refuses because of the breakpoint is sent once more without it, and the breakpoint switches off for that engine (research or Final QC) until the app restarts; six or more measured resumes that together cost more than they saved switch it off the same way (Settings → Developer tools → Cost self-checks). `0` switches it off: no request carries it. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`. |

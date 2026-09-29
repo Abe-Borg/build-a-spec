@@ -152,6 +152,7 @@ REQUIREMENTS_RESEARCH_SCHEMA: dict[str, Any] = {
 # lenient tool shape — a smaller safe request, never a 400.
 _STRICT_CAPABLE_MODELS = frozenset(
     {
+        settings.MODEL_SONNET_55,
         settings.MODEL_SONNET_5,
         settings.MODEL_OPUS_48,
         settings.MODEL_OPUS_5,

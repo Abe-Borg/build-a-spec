@@ -143,7 +143,7 @@ def _category_multipliers() -> dict[str, float]:
 
 
 def _rates(model: str) -> dict[str, float]:
-    return settings.PRICING.get(model, settings.PRICING[settings.MODEL_SONNET_5])
+    return settings.PRICING.get(model, settings.PRICING[settings.MODEL_SONNET_55])
 
 
 def model_rates(model: str) -> dict[str, float]:
@@ -224,7 +224,7 @@ def estimate_usage_cost(
 def usage_pricing_snapshot(model: str) -> dict[str, Any]:
     """Return the exact configured rates used to estimate a run's cost."""
     rate_model = (
-        model if model in settings.PRICING else settings.MODEL_SONNET_5
+        model if model in settings.PRICING else settings.MODEL_SONNET_55
     )
     rates = _rates(model)
     return {

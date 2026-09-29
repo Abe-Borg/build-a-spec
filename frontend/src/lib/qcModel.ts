@@ -15,6 +15,7 @@ const KNOWN: Record<string, { name: string; strongerThanDrafter: boolean }> = {
   "claude-opus-5": { name: "Claude Opus 5", strongerThanDrafter: true },
   "claude-opus-4-8": { name: "Claude Opus 4.8", strongerThanDrafter: true },
   "claude-fable-5": { name: "Claude Fable 5", strongerThanDrafter: true },
+  "claude-sonnet-5-5": { name: "Claude Sonnet 5.5", strongerThanDrafter: false },
   "claude-sonnet-5": { name: "Claude Sonnet 5", strongerThanDrafter: false },
 };
 

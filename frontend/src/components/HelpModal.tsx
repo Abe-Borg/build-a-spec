@@ -441,7 +441,7 @@ function HowItWorks() {
           },
           {
             t: "Two models, one job each",
-            d: "The interview and drafting run on Claude Sonnet 5. Final QC runs a fleet of Claude Opus 5.5 reviewers — the one place a second model appears.",
+            d: "The interview and drafting run on Claude Sonnet 5.5. Final QC runs a fleet of Claude Opus 5.5 reviewers — the one place a second model appears.",
           },
           {
             t: "Domain knowledge lives in spec modules",
@@ -641,7 +641,7 @@ function About({
       <dl className="space-y-2 rounded-xl border border-edge bg-raised/40 p-4 text-sm">
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Interview</dt>
-          <dd className="text-ink">{health?.model ?? "Claude Sonnet 5"}</dd>
+          <dd className="text-ink">{health?.model ?? "Claude Sonnet 5.5"}</dd>
         </div>
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Final QC</dt>

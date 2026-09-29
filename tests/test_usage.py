@@ -197,6 +197,7 @@ def test_every_priced_model_configures_both_cache_write_rates():
 # its read rate up on the pricing page. Assuming 0.1x is how Opus 5.5
 # shipped at twice its real read price.
 _PUBLISHED_CACHE_READ_MULTIPLIERS = {
+    settings.MODEL_SONNET_55: 0.1,
     settings.MODEL_SONNET_5: 0.1,
     settings.MODEL_OPUS_48: 0.1,
     settings.MODEL_FABLE_5: 0.1,

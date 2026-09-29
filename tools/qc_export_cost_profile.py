@@ -304,10 +304,10 @@ def _rates_for(report: dict, run: RunProfile) -> None:
     model = str(report.get("model") or "")
     table = settings.PRICING.get(model)
     if table is None:
-        table = settings.PRICING[settings.MODEL_SONNET_5]
+        table = settings.PRICING[settings.MODEL_SONNET_55]
         run.rate_source = (
             f"this build's PRICING table, falling back to "
-            f"{settings.MODEL_SONNET_5} (the report named no priced model)"
+            f"{settings.MODEL_SONNET_55} (the report named no priced model)"
         )
     else:
         run.rate_source = f"this build's PRICING table for {model}"

@@ -97,7 +97,7 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            _atomic_write_target delegates to
                            project_brief.write_brief_atomically
 backend/
-  settings.py              models (claude-sonnet-5 default), SDK transport
+  settings.py              models (claude-sonnet-5-5 default), SDK transport
                            (SDK_MAX_RETRIES / API_TIMEOUT_SECONDS — the SDK's
                            own defaults made explicit, Batch 9), effort levels
                            (interview high / research high, dialed back

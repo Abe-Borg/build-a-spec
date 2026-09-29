@@ -306,6 +306,24 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 ),
             ),
             ReleaseSection(
+                title="Installing",
+                items=(
+                    ReleaseItem(
+                        title="The installer asks you to accept the license",
+                        body=(
+                            "The installer now opens on Build-a-Spec's "
+                            "license, the PolyForm Shield License 1.0.0, and "
+                            "installs only after you choose “I accept "
+                            "the agreement”. Updates ask too, because each "
+                            "version is installed on the terms it ships "
+                            "with. The terms themselves have not changed: "
+                            "they already came with every install, and Help "
+                            "→ About names them."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
                 title="Troubleshooting",
                 items=(
                     ReleaseItem(

@@ -6,7 +6,10 @@
    **More info → Run anyway**. This is expected; downloads are
    SHA-256-verified against `latest.json` before the in-app
    updater ever launches a future update.
-3. No Python, Node, or other tooling is required — everything is
+3. The installer shows the license, the PolyForm Shield License
+   1.0.0, and installs only after you choose **I accept the
+   agreement**. It asks again on every update.
+4. No Python, Node, or other tooling is required — everything is
    bundled. The installer adds the Microsoft Edge WebView2
    runtime automatically if your machine doesn't already have it
    (current Windows 10/11 already do).

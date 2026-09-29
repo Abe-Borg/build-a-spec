@@ -703,8 +703,10 @@ function About({
                 <p className="mt-2 text-xs text-ink-faint">
                   Downloads the installer over https, checks it against the
                   SHA-256 in the release manifest, and only then runs it. The
-                  app closes so the installer can replace it. Large downloads
-                  take a while — the button stays busy until it is verified.
+                  app closes so the installer can replace it; the installer
+                  shows the license and asks you to accept it before it
+                  updates. Large downloads take a while — the button stays
+                  busy until it is verified.
                 </p>
               </>
             ) : (

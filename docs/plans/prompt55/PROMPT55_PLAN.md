@@ -435,9 +435,12 @@ schema or protocol bump, or version bump. One knob
    only the patterns used were removed.
 4. The harvest: the guide's line ends `_HARVEST_SYSTEM_PROMPT`; the
    `max_tokens` check runs BEFORE the tool block is read; the request's
-   `max_tokens` is `settings.HARVEST_MAX_TOKENS`
-   (`_int_env(..., 64_000, minimum=4096)`), with a README Configuration row,
-   a README harvest bullet and the routes paragraph naming the new code.
+   `max_tokens` is `settings.HARVEST_MAX_TOKENS`, with a README
+   Configuration row, a README harvest bullet and the routes paragraph
+   naming the new code. As merged the knob is
+   `_int_env(..., min(_HARVEST_MAX_TOKENS_DEFAULT, INTERVIEW_MAX_TOKENS),
+   minimum=min(_HARVEST_MAX_TOKENS_FLOOR, INTERVIEW_MAX_TOKENS))`, the two
+   constants 64,000 and 4,096 (deviation 6).
 
 **Deviations.**
 
@@ -475,6 +478,18 @@ schema or protocol bump, or version bump. One knob
    1.21.0 entry's "Project facts" section, in the same commit as the change.
    The parsing hardenings got no item of their own, as the plan's Docs list
    says; they are not something a user does.
+6. **A lower global cap still binds the harvest** (caught in review on PR
+   #236, Codex). The first cut defaulted `HARVEST_MAX_TOKENS` to a flat
+   64,000, which RAISED the harvest above a `BUILD_A_SPEC_MAX_TOKENS` an
+   operator had set lower — the cap the harvest had honoured until it got a
+   knob of its own. The default is now `min(64_000, INTERVIEW_MAX_TOKENS)`,
+   and so is the floor's cap (`min(4_096, INTERVIEW_MAX_TOKENS)`): `_int_env`
+   clamps its default too, so a global cap under 4,096 would otherwise have
+   been lifted to 4,096 with a warning about a harvest knob nobody set. An
+   explicit `BUILD_A_SPEC_HARVEST_MAX_TOKENS` still goes above the global
+   cap. `test_a_lower_interview_ceiling_still_caps_the_harvest` pins all
+   four cases, with a positive logging control so its "no warning" check is
+   not vacuous.
 
 **Knowing test changes:** none. No existing test pinned the greedy
 patterns, the bare "Unknown tool: X" text or the removed cut-off wording.
@@ -483,17 +498,20 @@ QC tag constants through to `_parse` unchanged (a name now, a pattern
 before), and `tests/test_qc_batch_warm_lead.py`'s dummy `json_tag="VERDICT"`
 was already a string.
 
-**Tests:** `tests/test_prompt55_parsing_and_harvest.py`, 43 cases
+**Tests:** `tests/test_prompt55_parsing_and_harvest.py`, 44 cases
 (parametrized counted). The mis-cased-output-tool case is ONE assertion set
 over both engines, reusing `tests/test_retry_resume.py`'s `_ResearchHarness`
 and `_QcHarness` (tracker R4).
 
 **Verified** on the branch, with every doc change in place:
 `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q`
-3063 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean.
+3064 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean
+(re-run after the review fix of deviation 6).
 
-**Revert matrix.** Each mechanism reverted in place, one at a time, by a
-script that restored the exact text it read; `git status` and `git diff`
+**Revert matrix.** 26 rows: 24 before review, two more for deviation 6
+(the two settings rows above them were re-run against the new shape). Each
+mechanism reverted in place, one at a time, by a script that restored the
+exact text it read; `git status` and `git diff`
 were unchanged afterwards. The new test file ran every time, plus
 `tests/test_settings.py` and `tests/test_docs_consistency.py` for the knob
 rows.
@@ -521,8 +539,10 @@ rows.
 | harvest: a `max_tokens` stop with a payload accepted | 2 |
 | harvest: the cut-off refusal carries no usage | 2 |
 | harvest: the ceiling back to the interview's | 2 |
-| settings: the default back to 128k | 2 |
-| settings: no floor | 3 |
+| settings: the default back to 128k (`_HARVEST_MAX_TOKENS_DEFAULT`) | 3 |
+| settings: no floor | 4 |
+| settings: the default not capped by the interview ceiling (review fix) | 2 |
+| settings: the floor not capped by the interview ceiling (review fix) | 2 |
 | README: the knob's Configuration row removed | 0 — see below |
 
 The three green rows, each explained (tracker R8):

@@ -440,36 +440,107 @@ def test_the_route_refuses_a_cut_off_harvest_meters_it_and_shows_nothing(monkeyp
     assert session.last_harvest_bubble == 0
 
 
-def test_the_harvest_ceiling_ships_at_64k_with_a_floor():
-    """Read from the source, so no developer environment can move it."""
+def _harvest_ceiling_assignments() -> dict[str, ast.AST]:
     source = Path(settings.__file__).read_text(encoding="utf-8")
+    found: dict[str, ast.AST] = {}
     for node in ast.walk(ast.parse(source)):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "HARVEST_MAX_TOKENS"
+            and node.targets[0].id
+            in (
+                "HARVEST_MAX_TOKENS",
+                "_HARVEST_MAX_TOKENS_DEFAULT",
+                "_HARVEST_MAX_TOKENS_FLOOR",
+            )
         ):
-            call = node.value
-            assert getattr(call.func, "id", "") == "_int_env"
-            assert [arg.value for arg in call.args] == [
-                "BUILD_A_SPEC_HARVEST_MAX_TOKENS",
-                64_000,
-            ]
-            (floor,) = [k.value.value for k in call.keywords if k.arg == "minimum"]
-            assert floor == 4096
-            break
-    else:  # pragma: no cover - the assertion is the point
-        raise AssertionError("HARVEST_MAX_TOKENS is not declared in settings.py")
+            found[node.targets[0].id] = node.value
+    return found
+
+
+def _is_min_of(node: ast.AST, constant: str) -> bool:
+    """``min(<constant>, INTERVIEW_MAX_TOKENS)``, as written in settings.py."""
+    return (
+        isinstance(node, ast.Call)
+        and getattr(node.func, "id", "") == "min"
+        and [getattr(arg, "id", None) for arg in node.args]
+        == [constant, "INTERVIEW_MAX_TOKENS"]
+    )
+
+
+def test_the_harvest_ceiling_ships_at_64k_with_a_floor():
+    """Read from the source, so no developer environment can move it: 64k and
+    a floor of 4096, both capped by the interview's ceiling (Codex, PR #236)."""
+    found = _harvest_ceiling_assignments()
+    assert found["_HARVEST_MAX_TOKENS_DEFAULT"].value == 64_000
+    assert found["_HARVEST_MAX_TOKENS_FLOOR"].value == 4_096
+    call = found["HARVEST_MAX_TOKENS"]
+    assert getattr(call.func, "id", "") == "_int_env"
+    name, default = call.args
+    assert name.value == "BUILD_A_SPEC_HARVEST_MAX_TOKENS"
+    assert _is_min_of(default, "_HARVEST_MAX_TOKENS_DEFAULT")
+    (floor,) = [k.value for k in call.keywords if k.arg == "minimum"]
+    assert _is_min_of(floor, "_HARVEST_MAX_TOKENS_FLOOR")
+
+
+def _reload_with(monkeypatch, **env: str):
+    for name in ("BUILD_A_SPEC_HARVEST_MAX_TOKENS", "BUILD_A_SPEC_MAX_TOKENS"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    return importlib.reload(settings)
 
 
 def test_the_harvest_ceiling_reads_its_knob_and_clamps_to_the_floor(monkeypatch):
-    monkeypatch.setenv("BUILD_A_SPEC_HARVEST_MAX_TOKENS", "100")
     try:
-        assert importlib.reload(settings).HARVEST_MAX_TOKENS == 4096
-        monkeypatch.setenv("BUILD_A_SPEC_HARVEST_MAX_TOKENS", "20000")
-        assert importlib.reload(settings).HARVEST_MAX_TOKENS == 20_000
+        assert _reload_with(
+            monkeypatch, BUILD_A_SPEC_HARVEST_MAX_TOKENS="100"
+        ).HARVEST_MAX_TOKENS == 4096
+        assert _reload_with(
+            monkeypatch, BUILD_A_SPEC_HARVEST_MAX_TOKENS="20000"
+        ).HARVEST_MAX_TOKENS == 20_000
     finally:
-        monkeypatch.delenv("BUILD_A_SPEC_HARVEST_MAX_TOKENS", raising=False)
-        importlib.reload(settings)
+        _reload_with(monkeypatch)
     assert settings.HARVEST_MAX_TOKENS == 64_000
+
+
+def test_a_lower_interview_ceiling_still_caps_the_harvest(monkeypatch, caplog):
+    """The harvest inherited ``BUILD_A_SPEC_MAX_TOKENS`` before it had a knob
+    of its own, so an operator's lower global cap keeps binding it — and the
+    floor never lifts it back above that cap (Codex, PR #236). Only an
+    explicit harvest override goes above the global cap."""
+    try:
+        assert _reload_with(
+            monkeypatch, BUILD_A_SPEC_MAX_TOKENS="32000"
+        ).HARVEST_MAX_TOKENS == 32_000
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="buildaspec.settings"):
+            reloaded = _reload_with(monkeypatch, BUILD_A_SPEC_MAX_TOKENS="2000")
+        assert reloaded.HARVEST_MAX_TOKENS == 2_000
+        assert not [
+            r for r in caplog.records if "BUILD_A_SPEC_HARVEST_MAX_TOKENS" in r.getMessage()
+        ], "an unset harvest knob is never reported as below its floor"
+        # Explicit wins, in both directions the floor allows — and an explicit
+        # value under the floor IS reported (the control that makes the
+        # silence above mean something).
+        assert _reload_with(
+            monkeypatch,
+            BUILD_A_SPEC_MAX_TOKENS="32000",
+            BUILD_A_SPEC_HARVEST_MAX_TOKENS="100000",
+        ).HARVEST_MAX_TOKENS == 100_000
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="buildaspec.settings"):
+            reloaded = _reload_with(
+                monkeypatch,
+                BUILD_A_SPEC_MAX_TOKENS="32000",
+                BUILD_A_SPEC_HARVEST_MAX_TOKENS="100",
+            )
+        assert reloaded.HARVEST_MAX_TOKENS == 4096
+        assert [
+            r for r in caplog.records if "BUILD_A_SPEC_HARVEST_MAX_TOKENS" in r.getMessage()
+        ]
+    finally:
+        _reload_with(monkeypatch)
+    assert settings.HARVEST_MAX_TOKENS == 64_000
+    assert settings.INTERVIEW_MAX_TOKENS == settings.MODEL_MAX_OUTPUT_TOKENS

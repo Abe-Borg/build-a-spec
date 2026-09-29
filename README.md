@@ -523,7 +523,9 @@ facts, and makes every recorded fact name a source that exists.
   P55-1). The harvest asks the model to think the problem through before it
   answers, and caps the call's output at `BUILD_A_SPEC_HARVEST_MAX_TOKENS`
   (default 64,000 tokens, floor 4,096; it used to inherit the 128k model
-  ceiling). A reply that reaches the cap is refused as `harvest_cut_off` even
+  ceiling). A `BUILD_A_SPEC_MAX_TOKENS` set lower still caps the harvest, as
+  it did before, and the floor never lifts it back above that; only an
+  explicit `BUILD_A_SPEC_HARVEST_MAX_TOKENS` goes higher. A reply that reaches the cap is refused as `harvest_cut_off` even
   when it holds a list of proposals, because a cut-off list is not the one the
   model meant to propose: nothing is shown or recorded, it is still metered,
   and **Run it again** runs a fresh call.
@@ -2922,7 +2924,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary uses it too. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's. |
 | `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
 | `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |
-| `BUILD_A_SPEC_HARVEST_MAX_TOKENS` | `64000` | Output ceiling for the fact harvest's one call (floor 4096). The Sonnet 5.5 guide: set it high enough for the thinking and the JSON but no higher than one attempt is worth; a reply that reaches it is refused as cut off (`harvest_cut_off`), never shown as a partial list. |
+| `BUILD_A_SPEC_HARVEST_MAX_TOKENS` | `64000` (or `BUILD_A_SPEC_MAX_TOKENS`, if lower) | Output ceiling for the fact harvest's one call (floor 4096, or `BUILD_A_SPEC_MAX_TOKENS` if that is lower still, so a lower global cap keeps binding the harvest). The Sonnet 5.5 guide: set it high enough for the thinking and the JSON but no higher than one attempt is worth; a reply that reaches it is refused as cut off (`harvest_cut_off`), never shown as a partial list. |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
 | `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the system block and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
 | `BUILD_A_SPEC_CHAT_COMPACTION` | `1` | Routine conversation condensing: once the committed conversation passes the threshold below, a summary of its oldest turns is written **in the background after a reply** — a real, **billed** model call with no click behind it — and every later message sends the summary instead of those turns. **On by default** since the owner decided it on 2026-09-23 (without the paid recall check the compaction plan had named as the gate); `0` switches it off. The backstop (condense before a message that would not fit in ~85% of the context window) runs either way and is not configurable. |

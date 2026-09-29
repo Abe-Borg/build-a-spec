@@ -120,9 +120,11 @@ backend/
                            HARVEST_EFFORT (Project workspace Phase 4, default
                            medium — the fact harvest extracts, it drafts
                            nothing) and HARVEST_MAX_TOKENS
-                           (BUILD_A_SPEC_HARVEST_MAX_TOKENS, 64k, floor 4096 —
-                           the 5.5 prompting upgrade, P55-1; it inherited the
-                           128k interview ceiling before); ELIDE_FETCHED_PAGE_TEXT
+                           (BUILD_A_SPEC_HARVEST_MAX_TOKENS, 64k, floor 4096,
+                           both capped by INTERVIEW_MAX_TOKENS so a lower
+                           global cap still binds the harvest — the 5.5
+                           prompting upgrade, P55-1; it inherited the 128k
+                           interview ceiling before); ELIDE_FETCHED_PAGE_TEXT
                            (BUILD_A_SPEC_ELIDE_FETCHED_PAGES, default ON —
                            the compaction Phase 2 page-text trim, on since
                            its live canary passed on 2026-09-23; the 1.21.0
@@ -2742,7 +2744,8 @@ tests/
                            and each of its five call sites, plus no greedy
                            pattern left in backend/; the harvest's closing
                            line, harvest_cut_off (unit and route, metered),
-                           and HARVEST_MAX_TOKENS (an ast pin, the floor)
+                           and HARVEST_MAX_TOKENS (an ast pin, the floor, a
+                           lower BUILD_A_SPEC_MAX_TOKENS still binding it)
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,
@@ -18436,21 +18439,32 @@ traps.
   runaway at Sonnet 5.5's $10/MTok output rate. The floor keeps an override
   from starving the thinking the prompt now asks for. `max_tokens` is not
   part of any cached prefix, so the change costs no cache.
+- **A lower global cap still binds the harvest** (caught in review on PR
+  #236, Codex). The first cut defaulted to a flat 64k — which RAISED the
+  harvest above a `BUILD_A_SPEC_MAX_TOKENS` an operator had set lower (a
+  spend ceiling, or an interview-model override with a smaller output),
+  the cap the harvest had honoured until it got a knob of its own. Both the
+  default and the floor are now `min(<constant>, INTERVIEW_MAX_TOKENS)`
+  (`_HARVEST_MAX_TOKENS_DEFAULT` / `_HARVEST_MAX_TOKENS_FLOOR`). Capping the
+  FLOOR matters as much as the default: `_int_env` clamps its default too,
+  so a global cap under 4,096 would otherwise have been lifted to 4,096 with
+  a warning about a harvest knob nobody set. Only an explicit
+  `BUILD_A_SPEC_HARVEST_MAX_TOKENS` goes above the global cap.
 - **What did not change.** No request gained a field; the chat's tool list
   and the stable prompt are byte-identical (no cache is rewritten); nothing
   reaches the QC input manifest; the audit route stays retired (its parse is
   still reachable from `AuditRunner`, and the helper covers it). The
   batched transport reads the same `_parse`.
-- **Tests: `tests/test_prompt55_parsing_and_harvest.py`** (43, parametrized
+- **Tests: `tests/test_prompt55_parsing_and_harvest.py`** (44, parametrized
   cases counted). The research-vs-lens case is ONE assertion set over both
   engines, reusing `tests/test_retry_resume.py`'s harnesses (R4). Knowing
   test changes: none — no existing test pinned the greedy patterns, the old
   "Unknown tool" text or the removed cut-off wording, and
   `tools/qc_verifier_canary.py` / `tests/test_qc_warm_launch.py` pass the tag
   constants through unchanged (a name now, a pattern before).
-- **Revert matrix** (in full in the plan's As built): 24 rows, each reverted
+- **Revert matrix** (in full in the plan's As built): 26 rows, each reverted
   in place and restored from the exact text read, the tree checked clean
-  after. 21 went red on their own. Two are one mechanism written twice —
+  after. 23 went red on their own. Two are one mechanism written twice —
   the brace pre-check and the object check in `last_tagged_json_object`
   (a candidate that starts with `{` and ends with `}` and parses is always
   an object, so each alone guards what the other does); reverted together,

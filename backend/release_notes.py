@@ -213,8 +213,9 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                         body=(
                             "The fact harvest now thinks the problem through "
                             "before it answers, and its reply has an output "
-                            "limit of its own (64,000 tokens). A reply that "
-                            "reaches the limit is refused as cut off rather "
+                            "limit of its own (64,000 tokens by default). A "
+                            "reply that reaches the limit is refused as cut "
+                            "off rather "
                             "than shown as a list the model never finished: "
                             "nothing is proposed or recorded, the call still "
                             "shows in Settings → Usage, and Run it again "

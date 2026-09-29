@@ -76,12 +76,92 @@ def test_pyinstaller_spec_bundles_the_license():
 
 
 
-def test_every_surface_states_the_same_license():
-    """Six of the seven license surfaces, pinned so they cannot drift.
+def _iss_section(name: str) -> list[str]:
+    """The directive lines of one ``[Section]`` of installer.iss: comments,
+    preprocessor lines and blanks dropped, surrounding whitespace stripped."""
+    lines: list[str] = []
+    current = None
+    for raw in (PKG / "installer.iss").read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        header = re.fullmatch(r"\[([A-Za-z]+)\]", line)
+        if header:
+            current = header.group(1)
+            continue
+        if current == name and line and not line.startswith((";", "#")):
+            lines.append(line)
+    return lines
 
-    The seventh — the bundled copy in the PyInstaller output — is pinned by
+
+def _iss_directive(section: str, key: str) -> list[str]:
+    prefix = f"{key}="
+    return [ln[len(prefix):] for ln in _iss_section(section) if ln.startswith(prefix)]
+
+
+def test_installer_requires_accepting_the_license():
+    """The installer shows the license and will not install until the user
+    selects "I accept the agreement".
+
+    That is what Inno Setup's ``LicenseFile`` directive does: it adds the
+    License Agreement page, with "I do not accept" selected by default and
+    Next disabled until "I accept" is chosen. The page reads the repo's own
+    LICENSE, never a copy, so it cannot show terms other than the ones that
+    govern. Inno Setup cannot run here, so this pins the wiring; compiling
+    the installer (the release workflow, or its branch dry run) and the
+    pre-release QA row in docs/RELEASE_WINDOWS.md check the page itself."""
+    values = _iss_directive("Setup", "LicenseFile")
+    assert values, "installer.iss has no LicenseFile, so Setup shows no license page"
+    assert len(values) == 1, f"LicenseFile is set more than once: {values}"
+    # Inno resolves a relative path against the script's own folder (the
+    # default SourceDir), as it does for OutputDir and every [Files] Source.
+    target = (PKG / values[0].replace("\\", "/")).resolve()
+    assert target == (REPO_ROOT / "LICENSE").resolve(), (
+        f"the license page must show the root LICENSE, not {target}"
+    )
+    text = target.read_bytes()
+    # Inno Setup reads a text license file as ANSI, or as UTF-8 (versions
+    # before 6.3 only with a BOM). ASCII reads the same in all of them. A
+    # leading "{\rtf" would make Setup load the file as rich text instead.
+    assert text.isascii(), (
+        "LICENSE holds a non-ASCII character; older Inno Setup compilers "
+        "would show it garbled on the license page"
+    )
+    assert not text.lstrip().startswith(b"{\\rtf"), "LICENSE must stay plain text"
+    # The choices keep Inno Setup's own wording ("I accept the agreement" /
+    # "I do not accept the agreement"), which is what the QA row tells a
+    # tester to look for, and no [Code] may skip the page (ShouldSkipPage on
+    # wpLicense would install without asking).
+    for key in ("LicenseAccepted", "LicenseNotAccepted"):
+        assert not _iss_directive("Messages", key), (
+            f"installer.iss overrides {key}; the choices must keep Inno "
+            "Setup's own wording"
+        )
+    iss = (PKG / "installer.iss").read_text(encoding="utf-8")
+    assert "wpLicense" not in iss, "installer.iss code refers to the license page"
+
+
+def test_installer_license_page_names_the_license_in_plain_text():
+    """The page's lead-in (``LicenseLabel3``) names the license and says
+    the agreement below it governs. It is read on a Windows dialog, so it
+    stays ASCII — the script carries no encoding marker — and ONE line: a
+    [Messages] entry does not continue onto the next line."""
+    values = _iss_directive("Messages", "LicenseLabel3")
+    assert len(values) == 1, "installer.iss must set LicenseLabel3 exactly once"
+    label = values[0]
+    assert label.isascii(), "the license page's lead-in must be ASCII"
+    assert "PolyForm Shield License 1.0.0" in label
+    assert "the agreement below governs" in label
+    assert "accept" in label
+
+
+def test_every_surface_states_the_same_license():
+    """Seven of the eight license surfaces, pinned so they cannot drift.
+
+    The eighth — the bundled copy in the PyInstaller output — is pinned by
     ``test_pyinstaller_spec_bundles_the_license`` above, so between the two
-    tests every surface CLAUDE.md lists is asserted.
+    tests every surface CLAUDE.md lists is asserted. The installer's license
+    page is the newest: its lead-in names the license here, and
+    ``test_installer_requires_accepting_the_license`` pins that the terms it
+    shows are LICENSE itself.
 
     Relicensed MIT -> PolyForm Shield 1.0.0 on 2026-08-28. The one that is
     easiest to miss is HelpModal's About footer, because it is the only copy
@@ -115,6 +195,15 @@ def test_every_surface_states_the_same_license():
         "the in-app About footer still claims a different license than LICENSE"
     )
     assert "MIT License" not in help_modal
+
+    # The installer's license page: its lead-in names the license, and the
+    # terms under it are LICENSE itself.
+    (label,) = _iss_directive("Messages", "LicenseLabel3")
+    assert "PolyForm Shield License 1.0.0" in label, (
+        "the installer's license page names a different license than LICENSE"
+    )
+    iss = (PKG / "installer.iss").read_text(encoding="utf-8")
+    assert "MIT License" not in iss
 
     # package.json / package-lock.json root entries. Dependency entries in the
     # lockfile carry THEIR OWN licenses and must never be rewritten.

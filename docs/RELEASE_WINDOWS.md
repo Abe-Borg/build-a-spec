@@ -130,9 +130,9 @@ real updater at.
 On a machine with the *previous* version installed: open the app → the
 header shows "vX.Y.Z available — install" (or force it with the
 `/api/update/check?force=true` endpoint) → install → the app closes, the
-installer runs, and the new version launches. The download is
-SHA-256-verified against the manifest before it ever executes; a tampered
-or truncated download refuses to run.
+installer runs (its license page asks again; accept it), and the new
+version launches. The download is SHA-256-verified against the manifest
+before it ever executes; a tampered or truncated download refuses to run.
 
 ## DOCX fidelity release gate
 
@@ -187,7 +187,7 @@ build — and treat an unrecorded item as not done.
 
 ### Minimum before any release
 
-Four items, all performable from the dry-run artifact before you tag. If you
+Five items, all performable from the dry-run artifact before you tag. If you
 do nothing else, do these — they are the paths where a regression is both
 invisible to CI and expensive to the user.
 
@@ -206,6 +206,15 @@ invisible to CI and expensive to the user.
       then refuses to install. Its `url` will point at an asset that does not
       exist until you tag — expected on a branch build, see "Test the build
       without releasing" above.
+- [ ] **The installer asks for the license first** (v1.21.0). Run the
+      dry-run `BuildASpecSetup.exe`: the first page is **License Agreement**.
+      Its lead-in names the PolyForm Shield License 1.0.0, the text below it
+      is the repo's `LICENSE` laid out in paragraphs (not one run-on line),
+      **I do not accept the agreement** is selected, and **Next** stays
+      disabled until you choose **I accept the agreement**. Cancel from
+      that page installs nothing. The page reads `LICENSE` directly
+      (`LicenseFile` in `installer.iss`), so a compile that cannot find it
+      fails the build; this row checks it displays.
 - [ ] **Launch the packaged build and do one of each.** A chat turn, an
       import, an export. `--selfcheck` proves the modules import; it does not
       prove the window works.
@@ -221,8 +230,9 @@ invisible to CI and expensive to the user.
 
 - [ ] **The live update path.** On a machine with the *previous* version
       installed: the header offers the new version, the install closes the
-      app and relaunches on it, and the What's-new modal opens **once** and
-      not again. See "Verify the update path" above.
+      app, the installer shows the license page again (accept it to go on),
+      the app relaunches on the new version, and the What's-new modal opens
+      **once** and not again. See "Verify the update path" above.
 
       This one **cannot** be done before the tag, which is why it is not in
       the minimum above: `updates.py` resolves

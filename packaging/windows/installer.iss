@@ -6,10 +6,11 @@
 ; and expects the PyInstaller one-folder output at dist\BuildASpec\.
 ;
 ; Produces dist\installer\BuildASpecSetup.exe — a normal double-click
-; installer with a Start-menu shortcut, optional desktop icon, and a clean
-; uninstaller. The app is NOT code-signed, so Windows SmartScreen shows a
-; "Windows protected your PC" notice on first run (More info -> Run anyway);
-; expected and documented in docs/RELEASE_WINDOWS.md.
+; installer with a license agreement page, a Start-menu shortcut, optional
+; desktop icon, and a clean uninstaller. The app is NOT code-signed, so
+; Windows SmartScreen shows a "Windows protected your PC" notice on first
+; run (More info -> Run anyway); expected and documented in
+; docs/RELEASE_WINDOWS.md.
 ;
 ; If packaging\windows\MicrosoftEdgeWebview2Setup.exe is present at compile
 ; time (the release workflow downloads it), the installer bundles the Edge
@@ -58,6 +59,19 @@ PrivilegesRequiredOverridesAllowed=commandline
 OutputDir=..\..\dist\installer
 OutputBaseFilename=BuildASpecSetup
 SetupIconFile=assets\BuildASpec.ico
+; The license agreement page. Setup shows these terms and keeps Next
+; disabled until the user selects "I accept the agreement"; with "I do
+; not accept" (the default), Cancel is the only way off it. It shows on every
+; interactive run, updates launched by the in-app updater included, so
+; each version is installed on the terms it ships with. Silent installs
+; (/SILENT, /VERYSILENT) skip every wizard page, this one included.
+;
+; It reads the repository's own LICENSE file, not a copy, so the terms on
+; the page can never drift from the terms that govern (and that the
+; PyInstaller output already ships into {app}). Inno Setup loads a text
+; license file as ANSI or UTF-8; LICENSE is plain ASCII, which reads the
+; same either way, and tests/test_packaging.py keeps it that way.
+LicenseFile=..\..\LICENSE
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -71,6 +85,14 @@ RestartApplications=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+; The license page's lead-in, above the terms. It names the license and
+; gives the one-line summary README's License section gives, then says the
+; agreement governs. This is a license surface: a relicense changes it with
+; the others (tests/test_packaging.py pins it). Keep it ASCII, one line;
+; %n is Inno Setup's line break.
+LicenseLabel3={#MyAppName} is source-available under the PolyForm Shield License 1.0.0. In short: you may use it for any purpose, including commercial work, except to provide a product that competes with {#MyAppName}. This is a summary; the agreement below governs.%n%nYou must accept the agreement before continuing with the installation.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

@@ -2817,7 +2817,10 @@ Most users don't need any tooling. Download the latest
 [Releases page](https://github.com/Abe-Borg/build-a-spec/releases/latest)
 and run it — Python, Node, and every dependency are bundled, and the
 installer adds the Edge WebView2 runtime if your machine doesn't already
-have it.
+have it. The installer shows the license (the PolyForm Shield License 1.0.0;
+see [License](#license)) and does not install until you choose **I accept
+the agreement**. It asks again on every update, since each version is
+installed on the terms it ships with.
 
 The app is not code-signed, so on first run Windows SmartScreen shows
 "Windows protected your PC" → **More info → Run anyway**. Updates are
@@ -3053,6 +3056,8 @@ specifications on billable projects is squarely permitted. Reading, forking,
 modifying and redistributing it are permitted. Selling a rival specification tool
 built on it is not, unless you hold a separate license from the copyright holder.
 The [LICENSE](LICENSE) file governs; this paragraph is a summary, not the terms.
+The Windows installer shows the same terms, read from that file, and installs
+only after you accept them.
 
 This is a *source-available* license rather than an OSI-approved open-source one:
 the Open Source Definition forbids restricting a field of endeavour, and the

@@ -18064,6 +18064,96 @@ deviation and full revert matrix, and this section is the why and the traps.
      were corrected in place (including the two defaults' "flips on only on
      a recorded M3 pass").
 
+## The installer asks for the license first — implemented notes
+
+Owner ask (Abraham, 2026-09-29): check whether the installer describes the
+license and makes the user click accept, and fix it if not. It did neither:
+`installer.iss` had no `LicenseFile`, so `BuildASpecSetup.exe` went straight
+to the tasks and Ready pages, and the only place a user met the terms was
+the LICENSE file in the install folder and the About footer. No route, SSE
+event, dependency, env knob, project-format change or VERSION bump.
+
+- **The page is Inno Setup's own.** `LicenseFile=..\..\LICENSE` in
+  `[Setup]` adds the License Agreement page: the terms in a scrolling box,
+  **I do not accept the agreement** selected by default, and **Next**
+  disabled until the user picks **I accept the agreement**. Cancel is the
+  only other way off the page. Inno Setup 6 disables the Welcome page by
+  default, so it is the first page Setup shows.
+- **It reads the repo's LICENSE, never a copy.** The path resolves against
+  the script's folder (Inno's default `SourceDir`), like `OutputDir` and the
+  `[Files]` sources, so the terms on the page are the terms that govern, byte
+  for byte, including the two notice lines. A copy would have been a ninth
+  surface to keep identical (the `frontend/LICENSE` precedent), and a
+  plain-text rewrite of the markdown would break the rule that the terms are
+  never retyped. The cost is that the page shows LICENSE as it is: markdown
+  headings, `**bold**` and link syntax appear as characters. They read fine.
+- **Encoding, deliberately boring.** Inno Setup loads a text license file as
+  ANSI or UTF-8 (UTF-8 without a BOM only from 6.3), and loads it as rich
+  text when it starts with `{\rtf`. LICENSE is pure ASCII, which reads the
+  same in every case, and a test keeps it ASCII and not RTF. Line endings:
+  `.gitattributes` checks LICENSE out with LF on Windows too, and a Windows
+  rich-edit box (what the page uses) takes a bare LF as a paragraph break.
+  That last part is from Windows' documented behaviour, not from a compiled
+  installer; the QA row checks the terms show as paragraphs.
+- **The lead-in describes the license, in the owner's words.** A
+  `[Messages]` override of `LicenseLabel3` (the sentence above the terms)
+  names the PolyForm Shield License 1.0.0, gives README's one-line summary
+  (any purpose, commercial work included, except providing a product that
+  competes with Build-a-Spec), says it is a summary and the agreement below
+  governs, and says the terms must be accepted. It is ASCII and one line
+  (`%n` is Inno's line break), with `{#MyAppName}` for the name. The accept
+  and decline choices keep Inno's wording (`LicenseAccepted` /
+  `LicenseNotAccepted` are not overridden), which is what the QA row tells a
+  tester to look for.
+- **It asks on every interactive run, updates included.** The in-app
+  updater launches the installer with `os.startfile` (no `/SILENT`), so an
+  update shows the page again. That is deliberate: each version is installed
+  on the terms it ships with, and PolyForm Shield's Noncompete binds only a
+  recipient who received the terms. Nothing in `[Code]` skips `wpLicense`,
+  and a test keeps it that way. Silent installs (`/SILENT`, `/VERYSILENT`)
+  skip every wizard page, this one included, as Inno Setup always does.
+- **Copy moved with it.** README (Install (Windows, prebuilt) and the
+  License section), `release_install_notes.md` (the release page's install
+  steps, now four), Help → About's update line (the installer asks for the
+  license before it updates), and `docs/RELEASE_WINDOWS.md`: a fifth row in
+  "Minimum before any release" (the page's first-run behaviour, from the
+  dry-run artifact), and the update-path row and "Verify the update path"
+  now expect the page. The 1.21.0 entry gains an "Installing" section.
+  v1.20.0 was still the newest published release (checked through the
+  Releases API), so 1.21.0 is unreleased and the item rides in the same
+  commit as the change: whichever commit is tagged, the build and its note
+  agree (the PR #202 precedent).
+- **Not compiled here.** Inno Setup does not run on Linux, so nothing in
+  this change was compiled or clicked through. A bad `LicenseFile` path is a
+  compile error, so the release workflow (and its branch dry run) would fail
+  loudly rather than ship a broken installer; the new QA row is what checks
+  the page displays and gates Next. Run the dry run before tagging.
+- **Tests: 2 new in `tests/test_packaging.py`, 1 extended.**
+  `test_installer_requires_accepting_the_license` (one uncommented
+  `LicenseFile` in `[Setup]`, resolving to the root LICENSE; LICENSE ASCII
+  and not RTF; no override of the choices; no `wpLicense` in the script) and
+  `test_installer_license_page_names_the_license_in_plain_text` (one ASCII
+  `LicenseLabel3` naming the license, saying the agreement governs, and
+  asking for acceptance), both reading the script through `_iss_section`,
+  which skips comments and preprocessor lines. `test_every_surface_states_
+  the_same_license` now also asserts the installer's lead-in and says
+  "seven of the eight". Revert matrix, each change made in place and the
+  exact text restored after (`git status` checked clean): no `LicenseFile`,
+  a copy's path, the directive commented out, set twice, the lead-in
+  removed, naming MIT, holding an em dash, dropping "the agreement below
+  governs", overriding `LicenseAccepted`, a `wpLicense` reference in
+  `[Code]` — 1 or 2 red each; a non-ASCII character in LICENSE → 2 (this
+  test and the `frontend/LICENSE` byte-identity pin). All 11 rows red.
+- **Errata** (the notes are append-only, so corrections to earlier sections
+  go here):
+  1. "The license is PolyForm Shield, not MIT" says "Seven surfaces carry
+     the license claim". There are eight: the installer's license page
+     joins them. Its lead-in names the license, and the terms under it are
+     LICENSE itself, so a relicense changes `LicenseLabel3` with the rest.
+  2. The same section says `LICENSE` is bundled so the notice travels with
+     every installed copy. It still is, and the installer now also shows
+     the terms and requires them accepted before anything is copied.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

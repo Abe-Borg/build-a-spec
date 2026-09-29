@@ -2690,6 +2690,14 @@ tests/
                            Next-session line, and the completion banner +
                            line exactly when every row is done, in a fixed
                            order at the top
+  test_prompt55_tracker.py [5.5 prompting upgrade] the same checks for
+                           docs/plans/prompt55/PROMPT55_TRACKER.md against
+                           PROMPT55_PLAN.md, with the session list read
+                           from the plan's headings (a split adds
+                           P55-<n>b right after P55-<n>; the eight
+                           originals never move, and the closeout stays on
+                           the last row), plus the handoff's
+                           sessions-left sentence and the prompt template
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,

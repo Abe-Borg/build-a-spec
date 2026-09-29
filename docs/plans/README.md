@@ -4,6 +4,21 @@ Owner: Abraham.
 
 ## Active
 
+**[The 5.5 prompting upgrade](prompt55/PROMPT55_TRACKER.md)** — **in
+progress** (opened 2026-09-29). Implements the review of the app against
+Anthropic's prompting guides for Claude Sonnet 5.5 and Claude Opus 5.5
+(the models the interview, research, the harvest and Final QC now run on).
+Eight sessions, one pull request each: hardened output parsing and a fact
+harvest that thinks first; an interview that writes its reply after its
+last tool call; draft passes that finish in one turn, and Final QC effort
+re-based for Opus 5.5; a reminder for a research or review call that ends
+without its output tool (streamed and batched); thinking kept valid when
+the app edits a request; a server-side fallback for a declined Final QC
+call; and pasted text marked in chat, with the closeout. The spec is
+[`PROMPT55_PLAN.md`](prompt55/PROMPT55_PLAN.md); where the program stands,
+its rules, decisions and handoff live ONLY in the
+[tracker](prompt55/PROMPT55_TRACKER.md).
+
 **[Tier 1 finish: Chunks 3 and 4](tier1-finish/TIER1_FINISH_TRACKER.md)**
 — **complete** (opened 2026-09-24, closed 2026-09-25 by FIN-1; its code is
 all on `master`). It finished the two Tier 1 savings that shipped off: the

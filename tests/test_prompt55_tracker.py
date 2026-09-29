@@ -236,15 +236,26 @@ def test_the_plan_keeps_every_original_session_in_order() -> None:
         f"the plan's sessions must include {list(BASE_SESSIONS)}, in that order; "
         f"it has {sessions}"
     )
-    previous_base = None
+    # Each original session is followed by its splits, lettered b, c, d … in
+    # order ("Splitting a session"): never an 'a', never a skipped letter, and
+    # never a split away from its original.
+    runs: list[list[str]] = []
     for session in sessions:
-        base = _base_of(session)
-        if session != base:
-            assert base == previous_base, (
-                f"{session} must come directly after {base} (or its earlier split), "
-                f"per the tracker's 'Splitting a session'"
+        if session == _base_of(session):
+            runs.append([session])
+        else:
+            assert runs and _base_of(runs[-1][0]) == _base_of(session), (
+                f"{session} must come directly after {_base_of(session)} (or its "
+                f"earlier split), per the tracker's 'Splitting a session'"
             )
-        previous_base = base
+            runs[-1].append(session)
+    for run in runs:
+        base = run[0]
+        expected = [base] + [f"{base}{chr(ord('b') + k)}" for k in range(len(run) - 1)]
+        assert run == expected, (
+            f"{base}'s splits must be lettered b, c, d … in order: expected "
+            f"{expected}, found {run}"
+        )
 
 
 def test_every_plan_session_has_its_parts() -> None:
@@ -346,6 +357,22 @@ def test_finished_rows_name_their_pull_request_and_merge() -> None:
             )
         if row["status"] != "done":
             assert row["merge"] in EMPTY_CELLS, f"{row['id']} is not done, yet has a merge commit"
+        elif row["merge"] not in EMPTY_CELLS:
+            # The newest done row is blank on master, and filled first by the
+            # next session's reconcile step, so either is valid there; but a
+            # filled cell is always a commit hash, never a note or a guess's
+            # placeholder. (Step 2.3 checks every hash against the log.)
+            assert MERGE_CELL.fullmatch(row["merge"]), (
+                f"{row['id']}'s merge commit must be a commit hash from "
+                f"`git log origin/master` (7 to 40 hex digits) or blank, not "
+                f"{row['merge']!r}"
+            )
+    last = rows[-1]
+    if last["status"] == "done":
+        assert last["merge"] in EMPTY_CELLS, (
+            f"{last['id']} is the last session: no session comes after it to record "
+            f"its merge commit, so its PR leaves the cell blank, not {last['merge']!r}"
+        )
 
 
 def test_titles_agree_across_the_tracker_and_the_plan() -> None:

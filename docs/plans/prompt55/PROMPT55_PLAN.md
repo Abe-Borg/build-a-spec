@@ -1003,26 +1003,52 @@ program.
 
 ### Design
 
-1. **Wrap at send, never while typing.** The composer
-   (`frontend/src/components/Composer.tsx`) records each paste
-   (`onPaste` → `clipboardData.getData("text")`) worth marking — one holding
-   a line break or at least 120 characters (a constant; decision D7). At
-   send, for each recorded string still present verbatim in the message
-   (longest first, non-overlapping, first occurrence), wrap it as
+1. **Record each paste by position; wrap at send, never while typing.** The
+   composer (`frontend/src/components/Composer.tsx`) marks a paste worth
+   marking: one holding a line break or at least 120 characters (a constant;
+   decision D7). It records the paste as a RANGE of the message, never as a
+   string to search for later. The same text can already appear earlier in
+   the message (typed, or pasted before), and only the occurrence the paste
+   inserted was pasted. Wrapping the first match would mislabel the user's
+   own words as pasted and leave the real paste unmarked. The mechanics:
+   - `onPaste` stashes one pending record: `start = selectionStart`, and
+     `text = clipboardData.getData("text")` with `\r\n` and `\r` folded to
+     `\n` (a textarea's value holds `\n` only).
+   - Every change (`onChange`) first moves the recorded ranges through the
+     edit. The edit is the span between the old and new values' common
+     prefix and common suffix (prefix first, the suffix bounded so the two
+     never overlap). A range that ends at or before the edit's start stays;
+     a range that starts at or after the edit's end moves by the length
+     difference; and a range the edit reaches into (it deletes a character
+     inside the range, or inserts strictly between two of its characters)
+     is dropped. The user changed pasted text, and it is sent untagged, the
+     same as today and never worse. So typing right after a paste, or right
+     before it, leaves it whole. Then a pending paste is
+     adopted only if the new value holds exactly its text at its start;
+     otherwise it is discarded. The pending record is cleared either way. A
+     prefix/suffix diff can place an edit later than it really happened; it
+     then drops a range rather than mislabel one.
+   - Replacing the whole value in code (a prefill, a sent message, a cleared
+     composer) drops every range.
+   - At send, every range whose text still matches the value at its position
+     is wrapped as
 
-   ```text
-   <pasted_content id="3f9a1c2e">
-   …the pasted text, unchanged…
-   </pasted_content id="3f9a1c2e">
-   ```
+     ```text
+     <pasted_content id="3f9a1c2e">
+     …the pasted text, unchanged…
+     </pasted_content id="3f9a1c2e">
+     ```
 
-   with each tag on its own line and a fresh random 8-hex ID per block
-   (`crypto.getRandomValues`). Text the user edited inside a paste no longer
-   matches and is sent untagged — the same as today, never worse. Clear the
-   records when the message is sent or the composer is emptied. Pure helpers
-   in a new `frontend/src/lib/pastedContent.ts` (check the name is unused):
-   `wrapPastedContent(text, pasted, makeId)` and
-   `stripPastedContentTags(text)`.
+     with each tag on its own line and a fresh random 8-hex ID per block
+     (`crypto.getRandomValues`). Ranges never overlap, because an edit that
+     touched one dropped it. Wrap from the last range back, so the earlier
+     offsets stay valid.
+
+   Pure helpers live in a new `frontend/src/lib/pastedContent.ts` (check
+   the name is unused): `movePastedRanges(ranges, oldValue, newValue)`,
+   `adoptPaste(ranges, pending, value)`,
+   `wrapPastedContent(value, ranges, makeId)` and
+   `stripPastedContentTags(text)`. The composer only calls them.
 2. **The chat never shows the tags.** The local user bubble shows the text
    as typed; the API receives the tagged text. On a reload the transcript
    comes back tagged, so the user bubble renders
@@ -1041,10 +1067,20 @@ program.
 ### Tests
 
 `frontend/tests/prompt55PastedContent.test.ts` (registered in
-`frontend/package.json`): a multi-line paste is wrapped; a short one is not;
-an edited paste is not; two pastes get different IDs; overlapping pastes;
-strip removes only matching pairs and leaves the rest; a source-level pin
-that the composer sends wrapped text and the bubble renders stripped text.
+`frontend/package.json`):
+- a multi-line paste is wrapped, and a short one is not;
+- a paste placed after an identical, earlier, typed clause wraps the pasted
+  occurrence and leaves the typed one untagged;
+- an edit inside a paste drops it; an edit before a paste moves it; typing
+  right after a paste leaves it whole;
+- a paste over part of an earlier paste drops the earlier one;
+- clipboard text with `\r\n` line endings is adopted;
+- a pending paste the value does not hold at its start is discarded;
+- replacing the whole value drops every range;
+- two pastes get different IDs;
+- strip removes only matching pairs and leaves the rest;
+- a source-level pin that the composer sends wrapped text and the bubble
+  renders stripped text.
 `tests/test_prompt55_pasted_content.py`: the stable prompt carries the note,
 is still module-deterministic, and a tagged user message reaches the
 request's user turn intact.
@@ -1072,7 +1108,7 @@ request's user turn intact.
 
 ### Acceptance
 
-- **P55-8.1** — pasted blocks worth marking are wrapped at send with a random 8-hex ID per block, each tag on its own line
+- **P55-8.1** — pasted blocks worth marking are recorded by position and wrapped at send (the occurrence the paste inserted, never an identical earlier one) with a random 8-hex ID per block, each tag on its own line
 - **P55-8.2** — the chat never shows the tags, live or after a reload
 - **P55-8.3** — the stable prompt carries the pasted-content note and stays module-deterministic
 - **P55-8.4** — the frontend and backend tests cover every item above

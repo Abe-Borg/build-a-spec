@@ -169,7 +169,7 @@ match.
 
 ### P55-8 — Mark pasted text in chat, and close out
 
-- [ ] P55-8.1 — pasted blocks worth marking are wrapped at send with a random 8-hex ID per block, each tag on its own line
+- [ ] P55-8.1 — pasted blocks worth marking are recorded by position and wrapped at send (the occurrence the paste inserted, never an identical earlier one) with a random 8-hex ID per block, each tag on its own line
 - [ ] P55-8.2 — the chat never shows the tags, live or after a reload
 - [ ] P55-8.3 — the stable prompt carries the pasted-content note and stays module-deterministic
 - [ ] P55-8.4 — the frontend and backend tests cover every item above
@@ -296,9 +296,12 @@ that the plan's sections and this file agree after a split.
       - Otherwise, stop and tell Abraham which PR is open and what it is
         waiting on.
    3. Fill in the merge commit of every `done` row whose cell is blank,
-      from the GitHub API or `git log origin/master`. This rides your PR.
-      Do it first: from the moment your session ticks an item or is marked
-      blocked, the tracker test requires it.
+      from the GitHub API or `git log origin/master`, and check every hash
+      already there against the log, correcting any that is wrong (the test
+      checks a hash's shape; only the log knows whether it is the right
+      one). This rides your PR. Do it first: from the moment your session
+      ticks an item or is marked blocked, the tracker test requires it. A
+      session never writes its own row's merge commit.
 3. **Pick the session.** Take the first row that is not `done`.
    - If it is `blocked`, stop and tell Abraham. Never work around a
      blocked session.

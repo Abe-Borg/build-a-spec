@@ -248,12 +248,16 @@ API_TIMEOUT_SECONDS = _int_env("BUILD_A_SPEC_API_TIMEOUT_SECONDS", 600, minimum=
 
 # --- Adaptive thinking / effort ---------------------------------------------
 
-# Sonnet 5 runs adaptive thinking by default; requests state it explicitly
+# Sonnet 5.5 runs adaptive thinking by default; requests state it explicitly
 # (``thinking: {type: "adaptive"}``) plus an effort level via
-# ``output_config``. Interview turns default to "high" — the model's own
-# default: deep on complex work without stalling an interactive chat.
-# Research passes are background work and default to "high" (dialed back
-# 2026-07-28 from "xhigh" — cost/quality tradeoff, confirmed with Abraham).
+# ``output_config``. Interview turns default to "medium" (owner decision,
+# 2026-09-29; "high" before it). Sonnet 5.5 recalibrated its effort levels
+# from Sonnet 5's, and Anthropic's migration guidance starts multi-step tool
+# work — which a drafting turn is — at "medium". Research passes are
+# background work and default to "high" (dialed back 2026-07-28 from "xhigh" —
+# cost/quality tradeoff, confirmed with Abraham). The chat's condensing
+# summary reads INTERVIEW_EFFORT too, and must: an effort change invalidates
+# the messages cache the summary exists to read.
 EFFORT_LEVELS = ("low", "medium", "high", "max", "xhigh")
 
 
@@ -262,7 +266,7 @@ def _effort_env(name: str, default: str) -> str:
     return value if value in EFFORT_LEVELS else default
 
 
-INTERVIEW_EFFORT = _effort_env("BUILD_A_SPEC_INTERVIEW_EFFORT", "high")
+INTERVIEW_EFFORT = _effort_env("BUILD_A_SPEC_INTERVIEW_EFFORT", "medium")
 
 # AI template generalization is a bounded, mechanical rewrite: same tree,
 # same ids, same unresolved decisions, project-specific wording made

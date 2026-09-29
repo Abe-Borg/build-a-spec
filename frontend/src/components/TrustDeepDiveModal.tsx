@@ -626,7 +626,7 @@ function Dossier() {
               <>
                 Claude Sonnet 5.5 <Mono>(claude-sonnet-5-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “high” for both the interview and research. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
+              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview and “high” for research. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
             ],
             [
               "Final QC only",
@@ -775,7 +775,7 @@ function Dossier() {
               figures and reference documents — never their contents.
             </>
           }
-          model="Claude Sonnet 5.5, effort “high”."
+          model="Claude Sonnet 5.5, effort “medium”."
           bounds={
             <>
               At most 8 web searches and 4 fetches per round; a hard ceiling of
@@ -1561,7 +1561,7 @@ function Dossier() {
               arrive fresh with every message.
             </>
           }
-          model="Claude Sonnet 5.5, effort “high” — the chat's own model and settings."
+          model="Claude Sonnet 5.5, effort “medium” — the chat's own model and settings."
           bounds={
             <>
               One summary at a time, at most 64,000 output tokens; after a

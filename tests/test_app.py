@@ -92,6 +92,8 @@ def test_health_reports_model_and_key(monkeypatch):
 
 
 def test_chat_streams_deltas_and_updates_history(monkeypatch):
+    from backend import settings
+
     fake = FakeClient([text_turn(["PART 1 ", "- GENERAL"])])
     _patch_client(monkeypatch, fake)
 
@@ -149,7 +151,7 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
     # Adaptive thinking with the summarized-display opt-in (the "see what
     # the model is thinking" stream) at the configured effort.
     assert request["thinking"] == {"type": "adaptive", "display": "summarized"}
-    assert request["output_config"] == {"effort": "high"}
+    assert request["output_config"] == {"effort": settings.INTERVIEW_EFFORT}
 
     # Committed history stores the user's text ONLY — the context block
     # is per-request, never fossilized into history.

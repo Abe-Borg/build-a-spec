@@ -55,7 +55,7 @@ _DOCX_OPEN_FILE_TYPES = ("Word document (*.docx)", "All files (*.*)")
 # own filter or the packaged app hides every non-Word attachment behind the
 # generic "All files" entry — the HTML ``accept`` list only covers dev/browser.
 _REFERENCE_OPEN_FILE_TYPES = (
-    "Reference document (*.docx;*.pdf;*.txt;*.xml;*.csv)",
+    "Reference document (*.docx;*.pdf;*.txt;*.xml;*.csv;*.md;*.markdown)",
     "All files (*.*)",
 )
 _TEMPLATE_OPEN_FILE_TYPES = (

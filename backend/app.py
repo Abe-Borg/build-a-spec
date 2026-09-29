@@ -33,10 +33,11 @@ Endpoints (all JSON unless noted):
   edits require a proven flat island with isolated direct Word list bindings);
   ``?redline=master`` or ``?redline=version&base=N`` remains a normalized
   semantic tracked-changes export.
-- ``POST /api/reference/upload`` → attach a ``.docx`` as background context
-  for the model to read. Never touches the document tree, so unlike a master
-  import it has no blank-document precondition; the bytes are inspected and
-  discarded, only extracted text is kept.
+- ``POST /api/reference/upload`` → attach a reference document (Word, PDF,
+  text, XML, CSV or Markdown) as background context for the model to read.
+  Never touches the document tree, so unlike a master import it has no
+  blank-document precondition; the bytes are inspected and discarded, only
+  extracted text is kept.
 - ``GET  /api/references``    → attached reference documents (metadata only).
 - ``DELETE /api/reference/{rid}`` → detach one (404 when unknown).
 - ``POST /api/research/start``  → launch the requirements-research fan-out
@@ -5949,8 +5950,9 @@ def create_app(
         """Attach a document as background context for the model.
 
         Accepts every type in ``reference_extract.REFERENCE_KINDS`` (Word,
-        PDF, text, XML, CSV) — background material arrives in whatever format
-        the office already has it in, and none of it becomes the spec.
+        PDF, text, XML, CSV, Markdown) — background material arrives in
+        whatever format the office already has it in, and none of it becomes
+        the spec.
 
         Deliberately unlike ``/api/import/master``: this never touches the
         document tree, so it has no blank-document precondition and stays

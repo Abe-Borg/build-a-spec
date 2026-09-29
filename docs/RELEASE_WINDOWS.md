@@ -655,8 +655,14 @@ is `BUILD_A_SPEC_REDLINE_COMMENTS`, on by default.
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 
 - [ ] Attach one of each reference type — `.docx`, `.pdf`, `.txt`, `.xml`,
-      `.csv` — and have the model read one. A PDF with no text layer must be
-      refused with the reason, not attached empty.
+      `.csv`, `.md` — and have the model read one. A PDF with no text layer
+      must be refused with the reason, not attached empty.
+- [ ] In the **packaged** app, the Attach Document dialog's "Reference
+      document" filter lists `.md` and `.markdown` files (not only under
+      "All files"). Attach a `.md` with a heading, a list and a table: its
+      row in the Documents panel says Markdown, a `.markdown` file keeps its
+      own name, and asking the model about the table gets the table's
+      values.
 - [ ] A mermaid figure, a hand-authored SVG, and a table render in chat; the
       SVG/PNG/CSV downloads work from the **packaged** app. Rendering is
       sandboxed at three layers, so this is the one place a rendering

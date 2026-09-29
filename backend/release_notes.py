@@ -269,6 +269,26 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 ),
             ),
             ReleaseSection(
+                title="Reference documents",
+                items=(
+                    ReleaseItem(
+                        title="Attach Markdown files",
+                        body=(
+                            "Attach Document now takes Markdown (.md or "
+                            ".markdown) beside Word, PDF, text, XML and CSV: "
+                            "meeting notes, a basis of design written in a "
+                            "notes app, a README from a vendor. The assistant "
+                            "reads it as written, so its headings, lists and "
+                            "tables stay the outline it finds its way around "
+                            "by, and the research and Final QC passes read it "
+                            "like any other attachment. A project with a "
+                            "Markdown attachment opens in an older version "
+                            "of the app, which shows its type as \"md\"."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
                 title="Research",
                 items=(
                     ReleaseItem(

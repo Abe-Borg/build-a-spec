@@ -341,7 +341,7 @@ def test_an_unsupported_type_is_refused_and_names_what_is_accepted():
 
     assert refused.status_code == 400
     error = refused.json()["error"]
-    for extension in (".docx", ".pdf", ".txt", ".xml", ".csv"):
+    for extension in (".docx", ".pdf", ".txt", ".xml", ".csv", ".md", ".markdown"):
         assert extension in error
 
 
@@ -503,6 +503,8 @@ def test_every_supported_type_attaches_and_keeps_its_text():
             b"<standard><chw>44 degrees F at design.</chw></standard>",
             "xml",
         ),
+        ("acme.md", b"# ACME standard\n\n- CHW supply: 44 degrees F", "md"),
+        ("acme.markdown", b"## Chilled water\n\n44 degrees F at design.", "md"),
     ]
 
     for index, (name, payload, kind) in enumerate(uploads, start=1):
@@ -531,6 +533,146 @@ def test_structure_is_the_content_for_csv_and_xml():
 
     assert "system,supply temp,redundancy" in _read_tool(session, "ref-1")["content"]
     assert '<plant type="chilled-water">' in _read_tool(session, "ref-2")["content"]
+
+
+MARKDOWN_STANDARD = """\
+# ACME Data Centers — Mechanical Design Standard
+
+## 3.2 Chilled Water
+
+Chilled water supply temperature shall be **44 degrees F** at design.
+
+| System        | Supply temp | Redundancy |
+|---------------|-------------|------------|
+| Chilled water | 44 F        | N+1        |
+
+- Plants shall be N+1 at the design day load.
+- See [ASHRAE 90.1](https://www.ashrae.org/) for efficiency.
+"""
+
+
+def test_markdown_is_read_as_written_not_rendered():
+    """Its headings, table and list are the document's outline, and the model
+    reads Markdown as written: rendering it to plain text would throw the
+    outline away."""
+    client = TestClient(create_app())
+
+    body = _upload(client, "acme-standard.md", MARKDOWN_STANDARD.encode()).json()
+
+    assert body["ok"] is True
+    assert body["warnings"] == []
+    doc = body["reference_doc"]
+    assert doc["kind"] == "md"
+    assert doc["kind_label"] == "Markdown"
+    assert doc["filename"] == "acme-standard.md"
+    text = _read_tool(sessions.get_session(), "ref-1")["content"]
+    for line in (
+        "# ACME Data Centers — Mechanical Design Standard",
+        "## 3.2 Chilled Water",
+        "**44 degrees F**",
+        "| Chilled water | 44 F        | N+1        |",
+        "|---------------|-------------|------------|",
+        "- Plants shall be N+1 at the design day load.",
+        "[ASHRAE 90.1](https://www.ashrae.org/)",
+    ):
+        assert line in text, line
+
+
+def test_markdown_is_named_markdown_to_the_model_and_the_panel():
+    client = TestClient(create_app())
+    _upload(client, "notes.md", MARKDOWN_STANDARD.encode())
+    session = sessions.get_session()
+
+    metadata = client.get("/api/references").json()["reference_docs"][0]
+    assert metadata["kind"] == "md"
+    assert metadata["kind_label"] == "Markdown"
+    assert "Markdown" in session.references.context_stubs()
+    assert "Markdown" in _read_tool(session, "ref-1")["content"]
+
+
+def test_a_markdown_file_keeps_whichever_extension_it_came_with():
+    """Two spellings, one kind: ``.markdown`` must not become
+    ``.markdown.md``, and a name with neither still gets the canonical one."""
+    client = TestClient(create_app())
+
+    long_form = _upload(client, "Basis of Design.markdown", b"# BOD\n44 degrees F")
+    short_form = _upload(client, "meeting-notes.MD", b"# Notes\n44 degrees F")
+
+    assert long_form.json()["reference_doc"]["filename"] == "Basis of Design.markdown"
+    assert short_form.json()["reference_doc"]["filename"] == "meeting-notes.MD"
+    assert reference_extract.sanitize_reference_filename("", kind="md") == (
+        "attachment.md"
+    )
+    assert reference_extract.reference_extension_for_filename(
+        "notes.markdown", kind="md"
+    ) == ".markdown"
+    assert reference_extract.reference_extension_for_filename(
+        "notes.txt", kind="md"
+    ) == ".md"
+
+
+def test_binary_content_behind_a_markdown_extension_names_that_extension():
+    client = TestClient(create_app())
+
+    refused = _upload(client, "sneaky.markdown", b"\x89PNG\r\n\x1a\n\x00\x00rest")
+
+    assert refused.status_code == 400
+    error = refused.json()["error"]
+    assert "readable text" in error
+    assert "a .markdown name" in error
+
+
+def test_a_non_utf8_markdown_file_is_read_and_the_fallback_is_reported():
+    """Notes exported on Windows are routinely Windows-1252 or UTF-16."""
+    client = TestClient(create_app())
+
+    latin = _upload(client, "notes.md", "# CHW — 44 degrees F".encode("cp1252"))
+    utf16 = _upload(client, "bod.md", "# CHW 44 degrees F".encode("utf-16"))
+
+    assert latin.status_code == 200
+    assert utf16.status_code == 200
+    assert any("Windows-1252" in w for w in latin.json()["warnings"])
+    assert any("UTF-16" in w for w in utf16.json()["warnings"])
+    assert "# CHW — 44 degrees F" in _read_tool(sessions.get_session(), "ref-1")[
+        "content"
+    ]
+
+
+def test_every_picker_and_the_model_name_every_supported_type():
+    """The upload accepts exactly ``REFERENCE_KINDS``. The browser picker's
+    ``accept`` list and the native dialog's filter must offer the same set —
+    a type missing from either is one the user cannot select without "All
+    files" — and the model's stable policy must name every kind it may be
+    handed."""
+    import re
+    from pathlib import Path
+
+    import main
+    from backend.llm.prompts import _REFERENCE_DOC_POLICY
+
+    supported = set(reference_extract.REFERENCE_KINDS)
+    panel = (
+        Path(__file__).resolve().parents[1]
+        / "frontend" / "src" / "components" / "ArtifactPanel.tsx"
+    ).read_text(encoding="utf-8")
+    accepts = re.findall(r'accept="([^"]*\.pdf[^"]*)"', panel)
+    assert len(accepts) == 1, accepts
+    assert set(accepts[0].split(",")) == supported
+
+    (native,) = [
+        entry
+        for entry in main._REFERENCE_OPEN_FILE_TYPES
+        if entry.startswith("Reference document")
+    ]
+    patterns = re.search(r"\(([^)]*)\)", native).group(1).split(";")
+    assert {pattern.removeprefix("*") for pattern in patterns} == supported
+
+    for label in reference_extract.REFERENCE_KIND_LABELS.values():
+        if label == "text":
+            label = "plain text"
+        elif label == "Word":
+            label = "Word document"
+        assert label in _REFERENCE_DOC_POLICY, label
 
 
 def test_a_pdf_is_read_page_by_page_with_page_markers():

@@ -89,15 +89,15 @@ match.
 
 ### P55-1 — Harden output parsing and the fact harvest
 
-- [ ] P55-1.1 — `extract_tool_use_block` accepts a case-insensitive name only when no exact match exists, and the last match wins
-- [ ] P55-1.2 — the chat's unknown-tool `is_error` names the exact declared tool, without dispatching a mis-cased name; missing-key errors name the expected key
-- [ ] P55-1.3 — one `last_tagged_json_object` helper replaces all five greedy tagged-JSON patterns
-- [ ] P55-1.4 — the harvest's system prompt ends with "Think the problem through before you answer."
-- [ ] P55-1.5 — a harvest `max_tokens` stop is `harvest_cut_off` even with a payload, metered, and `HARVEST_MAX_TOKENS` (64k, env + README row) bounds the call
-- [ ] P55-1.6 — `tests/test_prompt55_parsing_and_harvest.py` covers every item above
-- [ ] P55-1.7 — verified: ruff, pytest, npm test, npm run build
-- [ ] P55-1.8 — revert matrix recorded in As built
-- [ ] P55-1.9 — CLAUDE.md, README and the release note updated
+- [x] P55-1.1 — `extract_tool_use_block` accepts a case-insensitive name only when no exact match exists, and the last match wins — evidence: `tests/test_prompt55_parsing_and_harvest.py::test_an_exact_name_wins_over_a_later_case_insensitive_one`, `::test_a_case_insensitive_name_is_accepted_and_the_last_one_wins`, `::test_a_mis_cased_output_tool_call_completes_the_call` (research + qc); `backend/research/schema.py` `extract_tool_use_block`
+- [x] P55-1.2 — the chat's unknown-tool `is_error` names the exact declared tool, without dispatching a mis-cased name; missing-key errors name the expected key — evidence: `tests/test_prompt55_parsing_and_harvest.py::test_a_mis_cased_chat_tool_is_told_its_exact_name_and_is_not_run`, `::test_an_unknown_chat_tool_is_told_every_tool_it_can_call`, `::test_a_read_reference_doc_call_without_ref_id_names_the_key`, `::test_every_chat_tool_names_the_key_an_empty_call_is_missing`; As built deviation 2 (only `read_reference_doc` changed)
+- [x] P55-1.3 — one `last_tagged_json_object` helper replaces all five greedy tagged-JSON patterns — evidence: `backend/research/schema.py` `last_tagged_json_object`; `tests/test_prompt55_parsing_and_harvest.py::test_research_reads_the_final_block_newest_response_first`, `::test_each_final_qc_fallback_reads_the_final_block` (x3), `::test_the_compliance_audit_reads_the_final_block`, `::test_no_greedy_tagged_json_pattern_is_left_anywhere`
+- [x] P55-1.4 — the harvest's system prompt ends with "Think the problem through before you answer." — evidence: `tests/test_prompt55_parsing_and_harvest.py::test_the_harvest_system_prompt_ends_with_the_guides_line`
+- [x] P55-1.5 — a harvest `max_tokens` stop is `harvest_cut_off` even with a payload, metered, and `HARVEST_MAX_TOKENS` (64k, env + README row) bounds the call — evidence: `tests/test_prompt55_parsing_and_harvest.py::test_a_cut_off_harvest_is_refused_even_with_a_payload_and_carries_its_usage`, `::test_the_route_refuses_a_cut_off_harvest_meters_it_and_shows_nothing`, `::test_the_harvest_ceiling_ships_at_64k_with_a_floor`, `::test_the_harvest_ceiling_reads_its_knob_and_clamps_to_the_floor`; README Configuration row
+- [x] P55-1.6 — `tests/test_prompt55_parsing_and_harvest.py` covers every item above — evidence: `tests/test_prompt55_parsing_and_harvest.py` (43 cases) covers P55-1.1 to P55-1.5, mapped in the plan's P55-1 As built
+- [x] P55-1.7 — verified: ruff, pytest, npm test, npm run build — evidence: ruff clean; `pytest -q` 3063 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean (plan's P55-1 As built, Verified)
+- [x] P55-1.8 — revert matrix recorded in As built — evidence: plan's P55-1 As built, Revert matrix (24 rows; 21 red alone, the other three explained and proven red in combination)
+- [x] P55-1.9 — CLAUDE.md, README and the release note updated — evidence: CLAUDE.md "Output parsing and the fact harvest, hardened" + Layout entries; README harvest bullet, routes and `BUILD_A_SPEC_HARVEST_MAX_TOKENS` row; `backend/release_notes.py` 1.21.0 "A harvest that runs out of room says so"
 
 ### P55-2 — The interview replies after its last tool call
 

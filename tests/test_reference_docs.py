@@ -578,6 +578,68 @@ def test_markdown_is_read_as_written_not_rendered():
         assert line in text, line
 
 
+def test_markdown_keeps_its_lines_exactly_and_other_text_is_still_tidied():
+    """In Markdown two trailing spaces are a hard line break, and trailing
+    spaces and blank-line runs inside a code block are the code — so a
+    Markdown file's lines are kept exactly. A ``.txt`` with the same bytes is
+    still tidied (trailing whitespace dropped, blank-line runs collapsed),
+    and both drop only the blank lines at the very start and end."""
+    markdown = (
+        "\n\n"
+        "Supply 44 degrees F  \n"
+        "Return 56 degrees F\n"
+        "\n"
+        "```\n"
+        "line one   \n"
+        "\n"
+        "\n"
+        "\n"
+        "line two\n"
+        "```\n"
+        "\n\n"
+    )
+    verbatim = reference_extract.extract_reference_document(
+        markdown.encode(), filename="notes.md"
+    )
+    tidied = reference_extract.extract_reference_document(
+        markdown.encode(), filename="notes.txt"
+    )
+
+    assert verbatim.text == (
+        "Supply 44 degrees F  \n"
+        "Return 56 degrees F\n"
+        "\n"
+        "```\n"
+        "line one   \n"
+        "\n"
+        "\n"
+        "\n"
+        "line two\n"
+        "```"
+    )
+    assert tidied.text == (
+        "Supply 44 degrees F\n"
+        "Return 56 degrees F\n"
+        "\n"
+        "```\n"
+        "line one\n"
+        "\n"
+        "line two\n"
+        "```"
+    )
+    assert verbatim.block_count == tidied.block_count == 6
+
+
+def test_markdown_normalizes_only_line_endings_and_control_characters():
+    """Blank or whitespace-only lines before the first and after the last
+    line with text go too; nothing between them does."""
+    verbatim = reference_extract.extract_reference_document(
+        b"   \r\nfirst  \r\nsecond\x07\r\n  \r\n\t\r\n", filename="notes.markdown"
+    )
+
+    assert verbatim.text == "first  \nsecond"
+
+
 def test_markdown_is_named_markdown_to_the_model_and_the_panel():
     client = TestClient(create_app())
     _upload(client, "notes.md", MARKDOWN_STANDARD.encode())

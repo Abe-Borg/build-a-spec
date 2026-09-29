@@ -946,7 +946,9 @@ backend/
                            unlock, no-text-layer refusal); txt/xml/csv/md decode
                            through a BOM/UTF-8/cp1252/latin-1 ladder with a NUL
                            binary guard, structure kept verbatim (Markdown is
-                           never rendered). Blocking — worker thread only
+                           never rendered, and its lines are kept exactly —
+                           _VERBATIM_LINE_KINDS: no trailing-space strip, no
+                           blank-run collapse). Blocking — worker thread only
   templates.py             reusable semantic templates: TemplateCatalog (curated
                            + personal libraries, preview→commit two-phase create,
                            Exact vs AI-Generalize, import/export/instantiate);
@@ -18219,12 +18221,19 @@ bump.
 - **Read as written, never rendered.** Markdown goes through the same
   `_extract_plain_text` as `.txt`, `.xml` and `.csv`: the decode ladder
   (UTF-16 BOM → UTF-8 → cp1252 → latin-1, the fallback disclosed), the NUL
-  guard against a renamed binary, control characters dropped, trailing
-  whitespace stripped and blank-line runs collapsed to one. Its headings,
-  lists, tables and emphasis markers stay, because they are the document's
-  outline and the model reads Markdown natively; rendering to plain text
-  would lose the outline and gain nothing. The one visible side effect of the
-  shared path: a two-space hard line break reads as an ordinary line break.
+  guard against a renamed binary, line endings to `\n` and control
+  characters dropped. Its headings, lists, tables and emphasis markers stay,
+  because they are the document's outline and the model reads Markdown
+  natively; rendering to plain text would lose the outline and gain nothing.
+- **Its lines are kept exactly** (`_VERBATIM_LINE_KINDS`, caught in review
+  on PR #234, Codex). The first cut shared the other text types' tidying —
+  trailing whitespace stripped, blank-line runs collapsed to one — and
+  called that "read as written". It is not, for Markdown: two trailing
+  spaces are a hard line break, and trailing spaces and blank lines inside a
+  fenced or indented code block are the code. A Markdown file now keeps
+  every line between its first and last line with text, byte for byte;
+  `.txt`, `.xml` and `.csv` are tidied exactly as before (pinned by the same
+  bytes read both ways).
 - **A file keeps the spelling it came with.** `sanitize_reference_filename`
   used the kind's first extension, so with two spellings `notes.markdown`
   would have been stored as `notes.markdown.md`. The new
@@ -18255,18 +18264,25 @@ bump.
   label. Before this, only the native filter was held to the set (by
   `test_close_prompt.py`), so a type added to the backend could silently
   stay unselectable in the browser.
-- **Tests**: 6 new in `tests/test_reference_docs.py` (Markdown kept as
-  written — headings, a table, a list, a link, bold; the label reaching the
-  panel, the stub and the tool header; both spellings keeping their own
-  name; the binary guard naming `.markdown`; a Windows-1252 and a UTF-16
-  Markdown file; the three-way type pin), plus `.md` and `.markdown` added to
-  the every-type and unsupported-type tests. Revert matrix, each mechanism
-  reverted in place and restored from the exact text read (the reference-doc
-  and close-prompt suites run each time): the `.md` mapping → 7 red; the
-  `.markdown` mapping → 5; the `md` label → 2; the filename-spelling fix →
-  2; the extension in the binary guard's message → 1; the browser `accept`
-  list without Markdown → 1; the native filter without it → 2 (this pin and
-  `test_close_prompt`'s); the stable policy back to its old line → 1.
+- **Tests**: 8 new in `tests/test_reference_docs.py` (Markdown kept as
+  written — headings, a table, a list, a link, bold; its lines kept exactly
+  while a `.txt` of the same bytes is tidied; only line endings, control
+  characters and the blank lines at either end normalized; the label
+  reaching the panel, the stub and the tool header; both spellings keeping
+  their own name; the binary guard naming `.markdown`; a Windows-1252 and a
+  UTF-16 Markdown file; the three-way type pin), plus `.md` and `.markdown`
+  added to the every-type and unsupported-type tests. Revert matrix, each
+  mechanism reverted in place and restored from the exact text read (the
+  reference-doc and close-prompt suites run each time): the `.md` mapping →
+  7 red; the `.markdown` mapping → 5; the `md` label → 2; the
+  filename-spelling fix → 2; the extension in the binary guard's message →
+  1; the browser `accept` list without Markdown → 1; the native filter
+  without it → 2 (this pin and `test_close_prompt`'s); the stable policy
+  back to its old line → 1; and for the review fix, Markdown not verbatim →
+  2, its trailing whitespace stripped → 2, its blank-line runs collapsed →
+  1, whitespace-only lines at the end kept → 1 (green on the first run —
+  the test's trailing lines were empty, not whitespace — so the test gained
+  them before this was recorded).
 - **Release note**: an "Attach Markdown files" item in a new "Reference
   documents" section of the unreleased 1.21.0 entry (v1.20.0 was the latest
   published release, checked through the Releases API), in the same commit

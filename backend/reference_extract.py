@@ -28,10 +28,12 @@ Supported kinds, and why each is read the way it is
           above and never rendered. Its headings, lists, tables and emphasis
           markers are the document's outline, and the model reads Markdown as
           written, so rendering it to plain text would only throw the outline
-          away. What every text type goes through still applies: trailing
-          whitespace on a line is dropped (so a two-space hard line break
-          reads as an ordinary line break) and runs of blank lines collapse
-          to one. Neither changes what the document says.
+          away. Its lines are kept exactly, which the other text types' are
+          not: their trailing whitespace is dropped and their blank-line runs
+          collapse to one, but in Markdown two trailing spaces are a hard
+          line break, and trailing spaces and blank lines inside a code block
+          are the code. Only line endings (to ``\n``), control characters and
+          blank lines at the very start and end are normalized.
 
 Everything here is pure CPU over the uploaded bytes and must run on a worker
 thread; see the event-loop rule in ``backend/app.py``.
@@ -93,6 +95,11 @@ MAX_PDF_PAGES = 1_000
 # file with fifty blank lines between sections would spend real tokens on
 # nothing.
 MAX_CONSECUTIVE_BLANK_LINES = 1
+
+# Kinds whose lines are kept exactly as written: no trailing whitespace is
+# stripped and no run of blank lines is collapsed. Markdown only — there both
+# can be meaning (a hard line break, the inside of a code block).
+_VERBATIM_LINE_KINDS = frozenset({"md"})
 
 # C0 controls have no meaning in extracted reference text; tabs and newlines
 # do. DEL goes too. Anything left would only confuse the model or the panel.
@@ -365,20 +372,24 @@ def _extract_plain_text(
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.translate(_CONTROL_TRANSLATION)
 
+    # Markdown keeps its lines exactly: two trailing spaces are a hard line
+    # break, and trailing spaces and blank-line runs inside a fenced or
+    # indented code block are the code. Every other text type is tidied.
+    verbatim = kind in _VERBATIM_LINE_KINDS
     lines: list[str] = []
     block_count = 0
     blank_run = 0
     for raw in text.split("\n"):
-        line = raw.rstrip()
+        line = raw if verbatim else raw.rstrip()
         if line.strip():
             blank_run = 0
             block_count += 1
             lines.append(line)
             continue
         blank_run += 1
-        if blank_run <= MAX_CONSECUTIVE_BLANK_LINES and lines:
-            lines.append("")
-    while lines and not lines[-1]:
+        if lines and (verbatim or blank_run <= MAX_CONSECUTIVE_BLANK_LINES):
+            lines.append(line if verbatim else "")
+    while lines and not lines[-1].strip():
         lines.pop()
 
     warnings: list[str] = []

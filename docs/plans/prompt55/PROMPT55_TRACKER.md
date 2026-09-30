@@ -2,7 +2,7 @@
 
 <!-- PROMPT55-STATUS: IN PROGRESS -->
 
-**Next session:** P55-5 — Remind a batched verifier seat that skipped its output tool
+**Next session:** P55-6 — Keep thinking valid when the harness edits a request
 
 Owner: Abraham. Opened 2026-09-29.
 
@@ -50,7 +50,7 @@ pull request each:
 | P55-2 | The interview replies after its last tool call | done | PR #237 | `77da938` |
 | P55-3 | Draft passes finish in one turn, and effort is re-based | done | PR #238 | `1d2185c` |
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | done | PR #239 | `4e94610` |
-| P55-5 | Remind a batched verifier seat that skipped its output tool | not started | — | — |
+| P55-5 | Remind a batched verifier seat that skipped its output tool | done | PR #240 | — |
 | P55-6 | Keep thinking valid when the harness edits a request | not started | — | — |
 | P55-7 | Final QC falls back when a streamed call is declined | not started | — | — |
 | P55-8 | Mark pasted text in chat, and close out | not started | — | — |
@@ -139,7 +139,7 @@ match.
 - [x] P55-5.2 — the reminder count survives a resume and resets on a restart — evidence: `_BatchSeatState.reminders_sent` (kept by `resume_attempt`, zeroed by `restart_attempt`); `tests/test_prompt55_batch_reminder.py::test_a_resume_resubmits_the_reminder_and_keeps_the_count`, `::test_a_restart_starts_the_count_again`, `::test_the_seat_state_keeps_the_count_on_a_resume_and_drops_it_on_a_restart`
 - [x] P55-5.3 — the reminded seat's record reconciles, priced at the batch rate — evidence: `tests/test_prompt55_batch_reminder.py::test_the_reminded_seat_is_priced_at_the_batch_rate_and_reconciles` (`cost_multiplier`, `estimate_usage_cost(..., multiplier=BATCH_COST_MULTIPLIER)`, `_audit_accounting_consistent()`, the `qc_batched` bucket, a `from_dict` round trip), `::test_progress_stays_phase_level_and_no_new_event_type`
 - [x] P55-5.4 — `tests/test_prompt55_batch_reminder.py` covers every item above — evidence: `tests/test_prompt55_batch_reminder.py` (20 cases) covers P55-5.1 to P55-5.3, plus `::test_the_reminder_request_is_sanitized_like_a_pause_resume`, `::test_batched_and_streamed_verdicts_agree_for_a_reminded_seat` and `::test_batched_and_streamed_fail_the_same_way_when_the_reminders_run_out`; plan's P55-5 As built, Knowing test changes (two `tests/test_qc_audit_report.py` fixtures, found by a probe)
-- [ ] P55-5.5 — verified: ruff, pytest, npm test, npm run build
+- [x] P55-5.5 — verified: ruff, pytest, npm test, npm run build — evidence: ruff clean; `pytest -q` 3212 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean (plan's P55-5 As built, Verified)
 - [x] P55-5.6 — revert matrix recorded in As built — evidence: plan's P55-5 As built, Revert matrix (24 rows, every one red; the first run's green sanitize row strengthened with a new test; the recovering guard and the window's `round_left=False` recorded as one mechanism written twice, red when reverted together)
 - [x] P55-5.7 — CLAUDE.md (and the release note, if needed) updated — evidence: CLAUDE.md "A batched verifier seat that skipped its output tool is reminded" section + Layout entries; `backend/release_notes.py` 1.21.0 Final QC "A reviewer that forgets to hand in its work is reminded" (the batched reviewers' sentence); README Final QC "Five lenses" bullet and the QC `engine.py` architecture line; the trust dossier's Final QC card
 

@@ -1613,7 +1613,7 @@ estimate from `estimate_usage_cost(..., multiplier=BATCH_COST_MULTIPLIER)`,
 type; and the two transports reaching the same verdicts, and the same
 failure text when the reminders run out.
 
-**Verified** on the branch, with every doc change in place: `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q` 3210 passed, 64 skipped and 2 failed on the first run, both failures `frontend/dist/assets` missing because a concurrent `npm run build` had emptied it (both pass on re-run; a clean full run is in progress); `npm test` 438 passed; `npm run build` clean.
+**Verified** on the branch, with every doc change in place: `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q` 3212 passed, 64 skipped (a first run, with `npm run build` emptying `frontend/dist` beside it, failed two app-factory tests on the missing `frontend/dist/assets`; the run on its own was clean); `npm test` 438 passed; `npm run build` clean.
 
 **Revert matrix.** 24 rows. Each mechanism was reverted in place, one at a
 time, by a script that restored the exact text it read and checked

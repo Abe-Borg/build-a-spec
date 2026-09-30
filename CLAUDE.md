@@ -18531,6 +18531,119 @@ traps.
      `harvest.py` and `llm/conversation.py` are maintained current, so they
      were corrected in place, and the new test file joins them.
 
+## The reply comes after the last tool call — implemented notes (5.5 prompting upgrade, P55-2)
+
+The second session of the 5.5 prompting upgrade (`docs/plans/prompt55/`),
+findings F1 and F7 of the review of Anthropic's Sonnet 5.5 and Opus 5.5
+prompting guides. No route, SSE event type, dependency, env knob,
+project-format change, QC schema or protocol bump, or version bump. The
+plan's P55-2 **As built** carries the deviations and the full revert matrix;
+this section is the why and the traps.
+
+- **Why the order matters on Sonnet 5.5.** The guide: "Notes longer than a
+  sentence or two come back as progress-update `thinking` blocks. Shorter
+  remarks stay `text`." The app's prompts asked for the opposite order —
+  `_SUGGESTED_PROMPTS_POLICY` said to call `suggest_prompts` "near the end of
+  your reply, once your questions for the turn are on the table", and both
+  full debriefs said "Close by asking … and stage suggested replies". So the
+  interview's questions, and a research or Final QC debrief's whole brief,
+  could arrive as a thinking block: collapsed in the chat's Thinking
+  disclosure (it collapses once reply text arrives) and dropped at commit
+  (`_TRANSIENT_BLOCK_TYPES`), never reaching saved history, the reloaded
+  transcript, the fact harvest's `[turn:N]` text, the condensed
+  conversation's digest or the model's own memory next turn. Text after the
+  LAST tool call is the turn's closing text, not a note between calls, so it
+  stays `text`. That is the whole fix.
+- **The stable prompt says the order and why.** `_HOW_YOU_WORK` step 2 makes
+  every tool call first (`suggest_prompts` last of all), step 3 writes the
+  reply after the final one, and a short paragraph gives the reason in terms
+  the model can act on. `_SUGGESTED_PROMPTS_POLICY` and the
+  `suggest_prompts` tool description (`backend/suggestions.py`, which renders
+  ahead of the system prompt and said "near the end of your reply" too) both
+  say LAST tool call, then the closing message. Short progress notes between
+  calls stay welcome: they are fine as collapsed lines once the closing
+  message carries the substance, and `THINKING_DISPLAY` stays `summarized`
+  (decision D2).
+- **One ordering sentence, in every chip-staging directive.**
+  `prompts._REPLY_AFTER_TOOL_CALLS` is carried by the full-draft and adapt
+  directives, both prerequisite turns, both debriefs and every short variant
+  (research nothing-new, QC clean, QC partial/failed/cancelled). One constant
+  so the directives cannot drift into different orders, and so one test
+  pins them all. The variants that asked for no chips now ask for suggested
+  replies for the choice they close on (P55-2.3 names them).
+  `FULL_DRAFT_DIRECTIVE`, `ADAPT_IMPORTED_DIRECTIVE`,
+  `RESEARCH_DEBRIEF_DIRECTIVE` and `QC_DEBRIEF_DIRECTIVE` became f-strings to
+  carry it. Every phrase the older directive tests pin survived, so none of
+  them changed.
+- **The web-lookup policy carries the guide's sentence.** Check specifics
+  that may have changed since training — a code requirement's current
+  wording or threshold, an adopted edition, a listing or approval — before
+  drafting them, "even when you feel confident". The old line "Quick lookups
+  are NOT the requirements-research phase" read literally as "don't search";
+  it now says a fact about to go into a provision is always worth a quick
+  check, and still points at the Research button for the systematic sweep.
+  Expect a few more metered searches per session (release-noted).
+- **Cache.** The stable prompt and a tool description changed, so every chat
+  session writes its cached prefix once more after the update. Research and
+  Final QC request bytes are unchanged (the lens prompt embeds only the
+  `apply_spec_edits` description), and nothing reaches the QC input manifest,
+  so no retained Final QC result reads stale.
+- **The canary** (`tools/prompt55_progress_update_canary.py`, the third paid
+  exception in the ground rules; only Abraham runs it, and nothing waits on
+  it). It runs ONE real interview turn through `stream_user_turn` on a fresh
+  `SessionState` with `conversation.get_client` swapped for the length of the
+  turn, and re-sends each request through `client.beta.messages.stream` with
+  `thinking.display: "updates"` (beta `thinking-display-updates-2026-08-18`)
+  and `max_tokens` capped — the only three differences from the production
+  request (`progress_update_request`, pure). Under `"updates"` every
+  non-empty thinking block IS a progress note. **Pass** = the last round
+  ends on `end_turn` with closing text of at least 80 characters that asks a
+  question, and no progress note asks one.
+- **The canary's trap: the engine's own retry.** `_enter_stream` degrades a
+  rejected `thinking.display` once by resending WITHOUT it. Left alone, a
+  400 on `"updates"` would run the whole turn without the beta and report a
+  verdict about nothing. `ProgressUpdateClient` re-raises its first recorded
+  failure on every later call without sending, so a refused request costs
+  one request and is printed. The real SDK sends when the stream context is
+  ENTERED (the fakes raise from `stream()`), so the error is recorded in
+  both places. A turn that fails after its requests succeeded (a stream that
+  breaks mid-iteration, the tool round ceiling) is caught from the engine's
+  own `error` events and reported, never judged.
+- **Testing a canary that drives the engine.** The request test runs the
+  same scripted turn through the plain engine and through the canary and
+  asserts each recorded request equals the plain one. The PROJECT CONTEXT
+  opens with the clock (`date_context_block(with_time=True)`), so the test
+  pins `conversation.date_context_block`; without it the two runs can
+  straddle a minute. The canary's fake client has ONLY a `beta` namespace,
+  so a request through `client.messages` fails loudly.
+- **Tests:** `tests/test_prompt55_closing_message.py` and
+  `tests/test_prompt55_progress_update_canary.py`; the docs-consistency
+  Windows-command scan now reads the canary and the two prompt55 files.
+  Revert matrix: 45 mechanisms, each reverted in place and restored from
+  the exact text read, every one red (in full in the plan's P55-2 As
+  built). The first run found one green row — the policy's old
+  answers-first phrase, which the test had checked only in the tool
+  description's spelling — and the test was strengthened before the row was
+  recorded.
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Batch 9 — implemented notes (v1.4.0: dynamic suggested-prompts bar)":
+     the `_SUGGESTED_PROMPTS_POLICY` it added (and the tool's own
+     description) told the model to call `suggest_prompts` "at most once per
+     turn, near the end of your reply". Since P55-2 it is the LAST tool
+     call, and the reply comes after it.
+  2. "Sonnet unleashed" notes: `_WEB_LOOKUP_POLICY` said "verify facts
+     freely … never recreate the research phase piecemeal". It now says to
+     check specifics even when confident, and the "piecemeal" line is gone;
+     the Research button still owns the systematic sweep.
+  3. "The chat sees the reviews, and completions debrief themselves
+     (v1.11.0)": the debrief directives' "honest variants" now all ask for
+     suggested replies and end with the shared ordering sentence; the
+     full-brief ones say "The whole brief is that closing message".
+  4. The ground rules' "Two canaries are the only explicit paid exceptions"
+     is now three; it was corrected in place, since the ground rules
+     describe the current state.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

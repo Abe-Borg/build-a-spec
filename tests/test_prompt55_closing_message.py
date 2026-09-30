@@ -69,7 +69,10 @@ def test_suggest_prompts_is_the_last_tool_call_before_the_closing_message(module
     ) in prompt
     assert "near the end of your reply" not in prompt
     assert "once your questions for the turn are on the table" not in prompt
-    assert "lead with direct answers to the questions you just asked" not in prompt
+    # The chips answer what the closing message is about to ask, not
+    # questions already written out before the call.
+    assert "when your closing message asks questions, lead with direct" in prompt
+    assert "when you asked questions this turn" not in prompt
 
 
 def test_the_suggest_prompts_tool_description_says_the_same_order():

@@ -330,6 +330,85 @@ def test_another_model_name_alone_is_not_a_fallback_when_none_was_asked_for():
     assert _lens_status(result, _WEB_LENS).served_by_model == ""
 
 
+def _answered_as(model: str, **extra) -> SimpleNamespace:
+    return SimpleNamespace(
+        model=model, stop_reason="end_turn", content=[text_block("done")],
+        usage=None, **extra,
+    )
+
+
+@pytest.mark.parametrize(
+    ("requested", "served"),
+    [
+        ("claude-opus-4-5", "claude-opus-4-5-20251101"),  # an alias resolved
+        ("claude-3-5-sonnet-latest", "claude-3-5-sonnet-20241022"),
+        ("claude-opus-4-5-20251101", "claude-opus-4-5"),  # the other way round
+        ("claude-opus-5-5", "claude-opus-5-5"),
+        ("Claude-Opus-5-5", "claude-opus-5-5"),
+    ],
+)
+def test_an_alias_answering_as_its_own_snapshot_is_not_a_fallback(requested, served):
+    """Codex, PR #242: a configured alias answers as the dated snapshot it
+    resolves to. The request carried the fallback, and still nothing fell
+    back: a snapshot of the requested model is that model."""
+    assert qc_engine._fallback_served_model(
+        _answered_as(served), requested=requested, carried=True
+    ) == ""
+
+
+@pytest.mark.parametrize(
+    ("requested", "served"),
+    [
+        ("claude-opus-5-5", "claude-opus-5"),
+        ("claude-opus-5-5", "claude-opus-5-20260101"),
+        ("claude-opus-4-5", "claude-opus-4-1-20250805"),
+    ],
+)
+def test_another_model_is_still_read_as_a_fallback(requested, served):
+    assert qc_engine._fallback_served_model(
+        _answered_as(served), requested=requested, carried=True
+    ) == served
+
+
+def test_a_run_on_an_alias_records_no_rescue_and_measures_its_tail(monkeypatch):
+    """End to end on an alias: a paused lens whose every response names the
+    alias's dated snapshot records no rescue, puts nothing under
+    Limitations, and its continuation is measured like any other."""
+    alias, snapshot = "claude-opus-4-5", "claude-opus-4-5-20251101"
+    pending = pause_response(pending_query="nfpa 13")
+    pending.model = snapshot
+    final = _measurable_final()
+    final.model = snapshot
+    seen: list[dict] = []
+    real = cost_checks.observe_continuation
+
+    def spy(engine, **kwargs):
+        seen.append(kwargs)
+        return real(engine, **kwargs)
+
+    monkeypatch.setattr(qc_engine.cost_checks, "observe_continuation", spy)
+    store = _store()
+    client = SequencedFakeClient(_one_finding(lens_turns=[pending, final]))
+    log = _StreamLog(client)
+    result = run_final_qc(
+        store.doc, None, DEFAULT_MODULE, client,
+        model=alias, max_tokens=4096, version_index=store.index,
+        started_at="2026-09-30T10:00:00-07:00",
+        finished_at="2026-09-30T10:01:00-07:00",
+        run_id="qc-fallback-alias", batch_verification=True,
+        batch_warm_lead=False, continuation_cache=True, refusal_fallback=True,
+    )
+    lens = [r for r in log.requests if f"[[QC-LENS:{_WEB_LENS}]]" in json.dumps(r["messages"], default=repr)]
+    assert len(lens) == 2 and all(_carries(r) for r in lens)
+    status = _lens_status(result, _WEB_LENS)
+    assert status.status == "completed"
+    assert status.served_by_model == ""
+    assert docx_export.qc_refusal_fallback(result.to_dict()) == (0, "")
+    assert len(seen) == 1
+    assert seen[0]["fallback_served"] is False
+    assert _kinds()["unmeasured"] == 0
+
+
 def test_a_decline_the_fallback_also_declines_stays_a_refusal():
     declined = fallback_served(
         qc_findings_response(

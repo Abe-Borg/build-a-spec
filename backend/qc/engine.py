@@ -3697,6 +3697,23 @@ def _model_id(value: Any) -> str:
     return ""
 
 
+# The suffix the provider may add when it resolves an alias to the snapshot
+# that serves it: "claude-opus-4-5" answers as "claude-opus-4-5-20251101",
+# and a "-latest" alias as its dated snapshot. Two ids that differ only here
+# name one model (Codex, PR #242).
+_MODEL_SNAPSHOT_SUFFIX = re.compile(r"(?:-latest|[-@]\d{8})$", re.IGNORECASE)
+
+
+def _same_model(served: str, requested: str) -> bool:
+    """Whether two model ids name one model: equal once each is lower-cased
+    and loses a snapshot date or ``-latest`` suffix."""
+
+    def family(model_id: str) -> str:
+        return _MODEL_SNAPSHOT_SUFFIX.sub("", model_id.strip().lower())
+
+    return family(served) == family(requested)
+
+
 def _fallback_blocks(content: Any) -> list[Any]:
     return [
         block
@@ -3715,11 +3732,14 @@ def _fallback_served_model(
     (the served-by signal — its ``model`` names the answering model), a
     ``fallback`` content block (one per hop where a model ran and declined —
     its ``to.model``), or, for a request that CARRIED the fallback, a
-    ``response.model`` other than the one requested (a sticky turn: once a
-    conversation fell back, later requests with ``fallbacks`` are served by
-    the fallback model directly, and carry no block; and the GA SDK's stream
-    accumulator does not copy ``iterations`` from ``message_delta``, while
-    ``message_start`` already names the serving model). A response whose
+    ``response.model`` naming another model than the one requested (a sticky
+    turn: once a conversation fell back, later requests with ``fallbacks``
+    are served by the fallback model directly, and carry no block; and the
+    GA SDK's stream accumulator does not copy ``iterations`` from
+    ``message_delta``, while ``message_start`` already names the serving
+    model). The requested model's own dated snapshot, or the snapshot a
+    ``-latest`` alias resolves to, is the same model (:func:`_same_model`):
+    it is how a configured alias answers, never a rescue. A response whose
     final ``stop_reason`` is a refusal was declined by the whole chain and was
     answered by nobody: ``""``. Reads the response and never changes it.
     """
@@ -3737,7 +3757,7 @@ def _fallback_served_model(
         return _model_id(_item_attr(target, "model")) or _UNKNOWN_MODEL
     if carried:
         served = _model_id(_item_attr(response, "model"))
-        if served and requested and served != requested:
+        if served and requested and not _same_model(served, requested):
             return served
     return ""
 

@@ -720,9 +720,11 @@ backend/
                            unless the resend is a 400 too; one WARNING).
                            _fallback_served_model reads a response three
                            ways (a fallback_message iteration, a fallback
-                           block's to.model, response.model ≠ requested only
-                           when the request CARRIED the fallback), "" for a
-                           refusal; _CallResult.served_by_model is the
+                           block's to.model, response.model naming another
+                           model — never the requested one's dated snapshot
+                           (_same_model) — only when the request CARRIED the
+                           fallback), "" for a refusal;
+                           _CallResult.served_by_model is the
                            call's _served_by_label; QCLensStatus / QCVerdict
                            / QCConsolidation gain served_by_model (serialized
                            only when set, read by _persisted_served_by_model,
@@ -3026,7 +3028,8 @@ tests/
                            merge, research never; a rescued lens (each
                            signal alone), seat, malformed seat and grouping
                            call recording who answered, a model name alone
-                           not a rescue when none was asked for, a doubly
+                           not a rescue when none was asked for nor when it
+                           is the requested alias's own snapshot, a doubly
                            declined call still a refusal, the payload read
                            after the switch point, the echo rule on a pause
                            and a reminder; the round trip and an older
@@ -19429,8 +19432,13 @@ the why and the traps.
   directly, with no block), and on the GA SDK it is often the only one at
   all: the stream accumulator does not copy `iterations` from
   `message_delta`, while `message_start` already names the serving model. It
-  counts only when the request CARRIED the fallback — otherwise an alias or
-  a dated snapshot echoed back would read as a rescue. A response whose
+  counts only when the request CARRIED the fallback, and only when the name
+  is another MODEL: a configured alias answers as its dated snapshot
+  (`claude-opus-4-5` as `claude-opus-4-5-20251101`, a `-latest` alias as its
+  snapshot), so `_same_model` compares the two ids lower-cased and without a
+  snapshot date or `-latest` suffix (Codex, PR #242 — carrying the fallback
+  by default had made every request on an alias read as a rescue, with a
+  false Limitations line and every tail observation unmeasured). A response whose
   final `stop_reason` is `refusal` was declined by the whole chain and was
   answered by nobody. On SDK 1.9.0 a `fallback` block parses as a
   `TextBlock` with `type="fallback"` and its `from`/`to` kept as extras;

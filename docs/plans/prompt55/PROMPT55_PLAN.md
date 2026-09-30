@@ -2092,7 +2092,8 @@ switches it back off.
 4. **Detection and record.** `_fallback_served_model(response, requested=,
    carried=)`: a `fallback_message` iteration's `model`, else the last
    `fallback` block's `to.model`, else `response.model` when it differs
-   from the requested model AND the request carried the fallback; `""` for
+   from the requested model — never its own dated snapshot (`_same_model`,
+   the review fix below) — AND the request carried the fallback; `""` for
    a response whose final `stop_reason` is a refusal. `_CallResult` gains
    `served_by_model` (`_served_by_label`: distinct, sorted, at most four);
    `QCLensStatus`, `QCVerdict` and `QCConsolidation` gain `served_by_model`
@@ -2147,7 +2148,9 @@ switches it back off.
    unconditionally; an alias or a dated snapshot echoed back would then read
    as a rescue. `cost_checks` (a leaf that cannot know what the request
    carried) reads only the block and the iteration; the engine passes the
-   model signal as `fallback_served`.
+   model signal as `fallback_served`. Carrying it was not enough on its own
+   (the review fix below): the fallback is on by default, so every request
+   carries it.
 3. **What SDK 1.9.0 actually delivers.** The GA stream accumulator does not
    copy `usage.iterations` from `message_delta`, while `message_start`
    already names the serving model, so on the streamed path the model name
@@ -2186,6 +2189,22 @@ switches it back off.
 9. **No release-checklist row.** A tester cannot make the model decline on
    demand.
 
+**Review fix (Codex, PR #242).** "Do not treat model alias resolution as a
+fallback": with `BUILD_A_SPEC_QC_MODEL` set to an alias, the provider names
+the snapshot it resolved to in `response.model` (`claude-opus-4-5` answers as
+`claude-opus-4-5-20251101`), and with the fallback carried by default every
+such response read as a rescue — a false per-record line, a false Limitations
+line, and every tail observation unmeasured. `_same_model(served, requested)`
+now compares the two ids lower-cased and without a trailing snapshot date
+(`-YYYYMMDD`, or `@YYYYMMDD`) or `-latest`; the model signal counts only for
+a different model. A fallback model is another model entirely, so nothing a
+rescue says is lost. Tests: the five alias shapes read as no rescue, three
+different models still read as one, and a run on an alias whose paused lens
+answers as its snapshot records no rescue, puts nothing under Limitations,
+and has its continuation measured (9 cases). Reverted in place: the raw
+comparison → 5 red; the date suffix not stripped → 4; `-latest` not stripped
+→ 1; case-sensitive → 1; every model "the same" → 6.
+
 **Knowing test changes.** Two helpers that pin today's exact request shape
 now pass `refusal_fallback=False`, each with a comment:
 `tests/test_qc_live_events.py`'s `_run_client` (the continuation tail's
@@ -2209,8 +2228,8 @@ unchanged.
 block, iteration, model, partial)`, each signal attached only when asked for;
 `tests/conftest.py` re-arms the latch before and after every test.
 
-**Tests.** `tests/test_prompt55_qc_refusal_fallback.py` (46 cases,
-parametrized included):
+**Tests.** `tests/test_prompt55_qc_refusal_fallback.py` (55 cases,
+parametrized included; 46 before the review fix above):
 - the request: every streamed lens request carries the parameter and the
   beta while the batched params and `_qc_request_kwargs` never do; streamed
   seats; a warm lead (and its batch not); the switch off sends neither; the
@@ -2218,7 +2237,8 @@ parametrized included):
   research never;
 - the record: a rescued lens completing with `served_by_model` (all three
   signals, and each alone), a model name alone not a rescue when none was
-  asked for, a doubly declined call still a refusal, a rescued seat, a
+  asked for, an alias answering as its own snapshot never a rescue (and a
+  run on one measured and silent), a doubly declined call still a refusal, a rescued seat, a
   malformed rescued seat, a rescued grouping call; the payload read after
   the switch point; the echo rule on a pause and on a reminder (the
   reminder's turn plain text); an ordinary response re-sent as the same

@@ -1,8 +1,22 @@
 # The 5.5 prompting upgrade — tracker
 
-<!-- PROMPT55-STATUS: IN PROGRESS -->
+<!-- PROMPT55-STATUS: COMPLETE -->
 
-**Next session:** P55-8 — Mark pasted text in chat, and close out
+<!-- PROMPT55-BANNER -->
+```text
+########     ########    ########   #######  ##    ## ########
+##           ##          ##     ## ##     ## ###   ## ##
+##           ##          ##     ## ##     ## ####  ## ##
+#######      #######     ##     ## ##     ## ## ## ## ######
+      ##           ##    ##     ## ##     ## ##  #### ##
+##    ## ### ##    ##    ##     ## ##     ## ##   ### ##
+ ######  ###  ######     ########   #######  ##    ## ########
+```
+<!-- /PROMPT55-BANNER -->
+
+**ALL WORK IN THE 5.5 PROMPTING UPGRADE IS COMPLETE.**
+
+**Next session:** none — the program is complete
 
 Owner: Abraham. Opened 2026-09-29.
 
@@ -53,7 +67,7 @@ pull request each:
 | P55-5 | Remind a batched verifier seat that skipped its output tool | done | PR #240 | `829b839` |
 | P55-6 | Keep thinking valid when the harness edits a request | done | PR #241 | `8240f19` |
 | P55-7 | Final QC falls back when a streamed call is declined | done | PR #242 | `2fe9b4c` |
-| P55-8 | Mark pasted text in chat, and close out | not started | — | — |
+| P55-8 | Mark pasted text in chat, and close out | done | PR #243 | — |
 
 ### What each status means
 
@@ -176,7 +190,7 @@ match.
 - [x] P55-8.5 — verified: ruff, pytest, npm test, npm run build — evidence: ruff clean; `pytest -q` 3311 passed, 64 skipped; `npm test` 466 passed; `npm run build` clean (plan's P55-8 As built, Verified)
 - [x] P55-8.6 — revert matrix recorded in As built — evidence: plan's P55-8 As built, "Revert matrix": 41 mechanisms reverted in place by a script that restored the exact text read (the tree checked unchanged afterwards); 40 red, and the strip's early return reads the same either way (an optimization, by design); the first run's three other green rows (adopting a paste not worth marking, a stale range, the composer's value ref) got stronger tests, and the recorded counts are the final run
 - [x] P55-8.7 — closeout: CLAUDE.md closing section, README, release notes checked, the plans index marked complete — evidence: CLAUDE.md "Pasted text is marked as pasted" (with the P55-3 pasted-directive erratum) and "The 5.5 prompting upgrade, as shipped" (all eight sessions, switches and defaults, what remains owed, the errata check) + Layout entries; README "The 5.5 prompting upgrade (in the next release)"; `backend/release_notes.py` 1.21.0 Chat "Pasted text is marked as pasted", and every P55-1 to P55-8 item checked to sit in 1.21.0 (unreleased — the Releases API lists v1.20.0 as the latest) and none in a frozen entry; `TrustDeepDiveModal.tsx` chat card + "Text you paste" row; `docs/plans/README.md` marks the program complete; P55-2's As built records the canary as not run and still optional
-- [ ] P55-8.8 — the tracker reads COMPLETE, with the banner, as the PR's last change
+- [x] P55-8.8 — the tracker reads COMPLETE, with the banner, as the PR's last change — evidence: this file's status line, banner block, completion line and Next-session line; the P55-8 row done with PR #243; `tests/test_prompt55_tracker.py` passes on the COMPLETE state
 
 ## Rules
 

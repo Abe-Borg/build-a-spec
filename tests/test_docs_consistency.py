@@ -95,34 +95,20 @@ def test_the_docs_use_the_venv_name_the_setup_creates() -> None:
 
 
 # Every place that tells someone to run a command on Windows: the five docs
-# the venv-name test reads, the live plans (the compaction plan, the
-# project workspace, the research/QC cost program's plan and progress
-# file, and the Tier 1 finish program's two plans and tracker) and the
-# execution record whose commands are still to be run, the
-# usage docstrings of the four profilers and the fetch-elision canary, and the
-# PyInstaller spec's build steps. The deep-dive remediation plans are
-# finished and keep their commands as written (the Batch 8 decision), and
-# CLAUDE.md is append-only history: only its Commands section is read, so a
-# note can still quote the broken form it records.
+# the venv-name test reads, the usage docstrings of the three profilers and
+# the two canaries, and the PyInstaller spec's build steps. The finished
+# implementation plans were retired on 2026-09-30 (docs/plans/README.md
+# says where each went); a future plan that carries a Windows command joins
+# this list. CLAUDE.md is append-only history: only its Commands section is
+# read, so a note can still quote the broken form it records.
 _WINDOWS_COMMAND_DOCS = (
     "README.md",
     "docs/RELEASE_WINDOWS.md",
     "docs/DOCX_FIDELITY.md",
     "docs/DOCX_FIDELITY_CORPUS.md",
     "docs/DOCX_RENDERER_WINDOWS.md",
-    "docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md",
-    "docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md",
-    "docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md",
-    "docs/plans/tier1-finish/TIER1_FINISH_CHUNK3_WARM_LEAD_PLAN.md",
-    "docs/plans/tier1-finish/TIER1_FINISH_CHUNK4_CONTINUATION_TAIL_PLAN.md",
-    "docs/plans/tier1-finish/TIER1_FINISH_TRACKER.md",
-    "docs/plans/project-workspace/README.md",
-    "docs/plans/prompt55/PROMPT55_PLAN.md",
-    "docs/plans/prompt55/PROMPT55_TRACKER.md",
-    "docs/review-results/2026-09-09/EXECUTION_RECORD.md",
     "tools/chat_history_profile.py",
     "tools/fetch_elision_canary.py",
-    "tools/lint_block_profile.py",
     "tools/prompt55_progress_update_canary.py",
     "tools/qc_export_cost_profile.py",
     "tools/research_cost_profile.py",

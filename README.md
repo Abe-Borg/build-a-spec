@@ -71,8 +71,9 @@ No release entry of its own: every user-visible item rides the newest
 unreleased entry (1.21.0) in `backend/release_notes.py`. On 2026-09-29 the app
 was reviewed against Anthropic's prompting guides for Claude Sonnet 5.5 (the
 chat, research, the fact harvest and the condensing summary) and Claude Opus
-5.5 (Final QC). Eight sessions implemented every recommendation
-(`docs/plans/prompt55/`). What changed for you:
+5.5 (Final QC). Eight sessions implemented every recommendation; the plan
+is retired, and CLAUDE.md's "The 5.5 prompting upgrade, as shipped" is the
+record. What changed for you:
 
 - **Pasted text is marked as pasted** (P55-8). A paste into the chat that
   holds a line break or runs to 120 characters reaches the assistant inside a
@@ -323,8 +324,9 @@ sheet, a previous project's section, or meeting notes.
 
 ## Shipped in v1.21.0 (Project workspace — every section of a project stays in step)
 
-The project-workspace program (`docs/plans/project-workspace/`) makes a
-project a first-class thing: one project folder, sections that hang off it,
+The project-workspace program (its plans are retired; CLAUDE.md's "The
+project workspace program, as shipped" is the record) makes a project a
+first-class thing: one project folder, sections that hang off it,
 switching between them in one click. Its phases shipped together in
 v1.21.0:
 
@@ -626,15 +628,16 @@ tokens), `facts`, `sections`, `references`, `document`, `lint`,
 `open_items`, `qc_review`, `other` and `total`; the blocks sum to `total`.
 
 Part B — rendering the research relevance-first — is not built. It waits on
-that measurement, taken on a real second section of a hyperscale project (see
-`docs/plans/project-workspace/05_RELEVANCE_TRIM.md`).
+that measurement, taken on a real second section of a hyperscale project. Its
+spec is retired with the program's plans
+(`git show 7d4c0db:docs/plans/project-workspace/05_RELEVANCE_TRIM.md`).
 
 ## Chat history compaction
 
 Every chat turn re-sends the whole conversation, and nothing bounded it: a
 long enough session would eventually exceed the model's 1M-token window,
 after which every message fails and the saved project keeps the problem.
-The plan is [`docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`](docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md):
+The plan (retired; CLAUDE.md's compaction sections are the record) was:
 first stop saving data that is already stored elsewhere, then condense the
 conversation rarely between turns, with the original transcript always
 kept and recallable. Phases 1 and 2 ship in v1.21.0. Phase 2's trim is on
@@ -644,7 +647,7 @@ default since 2026-09-23 (below). That finishes the program's code. On
 2026-09-23 the owner dropped the plan's two remaining pieces: an optional
 trim within a single full-draft turn (Phase 5), and, for now, passing the
 summary's list of unrecorded decisions to the fact harvest. The release
-notes for Phases 2 and 3 wait for the next release.
+notes for Phases 2 and 3 are in the unreleased 1.21.0 entry.
 
 ### Stale outlines stay out of the conversation (Phase 1)
 
@@ -774,17 +777,18 @@ it pays for itself within a handful of later messages. **Settings →
 Developer tools → Session state → Condensed conversation** shows the
 record's sizes (never its text).
 
-## Redline on your original (in progress)
+## Redline on your original
 
-The redline-on-your-original program
-(`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`) exports a copy of the Word
+The redline-on-your-original program (its plan is retired; CLAUDE.md's
+"Redline on your original" sections and `docs/DOCX_FIDELITY.md` are the
+record) exports a copy of the Word
 file you imported with every change Build-a-Spec made shown as Word tracked
 changes — Accept All gives the updated section, Reject All gives your
 original back. Its first phase fixes the export that redline has to agree
 with, and it ships in v1.21.0. The redline itself (Phase 1, below) is
-built too: its backend is in v1.21.0, and its Export-menu item and *Open
-redline in Word* are on `master`, with no release entry yet — which release
-announces the redline is the owner's pick. So are fixes for the two losses
+built too, and since 2026-09-30 every part of the program is announced in
+the unreleased 1.21.0 entry, which a tag cut from `master` carries. So are
+fixes for the two losses
 Phase 1 recorded in the formatted export (links, and the level of a new
 sub-provision — below), and for the four things Phase 0 left behind (the
 Phase 0 follow-up, below). Phase 2 landed as two pull requests: first real
@@ -792,8 +796,8 @@ Microsoft Word as the redline's judge (PR #197, below), then Word's own "Moved"
 marks (below) — built before anyone had run that judge on Windows, a gate the
 owner waived, so a switch turns them off. Phase 3 — Build-a-Spec's
 comments on the changes, with the research text and source links behind
-each one (below) — is built too, on `master` with no release entry yet; the
-owner declined the phase's other ideas.
+each one (below) — is built too; the owner declined the phase's other ideas.
+The real-Word QA rows in the release runbook are still to run.
 
 ### Export Word (keeps your formatting) keeps more of it (Phase 0)
 
@@ -1116,15 +1120,12 @@ affects quality**: no model, effort level, prompt, search or fetch budget,
 verifier panel, adjudication rule or output changes. Only how and when the
 same requests reach the provider changes — calls that share a cached prefix
 stop writing it several times over, a paused call reads its own cache, and a
-retry resumes instead of starting over. The plan is
-[`docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md`](docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md);
-where it stands is
-[`docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md`](docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md),
-and nowhere else.
+retry resumes instead of starting over. The plan and its progress file are
+retired; CLAUDE.md's "Research and Final QC cost, Tier 1, as shipped" is
+the record.
 
-**The program is complete** (six chunks, closed 2026-09-24), and no release
-carries it yet: whichever release next ships from `master` owes its release
-notes. In an ordinary run a user sees at most two changes: Final QC's first
+**The program is complete** (six chunks, closed 2026-09-24), and its release
+notes are in the unreleased 1.21.0 entry. In an ordinary run a user sees at most two changes: Final QC's first
 stage starts a few seconds later (Chunk 2, below), and on a section large
 enough, its batched verification waits for one reviewer to start answering
 first (Chunk 3, below). When a request fails for a passing reason — a rate
@@ -1142,9 +1143,9 @@ a separately streamed request stored (Chunk 3), and whether a resumed
 request's automatic cache breakpoint is accepted and read (Chunk 4). Each
 was to turn on only when a measured run (the plan's M3) passed its own test,
 and no such run is planned (the progress file's O6, 2026-09-24). So a
-second program, the **Tier 1 finish**
-([`docs/plans/tier1-finish/TIER1_FINISH_TRACKER.md`](docs/plans/tier1-finish/TIER1_FINISH_TRACKER.md),
-complete), replaced that run with **cost self-checks** that watch the runs
+second program, the **Tier 1 finish** (complete; CLAUDE.md's "The two
+shelved savings are on, and watch themselves" is the record), replaced that
+run with **cost self-checks** that watch the runs
 the app makes anyway and can only switch a saving off
 ([below](#the-cost-self-checks-watch-both-savings-tier-1-finish)), and then
 turned both on. **Both are on by default**, and `0` switches either off
@@ -1470,8 +1471,8 @@ provider.**
 **The project brief was a file relay.** Everything a section pays for could
 carry into the next section since v1.17.0, but getting there meant Export →
 Export project brief, then New session → New section in an existing project,
-then the file dialog. Phase 1 of the project-workspace plan
-(`docs/plans/PROJECT_WORKSPACE_2026-09-22.md`) removes the file.
+then the file dialog. Phase 1 of the project-workspace program removes the
+file.
 
 - **Next section → in the document panel.** It offers to save the section you
   are leaving (the same Save / Continue without saving / Cancel prompt as New

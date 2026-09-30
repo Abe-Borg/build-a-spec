@@ -1,7 +1,7 @@
 r"""Real Word judges the redline on your original (optional, Windows only).
 
-Redline on your original, Phase 2 (``docs/plans/REDLINE_ON_ORIGINAL_
-2026-09-22.md``). The app proves its own promise before it hands a redline
+Redline on your original, Phase 2 (the plan is retired; the contract is
+``docs/DOCX_FIDELITY.md`` → "Real Word as the judge"). The app proves its own promise before it hands a redline
 over: Accept All gives *Export Word (keeps your formatting)*, Reject All
 gives the upload back. That proof uses the app's own XML resolver. Here REAL
 Microsoft Word resolves the same files, both ways, through the hidden-Word

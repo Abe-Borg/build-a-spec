@@ -1,8 +1,8 @@
 """Word revision markup, resolved: Accept All, Reject All, and the canonical
 comparison the redline's self-check runs.
 
-Redline on your original, D-7 (``docs/plans/REDLINE_ON_ORIGINAL_2026-09-22
-.md``). The redline export promises two things about the file it hands
+Redline on your original, D-7 (the plan is retired; the contract is
+``docs/DOCX_FIDELITY.md`` → "Redline on your original"). The redline export promises two things about the file it hands
 over — Accept All gives the formatted export, Reject All gives the upload
 back — and checks both before it returns anything. These are the checks:
 pure lxml, no Word, a few linear passes over the body. They are also the

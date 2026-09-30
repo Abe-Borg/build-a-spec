@@ -1,7 +1,8 @@
 """One-request live canary for fetched-page elision in saved chat history.
 
-Phase 2 of the chat-history compaction plan
-(``docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md``) drops the text of
+Phase 2 of the chat-history compaction program (its plan is retired;
+CLAUDE.md "Fetched page text stays out of saved history" and "Citations
+must fit the request that carries them" are the record) drops the text of
 every page the chat fetched when a turn is saved, keeping the page's URL,
 title and retrieval time. Chat fetches carry citations, so a reply that
 quoted the page carries ``char_location`` citations whose character offsets

@@ -2,177 +2,72 @@
 
 Owner: Abraham.
 
-## Active
-
-**[The 5.5 prompting upgrade](prompt55/PROMPT55_TRACKER.md)** —
-**complete** (opened 2026-09-29, closed 2026-09-30 by P55-8; its code is all
-on `master`). Implemented the review of the app against Anthropic's
-prompting guides for Claude Sonnet 5.5 and Claude Opus 5.5 (the models the
-interview, research, the harvest and Final QC run on). Eight sessions, one
-pull request each (PRs #236–#242 and P55-8's): hardened output parsing and a
-fact harvest that thinks first; an interview that writes its reply after its
-last tool call; draft passes that finish in one turn, and Final QC effort
-re-based for Opus 5.5; a reminder for a research or review call that ends
-without its output tool (streamed and batched); thinking kept valid when the
-app edits a request; a server-side fallback for a declined Final QC call;
-and pasted text marked in chat, with the closeout. Its user-visible items
-ride the newest unreleased release entry (1.21.0). Still optional: the
-owner-run P55-2 canary (`tools/prompt55_progress_update_canary.py --run`).
-The spec is [`PROMPT55_PLAN.md`](prompt55/PROMPT55_PLAN.md); the record of
-every session, its rules and decisions is the
-[tracker](prompt55/PROMPT55_TRACKER.md), and CLAUDE.md "The 5.5 prompting
-upgrade, as shipped" summarizes it.
-
-**[Tier 1 finish: Chunks 3 and 4](tier1-finish/TIER1_FINISH_TRACKER.md)**
-— **complete** (opened 2026-09-24, closed 2026-09-25 by FIN-1; its code is
-all on `master`). It finished the two Tier 1 savings that shipped off: the
-continuation tail (Chunk 4) and the warm lead (Chunk 3). There was no
-owner-run measurement (O6): runtime self-checks, which watch the runs the
-app makes anyway and can only switch a saving off, replaced the M3 gate,
-and then each switch turned on (decision FD1). **Both now default on**, and
-`0` switches either off; Settings → Developer tools → Cost self-checks shows
-what the checks have decided. Six sessions, one pull request each: CT-1,
-CT-2 and CT-3
-([Chunk 4's plan](tier1-finish/TIER1_FINISH_CHUNK4_CONTINUATION_TAIL_PLAN.md);
-PRs #224–#226), WL-1 and WL-2
-([Chunk 3's plan](tier1-finish/TIER1_FINISH_CHUNK3_WARM_LEAD_PLAN.md);
-PRs #227 and #228), and the closeout, FIN-1, which folded the program into
-the root `CLAUDE.md` and `README.md` (FD2). The only thing still owed is the
-Tier 1 release notes (below). The record of how it ran, the rules and the
-decisions live ONLY in the [tracker](tier1-finish/TIER1_FINISH_TRACKER.md)
-and the two plans' As built sections.
-
-**[Research and Final QC cost, Tier 1](RESEARCH_QC_COST_TIER1_2026-09-23.md)**
-— **complete** (opened 2026-09-23, closed 2026-09-24 by Chunk 6; its code is
-all on `master`, and its release notes are owed to the next release). Cut
-what requirements research and Final QC cost without changing any model,
-effort, prompt, budget, panel or result. Calls that share a cached prefix
-stop writing it more than once; paused research and review calls read their
-own cache; a transient failure resumes instead of starting over; and a
-research cost profiler measures the effect. Six chunks, one per session.
-Chunk 2's staggered launch ships on, and Chunk 5's resume has no switch.
-**Chunks 3 and 4 shipped off. Each flip needed a measured run (M3), and on
-2026-09-24 the owner said none is coming (O6), so both were shelved. The
-same day he asked for them to be finished without one (O7), and the Tier 1
-finish program (above) turned both on: Chunk 4 in CT-3 (PR #226), Chunk 3
-in WL-2 (PR #228), each watched by its runtime self-check.** No
-measurement of a real run was recorded during either program, so none of
-the savings has been measured yet. Whichever release next ships from
-`master` owes the plan's §7 "Release-note draft (Tier 1)", all four items:
-Chunks 2 and 5, and Chunks 3 and 4, which are on by default. Where it
-stands, the measurements and the owner decisions live ONLY in
-[`RESEARCH_QC_COST_TIER1_PROGRESS.md`](RESEARCH_QC_COST_TIER1_PROGRESS.md)
-(its "After the program" section); start there, not here.
-
-**[Project workspace](project-workspace/README.md)** — the live program
-(decisions ratified 2026-09-22; Phase 1 shipped in v1.20.0, PR #174; where
-the later phases stand is kept ONLY in the folder README's implementation
-record — this line went stale once already; one release for Phases 2–6 at
-the end). Carry a project's work
-(research, location, system and project facts, references, editions)
-across its spec sections as a first-class project: a project folder with a
-Project panel, an append-only write-back merge, a harvest pass, a measured
-relevance trim, an optional client library, and the release closeout. The
-folder's README carries the handoff prompt, the implementation record, the
-release policy, the binding decisions and the program rules; one spec file
-per phase sits beside it. The assessment and the original one-file plan
-are [`PROJECT_WORKSPACE_2026-09-22.md`](PROJECT_WORKSPACE_2026-09-22.md).
-A fresh session starts from the folder README's "How to hand this off"
-section, not here.
-
-**[Chat history compaction](CHAT_HISTORY_COMPACTION_2026-09-22.md)** —
-**complete** (opened 2026-09-22; its code is all on `master`, and its
-release notes are owed to the next release). Keep the chat history the
-model re-reads every turn bounded without losing what only the
-conversation holds: stop saving data
-stored elsewhere (Phase 1, stale edit outlines — complete, PR #182; Phase 2,
-fetched page text — merged in PR #183 and switched off; its live canary's
-first run on 2026-09-23 was refused, the trim was reworked in PR #192, and
-the second run passed the same day, so PR #194 turned it on by default), then
-condense the conversation rarely between turns with the full transcript kept
-and recallable (Phase 3 — complete, PR #189; decisions D1–D4 made
-2026-09-22; routine condensing shipped off until a paid recall check, and
-the owner turned it on by default on 2026-09-23 without that check (D5,
-PR #196); PR #192 also repairs citations that a condensed view had left
-pointing at the wrong page). A real project the owner measured on
-2026-09-23 confirmed the stale outlines were most of what an older build
-re-sent (75.5%). The same day the owner dropped the last two pieces: Phase
-5, a trim within a single full-draft turn (D6), and, for now, the "promote
-before prune" hand-off that would have passed the summary's unrecorded
-decisions to the project workspace's harvest (D4). The plan's
-implementation record is the only authority on where each phase stands; this
-line is a summary of it. The file is the plan, the owner decisions (D1–D6)
-and the implementation record. Phases 1–2 ship in the project workspace's
-release, 1.21.0 (same release policy); whichever release next ships from
-`master` owes Phase 2's and Phase 3's release-note drafts.
-
-**[Deep-dive remediation](deep-dive-remediation/README.md)** — **complete**.
-Six phases, 24 chunks (1.1–6.5), all landed: direct server-tool callers,
-continuation containers, server-tool pairing and legacy history repair, live
-stream resilience, named research coverage, per-TTL cache pricing, the v4
-Final QC panel outcomes, consolidation and sign-off consistency, and the
-locking and snapshot rules. The one item still outstanding is the owner-run
-live and manual QA in Chunk 6.5, which spends real money. Its README carries
-the handoff prompt, the frozen decisions, the finding-coverage matrix, the
-dependency edges and the phase gates; start there, not here.
-
-**[Redline on your original](REDLINE_ON_ORIGINAL_2026-09-22.md)**: opened
-2026-09-22; all seven decisions ratified the same day (the seventh settled
-Phase 0's open question: a provision added after a section's last paragraph
-keeps landing at the top of the next section). **Phase 0 (PR #184) ships in
-1.21.0** (the project-workspace closeout). **Phase 1 is built:** its backend
-(PR #187) is in 1.21.0, and its UI (PR #190 — the menu item, *Open redline in
-Word*, the capability, the copy) is on `master`. No release entry announces
-the redline yet; the owner picks the release, and the real-Word QA rows are
-still to run. A follow-up (PR #193) fixed the two losses Phase 1 recorded in
-the formatted export: a provision holding a hyperlink is spliced instead of
-rebuilt from its first run (every fallback in the corpus sweep had been a
-link — none are now), and a new sub-provision in a Word-numbered master takes
-its own numbering level. A second follow-up (PR #206) fixed a redline Word would refuse
-to open: inline custom XML in a changed provision had been wrapped whole in a
-tracked change, and it is now tracked from inside, like a hyperlink, with the
-self-check refusing that shape outright. A third (the Phase 0 follow-up, PR #207)
-fixed the four things Phase 0 left behind: refs that counted preserved blocks,
-the styled export numbering one, a non-spec import's placeholder headings in
-the formatted export and the redline, and a template clone's pending
-revisions. None of the three follow-ups has a release entry. **Phase 2 lands
-as two PRs** (a deviation: the plan
-sized it as one). PR A (PR #197) makes real Word the redline's judge — an optional
-Windows suite where a hidden Word accepts and rejects every change and the
-result must match Word's own save of the formatted export or the upload —
-plus a corpus recipe that records Word's own tracked moves as evidence;
-its as-built note is "Phase 2 (PR A) — as built". PR B (#204), native Word "Moved"
-marks, is built too — without the owner's Windows run of the judge or Word's
-own tracked-move sample, which the plan had made its gate: the owner waived
-that gate on 2026-09-23 (the plan's Decision 8; waived, not passed). The
-native moves ship behind `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` (on by default,
-`0` is the Phase 1 rendering byte for byte), and "Phase 2 (PR B) — as built"
-lists what the first Word run should check. No release entry yet.
-**Phase 3 is decided and built** (Decisions 9–13, 2026-09-23): the owner
-wanted only the comments — every change with a recorded basis now carries a
-Word comment from Build-a-Spec naming the research finding, attached
-document or Final QC fix behind it, with clickable source links, always on
-behind `BUILD_A_SPEC_REDLINE_COMMENTS` (`0` is the redline byte for byte). A
-durable record of applied QC fixes makes the QC half possible; the redline
-against any version is dropped, header/footer redlining declined, and
-layering on pending revisions skipped. Built without real Word, like PR B;
-"Phase 3 (comments on changes) — as built" lists what to check first. No
-release entry yet.
-The program adds a
-tracked-changes copy of the Word file you imported: every non-body part stays
-byte-identical (since Phase 3, Build-a-Spec's comments aside), Reject All
-gives back the upload, and Accept All gives
-*Export Word (keeps your formatting)*. The export checks both halves itself
-and refuses when either check fails. Phase 0 fixed the four bugs found in
-today's formatted export along the way — relettered provisions lost their tab
-and bold, a section break was dropped or duplicated, and a "(Not used.)" line
-went stale — plus five more of the same export's defects it turned up.
+Nothing is in flight. Every program that was planned here has shipped, and
+its as-built record lives in `CLAUDE.md`, the file each plan named as the
+source of truth for conventions, invariants and frozen decisions. A future
+plan goes in this folder beside this index, and the index is where a session
+looks first.
 
 ## Retired
 
+### 2026-09-30 — the finished programs
+
+Deleted on 2026-09-30, once every program below had closed and every
+user-visible item it still owed had been lifted into the unreleased 1.21.0
+entry of `backend/release_notes.py`. Each row's last column names the
+`CLAUDE.md` sections that hold its as-built record.
+
+| Program | Files removed | Closed | As-built record |
+|---|---|---|---|
+| Deep-dive remediation (v1.8.0) | `deep-dive-remediation/` (8 files) | 2026-07-29, Chunk 6.5 | the "Deep-dive remediation Chunk N.N" sections |
+| Chat history compaction | `CHAT_HISTORY_COMPACTION_2026-09-22.md` | 2026-09-23; Phases 1–3 shipped, Phases 4 and 5 dropped (D4, D6) | "Stale outlines stay out of saved history", "Fetched page text stays out of saved history", "A long conversation is condensed, never deleted", "Routine condensing is on by default", "The compaction plan's last two pieces are dropped" |
+| Project workspace | `PROJECT_WORKSPACE_2026-09-22.md`, `project-workspace/` (7 files) | 2026-09-23, Phase 7 (PR #188); Phase 5 Part B and Phase 6 were never started (below) | "Next section in one click", "The project has a home", "The brief is a living file", "Nothing settled is left in the transcript", "What each turn carries is measured", "The project workspace program, as shipped" |
+| Redline on your original | `REDLINE_ON_ORIGINAL_2026-09-22.md` | 2026-09-23, Phase 3 and every follow-up | the "Redline on your original" sections; the contract is `docs/DOCX_FIDELITY.md` |
+| Research and Final QC cost, Tier 1 | `RESEARCH_QC_COST_TIER1_2026-09-23.md`, `RESEARCH_QC_COST_TIER1_PROGRESS.md` | 2026-09-24, Chunk 6 | "Research and Final QC cost, Tier 1, as shipped" and one section per chunk |
+| Tier 1 finish | `tier1-finish/` (3 files) | 2026-09-25, FIN-1 | "The two shelved savings are on, and watch themselves" |
+| The 5.5 prompting upgrade | `prompt55/` (2 files) | 2026-09-30, P55-8 | "The 5.5 prompting upgrade, as shipped" and one section per session |
+| Revision-2 review, execution record | `../review-results/2026-09-09/EXECUTION_RECORD.md` | steps 1, 3 and 5 shipped; steps 2 and 4 were owner-run measurements never taken, and its two deferred ideas were since built by Tier 1 Chunks 2 and 3 | "The revision-2 review plan, as executed", "Where the revision-2 plan went" |
+
+Removed with them: `tests/test_tier1_finish_tracker.py` and
+`tests/test_prompt55_tracker.py`, whose only job was to police the shape of
+the two trackers, and `tools/lint_block_profile.py`, the execution record's
+step-4 instrument, which had no tests, was never run, and carried a copy of
+the LINT REPORT renderer that had to be kept in step with `conversation.py`.
+
+Three things were not already recorded elsewhere and were relocated, not
+dropped:
+
+- the release-note drafts the plans still owed (compaction Phases 2 and 3,
+  the Tier 1 plan's §7, and the redline program's seven) → the 1.21.0 entry
+  of `backend/release_notes.py`;
+- the deep-dive program's nine-item owner-owed live and manual QA gate
+  (Chunk 6.5) → `docs/RELEASE_WINDOWS.md` → **Pre-release manual QA** →
+  "Deep-dive remediation live gate";
+- the execution record's step-2 decision rule → it was already what
+  `tools/qc_export_cost_profile.py` applies; its docstring now says so.
+
+Two specs were never built, and nothing is waiting on them: project
+workspace Phase 5 Part B (relevance-first research rendering, gated on a
+measurement of a real second section) and Phase 6 (a client library, gated
+on a second project for one client, decision D5). If either is picked up,
+its spec is in git history at the last commit that held these files:
+
+```
+git show 7d4c0db:docs/plans/project-workspace/05_RELEVANCE_TRIM.md
+git show 7d4c0db:docs/plans/project-workspace/06_CLIENT_LIBRARY.md
+```
+
+Every other file above is there too, under its own path.
+
+Deliberately not kept as an in-tree `archive/` folder: repo-wide searches by
+coding agents would still surface it, which is the exact clutter the removal
+was for. The same reasoning retired the batch plans below.
+
+### 2026-07-29 — the batch plans
+
 The batch plans for v0.7.0–v1.0.0 (Batches 2–5) and the batch kickoff prompt
 `AGENT_PROMPT.md` were deleted on 2026-07-29. All four batches shipped, and
-their as-built design record is restated in `CLAUDE.md` — the file those plans
+their as-built design record is restated in `CLAUDE.md`, the file those plans
 themselves named as the source of truth for conventions, invariants and frozen
 decisions. `AGENT_PROMPT.md` selected the next batch from `VERSION` (topping
 out at 0.9.0 → Batch 5) and pointed at a `ROADMAP.md` deleted long before it,
@@ -196,7 +91,3 @@ reasoning:
 ```
 git show c991c4c:docs/plans/BATCH_4_FINAL_QC_ON_FABLE.md
 ```
-
-Deliberately not kept as an in-tree `archive/` folder: repo-wide searches by
-coding agents would still surface it, which is the exact clutter the removal
-was for.

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Read saved research rounds and report what they cost.
 
-Chunk 1 of the Research and Final QC cost plan
-(``docs/plans/RESEARCH_QC_COST_TIER1_2026-09-23.md``). It is the sibling of
+Chunk 1 of the Research and Final QC cost program, Tier 1 (its plan is
+retired; CLAUDE.md "Research cost is measurable" is the record). It is the
+sibling of
 ``tools/qc_export_cost_profile.py``, and the before-and-after instrument for
 the plan's Chunks 4 and 5: the headline it prints — the UNCACHED share of
 the input side, over every round it read — is the number those chunks exist
@@ -41,8 +42,8 @@ a brief carried under that hash still meets its original.
 ``--model`` prices every round at another model's list rates; by default
 they are priced at the research model this build is configured with.
 
-Paste the block it prints into the progress file's Measurements section
-(``docs/plans/RESEARCH_QC_COST_TIER1_PROGRESS.md``, M1 or M3).
+The block it prints is the before-and-after reading for the Tier 1 savings
+(the plan called it M1 or M3); keep it with the run it describes.
 """
 
 from __future__ import annotations

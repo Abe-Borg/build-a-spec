@@ -551,7 +551,8 @@ QC_WARM_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_WARM_WAIT_SECONDS", 45, minimum
 # ON by default since the Tier 1 finish program's WL-2, without the measured
 # trial the flip once waited on. A lead pays for itself only if the batch can
 # read the entry a STREAMED request wrote, and no document states that the two
-# transports share it; decision FD1 (docs/plans/tier1-finish/) replaced the
+# transports share it; decision FD1 (the Tier 1 finish program; CLAUDE.md
+# "The two shelved savings are on, and watch themselves") replaced the
 # trial that was to settle it with a runtime self-check
 # (backend/cost_checks.py, session WL-1) that can only switch the lead OFF,
 # until the app restarts. After every batched phase that ends normally and
@@ -581,7 +582,8 @@ QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", True)
 # apart, so the entries a tail would read have expired).
 #
 # ON by default since the Tier 1 finish program's CT-3, without the measured
-# trial the flip once waited on: decision FD1 (docs/plans/tier1-finish/)
+# trial the flip once waited on: decision FD1 (the Tier 1 finish program;
+# CLAUDE.md "The two shelved savings are on, and watch themselves")
 # replaced that trial with runtime self-checks (backend/cost_checks.py) that
 # watch the runs the app makes anyway and can only switch the tail OFF, one
 # engine at a time, until the app restarts. If the provider ever refuses a
@@ -801,7 +803,8 @@ CHAT_CACHE_TTL = _cache_ttl_env(
 # summary plus the newest turns instead of the whole transcript (the full
 # transcript is never deleted, and the model can read any condensed turn back
 # with ``recall_conversation``). ON by default since the owner decided it on
-# 2026-09-23 (decision D5 in docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md),
+# 2026-09-23 (the compaction plan's decision D5; CLAUDE.md "Routine
+# condensing is on by default"),
 # without the paid recall check that plan had named as the gate. Each summary
 # is a billed background call with no click behind it, so ``0`` switches it
 # off. The backstop below runs either way.

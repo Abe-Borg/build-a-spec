@@ -19782,8 +19782,12 @@ else, delete, point, and keep no `archive/` folder.
   command scan lost its eleven plan, record and lint-profiler entries and
   keeps the five docs, the five tools and the PyInstaller spec; the retired
   index itself is not scanned, and a future plan that carries a Windows
-  command joins the list. A repo-wide grep for `docs/plans/` finds the
-  index and the three `git show` pointers, nothing else.
+  command joins the list. A grep for `docs/plans/` over every file that
+  is not this one finds six lines: the retired index's three `git show`
+  pointers, the one in README and the one in the runbook, and the scan's
+  comment naming the index. This file was left out of that sweep on
+  purpose: its history sections name the retired paths some forty times,
+  and erratum 2 below is how those are corrected.
 - **The Layout is maintained current, so its two entries for the deleted
   tests are gone.** Nothing else in this file was rewritten: the sections
   above are append-only history, and the errata below are how their stale

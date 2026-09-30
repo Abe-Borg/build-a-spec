@@ -983,7 +983,155 @@ re-based, with the stale-once line).
 
 ### As built
 
-(Filled in by the session.)
+Built 2026-09-30 on `claude/wonderful-mccarthy-z5608w`, from `master` at
+`77da938` (PR #237's merge). No route, SSE event type, dependency,
+project-format change, QC schema or protocol bump, or version bump. One new
+env knob (`BUILD_A_SPEC_DRAFT_PASS_EFFORT`, README row). One default changed
+for everyone running from `master`: `BUILD_A_SPEC_QC_EFFORT` is `medium`
+(was `high`); `BUILD_A_SPEC_QC_EFFORT=high` switches it back.
+
+**What landed, by design item.**
+
+1. **Carry the pass through** (`backend/llm/prompts.py`). One shared bullet,
+   `_CARRY_THE_PASS_THROUGH` ("Carry the whole pass through in this one turn:
+   keep working until everything above is done. Do not stop after a PART or
+   an article to ask whether to continue. Stop early only for a question you
+   genuinely cannot default, and even then finish everything that does not
+   depend on it first."), rides `FULL_DRAFT_DIRECTIVE` and
+   `ADAPT_IMPORTED_DIRECTIVE` as the bullet just before the closing one, so
+   P55-2's ordering sentence stays last. The prerequisites-collecting turns
+   do not carry it.
+2. **Draft-pass effort.** `settings.DRAFT_PASS_EFFORT`
+   (`BUILD_A_SPEC_DRAFT_PASS_EFFORT`, default `"high"`, through
+   `_effort_env`). `conversation.turn_effort(user_text)` is the pure helper
+   (it reads the two settings when called): `DRAFT_PASS_EFFORT` when the
+   left-stripped text starts with one of `_DRAFT_PASS_DIRECTIVES`
+   (`FULL_DRAFT_DIRECTIVE`, `ADAPT_IMPORTED_DIRECTIVE` — the READY
+   constants), else `INTERVIEW_EFFORT`. `stream_user_turn` calls it once,
+   right after stripping the text; `_ChatRequestInputs.effort` carries it;
+   `_build_chat_request` sends `inputs.effort`. The prompt_refs trace event
+   records it (`capture.turn_prompts(effort=)`). The condensing summary fork
+   keeps `INTERVIEW_EFFORT`.
+3. **Final QC's lens effort.** `QC_EFFORT` defaults to `"medium"`; the
+   comment above it quotes the Opus 5.5 guide and says `high` was chosen for
+   Opus 5. The lens and consolidation calls follow it through
+   `QC_LENS_EFFORT`; `QC_VERIFIER_EFFORT`'s default is the unchanged literal
+   `"medium"`, so both phases now default to the same level; every override
+   keeps working.
+
+**Deviations.**
+
+1. **`_ChatRequestInputs.effort` is a required field** (no default), so a
+   future constructor cannot silently send the wrong effort. The one direct
+   constructor outside the engine (`tests/test_citation_repair.py`) now
+   passes it — a knowing test change.
+2. **The trace field rides `prompt_refs`, not `round_end`.** The effort is
+   decided once, at turn start, where `prompt_refs` is written; a per-round
+   field would restate the same value on every round. The spec named either.
+3. **`turn_effort` left-strips the text.** `stream_user_turn` already
+   strips it, so this changes nothing on the chat path; it keeps the helper
+   correct for any other caller.
+4. **Two stale comments corrected in passing** (R10): `settings.py`'s QC
+   block called Final QC "the one model other than Sonnet 5" (it is Sonnet
+   5.5), and the lens/verifier comment now says both phases default to
+   `medium`.
+5. **The trust dossier's full-draft card now names the adapt pass.** The
+   dossier described "Adapt imported draft" nowhere, and it now runs at the
+   same effort; the card says so, beside the carry-through instruction. The
+   chat-turn card points at it ("a whole-section pass runs at “high”"), the
+   model table names the two passes, and the Final QC card says both stages
+   default to `medium` and why.
+6. **README's adaptive-thinking bullet** (in the v0.9.0 "still current"
+   section) was updated beside the Configuration rows, since it listed the
+   effort knobs.
+7. **Release notes.** v1.20.0 is still the newest published release (GitHub
+   Releases API, 2026-09-30), so both items went into the unreleased 1.21.0
+   entry: Chat "Whole-section passes finish in one go" (with the one-time
+   cache cost) and a new Final QC section, "Final QC reasons on Opus 5.5's
+   own scale", with the stale-once line ("run Final QC again before you
+   apply its fixes").
+8. **No release-checklist row.** `docs/RELEASE_WINDOWS.md` names no effort
+   level, and nothing it asks a tester to check changed.
+
+**Knowing test changes.**
+
+- `tests/test_qc_phase_effort.py`:
+  `test_the_shipped_default_reasons_deeper_in_the_lens_phase` became
+  `test_the_shipped_defaults_run_both_phases_at_medium` — the lens default
+  it pinned is the value D4 changes.
+- `tests/test_citation_repair.py::test_the_summary_call_repairs_its_prefix_exactly_as_the_chat_request_does`
+  passes `effort=settings.INTERVIEW_EFFORT` to `_ChatRequestInputs`
+  (deviation 1). Its assertion is unchanged.
+
+**Tests:** `tests/test_prompt55_effort.py` (43 cases): the carry-through
+bullet in all four whole-section variants and in neither collecting turn;
+its wording; the `DRAFT_PASS_EFFORT` default (an `ast` pin) and its
+validation (four env values through a reload); `turn_effort` over five
+ready texts and six others; the settings read at call time; every round of
+a full-draft turn (the button's own directive through `/api/draft/full`)
+and of an adapt turn at `high`; an ordinary turn and a collecting turn at
+`medium`; the boost switched off; the effort decided once (a fake that
+changes both knobs after round 0, for a draft pass and an ordinary turn);
+the builder reading only the captured value; the `prompt_refs` field over
+a draft pass then an ordinary turn; the condensing summary at the interview
+effort; the `QC_EFFORT` default (an `ast` pin), the verifier default's
+unchanged literal (an `ast` pin) and the loaded values; a lens, a
+consolidation call and a seat all at `medium`; four override combinations
+through a reload; and a result retained at `high` reading stale while one
+made at today's defaults reads current.
+
+**Verified** on the branch, with every doc change in place: `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q` 3154 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean.
+
+**Revert matrix.** 21 rows. Each mechanism was reverted in place, one at a
+time, by a script that restored the exact text it read and checked
+`git diff` and `git status` unchanged after every row. Each row ran
+`tests/test_prompt55_effort.py`, `test_qc_phase_effort.py`,
+`test_prompt55_closing_message.py`, `test_full_draft.py`,
+`test_adapt_draft.py`, `test_citation_repair.py`, `test_chat_compaction.py`,
+`test_qc_manifest_integrity.py`, `test_diagnostics.py`, `test_app.py` and
+`test_settings.py`.
+
+| Mechanism reverted | Tests red |
+|---|---|
+| prompts: full draft carries no carry-through bullet | 2 |
+| prompts: adapt carries no carry-through bullet | 2 |
+| prompts: full draft's bullet after the closing bullet | 2 |
+| prompts: no 'do not stop after a PART' clause | 1 |
+| prompts: no 'finish what does not depend on it first' clause | 1 |
+| settings: DRAFT_PASS_EFFORT ships at medium | 6 |
+| settings: DRAFT_PASS_EFFORT read raw (no level validation) | 3 |
+| turn_effort: never boosts | 10 |
+| turn_effort: adapt directive not recognized | 3 |
+| turn_effort: full-draft directive not recognized | 7 |
+| turn_effort: substring, not prefix | 1 |
+| turn_effort: leading whitespace not stripped | 1 |
+| turn_effort: settings read at import, not per call | 2 |
+| builder: reads the interview setting, not the captured effort | 5 |
+| capture: re-decides the effort every round | 2 |
+| trace: turn does not hand its effort to prompt_refs | 1 |
+| trace: prompt_refs drops the effort field | 1 |
+| summary fork: at the draft-pass effort | 2 |
+| settings: QC_EFFORT back to high | 6 |
+| settings: verifier default follows QC_EFFORT | 1 |
+| freshness: rebuilt with the record's own effort (never stale) | 1 |
+
+Every row went red on the first run; no mechanism needed a stronger test.
+Two rows are worth a note:
+- **"turn_effort: substring, not prefix"** and **"leading whitespace not
+  stripped"** are each caught by one unit case only: the chat route already
+  strips the text, and no production caller sends a directive mid-message,
+  so the end-to-end tests cannot see either. The unit cases are the pin.
+- **"freshness: rebuilt with the record's own effort"** is not a P55-3
+  mechanism: it proves the stale-once disclosure is true, by showing that
+  the one test asserting it goes red when the freshness check stops reading
+  the live default.
+
+**For P55-4.** Nothing here touches the research or Final QC loops beyond
+the effort default; `_qc_request_kwargs` and each research dimension's
+`request_kwargs` still carry one `output_config` for the whole call, as P55-4's
+reminder request must too. `tests/test_prompt55_effort.py::_qc_scripts` is a
+small scripted run with lens, consolidation and seat requests, if a reminder
+test needs one.
 
 ---
 

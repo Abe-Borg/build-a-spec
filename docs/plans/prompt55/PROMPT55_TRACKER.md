@@ -2,7 +2,7 @@
 
 <!-- PROMPT55-STATUS: IN PROGRESS -->
 
-**Next session:** P55-3 — Draft passes finish in one turn, and effort is re-based
+**Next session:** P55-4 — Remind a streamed fan-out call that skipped its output tool
 
 Owner: Abraham. Opened 2026-09-29.
 
@@ -48,7 +48,7 @@ pull request each:
 |---|---|---|---|---|
 | P55-1 | Harden output parsing and the fact harvest | done | PR #236 | `b5c282a` |
 | P55-2 | The interview replies after its last tool call | done | PR #237 | `77da938` |
-| P55-3 | Draft passes finish in one turn, and effort is re-based | not started | — | — |
+| P55-3 | Draft passes finish in one turn, and effort is re-based | done | PR #238 | — |
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | not started | — | — |
 | P55-5 | Remind a batched verifier seat that skipped its output tool | not started | — | — |
 | P55-6 | Keep thinking valid when the harness edits a request | not started | — | — |

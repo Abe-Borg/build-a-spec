@@ -2657,4 +2657,4 @@ matches (a new test sends one untagged), and the composer's value ref (the
 source pin now requires `valueRef.current = next;` before `setValue(next)`).
 The counts above are the final run, on the finished tree.
 
-**Verified.** See the tracker's P55-8.5 evidence.
+**Verified** on the branch, with every doc change in place: `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q` 3311 passed, 64 skipped; `npm test` (frontend) 466 passed, 0 failed; `npm run build` clean.

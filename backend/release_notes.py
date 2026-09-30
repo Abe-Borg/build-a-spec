@@ -429,6 +429,25 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "goes out in the batch's next round."
                         ),
                     ),
+                    ReleaseItem(
+                        title="A declined review is answered, and the report says by whom",
+                        body=(
+                            "Opus 5.5's safety checks occasionally decline "
+                            "a harmless review, for example of clean agent "
+                            "chemistry or a security system, and that part "
+                            "of Final QC used to come back missing. Now a "
+                            "reviewer the model declines is answered by a "
+                            "backup model Anthropic chooses, in the same "
+                            "request. The report names that model on each "
+                            "answer it gave and again under Limitations, "
+                            "where it also says those answers' cost is "
+                            "estimated at the regular reviewer's rates. "
+                            "The panel reviewers that run in a batch are "
+                            "not covered: the batch service does not offer "
+                            "it. To keep it off, set "
+                            "BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(

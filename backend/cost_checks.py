@@ -488,8 +488,34 @@ def _rate(rates: Mapping[str, Any], name: str) -> Decimal:
     return Decimal(format(float(rates[name]), ".12g"))
 
 
+def _fallback_served(response: Any) -> bool:
+    """Whether ``response`` says another model answered it after a decline.
+
+    Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7) can hand a
+    declined request to another model, which reads and writes ITS OWN cache
+    at its own rates — so neither the tail's entry nor the explicit prefix's
+    is the one the configured model would have read. Two of the engine's
+    three signals are read here (a copy, not an import: this module is a
+    leaf): a ``fallback_message`` entry in ``usage.iterations``, and a
+    ``fallback`` content block. The third — a sticky turn the fallback model serves
+    directly, with no block — is ``response.model`` naming another model,
+    which only the engine can read safely (it alone knows the request carried
+    the fallback; a model alias would otherwise read as a fallback), so it
+    arrives as ``observe_continuation``'s ``fallback_served``.
+    """
+    iterations = _reported_iterations(_field(response, "usage"))
+    if iterations is not None and any(
+        _field(entry, "type") == "fallback_message" for entry in iterations
+    ):
+        return True
+    content = _field(response, "content")
+    return isinstance(content, (list, tuple)) and any(
+        _field(block, "type") == "fallback" for block in content
+    )
+
+
 def _tail_saving(
-    model: str, opening: Any, response: Any
+    model: str, opening: Any, response: Any, *, fallback_served: bool = False
 ) -> tuple[str, Decimal | None]:
     """Classify one observation: ``("exact" | "bound" | "unmeasured", saving)``.
 
@@ -511,9 +537,14 @@ def _tail_saving(
     - **unmeasured** — anything else: a continuation that answers a pending
       server tool call, one that ran more than one iteration (a later one
       reads the tail's entry, so it saves at least what its first iteration
-      shows), a usage record that cannot be read, or a bound with nothing
-      read.
+      shows), a usage record that cannot be read, a bound with nothing
+      read, or — the 5.5 prompting upgrade, P55-7 — a continuation or an
+      opening another model answered after a decline (``fallback_served``,
+      or :func:`_fallback_served`): its reads and writes are another model's
+      cache, at another model's rates.
     """
+    if fallback_served or _fallback_served(response) or _fallback_served(opening):
+        return "unmeasured", None
     if _answers_pending_tool(response) or not _one_model_iteration(response):
         return "unmeasured", None
     continuation = first_iteration_usage(response)
@@ -538,14 +569,22 @@ def _tail_saving(
 
 
 def observe_continuation(
-    engine: str, *, model: str, opening: Any, response: Any
+    engine: str,
+    *,
+    model: str,
+    opening: Any,
+    response: Any,
+    fallback_served: bool = False,
 ) -> None:
     """Record what the continuation tail saved on one request.
 
     ``response`` answered a request that carried the tail (a tail-free resend
     is never passed); ``opening`` is its conversation's opening response;
-    ``model`` is the model both were sent to. The observation is exact, a
-    bound, or unmeasured (:func:`_tail_saving`). Once ``engine`` has at least
+    ``model`` is the model both were sent to. ``fallback_served`` (Final
+    QC's refusal fallback, the 5.5 prompting upgrade, P55-7) says the engine
+    saw another model answer a response of this conversation, which makes
+    the observation unmeasured. The observation is exact, a bound, or
+    unmeasured (:func:`_tail_saving`). Once ``engine`` has at least
     :data:`_TAIL_MIN_OBSERVATIONS` measured observations whose summed saving
     is below zero, its tail switches off (``unprofitable``) with one WARNING.
     Every measured term is exact or an upper bound, so the sum bounds what the
@@ -557,7 +596,9 @@ def observe_continuation(
     logged at DEBUG and records nothing.
     """
     try:
-        kind, saving = _tail_saving(model, opening, response)
+        kind, saving = _tail_saving(
+            model, opening, response, fallback_served=fallback_served
+        )
         now = time.time()
         latched = False
         detail = ""

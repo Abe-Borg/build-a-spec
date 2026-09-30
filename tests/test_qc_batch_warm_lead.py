@@ -284,6 +284,12 @@ def _run(
         batch_verification=batch,
         batch_warm_lead=lead,
         warm_wait_seconds=warm,
+        # Off here: these tests compare a lead's request with the batched
+        # params byte for byte, and the refusal fallback (the 5.5 prompting
+        # upgrade, P55-7) rides every STREAMED request — a lead's included —
+        # but never a batch. Its own contract, the lead included, is
+        # tests/test_prompt55_qc_refusal_fallback.py.
+        refusal_fallback=False,
         event_sink=sink or (lambda _event: None),
         should_stop=should_stop,
     )

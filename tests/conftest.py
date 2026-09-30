@@ -95,6 +95,7 @@ def _fresh_session(monkeypatch):
     from backend import cost_checks, sessions
     from backend.llm.client import reset_client_cache
     from backend.llm.conversation import reset_thinking_display_probe
+    from backend.qc.engine import reset_refusal_fallback_probe
 
     sessions.reset_session()
     _restore_default_module()
@@ -105,6 +106,9 @@ def _fresh_session(monkeypatch):
     # So are the cost self-checks' latches (Tier 1 finish): a test that
     # switches a saving off must not leave it off for the next one.
     cost_checks.reset_for_tests()
+    # And Final QC's refusal-fallback latch (the 5.5 prompting upgrade,
+    # P55-7), for the same reason.
+    reset_refusal_fallback_probe()
     # Reference uploads use Anthropic's remote token-counting endpoint in
     # production. Keep the suite hermetic while preserving deterministic
     # cumulative-limit behavior.
@@ -125,3 +129,4 @@ def _fresh_session(monkeypatch):
     reset_client_cache()
     reset_thinking_display_probe()
     cost_checks.reset_for_tests()
+    reset_refusal_fallback_probe()

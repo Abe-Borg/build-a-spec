@@ -324,9 +324,26 @@ def observed(monkeypatch) -> list[tuple[str, str, Any, Any]]:
     calls: list[tuple[str, str, Any, Any]] = []
     real = cost_checks.observe_continuation
 
-    def record(engine: str, *, model: str, opening: Any, response: Any) -> None:
+    def record(
+        engine: str,
+        *,
+        model: str,
+        opening: Any,
+        response: Any,
+        fallback_served: bool = False,
+    ) -> None:
+        # ``fallback_served`` is Final QC's word that another model answered
+        # this conversation (the 5.5 prompting upgrade, P55-7); passed
+        # through untouched, and False in every run here.
+        assert fallback_served is False
         calls.append((engine, model, opening, response))
-        real(engine, model=model, opening=opening, response=response)
+        real(
+            engine,
+            model=model,
+            opening=opening,
+            response=response,
+            fallback_served=fallback_served,
+        )
 
     monkeypatch.setattr(cost_checks, "observe_continuation", record)
     return calls

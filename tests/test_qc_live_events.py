@@ -130,6 +130,12 @@ def _run_client(
         # Tier 1 finish program's CT-3; the continuation-tail tests below
         # pass it explicitly (cost Tier 1, Chunk 4).
         continuation_cache=continuation_cache,
+        # Off here: this file pins today's request SHAPE (the continuation
+        # tail and nothing else, exact key sets), and Final QC's refusal
+        # fallback (the 5.5 prompting upgrade, P55-7) adds ``extra_body`` and
+        # a beta to every streamed request. Its own contract is
+        # tests/test_prompt55_qc_refusal_fallback.py.
+        refusal_fallback=False,
         event_sink=event_sink or events.append,
         should_stop=should_stop,
     )

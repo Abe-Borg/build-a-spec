@@ -95,6 +95,9 @@ export type QcReportVerdict = Omit<QcVerdict, "ops_adequate" | "ops_note"> & {
   cost_multiplier?: number;
   api_request_count?: number;
   model_response_count?: number;
+  /** The model that answered this seat after the configured QC model
+   *  declined it (the 5.5 prompting upgrade, P55-7). Absent otherwise. */
+  served_by_model?: string;
 };
 
 export type QcReportFinding = Omit<
@@ -129,6 +132,9 @@ export type QcReportLens = QcLensStatus & {
   reviewed_checks?: QcReviewedCheckRecord[];
   api_request_count?: number;
   model_response_count?: number;
+  /** The model that answered this lens after the configured QC model
+   *  declined it (the 5.5 prompting upgrade, P55-7). Absent otherwise. */
+  served_by_model?: string;
 };
 
 export type QcReportResult = Omit<
@@ -1738,6 +1744,99 @@ export function qcPanelSizePhrase(
 export const QC_WARM_LEAD_METHODOLOGY_NOTE =
   "When a batch carries many verifier seats that share one cached copy of the document, one of those seats is sent first, streamed at full price, so the rest of the batch can read its cached copy instead of each storing its own. It is an ordinary seat with an ordinary verdict; its record is priced at list, and the batched seats' at the batch rate.";
 
+/** Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7), in the
+ *  memo's own words. A streamed call the configured QC model declined can be
+ *  answered by the fallback model the API chooses; the record says so, and
+ *  the report says so on that record and once in Limitations, beside the
+ *  cost basis (decision D6: the rescued usage is estimated at the configured
+ *  model's rates). Verbatim in both projections —
+ *  `docx_export.QC_FALLBACK_RECORD_TEMPLATE` / `QC_FALLBACK_LIMITATION_TEMPLATE`
+ *  are the same templates, pinned equal by a test. */
+export const QC_FALLBACK_RECORD_TEMPLATE =
+  "Answered by {models} after a safety decline.";
+export const QC_FALLBACK_LIMITATION_TEMPLATE =
+  "{count} call(s) were answered by {models} after the configured model declined; their cost is estimated at {qc_model} rates.";
+
+const QC_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,63}$/;
+
+/** The answering models a record names, as the engine wrote them. Anything
+ *  that is not a model id is not printed as one. Mirrors
+ *  `docx_export._qc_served_by_models`. */
+export function qcServedByModels(record: unknown): string[] {
+  if (!record || typeof record !== "object") return [];
+  const value = (record as { served_by_model?: unknown }).served_by_model;
+  if (typeof value !== "string") return [];
+  const parts = value.split(",").map((part) => part.trim());
+  if (!parts.every((part) => QC_MODEL_ID.test(part))) return [];
+  return [...new Set(parts)].sort();
+}
+
+/** The per-record sentence, or "" for a record the configured model
+ *  answered. Mirrors `docx_export.qc_fallback_record_note`. */
+export function qcFallbackRecordNote(record: unknown): string {
+  const models = qcServedByModels(record);
+  return models.length
+    ? QC_FALLBACK_RECORD_TEMPLATE.replace("{models}", models.join(", "))
+    : "";
+}
+
+export interface QcRefusalFallback {
+  /** Call records another model answered: lenses, the grouping step, and
+   *  every verifier seat in the four candidate collections. */
+  count: number;
+  limitation: string;
+}
+
+/**
+ * Calls another model answered after a decline, from the RECORD — never a
+ * setting. `{count: 0, limitation: ""}` when the configured model answered
+ * every call, including every record written before the fallback existed.
+ * Mirrors `docx_export.qc_refusal_fallback`.
+ */
+export function qcRefusalFallback(
+  rawResult: QcResultView | QcReportResult,
+): QcRefusalFallback {
+  const result = resultFields(rawResult);
+  const records: unknown[] = Array.isArray(result.lens_statuses)
+    ? [...result.lens_statuses]
+    : [];
+  if (result.consolidation && typeof result.consolidation === "object") {
+    records.push(result.consolidation);
+  }
+  const collections: unknown[] = [
+    result.findings,
+    result.refuted,
+    result.disputed,
+    result.inconclusive,
+  ];
+  for (const collection of collections) {
+    if (!Array.isArray(collection)) continue;
+    for (const candidate of collection as QcReportFinding[]) {
+      if (!candidate || typeof candidate !== "object") continue;
+      if (!Array.isArray(candidate.verdicts)) continue;
+      records.push(...candidate.verdicts);
+    }
+  }
+  const served = records.filter((record) => qcServedByModels(record).length);
+  if (!served.length) return { count: 0, limitation: "" };
+  const models = [
+    ...new Set(served.flatMap((record) => qcServedByModels(record))),
+  ].sort();
+  const configured = String(result.model ?? "").trim();
+  const qcModel = QC_MODEL_ID.test(configured)
+    ? configured
+    : "the configured model's";
+  return {
+    count: served.length,
+    limitation: QC_FALLBACK_LIMITATION_TEMPLATE.replace(
+      "{count}",
+      String(served.length),
+    )
+      .replace("{models}", models.join(", "))
+      .replace("{qc_model}", qcModel),
+  };
+}
+
 /**
  * How many verifier seats this run streamed ahead of its batch.
  *
@@ -2088,6 +2187,11 @@ export function qcReportLimitations(
   // its review, so it reads beside the other coverage gaps.
   const capture = qcBatchCapture(rawResult);
   if (capture.limitation) limitations.push(capture.limitation);
+  // So is a call another model answered after a decline (P55-7): the
+  // review happened, but its cost is estimated at the configured model's
+  // rates.
+  const fallback = qcRefusalFallback(rawResult);
+  if (fallback.limitation) limitations.push(fallback.limitation);
   const consolidation = qcConsolidationSummary(rawResult);
   if (consolidation.limitation) limitations.push(consolidation.limitation);
   const failedLenses = result.lens_statuses.filter(

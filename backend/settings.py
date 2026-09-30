@@ -597,6 +597,25 @@ QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", True)
 # asked (the plan's F3).
 CONTINUATION_CACHE = _bool_env("BUILD_A_SPEC_CONTINUATION_CACHE", True)
 
+# Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7). Opus 5.5's
+# safety classifiers (cybersecurity, biology, reasoning extraction) can
+# decline a review call — a benign lab, biosafety or pharmaceutical section
+# can trip the biology one — and a declined lens or seat leaves the run
+# partial. With this on, every STREAMED Final QC request (lenses, grouping
+# calls, streamed seats, warm leads) carries `fallbacks: "default"` under the
+# `server-side-fallback-2026-07-01` beta, so the API itself retries a declined
+# call on the model Anthropic recommends for that decline and returns its
+# answer; each report names the calls answered that way. Never on the batched
+# transport (the Batches API rejects the parameter), and never on research or
+# the chat (decision D6). A `reasoning_extraction` decline is not retried, and
+# a call the fallback model declines too stays a refusal. Rescued usage is
+# estimated at the configured QC model's rates. If the provider ever refuses
+# a request because of the parameter itself, the same request goes out once
+# more without it and the fallback switches off until the app restarts. 0
+# switches it off. Not in the QC input manifest: it changes which model may
+# answer a declined call, never what any call is asked.
+QC_REFUSAL_FALLBACK = _bool_env("BUILD_A_SPEC_QC_REFUSAL_FALLBACK", True)
+
 # Per-call web allowances (runaway guards, not budgets — env-overridable).
 # The code-compliance lens gets the big search allowance to check standards'
 # actual current content; the other lenses and verifiers get the small one.

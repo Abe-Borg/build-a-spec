@@ -44,6 +44,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import threading
 import time
 import uuid
@@ -57,7 +58,7 @@ from concurrent.futures import (
     wait,
 )
 from dataclasses import dataclass, field
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Callable
 
 import anthropic
@@ -113,6 +114,7 @@ from ..research.schema import (
     input_transformation_counts,
     last_tagged_json_object,
     missing_output_tool_reply,
+    with_beta_header,
     with_drop_block,
 )
 from ..runtime_context import (
@@ -370,6 +372,15 @@ _DISPOSITION_ACTIONS = frozenset(
 # explicit, reviewable range.
 _MAX_PERSISTED_INTEGER = (1 << 63) - 1
 _MAX_PERSISTED_COST_USD = 1_000_000_000_000.0
+
+
+def _drop_unset_served_by(record: dict[str, Any]) -> dict[str, Any]:
+    """Leave ``served_by_model`` out of a serialized record when it is unset
+    (P55-7): a record where nothing fell back keeps exactly the bytes it had
+    before the field existed."""
+    if not record.get("served_by_model"):
+        record.pop("served_by_model", None)
+    return record
 
 
 def _persisted_nonnegative_int(value: object, *, field_name: str) -> int:
@@ -909,6 +920,12 @@ class QCVerdict:
     # capture disclosure claims. Always 0 on the streaming transport and on
     # every record written before the disclosure existed.
     uncollected_requests: int = 0
+    # The model that answered this seat after the QC model declined it
+    # (``fallbacks: "default"``, the 5.5 prompting upgrade, P55-7). "" when
+    # nothing fell back — and then it is left out of the serialized record
+    # (``QCFinding.to_dict``), so every report written before it, and every
+    # one where nothing fell back, keeps the bytes it always had.
+    served_by_model: str = ""
 
     @classmethod
     def from_dict(cls, raw: object) -> "QCVerdict | None":
@@ -990,6 +1007,9 @@ class QCVerdict:
             uncollected_requests=_persisted_nonnegative_int(
                 raw.get("uncollected_requests", 0),
                 field_name="verdict uncollected_requests",
+            ),
+            served_by_model=_persisted_served_by_model(
+                raw.get("served_by_model")
             ),
         )
 
@@ -1312,6 +1332,9 @@ class QCConsolidation:
     estimated_cost_usd: float = 0.0
     api_request_count: int = 0
     model_response_count: int = 0
+    # The model that answered a grouping call after the QC model declined it
+    # (P55-7); serialized only when set.
+    served_by_model: str = ""
 
     def raw_candidate_count(self) -> int:
         return len(self.origins)
@@ -1343,6 +1366,11 @@ class QCConsolidation:
             "raw_candidate_count": self.raw_candidate_count(),
             "grouped_candidate_count": self.grouped_candidate_count(),
             "panels_avoided": self.panels_avoided(),
+            **(
+                {"served_by_model": self.served_by_model}
+                if self.served_by_model
+                else {}
+            ),
         }
 
     @classmethod
@@ -1389,6 +1417,7 @@ class QCConsolidation:
                 raw.get("model_response_count", 0),
                 field_name="consolidation model_response_count",
             ),
+            served_by_model=_persisted_served_by_model(raw.get("served_by_model")),
         )
 
 
@@ -1443,6 +1472,8 @@ class QCFinding:
 
     def to_dict(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)
+        for verdict in d.get("verdicts") or []:
+            _drop_unset_served_by(verdict)
         return d
 
     @classmethod
@@ -1573,9 +1604,12 @@ class QCLensStatus:
     api_request_count: int = 0
     model_response_count: int = 0
     error: str = ""
+    # The model that answered this lens after the QC model declined it
+    # (P55-7); serialized only when set, like the seat's.
+    served_by_model: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return dataclasses.asdict(self)
+        return _drop_unset_served_by(dataclasses.asdict(self))
 
     @classmethod
     def from_dict(cls, raw: dict) -> "QCLensStatus":
@@ -1635,6 +1669,7 @@ class QCLensStatus:
                 field_name="lens model_response_count",
             ),
             error=str(raw.get("error", "") or ""),
+            served_by_model=_persisted_served_by_model(raw.get("served_by_model")),
         )
 
 
@@ -3331,6 +3366,11 @@ class _CallResult:
     # been billed and the app cannot say — which is the whole of what the
     # capture disclosure claims. Always 0 on the streaming transport.
     uncollected_requests: int = 0
+    # The model(s) that answered this call's requests after the QC model
+    # declined them — ``fallbacks: "default"`` (the 5.5 prompting upgrade,
+    # P55-7) — read from every billed response. "" when nothing fell back,
+    # and always "" on the batched transport, which never carries fallbacks.
+    served_by_model: str = ""
 
 
 def _refusal_error(response: Any) -> str:
@@ -3377,12 +3417,17 @@ def _parse(all_responses: list[Any], tool_name: str, json_tag: str) -> dict | No
 
     ``json_tag`` is the fallback's tag NAME (``_FINDINGS_JSON_TAG`` and its
     siblings); the last complete tagged object in a response wins.
+
+    Each response is read as it may be re-sent (:func:`_payload_view`): a
+    declined model's partial output before a ``fallback`` block — a tool call
+    cut off mid-input among it — is never taken for the answer (P55-7).
     """
-    for response in reversed(all_responses):
+    views = [_payload_view(response) for response in all_responses]
+    for response in reversed(views):
         payload = extract_tool_use_block(response, tool_name)
         if isinstance(payload, dict):
             return payload
-    for response in reversed(all_responses):
+    for response in reversed(views):
         payload = last_tagged_json_object(_response_text(response), json_tag)
         if payload is not None:
             return payload
@@ -3507,6 +3552,281 @@ def _log_input_transformations(
         )
 
 
+# The refusal fallback (the 5.5 prompting upgrade, P55-7; the switch is
+# ``settings.QC_REFUSAL_FALLBACK``, pinned per run). Opus 5.5 runs
+# cybersecurity and biology safety classifiers, and a declined call is an
+# HTTP 200 with ``stop_reason: "refusal"`` — a lens or seat that would leave
+# the run partial. ``fallbacks: "default"`` under this beta asks the API to
+# retry a declined request itself, on the model Anthropic recommends for that
+# decline's category, and return that model's answer in the same response.
+# The scalar ``"default"`` form takes the ``-2026-07-01`` beta; the array form
+# takes ``-2026-06-01``, and pairing either header with the other form is a
+# 400. The SDK's GA ``messages.stream`` does not type the parameter, so it
+# rides ``extra_body``. Per request, beside the container and the tail, never
+# in ``_qc_request_kwargs``: the Batches API rejects it, and that builder is
+# the one request shape both transports send.
+REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+_REFUSAL_FALLBACK_MODE = "default"
+_REFUSAL_FALLBACK_FIELD = "fallbacks"
+_BETA_HEADER = "anthropic-beta"
+# A 400 whose text names the fallback — the parameter, or the beta that gates
+# it. Any other 400 is not the fallback's to answer.
+_FALLBACK_REJECTION = re.compile(r"fallback", re.IGNORECASE)
+_PROMPT_TOO_LONG = re.compile(r"prompt is too long", re.IGNORECASE)
+
+# The one process-wide latch: set when the provider refused a request BECAUSE
+# of the fallback parameter (``_open_stream``), read on every request after
+# the run's switch, cleared only by an app restart (and by the test
+# conftest). Final QC runs up to eight calls at once, so one lock.
+_refusal_fallback_lock = threading.Lock()
+_refusal_fallback_rejection = ""
+
+
+def refusal_fallback_available() -> bool:
+    """False once the provider has refused the fallback parameter itself."""
+    with _refusal_fallback_lock:
+        return not _refusal_fallback_rejection
+
+
+def _disable_refusal_fallback(detail: str) -> None:
+    """Switch the fallback off until the app restarts; one WARNING, once."""
+    global _refusal_fallback_rejection
+    detail = " ".join(str(detail).split())[:200] or "refused"
+    with _refusal_fallback_lock:
+        if _refusal_fallback_rejection:
+            return
+        _refusal_fallback_rejection = detail
+    _log.warning(
+        "Final QC's refusal fallback is switched off until the app restarts: "
+        "the provider refused a request that carried it (%s).",
+        detail,
+    )
+
+
+def reset_refusal_fallback_probe() -> None:
+    """Re-arm the latch. Tests only (the conftest's autouse reset)."""
+    global _refusal_fallback_rejection
+    with _refusal_fallback_lock:
+        _refusal_fallback_rejection = ""
+
+
+def _carries_refusal_fallback(request: Mapping[str, Any]) -> bool:
+    extra_body = request.get("extra_body")
+    return isinstance(extra_body, Mapping) and _REFUSAL_FALLBACK_FIELD in extra_body
+
+
+def _with_refusal_fallback(request: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``request`` carrying ``fallbacks: "default"`` and its beta.
+
+    ``extra_body`` and ``extra_headers`` are new dicts built from the ones
+    given, and the beta merges with any already there (P55-6's preserved
+    thinking one, when the conversation was edited). Every other key is the
+    request as given.
+    """
+    sent = dict(request)
+    sent["extra_body"] = {
+        **dict(request.get("extra_body") or {}),
+        _REFUSAL_FALLBACK_FIELD: _REFUSAL_FALLBACK_MODE,
+    }
+    sent["extra_headers"] = with_beta_header(
+        request.get("extra_headers"), REFUSAL_FALLBACK_BETA
+    )
+    return sent
+
+
+def _without_refusal_fallback(request: Mapping[str, Any]) -> dict[str, Any]:
+    """The same request without the fallback: its field and its beta only.
+
+    Anything else ``extra_body`` or ``anthropic-beta`` carries stays; an
+    ``extra_body`` or header left empty is dropped rather than sent empty.
+    """
+    sent = dict(request)
+    extra_body = {
+        key: value
+        for key, value in dict(request.get("extra_body") or {}).items()
+        if key != _REFUSAL_FALLBACK_FIELD
+    }
+    if extra_body:
+        sent["extra_body"] = extra_body
+    else:
+        sent.pop("extra_body", None)
+    headers: dict[str, Any] = {}
+    for key, value in dict(request.get("extra_headers") or {}).items():
+        if isinstance(key, str) and key.lower() == _BETA_HEADER:
+            betas = [
+                part.strip()
+                for part in str(value or "").split(",")
+                if part.strip() and part.strip() != REFUSAL_FALLBACK_BETA
+            ]
+            if betas:
+                headers[key] = ",".join(betas)
+            continue
+        headers[key] = value
+    if headers:
+        sent["extra_headers"] = headers
+    else:
+        sent.pop("extra_headers", None)
+    return sent
+
+
+def _is_fallback_rejection(exc: BaseException) -> bool:
+    """A 400 about the fallback parameter itself — never "prompt is too
+    long", which fails with or without it."""
+    if not isinstance(exc, anthropic.BadRequestError):
+        return False
+    text = str(exc)
+    return bool(_FALLBACK_REJECTION.search(text)) and not _PROMPT_TOO_LONG.search(
+        text
+    )
+
+
+# A model id as a report may carry it: the provider's own vocabulary
+# (canonical ids, aliases, dated snapshots), bounded. Anything else is not
+# printed as a model name.
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/-]{0,63}")
+_UNKNOWN_MODEL = "unknown"
+# A record names at most this many answering models (one in practice: every
+# call of a record is sent to one model, and a decline is routed by category).
+_MAX_SERVED_MODELS = 4
+_SERVER_TOOL_USES = frozenset({"server_tool_use", "mcp_tool_use"})
+
+
+def _model_id(value: Any) -> str:
+    if isinstance(value, str) and _MODEL_ID.fullmatch(value.strip()):
+        return value.strip()
+    return ""
+
+
+def _fallback_blocks(content: Any) -> list[Any]:
+    return [
+        block
+        for block in (content if isinstance(content, (list, tuple)) else [])
+        if _item_attr(block, "type") == "fallback"
+    ]
+
+
+def _fallback_served_model(
+    response: Any, *, requested: str, carried: bool
+) -> str:
+    """The model that answered ``response`` after a decline, or ``""``.
+
+    Three signals, in the order the skill documents them (the plan's P55-7
+    design, item 4): a ``fallback_message`` entry in ``usage.iterations``
+    (the served-by signal — its ``model`` names the answering model), a
+    ``fallback`` content block (one per hop where a model ran and declined —
+    its ``to.model``), or, for a request that CARRIED the fallback, a
+    ``response.model`` other than the one requested (a sticky turn: once a
+    conversation fell back, later requests with ``fallbacks`` are served by
+    the fallback model directly, and carry no block; and the GA SDK's stream
+    accumulator does not copy ``iterations`` from ``message_delta``, while
+    ``message_start`` already names the serving model). A response whose
+    final ``stop_reason`` is a refusal was declined by the whole chain and was
+    answered by nobody: ``""``. Reads the response and never changes it.
+    """
+    if classify_stop_reason(_item_attr(response, "stop_reason")) == STOP_CLASS_REFUSED:
+        return ""
+    usage = _item_attr(response, "usage")
+    iterations = _item_attr(usage, "iterations") if usage is not None else None
+    if isinstance(iterations, (list, tuple)):
+        for entry in reversed(list(iterations)):
+            if _item_attr(entry, "type") == "fallback_message":
+                return _model_id(_item_attr(entry, "model")) or _UNKNOWN_MODEL
+    blocks = _fallback_blocks(_item_attr(response, "content"))
+    if blocks:
+        target = _item_attr(blocks[-1], "to")
+        return _model_id(_item_attr(target, "model")) or _UNKNOWN_MODEL
+    if carried:
+        served = _model_id(_item_attr(response, "model"))
+        if served and requested and served != requested:
+            return served
+    return ""
+
+
+def _served_by_label(models: list[str]) -> str:
+    """The distinct answering models a record names, joined in a fixed
+    order (sorted, ``", "``-separated, bounded) — the order both report
+    projections read."""
+    distinct = sorted({model for model in models if _model_id(model)})
+    return ", ".join(distinct[:_MAX_SERVED_MODELS])
+
+
+def _persisted_served_by_model(value: object) -> str:
+    """``served_by_model`` from a saved record, read tolerantly: anything
+    that is not the label :func:`_served_by_label` writes is ``""`` — a
+    record never fails to load over a disclosure field."""
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) > _MAX_SERVED_MODELS or not all(_model_id(part) for part in parts):
+        return ""
+    return _served_by_label(parts)
+
+
+def _fallback_echo_content(content: Any) -> Any:
+    """``content`` as it may be re-sent after a mid-output fallback.
+
+    The skill's echo rule (``shared/model-migration.md`` → the ``refusal``
+    section): omit the ``thinking``, ``redacted_thinking`` and ``tool_use``
+    blocks — and any server-tool call without its result, and any other
+    model-internal block — that appear BEFORE the final ``fallback`` block;
+    text blocks, paired server-tool blocks, the ``fallback`` blocks themselves
+    and everything after the boundary are kept. The declined model's partial
+    is not part of what the fallback model continued from (only its text
+    was), and a partial client ``tool_use`` there may be truncated. With no
+    ``fallback`` block the same object comes back, so an ordinary response
+    is re-sent exactly as it always was.
+    """
+    blocks = list(content) if isinstance(content, (list, tuple)) else []
+    boundary = -1
+    for index, block in enumerate(blocks):
+        if _item_attr(block, "type") == "fallback":
+            boundary = index
+    if boundary < 0:
+        return content
+    uses: set[str] = set()
+    answered: set[str] = set()
+    for block in blocks:
+        kind = _item_attr(block, "type")
+        if kind in _SERVER_TOOL_USES and isinstance(_item_attr(block, "id"), str):
+            uses.add(_item_attr(block, "id"))
+        elif (
+            isinstance(kind, str)
+            and kind.endswith("_tool_result")
+            and isinstance(_item_attr(block, "tool_use_id"), str)
+        ):
+            answered.add(_item_attr(block, "tool_use_id"))
+    kept: list[Any] = []
+    for block in blocks[:boundary]:
+        kind = _item_attr(block, "type")
+        if kind in ("text", "fallback"):
+            kept.append(block)
+        elif kind in _SERVER_TOOL_USES:
+            if _item_attr(block, "id") in answered:
+                kept.append(block)
+        elif (
+            isinstance(kind, str)
+            and kind.endswith("_tool_result")
+            and kind != "tool_result"
+            and _item_attr(block, "tool_use_id") in uses
+        ):
+            kept.append(block)
+    return [*kept, *blocks[boundary:]]
+
+
+def _payload_view(response: Any) -> Any:
+    """What a payload may be read from: the response as it may be re-sent.
+
+    A declined model's partial output before a ``fallback`` block is not the
+    answer (its output tool call may be cut short mid-input); the fallback
+    model's, after it, is. A response with no ``fallback`` block is itself.
+    """
+    content = _item_attr(response, "content")
+    echoed = _fallback_echo_content(content)
+    if echoed is content:
+        return response
+    return SimpleNamespace(content=echoed)
+
+
 # The continuation tail's guard (Tier 1 finish, CT-1). A copy of
 # ``research.engine``'s, not an import; only the latch is shared, in
 # ``backend.cost_checks`` (one per process, one per engine).
@@ -3556,6 +3876,15 @@ def _open_stream(
     therefore survives the resend, and survival is exactly the case that
     latches nothing: a ``block_binding`` rejection never switches the tail
     off.
+
+    The refusal fallback (the 5.5 prompting upgrade, P55-7) has its own guard
+    of the same shape, checked first: a request carrying ``fallbacks`` that
+    is refused with a 400 naming the fallback (:func:`_is_fallback_rejection`)
+    is sent once more without it — through this function, so the tail's
+    guard still stands on that resend — and the fallback switches off until
+    the app restarts (:func:`_disable_refusal_fallback`), unless the resend
+    is refused with a 400 too. A refused fallback therefore costs one
+    request, never the call.
     """
     carried = "cache_control" in stream_kwargs
     with contextlib.ExitStack() as stack:
@@ -3564,32 +3893,90 @@ def _open_stream(
                 client.messages.stream(messages=messages, **stream_kwargs)
             )
         except Exception as rejection:
-            if not carried or not cost_checks.is_tail_rejection(rejection):
-                raise
-            without_tail = {
-                key: value
-                for key, value in stream_kwargs.items()
-                if key != "cache_control"
-            }
-            detail = cost_checks.exception_detail(rejection)
-            count_request()
-            try:
-                stream = stack.enter_context(
-                    client.messages.stream(messages=messages, **without_tail)
+            if _carries_refusal_fallback(stream_kwargs) and _is_fallback_rejection(
+                rejection
+            ):
+                # The refusal fallback's own guard (P55-7), CT-1's shape: a
+                # 400 that names the fallback sends the same request once
+                # more without it — at once, counted, the tail's guard still
+                # standing on the resend — and switches the fallback off
+                # until the app restarts, unless the resend is refused with a
+                # 400 too (then it was not the fallback's). Checked FIRST:
+                # the tail's guard reads any 400 as the tail's.
+                stream, carried = _resend_without_refusal_fallback(
+                    stack,
+                    client,
+                    messages=messages,
+                    stream_kwargs=stream_kwargs,
+                    count_request=count_request,
+                    detail=cost_checks.exception_detail(rejection),
                 )
-            except anthropic.BadRequestError:
-                # Refused without the tail too: not the tail's 400.
-                raise
-            except Exception:
+            else:
+                if not carried or not cost_checks.is_tail_rejection(rejection):
+                    raise
+                without_tail = {
+                    key: value
+                    for key, value in stream_kwargs.items()
+                    if key != "cache_control"
+                }
+                detail = cost_checks.exception_detail(rejection)
+                count_request()
+                try:
+                    stream = stack.enter_context(
+                        client.messages.stream(messages=messages, **without_tail)
+                    )
+                except anthropic.BadRequestError:
+                    # Refused without the tail too: not the tail's 400.
+                    raise
+                except Exception:
+                    cost_checks.disable_continuation_tail(
+                        _TAIL_ENGINE,
+                        reason=cost_checks.REASON_REJECTED,
+                        detail=detail,
+                    )
+                    raise
                 cost_checks.disable_continuation_tail(
                     _TAIL_ENGINE, reason=cost_checks.REASON_REJECTED, detail=detail
                 )
-                raise
-            cost_checks.disable_continuation_tail(
-                _TAIL_ENGINE, reason=cost_checks.REASON_REJECTED, detail=detail
-            )
-            carried = False
+                carried = False
         yield stream, carried
+
+
+def _resend_without_refusal_fallback(
+    stack: contextlib.ExitStack,
+    client: Any,
+    *,
+    messages: list,
+    stream_kwargs: dict[str, Any],
+    count_request: Callable[[], None],
+    detail: str,
+) -> tuple[Any, bool]:
+    """Open the same request without the refusal fallback (P55-7).
+
+    Through :func:`_open_stream` itself, so the continuation tail's guard
+    still stands on the resend (a request carrying both can have either
+    refused). Counted as it goes. The fallback switches off for the rest of
+    the app session unless the resend is itself refused with a 400: one that
+    survives removing the fallback was not the fallback's.
+    """
+    count_request()
+    try:
+        opened = stack.enter_context(
+            _open_stream(
+                client,
+                messages=messages,
+                stream_kwargs=_without_refusal_fallback(stream_kwargs),
+                count_request=count_request,
+            )
+        )
+    except anthropic.BadRequestError:
+        # Refused without the fallback too: not the fallback's 400.
+        raise
+    except Exception:
+        _disable_refusal_fallback(detail)
+        raise
+    _disable_refusal_fallback(detail)
+    return opened
 
 
 def _safe_stream_json(text: str) -> dict[str, Any]:
@@ -3815,6 +4202,7 @@ def _run_streaming_call(
     should_stop: Callable[[], bool] = lambda: False,
     first_output: threading.Event | None = None,
     continuation_cache: bool = False,
+    refusal_fallback: bool = False,
 ) -> _CallResult:
     """One QC call: request → pause_turn continuations → parse. Never raises.
 
@@ -3884,6 +4272,18 @@ def _run_streaming_call(
     be a 400 on an account created on or after 2026-08-31. Never in
     ``request_kwargs``, so the batched transport never carries it (its unset
     default already drops such a block); a restart clears the flag.
+
+    ``refusal_fallback`` (``settings.QC_REFUSAL_FALLBACK``, pinned per run;
+    the 5.5 prompting upgrade, P55-7) adds ``fallbacks: "default"`` and its
+    beta to every request, per request beside the container and the tail,
+    while the process-wide latch (:func:`refusal_fallback_available`) says
+    the provider has not refused the parameter itself. A call the QC model
+    declines is then retried by the API on the model it recommends for that
+    decline, inside the same response; the answering model is recorded on the
+    result (``served_by_model``, every billed response read), and a paused or
+    reminded conversation re-sends a fallback-served response by the skill's
+    echo rule (:func:`_fallback_echo_content`). Off, the default for a direct
+    caller, no request carries it.
     """
     try:
         # One TTL for every EXPLICIT marker in the request. The API requires
@@ -3954,17 +4354,32 @@ def _run_streaming_call(
         # carry ``drop_block``, so an enforced account gets the invalidated
         # blocks dropped instead of a 400.
         thinking_edited = False
+        # Whether any response of this CONVERSATION was answered by another
+        # model after a decline (P55-7): its cache reads and writes are then
+        # another model's, so the tail's value check (CT-2) must not measure
+        # its continuations — the opening included, which the check compares
+        # against. Conversation-local: a restart clears it.
+        fallback_in_conversation = False
+        # The models that answered this call's requests after the QC model
+        # declined them (P55-7): CALL-level, like ``billed`` — the disclosure
+        # pairs with the cost, and a restart's abandoned responses stay
+        # billed, so they stay disclosed too.
+        served_models: list[str] = []
+
+        def done(result: _CallResult) -> _CallResult:
+            result.served_by_model = _served_by_label(served_models)
+            return result
 
         for attempt in range(attempts):
             if should_stop():
-                return _CallResult(
+                return done(_CallResult(
                     None,
                     all_responses,
                     # A resumed conversation's responses are billed too.
                     [*billed, *all_responses],
                     "Cancelled by user.",
                     api_request_count,
-                )
+                ))
             is_last = attempt == attempts - 1
             # True only while a request is in flight: the one failure a
             # resume can honestly send again. Anything raised after a
@@ -3979,13 +4394,13 @@ def _run_streaming_call(
                 # it again spends none of it.
                 while len(all_responses) <= QC_MAX_CONTINUATIONS:
                     if should_stop():
-                        return _CallResult(
+                        return done(_CallResult(
                             None,
                             all_responses,
                             [*billed, *all_responses],
                             "Cancelled by user.",
                             api_request_count,
-                        )
+                        ))
                     # Every request sent counts, a failed one and the resend
                     # that follows it both — "client API requests" includes
                     # retries, as it always has.
@@ -4024,6 +4439,13 @@ def _run_streaming_call(
                         # carries it, and a conversation the sanitizer never
                         # edited sends exactly what it always did.
                         stream_kwargs = with_drop_block(stream_kwargs)
+                    if refusal_fallback and refusal_fallback_available():
+                        # This request's copy only, merged with any beta the
+                        # binding added. The latch is read on every request:
+                        # once the provider has refused the parameter itself
+                        # (``_open_stream``), no request carries it, in any
+                        # thread, until the app restarts.
+                        stream_kwargs = _with_refusal_fallback(stream_kwargs)
                     in_request = True
                     try:
                         with _open_stream(
@@ -4052,6 +4474,14 @@ def _run_streaming_call(
                     _log_input_transformations(
                         response, event_prefix=event_prefix, event_fields=event_fields
                     )
+                    served = _fallback_served_model(
+                        response,
+                        requested=model,
+                        carried=_carries_refusal_fallback(stream_kwargs),
+                    )
+                    if served:
+                        served_models.append(served)
+                        fallback_in_conversation = True
                     if carried_tail:
                         # The tail's value check (Tier 1 finish CT-2): what
                         # this continuation's usage proves the tail saved,
@@ -4064,6 +4494,7 @@ def _run_streaming_call(
                             model=model,
                             opening=all_responses[0],
                             response=response,
+                            fallback_served=fallback_in_conversation,
                         )
                     # Latest nonblank wins: a continuation that omits the field
                     # has not revoked the container.
@@ -4089,13 +4520,13 @@ def _run_streaming_call(
                         ):
                             if should_stop():
                                 # The Stop's own path: nothing more is sent.
-                                return _CallResult(
+                                return done(_CallResult(
                                     None,
                                     all_responses,
                                     [*billed, *all_responses],
                                     "Cancelled by user.",
                                     api_request_count,
-                                )
+                                ))
                             # Append-only, exactly as a pause resume
                             # appends: the assistant content verbatim, then
                             # ONE user turn. It ends on the user, so
@@ -4104,12 +4535,19 @@ def _run_streaming_call(
                             # CT-2's value check never see it. It re-reads
                             # the conversation uncached once, which is
                             # cheaper than a failed lens and its re-run.
+                            # A fallback-served reply by the echo rule
+                            # (P55-7); any other exactly as it came.
                             messages.append(
-                                {"role": "assistant", "content": response.content}
+                                {
+                                    "role": "assistant",
+                                    "content": _fallback_echo_content(
+                                        response.content
+                                    ),
+                                }
                             )
                             messages.append(
                                 missing_output_tool_reply(
-                                    response,
+                                    _payload_view(response),
                                     reminder=_missing_tool_reminder(tool_name),
                                     wrong_tool=_wrong_tool_result(tool_name),
                                 )
@@ -4133,29 +4571,34 @@ def _run_streaming_call(
                                 _MISSING_TOOL_REMINDERS,
                             )
                             continue
-                        return _CallResult(
+                        return done(_CallResult(
                             None,
                             all_responses,
                             [*billed, *all_responses],
                             "QC produced no parseable payload (reminders "
                             f"sent: {reminders_sent}).",
                             api_request_count,
-                        )
+                        ))
                     if stop_class == STOP_CLASS_PAUSE:
                         total_search = sum(
                             _web_search_count(r) for r in all_responses
                         )
                         if total_search > search_ceiling:
-                            return _CallResult(
+                            return done(_CallResult(
                                 None,
                                 all_responses,
                                 [*billed, *all_responses],
                                 "QC call exceeded the web_search budget ceiling "
                                 f"({total_search} > {search_ceiling}).",
                                 api_request_count,
-                            )
+                            ))
+                        # Re-sent as it came — or, when a fallback answered
+                        # part of it, by the skill's echo rule (P55-7).
                         messages.append(
-                            {"role": "assistant", "content": response.content}
+                            {
+                                "role": "assistant",
+                                "content": _fallback_echo_content(response.content),
+                            }
                         )
                         sanitized = sanitize_messages_for_resend(messages)
                         thinking_edited = (
@@ -4164,39 +4607,39 @@ def _run_streaming_call(
                         messages = sanitized
                         continue
                     if stop_class == STOP_CLASS_REFUSED:
-                        return _CallResult(
+                        return done(_CallResult(
                             None,
                             all_responses,
                             [*billed, *all_responses],
                             _refusal_error(response),
                             api_request_count,
                             REFUSAL_KIND,
-                        )
-                    return _CallResult(
+                        ))
+                    return done(_CallResult(
                         None,
                         all_responses,
                         [*billed, *all_responses],
                         "QC response incomplete (stop_reason: "
                         f"{getattr(response, 'stop_reason', None)}).",
                         api_request_count,
-                    )
+                    ))
                 if not completed:
-                    return _CallResult(
+                    return done(_CallResult(
                         None,
                         all_responses,
                         [*billed, *all_responses],
                         "QC call did not complete after maximum continuations.",
                         api_request_count,
-                    )
+                    ))
                 # ``payload`` was parsed at the completing response above; a
                 # completed conversation always carries one.
-                return _CallResult(
+                return done(_CallResult(
                     payload,
                     all_responses,
                     [*billed, *all_responses],
                     "",
                     api_request_count,
-                )
+                ))
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as exc:  # noqa: BLE001 — classified below
@@ -4207,14 +4650,14 @@ def _run_streaming_call(
                         if is_authentication_error(exc)
                         else f"{type(exc).__name__}: {exc}"
                     )
-                    return _CallResult(
+                    return done(_CallResult(
                         None,
                         all_responses,
                         [*billed, *all_responses],
                         message,
                         api_request_count,
                         failure_class.value,
-                    )
+                    ))
                 # Resume first, restart last.
                 mode = retry_mode(
                     progressed=in_request and bool(all_responses),
@@ -4231,6 +4674,7 @@ def _run_streaming_call(
                     container_id = ""
                     reminders_sent = 0
                     thinking_edited = False
+                    fallback_in_conversation = False
                 backoff = compute_backoff_seconds(
                     policy, attempt=attempt, failure_class=failure_class
                 )
@@ -4249,13 +4693,13 @@ def _run_streaming_call(
                 # fresh, so the card moves off the retry notice.
                 activity_state["kind"] = ""
                 time.sleep(backoff)
-        return _CallResult(
+        return done(_CallResult(
             None,
             all_responses,
             [*billed, *all_responses],
             "QC call failed after all attempts.",
             api_request_count,
-        )
+        ))
     finally:
         # Every return path, a stop before the first request included.
         if first_output is not None:
@@ -4796,6 +5240,7 @@ def _run_lens(
     should_stop: Callable[[], bool] = lambda: False,
     first_output: threading.Event | None = None,
     continuation_cache: bool = False,
+    refusal_fallback: bool = False,
 ) -> _LensOutcome:
     """One lens's full lifecycle. Never raises (KeyboardInterrupt aside).
 
@@ -4843,6 +5288,7 @@ def _run_lens(
         should_stop=should_stop,
         first_output=first_output,
         continuation_cache=continuation_cache,
+        refusal_fallback=refusal_fallback,
     )
     usage = _sum_billed(result.billed)
     queries, retrieved_sources = _collect_call_activity(result.responses)
@@ -4866,6 +5312,7 @@ def _run_lens(
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
                 error=result.error or "QC lens failed.",
+                served_by_model=result.served_by_model,
             ),
             billed=result.billed,
         )
@@ -4904,6 +5351,7 @@ def _run_lens(
             estimated_cost_usd=estimate_usage_cost(model, usage),
             api_request_count=result.api_request_count,
             model_response_count=len(result.billed),
+            served_by_model=result.served_by_model,
         ),
         summary=normalized["summary"],
         reviewed_checks=reviewed_checks,
@@ -5223,6 +5671,7 @@ def _consolidate_candidates(
     enabled: bool = True,
     warm_wait_seconds: float = 0,
     continuation_cache: bool = False,
+    refusal_fallback: bool = False,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> tuple[list[_Candidate], QCConsolidation, list[Any]]:
@@ -5275,6 +5724,7 @@ def _consolidate_candidates(
         fallback_reason: str = "",
         billed: list[Any] | None = None,
         api_request_count: int = 0,
+        served_by_model: str = "",
     ) -> tuple[list[_Candidate], QCConsolidation, list[Any]]:
         billed = billed or []
         usage = _sum_billed(billed)
@@ -5327,6 +5777,7 @@ def _consolidate_candidates(
                 estimated_cost_usd=estimate_usage_cost(model, usage),
                 api_request_count=api_request_count,
                 model_response_count=len(billed),
+                served_by_model=served_by_model,
             ),
             billed,
         )
@@ -5446,6 +5897,7 @@ def _consolidate_candidates(
                 should_stop=should_stop,
                 first_output=first_output,
                 continuation_cache=continuation_cache,
+                refusal_fallback=refusal_fallback,
             )
 
         futures = _launch_staggered(
@@ -5473,6 +5925,9 @@ def _consolidate_candidates(
     candidates: list[_Candidate] = []
     billed: list[Any] = []
     api_request_count = 0
+    # The step is one record whatever its bucket count, so it names every
+    # model that answered one of its grouping calls after a decline.
+    served_models: list[str] = []
     failures: list[str] = []
     # Bucket order, then original order within a bucket: the emitted order
     # never depends on which lens or which grouping call finished first.
@@ -5486,6 +5941,8 @@ def _consolidate_candidates(
         if call is not None:
             billed.extend(call.billed)
             api_request_count += call.api_request_count
+            if call.served_by_model:
+                served_models.extend(call.served_by_model.split(", "))
         if groups is None:
             failures.append(f"{bucket.bucket_id}: {error}")
             candidates.extend(
@@ -5530,6 +5987,7 @@ def _consolidate_candidates(
         fallback_reason=fallback_reason,
         billed=billed,
         api_request_count=api_request_count,
+        served_by_model=_served_by_label(served_models),
     )
 
 
@@ -5564,6 +6022,7 @@ def _run_consolidation_call(
     should_stop: Callable[[], bool] = lambda: False,
     first_output: threading.Event | None = None,
     continuation_cache: bool = False,
+    refusal_fallback: bool = False,
 ) -> tuple[list[dict[str, Any]] | None, str, _CallResult | None]:
     """One bucket's grouping call. ``None`` groups = fall back to singletons."""
     result = _run_streaming_call(
@@ -5585,6 +6044,7 @@ def _run_consolidation_call(
         should_stop=should_stop,
         first_output=first_output,
         continuation_cache=continuation_cache,
+        refusal_fallback=refusal_fallback,
     )
     if result.payload is None:
         return None, result.error or "The grouping call failed.", result
@@ -5707,6 +6167,7 @@ def _verify_one(
     should_stop: Callable[[], bool] = lambda: False,
     shared_should_stop: Callable[[], bool] = lambda: False,
     continuation_cache: bool = False,
+    refusal_fallback: bool = False,
 ) -> _VerifierOutcome:
     worker_fields = {
         "candidate_id": candidate_id,
@@ -5763,6 +6224,7 @@ def _verify_one(
         # A streamed seat's continuations are seconds apart, like a lens's,
         # so they get the tail too: 5 minutes after this seat's 1h markers.
         continuation_cache=continuation_cache,
+        refusal_fallback=refusal_fallback,
     )
     return _verifier_outcome(
         result,
@@ -5831,6 +6293,7 @@ def _verifier_outcome(
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
                 uncollected_requests=result.uncollected_requests,
+                served_by_model=result.served_by_model,
             ),
             billed=result.billed,
             shared_request_failure=shared_request_failure,
@@ -5859,6 +6322,7 @@ def _verifier_outcome(
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
                 uncollected_requests=result.uncollected_requests,
+                served_by_model=result.served_by_model,
             ),
             billed=result.billed,
         )
@@ -5892,6 +6356,7 @@ def _verifier_outcome(
             api_request_count=result.api_request_count,
             model_response_count=len(result.billed),
             uncollected_requests=result.uncollected_requests,
+            served_by_model=result.served_by_model,
         ),
         billed=result.billed,
     )
@@ -6354,6 +6819,7 @@ def _run_batch_calls(
     warm_leads: bool = False,
     warm_wait_seconds: float = 0.0,
     continuation_cache: bool = False,
+    refusal_fallback: bool = False,
 ) -> _BatchPhaseOutcome:
     """Run many independent QC calls through the Message Batches API.
 
@@ -6737,6 +7203,7 @@ def _run_batch_calls(
                 should_stop=should_stop,
                 first_output=released,
                 continuation_cache=continuation_cache,
+                refusal_fallback=refusal_fallback,
             )
             future.add_done_callback(lambda _done, event=released: event.set())
             lead_futures[lead.key] = future
@@ -7727,6 +8194,7 @@ def run_final_qc(
     warm_wait_seconds: float | None = None,
     batch_warm_lead: bool | None = None,
     continuation_cache: bool | None = None,
+    refusal_fallback: bool | None = None,
     version_index: int,
     started_at: str,
     finished_at: str,
@@ -7804,6 +8272,19 @@ def run_final_qc(
         settings.CONTINUATION_CACHE
         if continuation_cache is None
         else bool(continuation_cache)
+    )
+    # And the refusal fallback (the 5.5 prompting upgrade, P55-7), the same
+    # way: it decides which model may answer a streamed call the configured
+    # model declines, never what any call is asked, so it stays out of the
+    # input manifest too (a rescued call is disclosed on its own record
+    # instead). Pinned so every streamed call in the run — lenses, grouping
+    # calls, streamed seats and leads — asks alike; batched params never carry
+    # it (the Batches API rejects the field). Its latch, like the tail's, can
+    # only REMOVE it, once the provider has refused a request that carried it.
+    refusal_fallback = (
+        settings.QC_REFUSAL_FALLBACK
+        if refusal_fallback is None
+        else bool(refusal_fallback)
     )
     # Same discipline, load-bearing for a different reason: this string leads
     # both cached shared prefixes, so re-reading the clock per call would
@@ -7910,6 +8391,7 @@ def run_final_qc(
                 should_stop=should_stop,
                 first_output=first_output,
                 continuation_cache=continuation_cache,
+                refusal_fallback=refusal_fallback,
             )
 
         futures = _launch_staggered(
@@ -8066,6 +8548,7 @@ def run_final_qc(
         enabled=consolidation_enabled,
         warm_wait_seconds=warm_wait_seconds,
         continuation_cache=continuation_cache,
+        refusal_fallback=refusal_fallback,
         event_sink=event_sink,
         should_stop=should_stop,
     )
@@ -8266,6 +8749,7 @@ def run_final_qc(
                 warm_wait_seconds=warm_wait_seconds,
                 # The streamed leads' continuations only; batched seats never.
                 continuation_cache=continuation_cache,
+                refusal_fallback=refusal_fallback,
             )
             call_results = batch_phase.results
             unassigned_batch_results = batch_phase.unassigned_results
@@ -8339,6 +8823,7 @@ def run_final_qc(
                             should_stop=should_stop,
                             shared_should_stop=shared_failure.is_set,
                             continuation_cache=continuation_cache,
+                            refusal_fallback=refusal_fallback,
                         )
                         futures[future] = (i, j)
 

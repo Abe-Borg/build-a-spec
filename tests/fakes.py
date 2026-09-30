@@ -1031,6 +1031,64 @@ def qc_findings_response(
     )
 
 
+def fallback_served(
+    response: SimpleNamespace,
+    *,
+    to_model: str = "claude-opus-5",
+    from_model: str = "claude-opus-5-5",
+    block: bool = True,
+    iteration: bool = True,
+    model: bool = True,
+    partial: list[Any] | None = None,
+) -> SimpleNamespace:
+    """Mark a scripted response as answered by a fallback model (P55-7).
+
+    Final QC's refusal fallback lets the API retry a declined request on the
+    model it chooses and return that model's answer. The three signals the
+    engine reads each attach only when asked for, so a test can prove each
+    one alone: ``block`` puts a ``fallback`` content block (``from`` / ``to``,
+    the switch point) ahead of the answer, after any ``partial`` content the
+    declined model produced first; ``iteration`` adds ``usage.iterations`` —
+    the declined attempt as a plain ``message`` entry, then the serving
+    attempt as ``fallback_message`` (plain dicts, as a GA response carries
+    the extra field); ``model`` sets ``response.model`` to the answering
+    model (a sticky turn's only signal besides the iteration). The response
+    is changed in place and returned, so it can wrap any builder.
+    """
+    if block:
+        switch = SimpleNamespace(
+            type="fallback",
+            to=SimpleNamespace(model=to_model),
+            **{"from": SimpleNamespace(model=from_model)},
+        )
+        response.content = [*(partial or []), switch, *response.content]
+    if iteration:
+        record = getattr(response, "usage", None)
+        if record is None:
+            record = response.usage = usage()
+        record.iterations = [
+            {
+                "type": "message",
+                "model": from_model,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+            {
+                "type": "fallback_message",
+                "model": to_model,
+                "input_tokens": record.input_tokens,
+                "output_tokens": record.output_tokens,
+                "cache_read_input_tokens": record.cache_read_input_tokens,
+                "cache_creation_input_tokens": record.cache_creation_input_tokens,
+            },
+        ]
+    if model:
+        response.model = to_model
+    return response
+
+
 def qc_verdict_response(
     upholds: bool,
     *,

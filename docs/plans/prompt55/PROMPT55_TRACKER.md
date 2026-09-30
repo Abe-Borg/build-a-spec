@@ -2,7 +2,7 @@
 
 <!-- PROMPT55-STATUS: IN PROGRESS -->
 
-**Next session:** P55-7 — Final QC falls back when a streamed call is declined
+**Next session:** P55-8 — Mark pasted text in chat, and close out
 
 Owner: Abraham. Opened 2026-09-29.
 
@@ -52,7 +52,7 @@ pull request each:
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | done | PR #239 | `4e94610` |
 | P55-5 | Remind a batched verifier seat that skipped its output tool | done | PR #240 | `829b839` |
 | P55-6 | Keep thinking valid when the harness edits a request | done | PR #241 | `8240f19` |
-| P55-7 | Final QC falls back when a streamed call is declined | not started | — | — |
+| P55-7 | Final QC falls back when a streamed call is declined | done | PR #242 | — |
 | P55-8 | Mark pasted text in chat, and close out | not started | — | — |
 
 ### What each status means

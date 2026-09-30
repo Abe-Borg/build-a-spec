@@ -1,4 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  adoptPaste,
+  movePastedRanges,
+  pendingPaste,
+  randomPasteId,
+  wrapPastedContent,
+  type PastedRange,
+  type PendingPaste,
+} from "../lib/pastedContent";
 
 interface Props {
   disabled: boolean;
@@ -24,6 +33,23 @@ export default function Composer({
 }: Props) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
+  // Pastes worth marking, recorded by position (lib/pastedContent.ts): the
+  // send wraps each in <pasted_content> tags so the model knows the text came
+  // from somewhere else. Refs, not state — they never change what renders.
+  // `valueRef` is the value the ranges describe, so an edit is always
+  // measured against the value it changed.
+  const rangesRef = useRef<PastedRange[]>([]);
+  const pendingRef = useRef<PendingPaste | null>(null);
+  const valueRef = useRef("");
+
+  /** Replace the whole value in code (a prefill, a sent message): every
+   *  recorded paste goes with the text it described. */
+  const replaceValue = (text: string) => {
+    rangesRef.current = [];
+    pendingRef.current = null;
+    valueRef.current = text;
+    setValue(text);
+  };
 
   // Auto-grow up to ~9 lines.
   useEffect(() => {
@@ -37,7 +63,7 @@ export default function Composer({
   // at the end so the user just types what to change.
   useEffect(() => {
     if (!prefill || prefill.nonce === 0) return;
-    setValue(prefill.text);
+    replaceValue(prefill.text);
     const el = ref.current;
     if (el) {
       el.focus();
@@ -49,9 +75,13 @@ export default function Composer({
   }, [prefill?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = () => {
-    const text = value.trim();
-    if (!text || disabled || uploading) return;
-    setValue("");
+    const current = valueRef.current;
+    if (!current.trim() || disabled || uploading) return;
+    // The model gets the pastes marked; the bubble strips the marks again
+    // (MessageBubble renders stripPastedContentTags), so the chat shows the
+    // message exactly as it was typed.
+    const text = wrapPastedContent(current, rangesRef.current, randomPasteId);
+    replaceValue("");
     onSend(text);
   };
 
@@ -67,7 +97,22 @@ export default function Composer({
           ref={ref}
           rows={1}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onPaste={(e) => {
+            // Applied by the change that follows; recorded now, where the
+            // selection still says where the paste lands.
+            pendingRef.current = pendingPaste(
+              e.currentTarget.selectionStart ?? 0,
+              e.clipboardData.getData("text"),
+            );
+          }}
+          onChange={(e) => {
+            const next = e.target.value;
+            const moved = movePastedRanges(rangesRef.current, valueRef.current, next);
+            rangesRef.current = adoptPaste(moved, pendingRef.current, next);
+            pendingRef.current = null;
+            valueRef.current = next;
+            setValue(next);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();

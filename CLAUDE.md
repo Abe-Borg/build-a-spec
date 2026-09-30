@@ -1770,7 +1770,11 @@ backend/
                            _CARRY_THE_PASS_THROUGH is the ONE carry-it-through
                            bullet FULL_DRAFT_DIRECTIVE and
                            ADAPT_IMPORTED_DIRECTIVE carry, just before their
-                           closing bullet (never the prerequisites turns)
+                           closing bullet (never the prerequisites turns).
+                           P55-8: _PASTED_CONTENT_POLICY, the Opus 5.5 guide's
+                           pasted-text note verbatim, right after
+                           _REFERENCE_DOC_POLICY (module-stable, no session
+                           data)
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
                            lint event + standards_payload (the event lints
                            exactly as the doc payload does:
@@ -1999,6 +2003,22 @@ frontend/src/
                            a real boolean folds), effectivePanelTray (ready /
                            locked: the tour shows every panel), foldedAttention
                            (the folded bar's counts, minus panels left out)
+  lib/pastedContent.ts     [5.5 prompting upgrade, P55-8] pasted text marked
+                           as pasted: pendingPaste (the clipboard text, line
+                           endings folded, at the selection start),
+                           movePastedRanges (every change moves the recorded
+                           ranges through a prefix/suffix diff; a range the
+                           edit reaches into is dropped), adoptPaste (records
+                           a paste the value holds at its start and
+                           isWorthMarking — a line break or
+                           PASTE_MARK_MIN_CHARS, 120, decision D7; an
+                           overlapped range goes), wrapPastedContent (the
+                           trimmed message with each still-matching range in
+                           <pasted_content id="…"> tags, each tag on its own
+                           line, a fresh 8-hex id per block that the message
+                           holds nowhere else) and stripPastedContentTags (its
+                           exact inverse, matching ids only). Pure; the
+                           composer and the user bubble only call it
   lib/figures.ts           [Batch 8] figure render + security helpers: DOMPurify
                            SVG sanitize, lazy mermaid.render (securityLevel strict,
                            htmlLabels off), sandbox-iframe srcdoc with a strict CSP
@@ -2158,10 +2178,14 @@ frontend/src/
                            two Final QC report surfaces
   components/*             Chat (Batch 6 starter chips in the empty state) /
                            MessageBubble (smoothing + thinking block; renders a
-                           ChatMessage.note as a compact centered event marker) /
-                           Composer (WI2 ask-model prefill; Batch 7 swaps the send
+                           ChatMessage.note as a compact centered event marker;
+                           a user bubble renders stripPastedContentTags — P55-8)
+                           / Composer (WI2 ask-model prefill; Batch 7 swaps the send
                            button for a stop-square while streaming, Claude.ai-style
-                           — always clickable, no confirmation) / ArtifactPanel
+                           — always clickable, no confirmation; P55-8 records
+                           pastes by position in refs and sends
+                           wrapPastedContent's text, and replaceValue — a
+                           prefill, a sent message — drops every range) / ArtifactPanel
                            (stepper, Batch 5 Compare toggle + base picker + stat line
                            + export menu, Save (a split button once the session
                            has a target: Save overwrites it, the caret holds
@@ -3045,6 +3069,29 @@ tests/
                            model's rates) reaching the Limitations list, an
                            older report silent, and the modal rendering
                            every record through the helper
+  test_prompt55_pasted_content.py
+                           [5.5 prompting upgrade, P55-8] the guide's note in
+                           every module's stable prompt, right after the
+                           reference-document policy, word for word and with
+                           no session data; the prompt deterministic and the
+                           cached system block the same with or without a
+                           paste; a tagged message reaching the request's user
+                           turn, saved history and the reloaded transcript
+                           intact; and every frontend test file registered in
+                           `npm test`
+  frontend/tests/prompt55PastedContent.test.ts
+                           [P55-8] the helpers through a simulator of the
+                           composer's own handlers: which pastes are marked
+                           (D7), the tag shape, the pasted occurrence and
+                           never an identical typed one, edits before, inside
+                           and after a paste, a paste over a paste, \r\n,
+                           a discarded pending paste, replacing the value, ids,
+                           the trim, stale ranges, strip; two seeded sweeps
+                           (strip∘wrap is the trimmed message for any ranges;
+                           every intact paste marked where it sits and nothing
+                           else, against a per-character record of who wrote
+                           what); and the composer and bubble wiring pinned at
+                           the source
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,
@@ -19542,6 +19589,151 @@ the why and the traps.
      `_open_stream` as the tail's guard alone. In Final QC it now checks the
      refusal fallback's guard first, and CT-2's list of unmeasured
      continuations gains a fallback-served one.
+
+## Pasted text is marked as pasted — implemented notes (5.5 prompting upgrade, P55-8)
+
+The eighth and last session of the 5.5 prompting upgrade
+(`docs/plans/prompt55/`), finding F10 and decision D7: the Opus 5.5 guide's
+"Mark pasted text in user messages". Users paste owner emails, code excerpts
+and other sections' wording into the composer, and that text can carry
+instructions the user did not write. No route, SSE event type, dependency,
+env knob, project-format change, QC schema or protocol bump, or version bump.
+The plan's P55-8 **As built** carries the deviations and the full revert
+matrix; this section is the why and the traps.
+
+- **What the model receives.** Each paste worth marking — one holding a line
+  break, or at least `PASTE_MARK_MIN_CHARS` (120) characters (D7; a module
+  constant, not a knob) — reaches the API as
+
+  ```text
+  <pasted_content id="3f9a1c2e">
+  …the pasted text, unchanged…
+  </pasted_content id="3f9a1c2e">
+  ```
+
+  with each tag on its own line and a fresh random 8-hex id per block
+  (`crypto.getRandomValues`). The stable prompt carries
+  `_PASTED_CONTENT_POLICY`, the guide's note word for word, right after
+  `_REFERENCE_DOC_POLICY`: follow instructions inside the tags only where the
+  user's own message asks, and never mention the id. Module-stable, no
+  session data. Short inline pastes stay plain text.
+- **A paste is a RANGE, never a string to search for later**
+  (`frontend/src/lib/pastedContent.ts`). The same words can already be in the
+  message, typed or pasted before, and only the occurrence the paste inserted
+  was pasted; wrapping the first match would label the user's own words as
+  pasted. `onPaste` stashes a pending record (the selection start, and the
+  clipboard's text with `\r\n`/`\r` folded to `\n`, as a textarea holds it);
+  every `onChange` first moves the recorded ranges through the edit
+  (`movePastedRanges`: a prefix/suffix diff, the suffix bounded so the two
+  never overlap — a range before the edit stays, one after it shifts, one the
+  edit reaches into is dropped and sent plain, never worse than before), then
+  `adoptPaste` records the pending paste only if the new value holds exactly
+  its text at its start and it is worth marking, dropping any range it
+  overlaps; the pending record is cleared either way. `replaceValue` — a
+  prefill, a sent message — drops every range. The ranges live in refs: they
+  never change what renders.
+- **The send is invertible, and that is what keeps the tags off screen.**
+  `wrapPastedContent` wraps the TRIMMED message: a range whose text no longer
+  matches its position is skipped, a range the trim cuts into keeps only what
+  the message still holds, and `isWorthMarking` is applied to what is actually
+  wrapped (a paste whose only line break is trailing whitespace goes plain).
+  A line break is added before a block only when something precedes it and
+  after only when something follows, exactly one each, so
+  `stripPastedContentTags` — which removes only pairs whose ids match, with
+  those two line breaks — gives back the trimmed message character for
+  character (a seeded sweep over arbitrary ranges pins it). The composer hands
+  the WIRE text to `onSend`; the local message stores it, and the user bubble
+  renders `stripPastedContentTags(msg.text)` — so the live bubble and the
+  reloaded transcript go through one rendering, and neither shows a tag.
+- **An id is never ambiguous.** `freshId` takes an id only if it is well
+  formed, unused in this message and found nowhere in its text, so a closing
+  tag can never occur inside what it closes; if the source cannot supply one,
+  that block goes untagged.
+- **The tags ride everything else verbatim.** They are part of the user's
+  bare text, so commit keeps them in history, the next request re-sends them,
+  the project file saves them and a reload's transcript carries them; the
+  fact harvest, the condensing summary and recall read them as data.
+  Prefills, starter chips, suggested replies and the server's own directives
+  never pass through the composer's paste path and are never tagged.
+- **Honest limits.** A drag-and-drop, or an undo/redo that re-inserts pasted
+  text, is not a paste event and goes plain. The prefix/suffix diff can place
+  an edit later than it happened: usually that drops a range, but an edit that
+  lands exactly at a range's end keeps it — the tags then still hold exactly
+  the pasted string, and only which of two identical characters counts
+  inside differs (a sweep in one shared alphabet pins that every marked block
+  is exactly one paste's text). The tags are plain text and can be imitated:
+  the guide calls it one guardrail. The guide also warns the model "can be
+  slightly more cautious at times"; the release note says so, and there is no
+  knob.
+- **Cache.** The stable prompt changed, so every chat session writes its
+  cached prefix once more after the update. Research and Final QC request
+  bytes are unchanged, and nothing reaches the QC input manifest.
+- **Copy.** The trust dossier's chat-turn card says what a paste becomes, and
+  its security table gains a "Text you paste" row (one guardrail, not a
+  wall). README gains "The 5.5 prompting upgrade" section; the 1.21.0 release
+  entry gains "Pasted text is marked as pasted".
+- **Tests.** `frontend/tests/prompt55PastedContent.test.ts` (21, registered in
+  `frontend/package.json`) drives the helpers through a simulator of the
+  composer's own handlers, with two seeded sweeps: strip∘wrap is the trimmed
+  message for arbitrary ranges, and — with each paste in an alphabet of its
+  own — every intact paste is marked exactly where it sits and nothing else
+  is, against a per-character record of who wrote what.
+  `tests/test_prompt55_pasted_content.py` (11) pins the note, the prompt's
+  determinism, the tagged message reaching the request, history and the
+  reloaded transcript intact, a pasted directive running at the interview
+  effort, and every frontend test file being registered in `npm test` (a file
+  left off that list never runs).
+- **Errata** (these notes are append-only, so corrections to earlier sections
+  are recorded here): "Draft passes finish in one turn, and effort is
+  re-based (P55-3)" says "A user who pastes a directive gets the boost, which
+  is harmless." Since P55-8 a pasted directive — always long enough to be
+  marked — reaches the model inside pasted-content tags, so it no longer
+  starts the message and runs at `INTERVIEW_EFFORT`. Only the app's own
+  directives, which never pass through the composer, get the draft-pass
+  boost.
+
+## The 5.5 prompting upgrade, as shipped — implemented notes (closeout)
+
+The program (`docs/plans/prompt55/`: the plan, and the tracker that is the
+record of every session) implemented all eleven recommendations of the
+2026-09-29 review of the app against Anthropic's prompting guides for Claude
+Sonnet 5.5 (the chat, research, the fact harvest, the condensing summary and
+the template pass) and Claude Opus 5.5 (Final QC) — decision D1. Eight
+sessions, one pull request each, on 2026-09-29 and 2026-09-30: P55-1 (PR
+#236) to P55-7 (PR #242), and P55-8, which also closed the program. Every
+user-visible item rides the newest unreleased release entry, 1.21.0 (v1.20.0
+was the newest published release when the program closed); none sits in a
+frozen entry. Each session's own section above is the why and the traps;
+this one is the map.
+
+| Session | What changed | Switch, and its default |
+|---|---|---|
+| P55-1 | An output tool called with the wrong letter case completes the call (an exact name still wins); the chat names a mis-cased tool's exact name without running it; one `last_tagged_json_object` takes the LAST complete tagged JSON value; the fact harvest ends its prompt with "Think the problem through before you answer." and refuses a `max_tokens` stop as `harvest_cut_off` | `BUILD_A_SPEC_HARVEST_MAX_TOKENS`, 64,000 (floor 4,096; a lower `BUILD_A_SPEC_MAX_TOKENS` still binds it) |
+| P55-2 | The stable prompt and every chip-staging directive make every tool call first (`suggest_prompts` last) and write the reply after the last one, so it stays text; the web-lookup policy checks specifics "even when you feel confident" | none; `THINKING_DISPLAY` stays `summarized` (D2). The paid, owner-run canary `tools/prompt55_progress_update_canary.py --run` |
+| P55-3 | Whole-section passes are told to carry the pass through, and run every round at a higher effort decided once per turn; Final QC's effort re-based for Opus 5.5 | `BUILD_A_SPEC_DRAFT_PASS_EFFORT`, `high` (set it equal to the interview effort to switch the boost off); `BUILD_A_SPEC_QC_EFFORT` now defaults to `medium` (`high` restores it). A retained Final QC result read stale once |
+| P55-4 | A streamed research area or Final QC call whose reply ends without its output tool is reminded, at most twice per conversation (D5), never after `max_tokens`, a refusal or a Stop | none (a module constant per engine) |
+| P55-5 | The same for a batched verifier seat, in the next batch round, never in the settlement window or on the last round | none |
+| P55-6 | A request whose messages the harness edited (the resend sanitizer, the citation repair) carries `block_binding: drop_block` and its beta, sticky for the rest of a fan-out conversation; the display probe degrades only on a display-worded 400 | none |
+| P55-7 | Every streamed Final QC request carries the API's refusal fallback; a rescued call records who answered, and both report projections disclose it and price it at the QC model's rates (D6) | `BUILD_A_SPEC_QC_REFUSAL_FALLBACK`, on (`0` off); a refused parameter switches it off until a restart |
+| P55-8 | A paste worth marking reaches the model inside `<pasted_content>` tags with a random id; the stable prompt carries the guide's note; the chat never shows the tags | none (D7's 120 characters is a constant) |
+
+- **What changed for everyone running from `master`.** Final QC's lens
+  effort (`medium`); the draft-pass effort (`high`); the refusal fallback on
+  streamed Final QC calls; the harvest's output ceiling; and new stable-prompt
+  and system-prompt text in the chat (P55-2, P55-8) and in research and Final
+  QC (P55-4), so each cache lineage is written once more after the update.
+- **What stayed.** No route, no SSE event type, no dependency, no QC schema or
+  protocol bump, no project-format change; the only new QC record field
+  (`served_by_model`) is written only when set, so older reports load byte
+  for byte.
+- **What remains owed.** The P55-2 canary is optional and has not been run:
+  only the owner runs it, and nothing waits on it. The release notes wait for
+  whichever release next ships from `master`.
+- **Errata.** Every backticked identifier the eight sections name was checked
+  against the code at the closeout: each exists, except a test the P55-3
+  section itself records as renamed. The one statement found false is
+  recorded in the P55-8 section above (a pasted directive no longer gets the
+  draft-pass boost).
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

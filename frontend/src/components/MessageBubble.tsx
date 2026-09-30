@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, Figure } from "../types";
+import { stripPastedContentTags } from "../lib/pastedContent";
 import { splitStableTail, useSmoothText } from "../lib/useSmoothText";
 import FigureCard from "./FigureCard";
 import StatusStrip from "./StatusStrip";
@@ -107,10 +108,12 @@ function MessageBubble({
   }
 
   if (msg.role === "user") {
+    // A pasted block reaches the model inside <pasted_content> tags (P55-8);
+    // the user sees their message as they typed it, live and after a reload.
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-2xl rounded-br-md border border-edge bg-raised px-4 py-2.5 text-[0.925rem] leading-relaxed whitespace-pre-wrap">
-          {msg.text}
+          {stripPastedContentTags(msg.text)}
         </div>
       </div>
     );

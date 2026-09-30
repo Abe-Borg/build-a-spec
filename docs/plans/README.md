@@ -4,20 +4,24 @@ Owner: Abraham.
 
 ## Active
 
-**[The 5.5 prompting upgrade](prompt55/PROMPT55_TRACKER.md)** — **in
-progress** (opened 2026-09-29). Implements the review of the app against
-Anthropic's prompting guides for Claude Sonnet 5.5 and Claude Opus 5.5
-(the models the interview, research, the harvest and Final QC now run on).
-Eight sessions, one pull request each: hardened output parsing and a fact
-harvest that thinks first; an interview that writes its reply after its
+**[The 5.5 prompting upgrade](prompt55/PROMPT55_TRACKER.md)** —
+**complete** (opened 2026-09-29, closed 2026-09-30 by P55-8; its code is all
+on `master`). Implemented the review of the app against Anthropic's
+prompting guides for Claude Sonnet 5.5 and Claude Opus 5.5 (the models the
+interview, research, the harvest and Final QC run on). Eight sessions, one
+pull request each (PRs #236–#242 and P55-8's): hardened output parsing and a
+fact harvest that thinks first; an interview that writes its reply after its
 last tool call; draft passes that finish in one turn, and Final QC effort
 re-based for Opus 5.5; a reminder for a research or review call that ends
-without its output tool (streamed and batched); thinking kept valid when
-the app edits a request; a server-side fallback for a declined Final QC
-call; and pasted text marked in chat, with the closeout. The spec is
-[`PROMPT55_PLAN.md`](prompt55/PROMPT55_PLAN.md); where the program stands,
-its rules, decisions and handoff live ONLY in the
-[tracker](prompt55/PROMPT55_TRACKER.md).
+without its output tool (streamed and batched); thinking kept valid when the
+app edits a request; a server-side fallback for a declined Final QC call;
+and pasted text marked in chat, with the closeout. Its user-visible items
+ride the newest unreleased release entry (1.21.0). Still optional: the
+owner-run P55-2 canary (`tools/prompt55_progress_update_canary.py --run`).
+The spec is [`PROMPT55_PLAN.md`](prompt55/PROMPT55_PLAN.md); the record of
+every session, its rules and decisions is the
+[tracker](prompt55/PROMPT55_TRACKER.md), and CLAUDE.md "The 5.5 prompting
+upgrade, as shipped" summarizes it.
 
 **[Tier 1 finish: Chunks 3 and 4](tier1-finish/TIER1_FINISH_TRACKER.md)**
 — **complete** (opened 2026-09-24, closed 2026-09-25 by FIN-1; its code is

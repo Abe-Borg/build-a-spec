@@ -1898,7 +1898,9 @@ parametrized included):
 - the canary folds a production beta into `betas`.
 
 **Verified** on the branch: `.venv/bin/python -m ruff check .` clean;
-VERIFIED_LINE
+`.venv/bin/python -m pytest -q` 3245 passed, 64 skipped (the run before the
+fixture fix failed exactly the two `test_qc_live_events.py` tests named
+above, and nothing else); `npm test` 438 passed; `npm run build` clean.
 
 **Revert matrix.** 33 rows. Each mechanism was reverted in place,
 one at a time, by a script that restored the exact text it read and checked

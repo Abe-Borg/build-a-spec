@@ -50,7 +50,7 @@ pull request each:
 | P55-2 | The interview replies after its last tool call | done | PR #237 | `77da938` |
 | P55-3 | Draft passes finish in one turn, and effort is re-based | done | PR #238 | `1d2185c` |
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | done | PR #239 | `4e94610` |
-| P55-5 | Remind a batched verifier seat that skipped its output tool | done | PR #240 | — |
+| P55-5 | Remind a batched verifier seat that skipped its output tool | done | PR #240 | `829b839` |
 | P55-6 | Keep thinking valid when the harness edits a request | not started | — | — |
 | P55-7 | Final QC falls back when a streamed call is declined | not started | — | — |
 | P55-8 | Mark pasted text in chat, and close out | not started | — | — |

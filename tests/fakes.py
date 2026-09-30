@@ -523,6 +523,7 @@ def raw_turn(
     usage: SimpleNamespace | None = None,
     snapshot_usage: SimpleNamespace | None = None,
     refusal_category: str | None = None,
+    input_transformations: list[Any] | None = None,
 ) -> SimpleNamespace:
     """A scripted response with arbitrary content blocks (thinking,
     server tools, pause_turn shapes) for the chat loop's fake client.
@@ -534,7 +535,10 @@ def raw_turn(
     when a turn is stopped mid-stream, which is normally a much smaller
     placeholder than the final message's count. ``refusal_category`` scripts
     the ``stop_details`` a declined turn carries (see :func:`_stop_details`);
-    pair it with ``stop_reason="refusal"``."""
+    pair it with ``stop_reason="refusal"``. ``input_transformations`` scripts
+    the top-level array a response to a request carrying the
+    preserved-thinking beta holds (the 5.5 prompting upgrade, P55-6),
+    attached only when supplied."""
     turn = SimpleNamespace(
         chunks=list(chunks or []),
         content=list(content),
@@ -551,7 +555,16 @@ def raw_turn(
         turn.usage = usage
     if snapshot_usage is not None:
         turn.snapshot_usage = snapshot_usage
+    if input_transformations is not None:
+        turn.input_transformations = list(input_transformations)
     return turn
+
+
+def _input_transformations_of(turn: SimpleNamespace) -> dict:
+    """``input_transformations`` when the scripted turn carries it, else
+    nothing — so every fixture without it builds the same message as before."""
+    value = getattr(turn, "input_transformations", None)
+    return {} if value is None else {"input_transformations": value}
 
 
 def harvest_proposal(statement: str, **fields: Any) -> dict[str, str]:
@@ -657,6 +670,7 @@ class _FakeStreamCtx:
             usage=getattr(self._turn, "usage", None),
             **_container_of(self._turn),
             **_stop_details_of(self._turn),
+            **_input_transformations_of(self._turn),
         )
 
     @property
@@ -920,6 +934,7 @@ def pause_response(
     searches: int | None = None,
     container: str | None = None,
     pending_query: str = "",
+    answers: str = "",
 ) -> SimpleNamespace:
     """A ``pause_turn`` response mid-research (server tools still running).
 
@@ -927,10 +942,17 @@ def pause_response(
     — the reason a turn pauses at all, and the block the provider resumes
     from. Fixtures without it model a pause whose searches all came back,
     which is the easier half.
+
+    ``answers`` is the id of the pending use the PREVIOUS pause ended on:
+    the search result names it, as a resumed response's result does, so the
+    pair straddles the two messages and the resend sanitizer's pairing guard
+    keeps it. Without it a pending use that is no longer the trailing
+    message is unpaired, and the guard drops it — an edit the conversation
+    never had on the wire.
     """
     content: list[SimpleNamespace] = []
     if searched_urls:
-        content.append(search_result_block(searched_urls))
+        content.append(search_result_block(searched_urls, tool_use_id=answers))
     if pending_query:
         content.append(
             SimpleNamespace(

@@ -37,6 +37,7 @@ import contextlib
 import dataclasses
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping
@@ -91,10 +92,16 @@ from .schema import (
     build_web_search_tool,
     extract_tool_use_block,
     last_tagged_json_object,
+    missing_output_tool_reply,
     requirements_research_tool,
 )
 
 EventSink = Callable[[dict], None]
+
+# The research fan-out's logger. One INFO line per missing-output-tool
+# reminder (the 5.5 prompting upgrade, P55-4): the area's id and the count,
+# never content.
+_log = logging.getLogger("buildaspec.research")
 
 
 def _noop_sink(_event: dict) -> None:
@@ -138,6 +145,41 @@ _RESEARCH_MAX_WORKERS = 4
 # turns; sized for the heaviest dimension (~one pause per 3 searches). The
 # 2× search-budget ceiling below is the real runaway guard.
 RESEARCH_MAX_CONTINUATIONS = 16
+
+# A research area whose reply ends without the output tool (the Opus 5.5
+# prompting guide's early stop: "some of those updates end the turn with text
+# rather than a tool call") is reminded instead of failing outright — at most
+# this many times per CONVERSATION (the 5.5 prompting upgrade, P55-4,
+# decision D5: the guide says to stop "after two or three automatic
+# continuations on the same task"). A module constant, not a knob, and a copy
+# of ``qc.engine``'s (the engines keep separate copies of their loop). A
+# restart starts the count again; a resume keeps it.
+_MISSING_TOOL_REMINDERS = 2
+
+
+def _missing_tool_reminder() -> str:
+    """The reminder a text-only end of turn gets. Names the tool exactly."""
+    return (
+        f"Your turn ended without a {RESEARCH_TOOL_NAME} call, so nothing "
+        f"was recorded. Call {RESEARCH_TOOL_NAME} now with your findings. "
+        "Do not repeat searches you have already run."
+    )
+
+
+def _wrong_tool_result(name: str) -> str:
+    """The ``is_error`` result a call to any other client tool gets.
+
+    True whatever was called — an invented name, or (unreachable in practice)
+    the right name with an input that is not an object — because it says
+    only that nothing was recorded and how the findings are.
+    """
+    return (
+        f"Nothing was recorded by this `{name}` call: your findings are "
+        f"recorded only by {RESEARCH_TOOL_NAME}, called by that exact name. "
+        f"Call {RESEARCH_TOOL_NAME} now with your findings. Do not repeat "
+        "searches you have already run."
+    )
+
 
 # Engine defaults when a dimension declares no budget of its own.
 RESEARCH_DEFAULT_MAX_SEARCHES = 24
@@ -1557,6 +1599,10 @@ Call the submit_requirements_research tool exactly once with your findings.
 - confidence in [0,1]. If you cannot ground a requirement in retrieved
   sources, either omit it or report it with confidence 0 and explain in
   notes — never guess.
+Your findings are recorded only by the submit_requirements_research call. A
+message without a tool call ends your turn and records nothing, so put any
+status note in the same message as your next tool call, and end by calling
+submit_requirements_research.
 If you cannot call the tool, emit the same payload as JSON wrapped in
 <research_json>...</research_json> tags.
 </output>"""
@@ -2296,6 +2342,17 @@ def _run_dimension(
     the next attempt begins from the opening request. The final attempt
     always restarts. The continuation budget is the conversation's, so a
     resume never earns a pause loop a second allowance.
+
+    A reply that ends its turn without the output tool is REMINDED rather
+    than failed (the 5.5 prompting upgrade, P55-4): its content is appended
+    verbatim, then one user turn naming ``submit_requirements_research``
+    (:func:`missing_output_tool_reply`), and the conversation goes on — at
+    most :data:`_MISSING_TOOL_REMINDERS` times per conversation, only while
+    its continuation budget can send one more request, and never once a Stop
+    has landed. The reminder's response is the conversation's like any
+    other: billed once, pooled for grounding, counted against the budget.
+    When the reminders run out the area fails as it always did, with the
+    count in its message.
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
@@ -2419,6 +2476,11 @@ def _run_dimension(
     # A resume moves nothing here — the conversation carries on, and the
     # terminal ``[*billed_responses, *all_responses]`` counts it once.
     billed_responses: list[Any] = []
+    # Missing-output-tool reminders this CONVERSATION has sent (P55-4). A
+    # resume keeps the count, since the conversation it counts carries on
+    # (and a reminder request that failed in flight is sent again as it
+    # stood); a restart is a new conversation and starts it at zero.
+    reminders_sent = 0
 
     for attempt in range(attempts_planned):
         if should_stop():
@@ -2511,8 +2573,64 @@ def _run_dimension(
                     getattr(response, "stop_reason", None)
                 )
                 if stop_class == STOP_CLASS_COMPLETE:
-                    completed = True
-                    break
+                    payload, parse_source = _parse_research_payload(all_responses)
+                    if payload is not None:
+                        completed = True
+                        break
+                    # The turn ended without the output tool (P55-4): a
+                    # report, not the end of the task. Remind — never after
+                    # max_tokens or a refusal (their stop classes take their
+                    # own paths below), and only while the conversation's
+                    # budget can still send the reminder request, which
+                    # counts against it like a continuation.
+                    if (
+                        reminders_sent < _MISSING_TOOL_REMINDERS
+                        and len(all_responses) <= RESEARCH_MAX_CONTINUATIONS
+                    ):
+                        if should_stop():
+                            # The Stop's own path: nothing more is sent.
+                            return _failed(
+                                "Cancelled by user.",
+                                kind=DIMENSION_ERROR_CANCELLED,
+                                responses=[*billed_responses, *all_responses],
+                            )
+                        # Append-only, exactly as a pause resume appends:
+                        # the assistant content verbatim, then ONE user turn
+                        # (the reminder text, or an is_error result for
+                        # every client tool the model invented). It ends on
+                        # the user, so ``_is_continuation`` is false and the
+                        # request carries no continuation tail — CT-1's
+                        # guard and CT-2's value check never see it. It
+                        # re-reads the paused conversation uncached once,
+                        # which is cheaper than a failed area and its re-run.
+                        messages.append(
+                            {"role": "assistant", "content": response.content}
+                        )
+                        messages.append(
+                            missing_output_tool_reply(
+                                response,
+                                reminder=_missing_tool_reminder(),
+                                wrong_tool=_wrong_tool_result,
+                            )
+                        )
+                        messages = sanitize_messages_for_resend(messages)
+                        reminders_sent += 1
+                        _log.info(
+                            "Research area %s ended its turn without %s; "
+                            "reminder %d of %d sent.",
+                            dimension.dimension_id,
+                            RESEARCH_TOOL_NAME,
+                            reminders_sent,
+                            _MISSING_TOOL_REMINDERS,
+                        )
+                        continue
+                    return _failed(
+                        "Research produced no parseable payload (no tool "
+                        "call, no tagged JSON; reminders sent: "
+                        f"{reminders_sent}).",
+                        kind=DIMENSION_ERROR_NO_PAYLOAD,
+                        responses=[*billed_responses, *all_responses],
+                    )
                 if stop_class == STOP_CLASS_PAUSE:
                     total_search_so_far = sum(
                         web_search_count(r) for r in all_responses
@@ -2574,14 +2692,8 @@ def _run_dimension(
                     responses=[*billed_responses, *all_responses],
                 )
 
-            payload, parse_source = _parse_research_payload(all_responses)
-            if payload is None:
-                return _failed(
-                    "Research produced no parseable payload (no tool call, "
-                    "no tagged JSON).",
-                    kind=DIMENSION_ERROR_NO_PAYLOAD,
-                    responses=[*billed_responses, *all_responses],
-                )
+            # ``payload`` was parsed at the completing response above; a
+            # completed conversation always carries one.
             items = _items_from_payload(payload, dimension.dimension_id)
 
             # Grounding: pool searched + fetched URLs across every response
@@ -2675,6 +2787,7 @@ def _run_dimension(
                 all_responses = []
                 messages = _opening_messages()
                 container_id = ""
+                reminders_sent = 0
             backoff = compute_backoff_seconds(
                 policy, attempt=attempt, failure_class=failure_class
             )

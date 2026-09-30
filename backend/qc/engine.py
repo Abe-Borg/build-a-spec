@@ -111,6 +111,7 @@ from ..research.schema import (
     build_web_search_tool,
     extract_tool_use_block,
     last_tagged_json_object,
+    missing_output_tool_reply,
 )
 from ..runtime_context import (
     current_date_iso,
@@ -194,6 +195,45 @@ def _qc_max_workers() -> int:
 # pause_turn continuations per streaming call. The 2× search-budget ceiling
 # is the real runaway guard.
 QC_MAX_CONTINUATIONS = 16
+
+# A streamed QC call — a lens, a grouping call, a streamed verifier seat, a
+# warm lead — whose reply ends without its output tool (the Opus 5.5
+# prompting guide's early stop: "some of those updates end the turn with text
+# rather than a tool call") is reminded instead of failing outright — at most
+# this many times per CONVERSATION (the 5.5 prompting upgrade, P55-4,
+# decision D5: stop "after two or three automatic continuations on the same
+# task"). A module constant, not a knob, and a copy of ``research.engine``'s
+# (the engines keep separate copies of their loop). A restart starts the
+# count again; a resume keeps it. The batched transport does not remind yet
+# (P55-5).
+_MISSING_TOOL_REMINDERS = 2
+
+
+def _missing_tool_reminder(tool_name: str) -> str:
+    """The reminder a text-only end of turn gets. Names the tool exactly."""
+    return (
+        f"Your turn ended without a {tool_name} call, so nothing was "
+        f"recorded. Call {tool_name} now with the work you have already "
+        "done. Do not repeat searches or fetches you have already run."
+    )
+
+
+def _wrong_tool_result(tool_name: str) -> Callable[[str], str]:
+    """The ``is_error`` result a call to any other client tool gets.
+
+    True whatever was called — an invented name, or (unreachable in practice)
+    the right name with an input that is not an object — because it says
+    only that nothing was recorded and how the work is.
+    """
+
+    def text(name: str) -> str:
+        return (
+            f"Nothing was recorded by this `{name}` call: your work is "
+            f"recorded only by {tool_name}, called by that exact name. Call "
+            f"{tool_name} now with the work you have already done."
+        )
+
+    return text
 
 # Persisted report/protocol identifiers. Bump the schema when the serialized
 # audit record changes incompatibly; bump the protocol whenever the actual
@@ -2925,6 +2965,23 @@ def _render_profile(profile: RequirementsProfile | None) -> str:
     return block
 
 
+def _early_stop_line(tool_name: str, work: str) -> str:
+    """The system-prompt line that names the early stop to avoid (P55-4).
+
+    The Opus 5.5 prompting guide's advice for an unattended loop: say that a
+    message without a tool call ends the turn, and ask for status notes "in
+    the same message as your next tool call". One wording across the lens,
+    grouping and verifier prompts; research's protocol block carries its own
+    copy.
+    """
+    return (
+        f"Your {work} is recorded only by the {tool_name} call. A message "
+        "without a tool call ends your turn and records nothing, so put any "
+        "status note in the same message as your next tool call, and end by "
+        f"calling {tool_name}."
+    )
+
+
 def _lens_system_prompt(module: SpecModule) -> str:
     return (
         f"{module.compliance_persona}\n\n"
@@ -2962,6 +3019,7 @@ def _lens_system_prompt(module: SpecModule) -> str:
         "fix exists; the server will still validate every final state.\n"
         "- Never propose mass status upgrades (do not 'confirm everything').\n"
         "- Cite in source_urls only URLs you actually retrieved this turn.\n"
+        f"{_early_stop_line(QC_FINDINGS_TOOL_NAME, 'review')}\n"
         "If you cannot call the tool, emit the same payload as JSON wrapped "
         "in <qc_json>...</qc_json> tags.\n"
         "</output>"
@@ -3087,6 +3145,7 @@ def _consolidation_system_prompt(module: SpecModule) -> str:
         "already agree, when no clean single fix exists, or for a "
         "single-member group. Never combine two members' operations into a "
         "sequence that would write the same requirement twice.\n"
+        f"{_early_stop_line(QC_CONSOLIDATION_TOOL_NAME, 'grouping')}\n"
         "If you cannot call the tool, emit the payload as JSON wrapped in "
         "<qc_consolidation_json>...</qc_consolidation_json> tags.\n"
         "</output>"
@@ -3171,6 +3230,7 @@ def _verifier_system_prompt(module: SpecModule) -> str:
         "scope, create a contradiction, or are otherwise unsafe even if they "
         "look mechanically valid.\n"
         "- ops_note: one-line rationale for the proposed-operation decision.\n"
+        f"{_early_stop_line(QC_VERDICT_TOOL_NAME, 'verdict')}\n"
         "If you cannot call the tool, emit the payload as JSON wrapped in "
         "<qc_verdict_json>...</qc_verdict_json> tags.\n"
         "</output>"
@@ -3774,6 +3834,18 @@ def _run_streaming_call(
     (:func:`_open_stream`, Tier 1 finish CT-1), so a refusal costs one
     request instead of the call. That covers every streamed QC call: the
     lenses, the grouping calls, streamed seats and warm leads.
+
+    A reply that ends its turn without the output tool is REMINDED rather
+    than failed (the 5.5 prompting upgrade, P55-4): its content is appended
+    verbatim, then one user turn naming ``tool_name``
+    (``missing_output_tool_reply``), and the conversation goes on — at most
+    :data:`_MISSING_TOOL_REMINDERS` times per conversation, only while its
+    continuation budget can send one more request, and never once a Stop has
+    landed. The reminder's response is the conversation's like any other:
+    billed once, counted in ``api_request_count`` and the response count,
+    pooled for grounding. When the reminders run out the call fails as it
+    always did, with the count in its message. Every streamed QC call gets
+    it — lenses, grouping calls, streamed seats and warm leads.
     """
     try:
         # One TTL for every EXPLICIT marker in the request. The API requires
@@ -3831,6 +3903,10 @@ def _run_streaming_call(
         # Responses of conversations a RESTART abandoned — billed, never
         # grounding. A resume moves nothing here.
         billed: list[Any] = []
+        # Missing-output-tool reminders this CONVERSATION has sent (P55-4).
+        # A resume keeps the count (a reminder request that failed in flight
+        # is sent again as it stood); a restart starts it at zero.
+        reminders_sent = 0
 
         for attempt in range(attempts):
             if should_stop():
@@ -3940,8 +4016,71 @@ def _run_streaming_call(
                         getattr(response, "stop_reason", None)
                     )
                     if stop_class == STOP_CLASS_COMPLETE:
-                        completed = True
-                        break
+                        payload = _parse(all_responses, tool_name, json_tag)
+                        if payload is not None:
+                            completed = True
+                            break
+                        # The turn ended without the output tool (P55-4): a
+                        # report, not the end of the task. Remind — never
+                        # after max_tokens or a refusal (their stop classes
+                        # take their own paths below), and only while the
+                        # conversation's budget can still send the reminder
+                        # request, which counts against it like a
+                        # continuation.
+                        if (
+                            reminders_sent < _MISSING_TOOL_REMINDERS
+                            and len(all_responses) <= QC_MAX_CONTINUATIONS
+                        ):
+                            if should_stop():
+                                # The Stop's own path: nothing more is sent.
+                                return _CallResult(
+                                    None,
+                                    all_responses,
+                                    [*billed, *all_responses],
+                                    "Cancelled by user.",
+                                    api_request_count,
+                                )
+                            # Append-only, exactly as a pause resume
+                            # appends: the assistant content verbatim, then
+                            # ONE user turn. It ends on the user, so
+                            # ``_is_continuation`` is false and the request
+                            # carries no continuation tail — CT-1's guard and
+                            # CT-2's value check never see it. It re-reads
+                            # the conversation uncached once, which is
+                            # cheaper than a failed lens and its re-run.
+                            messages.append(
+                                {"role": "assistant", "content": response.content}
+                            )
+                            messages.append(
+                                missing_output_tool_reply(
+                                    response,
+                                    reminder=_missing_tool_reminder(tool_name),
+                                    wrong_tool=_wrong_tool_result(tool_name),
+                                )
+                            )
+                            messages = sanitize_messages_for_resend(messages)
+                            reminders_sent += 1
+                            _log.info(
+                                "QC %s call (%s) ended its turn without %s; "
+                                "reminder %d of %d sent.",
+                                event_prefix,
+                                ", ".join(
+                                    f"{key}={value}"
+                                    for key, value in event_fields.items()
+                                ),
+                                tool_name,
+                                reminders_sent,
+                                _MISSING_TOOL_REMINDERS,
+                            )
+                            continue
+                        return _CallResult(
+                            None,
+                            all_responses,
+                            [*billed, *all_responses],
+                            "QC produced no parseable payload (reminders "
+                            f"sent: {reminders_sent}).",
+                            api_request_count,
+                        )
                     if stop_class == STOP_CLASS_PAUSE:
                         total_search = sum(
                             _web_search_count(r) for r in all_responses
@@ -3985,12 +4124,13 @@ def _run_streaming_call(
                         "QC call did not complete after maximum continuations.",
                         api_request_count,
                     )
-                payload = _parse(all_responses, tool_name, json_tag)
+                # ``payload`` was parsed at the completing response above; a
+                # completed conversation always carries one.
                 return _CallResult(
                     payload,
                     all_responses,
                     [*billed, *all_responses],
-                    "" if payload is not None else "QC produced no parseable payload.",
+                    "",
                     api_request_count,
                 )
             except (KeyboardInterrupt, SystemExit):
@@ -4025,6 +4165,7 @@ def _run_streaming_call(
                     all_responses = []
                     messages = opening_messages()
                     container_id = ""
+                    reminders_sent = 0
                 backoff = compute_backoff_seconds(
                     policy, attempt=attempt, failure_class=failure_class
                 )

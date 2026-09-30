@@ -630,15 +630,16 @@ def test_a_grouping_call_that_produces_no_payload_falls_back_and_keeps_its_cost(
             )
         ],
     )
-    # No tool call at all — the parse-failure shape.
-    scripts[CONSOLIDATE] = [qc_consolidation_response(None)]
+    # No tool call at all — the parse-failure shape — and again after each
+    # of the call's two reminders (P55-4), which it pays for too.
+    scripts[CONSOLIDATE] = [qc_consolidation_response(None) for _ in range(3)]
     scripts["[[QC-VERIFY:"] = _upheld(4)
     result = _run(SequencedFakeClient(scripts), store)
 
     assert len(result.findings) == 2
     assert result.consolidation.status == CONSOLIDATION_STATUS_FAILED
-    assert result.consolidation.api_request_count == 1
-    assert result.consolidation.model_response_count == 1
+    assert result.consolidation.api_request_count == 3
+    assert result.consolidation.model_response_count == 3
     # And the run totals still reconcile to their component records.
     assert result.api_request_count == (
         sum(status.api_request_count for status in result.lens_statuses)

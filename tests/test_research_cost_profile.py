@@ -95,22 +95,26 @@ def _researched_session(client: TestClient, monkeypatch, *, fail: str = "") -> N
 
     ``fail`` names an area whose reply never calls the output tool, so the
     area fails — and, since that reply was billed, its usage is still
-    recorded on its status.
+    recorded on its status. It is reminded twice first (the 5.5 prompting
+    upgrade, P55-4), and it ignores both reminders.
     """
     _record_profile(client, monkeypatch)
     scripts: dict[str, list] = {}
     for dim_id, key in DIM_KEYS.items():
         if dim_id == fail:
-            # A reply that never calls the output tool fails the area on its
-            # first response (it is not retried), and that response was
-            # billed, so its usage is recorded on the status.
+            # A reply that never calls the output tool is reminded twice
+            # (P55-4) and ignores both, so the area fails without a retry.
+            # Every reply was billed; the two to the reminders carry no
+            # usage, so the area's row is exactly the first reply's.
             scripts[key] = [
                 research_response(
                     items=None,
                     searched_urls=[_URL],
                     stop_reason="end_turn",
                     tokens=_TOKENS[dim_id],
-                )
+                ),
+                research_response(items=None, stop_reason="end_turn"),
+                research_response(items=None, stop_reason="end_turn"),
             ]
             continue
         scripts[key] = [
@@ -228,6 +232,15 @@ def test_a_failed_dimension_is_billed_and_included(monkeypatch, tmp_path):
     _researched_session(client, monkeypatch, fail="site_environment")
     report = _profile([_saved_project(tmp_path)], tmp_path)
 
+    # The area failed the way the fixture means it to: no payload after both
+    # reminders, not an exhausted script.
+    status = next(
+        s
+        for s in sessions.get_session().research.profile_result.dimension_statuses
+        if s.dimension_id == "site_environment"
+    )
+    assert status.error_kind == "no_payload"
+    assert "reminders sent: 2" in status.error
     cells = _row(report, "`site_environment`")
     assert cells[1] == "failed"
     # The failed area's billed response is on its row, counted once.

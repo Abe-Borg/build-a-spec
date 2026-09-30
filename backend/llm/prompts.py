@@ -224,6 +224,23 @@ _REPLY_AFTER_TOOL_CALLS = (
 )
 
 
+# The one carry-it-through bullet both whole-section passes carry (the 5.5
+# prompting upgrade, P55-3). The Sonnet 5.5 guide: "At `low` and `medium`,
+# on long agentic tasks, it's more likely to stop and check in with the user
+# before it finishes", and its fix is the line this adapts — "Keep working
+# until everything the user asked for is done, and only stop to ask when you
+# can't go on without the user or before a risky step." A full draft and an
+# adapt pass are the app's longest multistep turns, so they say it outright.
+# Directives are user messages, so the line costs no cached prefix.
+_CARRY_THE_PASS_THROUGH = (
+    "Carry the whole pass through in this one turn: keep working until "
+    "everything above is done. Do not stop after a PART or an article to ask "
+    "whether to continue. Stop early only for a question you genuinely cannot "
+    "default, and even then finish everything that does not depend on it "
+    "first."
+)
+
+
 # The canned user message the "Draft full section" action (Batch 3, WI1)
 # sends through the normal chat path — it appears in chat as a visible,
 # honest user turn and rides the ordinary tool loop, undo, and rollback.
@@ -236,6 +253,7 @@ Draft the COMPLETE section now — the full first pass, top to bottom.
 - Use everything already established: my interview answers, the project profile, the standards editions in effect, the grounded research items, the established project facts, and any reference documents I have attached (read them first — do not draft around them). Draft to them — and when a provision derives from a research item, an attached document, or a confirmed project fact, tag it with that item's, document's, or fact's source_item_id.
 - Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed); [TBD: …] or needs_input for anything that genuinely can't be defaulted yet. Over-flag rather than silently guess — I'll walk the assumptions afterward.
 - Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
+- {_CARRY_THE_PASS_THROUGH}
 - When the last edit is in, stage suggested replies for your 2–3 highest-value follow-up questions, then close with a short summary in chat plus those questions. {_REPLY_AFTER_TOOL_CALLS}"""
 
 
@@ -509,6 +527,7 @@ Walk the ENTIRE imported starter against THIS project now — the full gap-and-a
 - Use everything already established — my answers, the project profile, the standards editions in effect, and grounded research items (tag derived provisions with source_item_id).
 - If PROJECT CONTEXT carries an IMPORTED DOCX EDITING BOUNDARY block, obey it: batch only IDs it lists as editable (one operation per call when unsure), never attempt its categorical no-gos, and where it blocks an adaptation this project needs, tell me what the panel's "Edit freely" action would unlock rather than silently skipping it.
 - Keep each apply_spec_edits call to a sensible size (roughly an article at a time) so I can watch the pass move through the document.
+- {_CARRY_THE_PASS_THROUGH}
 - When the last edit is in, stage suggested replies for your 2-3 highest-value follow-up questions, then close with a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus those questions. {_REPLY_AFTER_TOOL_CALLS}"""
 
 

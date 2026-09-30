@@ -2,7 +2,7 @@
 
 <!-- PROMPT55-STATUS: IN PROGRESS -->
 
-**Next session:** P55-3 — Draft passes finish in one turn, and effort is re-based
+**Next session:** P55-4 — Remind a streamed fan-out call that skipped its output tool
 
 Owner: Abraham. Opened 2026-09-29.
 
@@ -47,8 +47,8 @@ pull request each:
 | ID | Title | Status | PR | Merge commit |
 |---|---|---|---|---|
 | P55-1 | Harden output parsing and the fact harvest | done | PR #236 | `b5c282a` |
-| P55-2 | The interview replies after its last tool call | done | PR #237 | — |
-| P55-3 | Draft passes finish in one turn, and effort is re-based | not started | — | — |
+| P55-2 | The interview replies after its last tool call | done | PR #237 | `77da938` |
+| P55-3 | Draft passes finish in one turn, and effort is re-based | done | PR #238 | — |
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | not started | — | — |
 | P55-5 | Remind a batched verifier seat that skipped its output tool | not started | — | — |
 | P55-6 | Keep thinking valid when the harness edits a request | not started | — | — |
@@ -113,14 +113,14 @@ match.
 
 ### P55-3 — Draft passes finish in one turn, and effort is re-based
 
-- [ ] P55-3.1 — both whole-section directives tell the model to carry the pass through in one turn
-- [ ] P55-3.2 — `DRAFT_PASS_EFFORT` (default high, env + README row) is used for every round of a ready full-draft or adapt turn, and only those
-- [ ] P55-3.3 — the turn's effort is decided once per turn and recorded in its trace
-- [ ] P55-3.4 — `QC_EFFORT` defaults to medium; the verifier default is unchanged; overrides keep working
-- [ ] P55-3.5 — `tests/test_prompt55_effort.py` covers every item above; knowing test changes recorded
-- [ ] P55-3.6 — verified: ruff, pytest, npm test, npm run build
-- [ ] P55-3.7 — revert matrix recorded in As built
-- [ ] P55-3.8 — CLAUDE.md, README, the trust dossier and the release note updated (including the stale-once disclosure)
+- [x] P55-3.1 — both whole-section directives tell the model to carry the pass through in one turn — evidence: `backend/llm/prompts.py` `_CARRY_THE_PASS_THROUGH` in `FULL_DRAFT_DIRECTIVE` and `ADAPT_IMPORTED_DIRECTIVE`; `tests/test_prompt55_effort.py::test_both_whole_section_directives_carry_the_pass_through` (4 variants), `::test_the_carry_through_line_says_what_the_guide_says`, `::test_a_collecting_turn_does_not_carry_it`
+- [x] P55-3.2 — `DRAFT_PASS_EFFORT` (default high, env + README row) is used for every round of a ready full-draft or adapt turn, and only those — evidence: `backend/settings.py` `DRAFT_PASS_EFFORT`; README `BUILD_A_SPEC_DRAFT_PASS_EFFORT` row; `tests/test_prompt55_effort.py::test_the_shipped_draft_pass_effort_is_one_level_above_the_interview`, `::test_the_knob_reads_a_level_and_falls_back_to_high`, `::test_every_round_of_a_full_draft_turn_carries_the_draft_effort`, `::test_every_round_of_an_adapt_turn_carries_the_draft_effort`, `::test_an_ordinary_turn_carries_the_interview_effort`, `::test_a_collecting_turn_carries_the_interview_effort`, `::test_every_other_turn_runs_at_the_interview_effort`
+- [x] P55-3.3 — the turn's effort is decided once per turn and recorded in its trace — evidence: `conversation.turn_effort` + `_ChatRequestInputs.effort`; `capture.turn_prompts(effort=)`; `tests/test_prompt55_effort.py::test_the_effort_is_decided_once_per_turn` (draft pass + ordinary), `::test_the_request_inputs_carry_the_turn_effort`, `::test_the_trace_records_the_effort_each_turn_ran_at`; As built deviation 2 (on `prompt_refs`)
+- [x] P55-3.4 — `QC_EFFORT` defaults to medium; the verifier default is unchanged; overrides keep working — evidence: `backend/settings.py` `QC_EFFORT`; `tests/test_prompt55_effort.py::test_the_shipped_qc_effort_is_medium`, `::test_the_verifier_default_is_unchanged`, `::test_every_qc_phase_defaults_to_medium`, `::test_a_lens_a_grouping_call_and_a_seat_are_sent_at_medium`, `::test_every_override_keeps_working` (4 combinations), `::test_a_result_retained_at_high_reads_stale_against_the_new_default`
+- [x] P55-3.5 — `tests/test_prompt55_effort.py` covers every item above; knowing test changes recorded — evidence: `tests/test_prompt55_effort.py` (43 cases) covers P55-3.1 to P55-3.4; plan's P55-3 As built, Knowing test changes (`test_qc_phase_effort.py`'s default pin, `test_citation_repair.py`'s required `effort=`)
+- [x] P55-3.6 — verified: ruff, pytest, npm test, npm run build — evidence: ruff clean; `pytest -q` 3154 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean (plan's P55-3 As built, Verified)
+- [x] P55-3.7 — revert matrix recorded in As built — evidence: plan's P55-3 As built, Revert matrix (21 rows, every one red on the first run)
+- [x] P55-3.8 — CLAUDE.md, README, the trust dossier and the release note updated (including the stale-once disclosure) — evidence: CLAUDE.md "Draft passes finish in one turn, and effort is re-based" + Layout entries; README `BUILD_A_SPEC_DRAFT_PASS_EFFORT`, `QC_EFFORT` and `QC_LENS_EFFORT` rows and the adaptive-thinking bullet; `TrustDeepDiveModal.tsx` model table, chat, full-draft and Final QC cards; `backend/release_notes.py` 1.21.0 Chat "Whole-section passes finish in one go" and Final QC "Final QC reasons on Opus 5.5's own scale" ("run Final QC again before you apply its fixes")
 
 ### P55-4 — Remind a streamed fan-out call that skipped its output tool
 

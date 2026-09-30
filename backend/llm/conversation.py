@@ -214,6 +214,8 @@ from ..usage_ledger import (
 )
 from .client import AUTH_ERROR_MESSAGE, MissingApiKeyError, get_client
 from .prompts import (
+    ADAPT_IMPORTED_DIRECTIVE,
+    FULL_DRAFT_DIRECTIVE,
     render_system_prompt,
     sanitize_discipline,
     sanitize_project_context,
@@ -2977,10 +2979,43 @@ class _ChatRequestInputs:
     module: SpecModule
     model: str
     max_tokens: int
+    # The effort every round of this turn is sent at (the 5.5 prompting
+    # upgrade, P55-3): decided ONCE, at turn start, by :func:`turn_effort`
+    # and captured with the rest, so a round can never re-decide it — a
+    # change of top-level effort mid-turn would invalidate the messages
+    # cache the turn's own continuation rounds read.
+    effort: str
     # How this turn's view is cut (compaction plan Phase 3): None sends the
     # whole history. Fixed for the whole turn — chosen before round 0 — so
     # every continuation round extends the same cached prefix.
     view_spec: ViewSpec | None = None
+
+
+# The server-owned directives that start a whole-section pass. Only the
+# READY ones: ``full_draft_directive`` / ``adapt_imported_directive`` append
+# their anchor AFTER the constant, so a ready pass starts with it, while the
+# prerequisites-collecting turns (``draft_prerequisites_directive`` and the
+# adapt variant) start "Before you …" and never match — a turn that only
+# asks three questions has nothing to think harder about.
+_DRAFT_PASS_DIRECTIVES = (FULL_DRAFT_DIRECTIVE, ADAPT_IMPORTED_DIRECTIVE)
+
+
+def turn_effort(user_text: str) -> str:
+    """The effort a chat turn runs at, decided once from its user text.
+
+    A ready full-draft or adapt-imported pass runs at
+    ``settings.DRAFT_PASS_EFFORT``; everything else at
+    ``settings.INTERVIEW_EFFORT`` (the 5.5 prompting upgrade, P55-3). The
+    match is the directive's exact prefix, so the server decides, not the
+    client: a user who pastes a directive gets the boost, which is harmless,
+    and a turn that merely mentions a full draft does not. Settings are read
+    at call time, so an operator who sets the two knobs equal switches the
+    boost off without a code change.
+    """
+    text = (user_text or "").lstrip()
+    if any(text.startswith(directive) for directive in _DRAFT_PASS_DIRECTIVES):
+        return settings.DRAFT_PASS_EFFORT
+    return settings.INTERVIEW_EFFORT
 
 
 def _request_view(
@@ -3046,7 +3081,7 @@ def _build_chat_request(
         ),
         "tools": _chat_tools(),
         "thinking": _thinking_param(),
-        "output_config": {"effort": settings.INTERVIEW_EFFORT},
+        "output_config": {"effort": inputs.effort},
     }
     if container_id:
         # Top level only — never inside system, tools, or messages. A
@@ -4779,6 +4814,9 @@ def stream_user_turn(
     if not user_text:
         yield {"type": "error", "message": "Empty message."}
         return
+    # Decided once, here, and never again this turn (P55-3): every round's
+    # request carries it, and the turn's trace records it.
+    effort = turn_effort(user_text)
 
     # The PROJECT CONTEXT renders once, at turn start: mid-turn document
     # changes reach the model through tool results, and a frozen block
@@ -4849,6 +4887,7 @@ def stream_user_turn(
             context_text=context_text,
             user_text=user_text,
             context_sizes=context_sizes,
+            effort=effort,
         )
     except Exception as exc:  # noqa: BLE001 - initialization is transactional
         session.finalize_model_turn(turn_token, committed=False)
@@ -4881,6 +4920,7 @@ def stream_user_turn(
             module=session.module,
             model=model or settings.INTERVIEW_MODEL,
             max_tokens=max_tokens or settings.INTERVIEW_MAX_TOKENS,
+            effort=effort,
             view_spec=turn_view.spec if turn_view is not None else None,
         )
 

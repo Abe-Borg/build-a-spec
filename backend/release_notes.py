@@ -285,6 +285,25 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "session; each is metered like any other."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Whole-section passes finish in one go",
+                        body=(
+                            "Draft full section and Adapt imported draft now "
+                            "reason at high effort for the whole pass, one "
+                            "level above the rest of the chat, and are told "
+                            "to carry the pass through to the end instead "
+                            "of stopping after a part to ask whether to go "
+                            "on. They still stop for a question they cannot "
+                            "answer with a sensible default, after finishing "
+                            "everything that does not depend on it. A pass "
+                            "costs somewhat more at high effort, and because "
+                            "the effort changes, the pass and the message "
+                            "after it each re-send the conversation so far "
+                            "at full price once instead of reading it from "
+                            "Anthropic's cache. These passes usually run "
+                            "early, while the conversation is short."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(
@@ -354,6 +373,27 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "ended. A round now shows as running, with its "
                             "agents and a Stop button, from the moment you "
                             "start it."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="Final QC reasons on Opus 5.5's own scale",
+                        body=(
+                            "Final QC's five specialist reviewers now "
+                            "reason at medium effort, the same as the "
+                            "reviewers who check each finding. Their "
+                            "previous setting, high, was chosen for Claude "
+                            "Opus 5. Anthropic reports that Opus 5.5 at "
+                            "medium matches or exceeds Opus 5 at high, and "
+                            "that at a given setting Opus 5.5 thinks more "
+                            "per step. The depth a review ran at is part of "
+                            "what it records, so a Final QC report made "
+                            "before this update reads as out of date once: "
+                            "run Final QC again before you apply its fixes."
                         ),
                     ),
                 ),

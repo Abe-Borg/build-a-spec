@@ -626,7 +626,7 @@ function Dossier() {
               <>
                 Claude Sonnet 5.5 <Mono>(claude-sonnet-5-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview and “high” for research. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
+              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “high” for research. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
             ],
             [
               "Final QC only",
@@ -780,7 +780,7 @@ function Dossier() {
               figures and reference documents — never their contents.
             </>
           }
-          model="Claude Sonnet 5.5, effort “medium”."
+          model="Claude Sonnet 5.5, effort “medium” (a whole-section pass runs at “high” — see the next card)."
           bounds={
             <>
               At most 8 web searches and 4 fetches per round; a hard ceiling of
@@ -815,13 +815,28 @@ function Dossier() {
             </>
           }
           sent="Identical to a normal turn."
-          model="Claude Sonnet 5.5 — one ordinary turn."
+          model={
+            <>
+              Claude Sonnet 5.5 — one ordinary turn, but every round of it at
+              effort “high” rather than the interview’s “medium”: a whole-section
+              pass is the longest multistep turn in the app, and the model
+              maker’s guidance moves longer tool work up a level. The application
+              decides this, once per turn, from its own instruction (never the
+              turn that only asks for the three facts), and the turn’s trace
+              records it. “Adapt imported draft” — the same pass over an
+              imported starter — runs the same way.
+            </>
+          }
           bounds={
             <>
               Same atomicity as any turn: the entire first pass is{" "}
               <b className="text-ink">one undo step</b>. The instruction requires
-              honest provenance stamping and explicitly forbids confirming a
-              guess to look finished.
+              honest provenance stamping, explicitly forbids confirming a guess
+              to look finished, and tells the model to carry the whole pass
+              through in that one turn rather than stop after a part to ask
+              whether to continue — pausing only for a question it genuinely
+              cannot default, after finishing everything that does not depend
+              on it.
             </>
           }
         />
@@ -1012,10 +1027,13 @@ function Dossier() {
           model={
             <>
               Claude Opus 5.5 — five lens calls plus two or three verifier calls{" "}
-              <em>per finding</em>. Reasoning depth is set per stage: “high” for
-              the lenses, which read the section cold and decide what is wrong
-              with it, and “medium” for the verifier seats, which adjudicate one
-              already-stated claim with the same document in front of them.
+              <em>per finding</em>. Reasoning depth is set per stage, and both
+              stages default to “medium”: the lenses, which read the section
+              cold and decide what is wrong with it, and the verifier seats,
+              which adjudicate one already-stated claim with the same document
+              in front of them. The lenses ran at “high” until the model maker
+              recalibrated the levels for Opus 5.5, whose “medium” matches or
+              exceeds Opus 5’s “high”; each stage is still its own setting.
               This is still the most expensive action in the app. Your document
               is cached by the API, and a call that finds it cached reads it at
               a twentieth of the price. Calls whose tools differ cannot share a

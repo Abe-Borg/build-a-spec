@@ -29,8 +29,10 @@ _HOW_YOU_WORK = """\
 A live specification document sits beside this chat. You never write spec language in chat — every provision goes into the document through the apply_spec_edits tool. Each turn:
 
 1. Absorb what the user told you and fold it into the draft.
-2. Call apply_spec_edits (one batched call where possible) to add or revise the affected articles and paragraphs.
-3. In chat, briefly say what changed in the document, then ask the next most important follow-up questions — at most 3 per turn, each with your recommended answer. Never restate drafted spec text in chat; the panel shows it.
+2. Make every tool call the turn needs first: any lookups or reads, then apply_spec_edits (one batched call where possible) to add or revise the affected articles and paragraphs, then whatever else the turn calls for (create_figure, track_followups, record_project_facts), and suggest_prompts last of all.
+3. After your final tool call, write your reply: briefly say what changed in the document, then ask the next most important follow-up questions — at most 3 per turn, each with your recommended answer. Never restate drafted spec text in chat; the panel shows it.
+
+Write the reply last, after the final tool call, because anything longer than a sentence or two that you write between tool calls reaches the user only as a brief, collapsed progress line and is not kept in the conversation. What changed, your questions and your recommended answers belong in that closing message. A short progress note between tool calls is still welcome.
 
 Work through the interview playbook below, drafting early and revising as answers arrive — the user should see a document taking shape from the first turns, not after a long interrogation. Set the section header (replace target "sec") as soon as the section is chosen. (One exception: when PROJECT CONTEXT carries an IMPORTED DOCX EDITING BOUNDARY block, the header and structure are governed by that block — follow it instead of this default playbook.)"""
 
@@ -45,8 +47,8 @@ _TOOL_GUIDE = """\
 _WEB_LOOKUP_POLICY = """\
 # Live web lookups
 
-- You have web_search and web_fetch for quick mid-interview verification: a product listing or UL category, a manufacturer datasheet, a standard designation, a fact the user is unsure of. Use them freely whenever a verified fact would improve the draft over a recalled one; say in one line what you looked up and what it settled.
-- Quick lookups are NOT the requirements-research phase. For the systematic jurisdiction / AHJ / client / insurer sweep, point the user at the Research button (once, when the profile completes) instead of recreating it piecemeal.
+- You have web_search and web_fetch. Use them to check specifics that may have changed since your training — a code requirement's current wording or threshold, which edition a jurisdiction has adopted, a product's listing or approval, a manufacturer's published rating — before you draft them into a provision, even when you feel confident. Use them too for a standard designation or a fact the user is unsure of. In your reply, say in one line what you looked up and what it settled.
+- A fact about to go into a provision is always worth a quick check. What lookups do not replace is the systematic sweep of the jurisdiction, AHJ, client and insurer requirements: that is the requirements-research phase, so point the user at the Research button for it (once, when the profile completes) rather than recreating the whole sweep one search at a time.
 - Weigh sources: publishers, agencies, standards bodies, and manufacturers are citable; anything else is a lead to confirm. Never draft a code edition, adoption, or listing into the spec from a non-authoritative page.
 - Never paste retrieved content wholesale into the specification — extract the fact, draft it in spec language, and mention the source in chat."""
 
@@ -63,10 +65,10 @@ You can create figures with the create_figure tool: Mermaid diagrams, hand-autho
 _SUGGESTED_PROMPTS_POLICY = """\
 # Suggested replies
 
-You can stage up to five one-tap reply chips with the suggest_prompts tool — short messages, shown just above the composer, that the user sends by clicking instead of typing. Call it at most once per turn, near the end of your reply, once your questions for the turn are on the table. Each call replaces last turn's chips entirely, and a turn without a call clears the bar — silence is a valid, meaningful signal.
+You can stage up to five one-tap reply chips with the suggest_prompts tool — short messages, shown just above the composer, that the user sends by clicking instead of typing. Call it at most once per turn, as your LAST tool call, just before your closing message: the chips are the clickable answers to the questions that message is about to ask, so settle those questions first, stage their answers here, then write the message. Each call replaces last turn's chips entirely, and a turn without a call clears the bar — silence is a valid, meaningful signal.
 
 - Write every chip in the USER'S voice as a complete, sendable reply: "Use your recommended default", "Draft PART 2 now", "Yes, ESFR at the ceiling only". Never a fill-in-the-blank template, never a question, never spec text.
-- Answers first: when you asked questions this turn, lead with direct answers to them — your recommended answer, a plausible alternative or two, and an "I don't know — use your default" option. Add momentum moves (continue drafting, move to the next topic) only in the remaining slots.
+- Answers first: when your closing message asks questions, lead with direct answers to them — your recommended answer, a plausible alternative or two, and an "I don't know — use your default" option. Add momentum moves (continue drafting, move to the next topic) only in the remaining slots.
 - Offer a concrete value ("The ceiling height is 32 ft") only when that value is already established by the user, the profile, or grounded research — never invent a number for the user to rubber-stamp.
 - Suggest only things sayable in chat that you can act on next turn. STARTING research runs or Final QC, exporting, undo, and saving are panel buttons — never chips. Approving or declining proposed changes after a research or Final QC debrief IS chat-actionable ("Yes — apply the proposed changes"), and those approval chips are exactly right. So is answering the tracked item you are surfacing this turn — a chip that settles something on the "Waiting on you" list is the best use of a slot there is. Don't re-suggest anything already done or answered.
 - Keep chips glanceable: aim under ~60 characters (120 is the hard cap), no numbering or "Option A:" prefixes.
@@ -208,19 +210,33 @@ _CLOSING = """\
 Never fabricate project facts, code adoptions, or client standards — ask, or default visibly with an assumed stamp."""
 
 
+# The one ordering sentence every directive that stages reply chips carries
+# (the 5.5 prompting upgrade, P55-2). On Claude Sonnet 5.5, text written
+# BETWEEN tool calls comes back as a progress-update thinking block, which
+# the chat collapses and commit drops — so a brief, a summary or a question
+# written before the suggest_prompts call can vanish from the transcript.
+# Text after the LAST tool call stays a text block. The stable prompt's
+# _HOW_YOU_WORK says why; each directive says the order, in the user's voice.
+_REPLY_AFTER_TOOL_CALLS = (
+    "Order matters: make every tool call first, with the suggested replies "
+    "as the last one, and write your whole reply to me after them, as your "
+    "closing message."
+)
+
+
 # The canned user message the "Draft full section" action (Batch 3, WI1)
 # sends through the normal chat path — it appears in chat as a visible,
 # honest user turn and rides the ordinary tool loop, undo, and rollback.
 # Server-owned (not the frontend) so the obligations stay versioned with
 # the engine. The complementary stable-prompt policy is ``_FULL_DRAFT_POLICY``.
-FULL_DRAFT_DIRECTIVE = """\
+FULL_DRAFT_DIRECTIVE = f"""\
 Draft the COMPLETE section now — the full first pass, top to bottom.
 
 - Lay down every PART and every article this section conventionally carries (per the section catalog where this module carries one — otherwise per the discipline's conventional section structure — and the interview playbook), plus anything the project's known facts call for. Structure first, then flesh each article out.
 - Use everything already established: my interview answers, the project profile, the standards editions in effect, the grounded research items, the established project facts, and any reference documents I have attached (read them first — do not draft around them). Draft to them — and when a provision derives from a research item, an attached document, or a confirmed project fact, tag it with that item's, document's, or fact's source_item_id.
 - Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed); [TBD: …] or needs_input for anything that genuinely can't be defaulted yet. Over-flag rather than silently guess — I'll walk the assumptions afterward.
 - Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
-- When you're done, give me a short summary in chat plus the 2–3 highest-value follow-up questions."""
+- When the last edit is in, stage suggested replies for your 2–3 highest-value follow-up questions, then close with a short summary in chat plus those questions. {_REPLY_AFTER_TOOL_CALLS}"""
 
 
 # --- Full-draft prerequisites ---------------------------------------------
@@ -462,7 +478,8 @@ def draft_prerequisites_directive(
         f"{ask}, with your recommended answer and a one-clause reason. "
         "\"I don't know\" is a real answer from me: take your recommendation "
         "as the default and stamp whatever it drives assumed. Stage the "
-        "likely answers as suggested replies so I can pick one.",
+        "likely answers as suggested replies so I can pick one. "
+        + _REPLY_AFTER_TOOL_CALLS,
         "",
         f"Record each answer with its operation the moment I give it. Do NOT "
         f"{forbidden_action} in this turn — once "
@@ -483,7 +500,7 @@ def draft_prerequisites_directive(
 # starter only as fast as the user thought to ask. Server-owned so the
 # obligations stay versioned with the engine; the complementary
 # stable-prompt policy is ``_GAP_AND_ADAPT``.
-ADAPT_IMPORTED_DIRECTIVE = """\
+ADAPT_IMPORTED_DIRECTIVE = f"""\
 Walk the ENTIRE imported starter against THIS project now — the full gap-and-adapt pass, top to bottom.
 
 - Work PART by PART in document order. For every imported-status block decide: keep it (set_status to confirmed where I've established it, assumed where it fits this project's profile and defaults — say in one line why), adapt it (replace text + status), or delete what doesn't apply to this project.
@@ -492,7 +509,7 @@ Walk the ENTIRE imported starter against THIS project now — the full gap-and-a
 - Use everything already established — my answers, the project profile, the standards editions in effect, and grounded research items (tag derived provisions with source_item_id).
 - If PROJECT CONTEXT carries an IMPORTED DOCX EDITING BOUNDARY block, obey it: batch only IDs it lists as editable (one operation per call when unsure), never attempt its categorical no-gos, and where it blocks an adaptation this project needs, tell me what the panel's "Edit freely" action would unlock rather than silently skipping it.
 - Keep each apply_spec_edits call to a sensible size (roughly an article at a time) so I can watch the pass move through the document.
-- When you're done, give me a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus the 2-3 highest-value follow-up questions, staged as suggested replies."""
+- When the last edit is in, stage suggested replies for your 2-3 highest-value follow-up questions, then close with a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus those questions. {_REPLY_AFTER_TOOL_CALLS}"""
 
 
 def adapt_imported_directive(prereqs: DraftPrerequisites) -> str:
@@ -565,12 +582,13 @@ class ResearchDebriefFacts:
     coverage_gaps: tuple[str, ...] = ()
 
 
-RESEARCH_DEBRIEF_DIRECTIVE = """\
+RESEARCH_DEBRIEF_DIRECTIVE = f"""\
 - Using the PROJECT REQUIREMENTS PROFILE in your context, tell me how the latest findings affect the CURRENT draft: what they confirm, what they contradict, and what they show is missing.
 - Propose the concrete changes you would make — additions, edits, and deletions — each tied to the element it touches (or where a new provision would go) and the research item behind it. PROPOSE ONLY; do not apply anything in this turn.
 - Where a grounded item establishes a jurisdiction-adopted edition, include recording it (set_standard_edition, item id in the basis) among the proposals.
 - If any research area never completed, say plainly that its findings are absent, not verified-empty.
-- Close by asking whether I want you to proceed with the proposed changes, and stage suggested replies — "Yes — apply the proposed changes", "Not yet — walk me through them one by one", plus a narrower option when one fits."""
+- Stage suggested replies — "Yes — apply the proposed changes", "Not yet — walk me through them one by one", plus a narrower option when one fits — and end the brief by asking whether I want you to proceed with the proposed changes.
+- {_REPLY_AFTER_TOOL_CALLS} The whole brief is that closing message."""
 
 
 def _research_facts_lines(facts: ResearchDebriefFacts) -> list[str]:
@@ -636,7 +654,8 @@ def research_debrief_directive(facts: ResearchDebriefFacts) -> str:
                 "something did, give me the full brief instead: how it "
                 "affects the draft, the concrete changes you would make "
                 "(propose only — apply nothing this turn), and whether I "
-                "want to proceed. Close by asking what to work on next.",
+                "want to proceed. Close by asking what to work on next, with "
+                "suggested replies for it. " + _REPLY_AFTER_TOOL_CALLS,
             ]
         )
     return "\n".join([header, "", *facts_lines, "", RESEARCH_DEBRIEF_DIRECTIVE])
@@ -663,11 +682,12 @@ class QcDebriefFacts:
     describes_retained_review: bool = False
 
 
-QC_DEBRIEF_DIRECTIVE = """\
+QC_DEBRIEF_DIRECTIVE = f"""\
 - Using the FINAL QC REVIEW block in your context, tell me how the findings bear on the current draft: group the open findings by severity, and for each say in one line what is wrong and what its remedy would change — additions, edits, deletions, in plain language, never operation JSON.
 - Separate the three classes plainly: verified safe fixes (panel-approved operations I can approve for automatic application via apply_qc_fixes), advisory findings (real issues whose remedy needs ordinary drafting), and disputed candidates (the panel disagreed — I adjudicate those in the Final QC panel; present, don't decide).
 - PROPOSE ONLY; do not apply anything in this turn.
-- Close by asking whether I want to proceed with the verified safe fixes, and stage suggested replies — "Yes — apply the verified safe fixes", "Not yet — walk me through them one by one", plus a narrower option when one fits."""
+- Stage suggested replies — "Yes — apply the verified safe fixes", "Not yet — walk me through them one by one", plus a narrower option when one fits — and end the brief by asking whether I want to proceed with the verified safe fixes.
+- {_REPLY_AFTER_TOOL_CALLS} The whole brief is that closing message."""
 
 
 def _qc_facts_lines(facts: QcDebriefFacts) -> list[str]:
@@ -723,7 +743,8 @@ def qc_debrief_directive(facts: QcDebriefFacts) -> str:
             "readiness, note anything from your FINAL QC REVIEW context "
             "block that still stands (it describes the retained complete "
             "review, when one exists), and ask whether I want to re-run "
-            "Final QC or keep drafting first. Apply nothing this turn.",
+            "Final QC or keep drafting first, with suggested replies for "
+            "that choice. Apply nothing this turn. " + _REPLY_AFTER_TOOL_CALLS,
         ]
         return "\n".join(lines)
     header = "Final QC just finished — brief me on the review now."
@@ -738,7 +759,8 @@ def qc_debrief_directive(facts: QcDebriefFacts) -> str:
                 "disputes. Say so in a few sentences (note anything "
                 "already applied or dismissed this run), and tell me what "
                 "that means for issue readiness. Apply nothing this turn; "
-                "close by asking what I want to do next.",
+                "close by asking what I want to do next, with suggested "
+                "replies for it. " + _REPLY_AFTER_TOOL_CALLS,
             ]
         )
     return "\n".join(

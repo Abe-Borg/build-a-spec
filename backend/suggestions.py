@@ -126,19 +126,19 @@ SUGGEST_PROMPTS_TOOL: dict[str, Any] = {
         "template, never a question, never an instruction addressed to the "
         "user.\n"
         "\n"
-        "Order matters: lead with direct answers to the questions you just "
-        "asked (always include an accept-your-recommendation option and, "
-        'when honest, "I don\'t know — use your default"), then add '
-        "momentum moves if slots remain. Suggest only things sayable IN "
+        "Order matters: lead with direct answers to the questions your "
+        "closing message asks (always include an accept-your-recommendation "
+        'option and, when honest, "I don\'t know — use your default"), then '
+        "add momentum moves if slots remain. Suggest only things sayable IN "
         "CHAT that you can act on next turn — research runs, Final QC, "
         "export, undo, and saving are panel buttons, not chat messages. "
         "Don't re-suggest what's already done or answered.\n"
         "\n"
         "Keep each prompt under 120 characters (hard limit) and aim for "
         "under ~60 — chips must read at a glance. Call at most once per "
-        "turn, near the end of your reply. Each call REPLACES the previous "
-        "set entirely, and a turn where you don't call this tool clears the "
-        "bar — so as the section nears issue-ready, wind down to 1-2 chips "
+        "turn, as your LAST tool call, and write your closing message after "
+        "it, not before. Each call REPLACES the previous set entirely, and "
+        "a turn where you don't call this tool clears the bar — so as the section nears issue-ready, wind down to 1-2 chips "
         'or none. An empty prompts list is valid and means "nothing useful '
         'left to suggest".'
     ),

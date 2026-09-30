@@ -2,7 +2,7 @@
 
 <!-- PROMPT55-STATUS: IN PROGRESS -->
 
-**Next session:** P55-2 — The interview replies after its last tool call
+**Next session:** P55-3 — Draft passes finish in one turn, and effort is re-based
 
 Owner: Abraham. Opened 2026-09-29.
 
@@ -46,8 +46,8 @@ pull request each:
 
 | ID | Title | Status | PR | Merge commit |
 |---|---|---|---|---|
-| P55-1 | Harden output parsing and the fact harvest | done | PR #236 | — |
-| P55-2 | The interview replies after its last tool call | not started | — | — |
+| P55-1 | Harden output parsing and the fact harvest | done | PR #236 | `b5c282a` |
+| P55-2 | The interview replies after its last tool call | done | PR #237 | — |
 | P55-3 | Draft passes finish in one turn, and effort is re-based | not started | — | — |
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | not started | — | — |
 | P55-5 | Remind a batched verifier seat that skipped its output tool | not started | — | — |
@@ -101,15 +101,15 @@ match.
 
 ### P55-2 — The interview replies after its last tool call
 
-- [ ] P55-2.1 — the stable prompt tells the model to make its tool calls first and write the user-facing reply after the last one
-- [ ] P55-2.2 — `suggest_prompts` is the last tool call before the closing message; the old "near the end of your reply" order is gone
-- [ ] P55-2.3 — every directive that stages chips (full draft, adapt, prerequisites, both debriefs and their variants) says to stage them first and then write the closing message
-- [ ] P55-2.4 — the web-lookup policy carries the "even when you feel confident" sentence and no longer reads as "don't search"
-- [ ] P55-2.5 — `tools/prompt55_progress_update_canary.py` sends nothing without `--run`, re-sends the production request with `display: "updates"`, and prints a pass/fail verdict
-- [ ] P55-2.6 — `tests/test_prompt55_closing_message.py` and `tests/test_prompt55_progress_update_canary.py` cover every item above; knowing test changes recorded
-- [ ] P55-2.7 — verified: ruff, pytest, npm test, npm run build
-- [ ] P55-2.8 — revert matrix recorded in As built
-- [ ] P55-2.9 — CLAUDE.md (notes + the paid-canary ground rule), README and the release note updated
+- [x] P55-2.1 — the stable prompt tells the model to make its tool calls first and write the user-facing reply after the last one — evidence: `tests/test_prompt55_closing_message.py::test_the_stable_prompt_makes_tool_calls_first_and_replies_last` (every module); `backend/llm/prompts.py` `_HOW_YOU_WORK` steps 2–3 and the reason paragraph
+- [x] P55-2.2 — `suggest_prompts` is the last tool call before the closing message; the old "near the end of your reply" order is gone — evidence: `tests/test_prompt55_closing_message.py::test_suggest_prompts_is_the_last_tool_call_before_the_closing_message`, `::test_the_suggest_prompts_tool_description_says_the_same_order`; As built deviation 1 (the tool description changed too)
+- [x] P55-2.3 — every directive that stages chips (full draft, adapt, prerequisites, both debriefs and their variants) says to stage them first and then write the closing message — evidence: `tests/test_prompt55_closing_message.py::test_every_chip_staging_directive_stages_first_and_closes_after` (16 directives and variants), `::test_a_debrief_brief_is_the_closing_message`, `::test_a_whole_section_pass_closes_after_its_last_edit`; `prompts._REPLY_AFTER_TOOL_CALLS`; As built deviation 2
+- [x] P55-2.4 — the web-lookup policy carries the "even when you feel confident" sentence and no longer reads as "don't search" — evidence: `tests/test_prompt55_closing_message.py::test_the_web_lookup_policy_checks_specifics_even_when_confident`; `backend/llm/prompts.py` `_WEB_LOOKUP_POLICY`
+- [x] P55-2.5 — `tools/prompt55_progress_update_canary.py` sends nothing without `--run`, re-sends the production request with `display: "updates"`, and prints a pass/fail verdict — evidence: `tests/test_prompt55_progress_update_canary.py::test_the_canary_sends_nothing_without_run`, `::test_every_round_resends_exactly_what_the_production_engine_builds`, `::test_the_resent_request_differs_only_in_display_the_cap_and_the_beta`, `::test_main_reports_a_pass`, `::test_main_reports_a_failed_verdict_nonzero`; As built deviations 3, 4 and 7
+- [x] P55-2.6 — `tests/test_prompt55_closing_message.py` and `tests/test_prompt55_progress_update_canary.py` cover every item above; knowing test changes recorded — evidence: `tests/test_prompt55_closing_message.py` (30 cases) covers P55-2.1 to P55-2.4, `tests/test_prompt55_progress_update_canary.py` (17) covers P55-2.5; plan's P55-2 As built, Knowing test changes (the docs-consistency scan widened; no older pin moved)
+- [x] P55-2.7 — verified: ruff, pytest, npm test, npm run build — evidence: ruff clean; `pytest -q` 3111 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean (plan's P55-2 As built, Verified)
+- [x] P55-2.8 — revert matrix recorded in As built — evidence: plan's P55-2 As built, Revert matrix (45 rows, every one red; the first run's one green row strengthened, one mis-aimed row re-aimed)
+- [x] P55-2.9 — CLAUDE.md (notes + the paid-canary ground rule), README and the release note updated — evidence: CLAUDE.md "The reply comes after the last tool call" section, the ground rule's three canaries and Layout entries; README "Live web lookups" bullet and the third paid check; `backend/release_notes.py` 1.21.0 Chat "The assistant's questions stay in the chat" and "The assistant checks code specifics first"; the trust dossier's chat card
 
 ### P55-3 — Draft passes finish in one turn, and effort is re-based
 

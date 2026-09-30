@@ -692,7 +692,206 @@ the ordering fix does not wait on it (D2).
 
 ### As built
 
-(Filled in by the session.)
+Built 2026-09-30 on `claude/prompt55-upgrade-p55-2-j3pzcf`, from `master` at
+`b5c282a` (PR #236's merge). No route, SSE event type, dependency, env knob,
+project-format change, QC schema or protocol bump, or version bump. One new
+tool (`tools/prompt55_progress_update_canary.py`, paid, owner-run).
+
+**What landed, by design item.**
+
+1. **The ordering rule** (`backend/llm/prompts.py`, `_HOW_YOU_WORK`). Step 2
+   now makes every tool call the turn needs first — lookups and reads, then
+   `apply_spec_edits`, then `create_figure` / `track_followups` /
+   `record_project_facts`, and `suggest_prompts` last of all. Step 3 writes
+   the reply after the final tool call. A new paragraph gives the reason in
+   one sentence the model can act on (anything longer than a sentence or two
+   written between tool calls reaches the user only as a brief, collapsed
+   progress line and is not kept in the conversation), and says short
+   progress notes between tool calls are still welcome.
+   `_SUGGESTED_PROMPTS_POLICY` calls the tool "as your LAST tool call, just
+   before your closing message", and its answers-first bullet now points at
+   the questions the closing message asks. `_FOLLOWUP_POLICY`,
+   `_PROJECT_FACTS_POLICY`, `_QC_FINDINGS_POLICY` and `_FULL_DRAFT_POLICY`
+   were read: none implies text before a tool call (the QC policy already
+   makes `apply_qc_fixes` the turn's first action), so they are unchanged.
+2. **The directives.** One shared sentence, `_REPLY_AFTER_TOOL_CALLS` ("Order
+   matters: make every tool call first, with the suggested replies as the
+   last one, and write your whole reply to me after them, as your closing
+   message."), rides every directive that stages chips: `FULL_DRAFT_DIRECTIVE`
+   and `ADAPT_IMPORTED_DIRECTIVE` ("When the last edit is in, stage
+   suggested replies … then close with …"), `draft_prerequisites_directive`
+   (so `adapt_prerequisites_directive` too), `RESEARCH_DEBRIEF_DIRECTIVE` and
+   `QC_DEBRIEF_DIRECTIVE` (plus "The whole brief is that closing message."),
+   and the four short variants (research nothing-new, QC clean, QC partial,
+   QC cancelled — the last two are one branch). The four constants became
+   f-strings to carry it.
+3. **The web-lookup policy.** The guide's sentence, adapted: check
+   specifics that may have changed since training — a code requirement's
+   current wording or threshold, which edition a jurisdiction has adopted, a
+   product's listing or approval, a manufacturer's published rating — before
+   drafting them, "even when you feel confident". The research-phase line
+   now reads "A fact about to go into a provision is always worth a quick
+   check. What lookups do not replace is the systematic sweep …" and still
+   points at the Research button once. "Say in one line what you looked up"
+   became "In your reply, say …", in keeping with item 1.
+4. **`THINKING_DISPLAY` is unchanged** (`summarized`, D2).
+5. **The canary** (`tools/prompt55_progress_update_canary.py`). It drives
+   `stream_user_turn` directly — the plan's first branch: the only setup
+   needed was a fresh `SessionState()` (whose default module is the generic
+   one) and `conversation.get_client` swapped for the length of the turn and
+   restored in a `finally`. No stub trace handle was needed; like any turn it
+   leaves a trace when tracing is on, and its docstring says so.
+   `ProgressUpdateClient` stands in for the client: each
+   `messages.stream(**kwargs)` the engine makes is recorded and re-sent as
+   `client.beta.messages.stream(**progress_update_request(kwargs))`, the pure
+   re-shape that sets `thinking.display = "updates"`, caps `max_tokens`
+   (default 32,000, bounds 4,096–64,000; never raised) and adds
+   `betas=["thinking-display-updates-2026-08-18"]` — nothing else. The pinned
+   SDK (1.9.0 here; `anthropic>=1.0,<2`) takes `betas`, `thinking`,
+   `cache_control` and `container` on `client.beta.messages.stream`
+   (checked by signature). The report prints each round's blocks (type and
+   length), every progress note's text, usage, the tool calls in order and
+   whether `suggest_prompts` was the last one, and the closing text; then the
+   verdict. Exit codes: 0 pass, 1 fail or a failed request, 2 no key or a
+   bad `--max-tokens`.
+
+**Deviations.**
+
+1. **The `suggest_prompts` tool description changed too**
+   (`backend/suggestions.py`). The plan listed only the stable prompt, but
+   the tool's own description said "Call at most once per turn, near the end
+   of your reply" and "lead with direct answers to the questions you just
+   asked" — it renders ahead of the system prompt and would have contradicted
+   the new policy. It now says "as your LAST tool call, and write your
+   closing message after it, not before" and "the questions your closing
+   message asks". Tools and the stable prompt both changed, so every chat
+   session writes its cached prefix once more after the update (it would
+   have anyway: the system prompt changed). Research and Final QC request
+   bytes are unchanged, and nothing reaches the QC input manifest.
+2. **The short variants now ask for suggested replies.** Before, the
+   research nothing-new, QC clean and QC partial variants asked for no chips
+   at all. P55-2.3 names "both debriefs and their variants", so each now asks
+   for suggested replies for the choice it closes on, and carries the shared
+   ordering sentence.
+3. **A failed request is never resent.** The engine's `_enter_stream`
+   degrades a rejected `thinking.display` once by resending without it,
+   which would run the canary's turn without `"updates"` and report a
+   verdict about nothing. After any failure `ProgressUpdateClient.stream`
+   re-raises the recorded error without sending, so a 400 costs one request
+   and is printed. A request refused when its stream context is entered (the
+   real SDK's timing) is recorded there too.
+4. **The verdict also requires the last round to end on `end_turn`.** A turn
+   cut off by `max_tokens` with text in it is not a pass. The plan's other
+   rules are as written (closing text of at least 80 characters that asks a
+   question, no progress note asking one); where `suggest_prompts` fell is
+   reported but not judged, because a turn that stages no chips is valid.
+5. **The trust dossier's chat card gained a sentence** (R10): the model is
+   told to make its tool calls first and reply after the last one, and to
+   check a code requirement, adopted edition or listing with a quick lookup
+   even when confident. The README's "Live web lookups" bullet says the
+   same, and the canary sits beside the other two paid checks.
+6. **Release notes.** v1.20.0 is still the newest published release
+   (GitHub Releases API, 2026-09-30), so two items went into the unreleased
+   1.21.0 entry's Chat section: "The assistant's questions stay in the chat"
+   (the ordering fix is user-visible) and "The assistant checks code
+   specifics first" (the plan's item, with the few-more-searches note).
+
+7. **The canary also reports the engine's own failure.** A turn can fail
+   after its requests succeeded (a stream that breaks mid-iteration, the
+   tool round ceiling). `run_turn` collects the engine's `error` events into
+   `ProgressUpdateClient.turn_errors`, and `main` prints them and exits 1
+   rather than judging a half-finished turn.
+
+**Knowing test changes.** `tests/test_docs_consistency.py`'s Windows-command
+scan now reads the canary and the two prompt55 files (additive). No existing
+pin moved: the rewrites kept every phrase `tests/test_full_draft.py`,
+`tests/test_adapt_draft.py`, `tests/test_debrief.py` and
+`tests/test_suggested_prompts.py` assert ("follow-up question", "asking
+whether I want you to proceed", "suggested replies", "Yes — apply the
+proposed changes" …), and all four pass unchanged.
+
+**Tests:** `tests/test_prompt55_closing_message.py` (30 cases) and
+`tests/test_prompt55_progress_update_canary.py` (17). The request
+test runs the same scripted turn through the plain engine and through the
+canary with the clock pinned and asserts each round's recorded request IS
+the production request; the canary's client has ONLY a beta namespace, so a
+request through `client.messages` would fail.
+
+**Verified** on the branch, with every doc change in place: `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q` 3111 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean.
+
+**Revert matrix.** 45 rows. Each mechanism was reverted in place, one at a
+time, by a script that restored the exact text it read and checked `git
+diff` and `git status` unchanged after every row. Each row ran
+`tests/test_prompt55_closing_message.py`,
+`tests/test_prompt55_progress_update_canary.py`,
+`tests/test_docs_consistency.py` and the four older directive suites
+(`test_full_draft.py`, `test_adapt_draft.py`, `test_debrief.py`,
+`test_suggested_prompts.py`).
+
+| Mechanism reverted | Tests red |
+|---|---|
+| prompt: step 2 no longer makes tool calls first | 2 |
+| prompt: step 3 reply not after the final tool call | 2 |
+| prompt: the reason paragraph removed | 2 |
+| prompt: step 2 drops suggest_prompts last | 2 |
+| policy: back to near the end of your reply | 2 |
+| policy: answers-first back to questions you just asked | 2 |
+| tool description: back to near the end of your reply | 1 |
+| tool description: back to questions you just asked | 1 |
+| web: no even-when-confident | 2 |
+| web: the old research-phase line restored | 2 |
+| shared sentence reworded | 1 |
+| full draft: no ordering sentence | 2 |
+| full draft: back to 'When you're done' | 1 |
+| adapt: no ordering sentence | 2 |
+| prerequisites: no ordering sentence | 3 |
+| research debrief (full): no ordering bullet | 3 |
+| research debrief (nothing new): no ordering sentence | 2 |
+| QC debrief (full): no ordering bullet | 3 |
+| QC debrief (partial): no ordering sentence | 2 |
+| QC debrief (clean): no ordering sentence | 1 |
+| debriefs: 'The whole brief is that closing message' dropped (research) | 1 |
+| canary: display not set to updates | 2 |
+| canary: max_tokens not capped | 1 |
+| canary: no beta | 1 |
+| canary: thinking mutated in place | 2 |
+| canary: sent through client.messages, not beta | 12 |
+| canary: resends after a failure | 2 |
+| canary: error on enter not recorded | 1 |
+| canary: final message not recorded | 7 |
+| canary: snapshot not recorded | 1 |
+| canary: get_client not restored | 1 |
+| verdict: a question in a note allowed | 2 |
+| verdict: stop reason not checked | 1 |
+| verdict: refusal branch removed | 1 |
+| verdict: closing length not checked | 1 |
+| verdict: closing question not checked | 1 |
+| verdict: the no-closing-text check removed | 1 |
+| main: failed verdict exits 0 | 2 |
+| main: a failed request exits 0 | 2 |
+| canary: engine error events not collected | 1 |
+| main: a failed turn exits 0 | 1 |
+| main: ceiling not bounded | 1 |
+| main: missing key not handled | 1 |
+| main: sends without --run | 1 |
+| docs scan: canary docstring bare venv path | 1 |
+
+The first run had one green row and one mis-aimed row, both fixed before
+this was recorded (tracker R8):
+- **The policy's answers-first wording** went green: the test only checked
+  that the tool description's old phrase ("questions you just asked") was
+  gone, while the policy's old phrase was "when you asked questions this
+  turn". The test now asserts the new policy phrase is present and the old
+  one absent; re-run, 2 red.
+- **"A failed request exits 0"** reverted the wrong `return 1` (the
+  engine-error branch added in deviation 7 sits between the two). Re-aimed
+  at the request-failure branch; re-run, 2 red.
+
+**For P55-3.** `FULL_DRAFT_DIRECTIVE` and `ADAPT_IMPORTED_DIRECTIVE` are
+f-strings now (they carry `{_REPLY_AFTER_TOOL_CALLS}` in their last bullet),
+so a literal brace added to either must be doubled. Keep the ordering
+sentence in the last bullet when adding the carry-it-through line:
+`tests/test_prompt55_closing_message.py` pins it in every directive.
 
 ---
 

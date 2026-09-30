@@ -2060,7 +2060,302 @@ row; the trust dossier's Final QC card; a release-note item.
 
 ### As built
 
-(Filled in by the session.)
+Built 2026-09-30 on `claude/loving-dijkstra-mp8tcj`, from `master` at
+`8240f19` (PR #241's merge). No route, SSE event type, dependency,
+project-format change, QC schema or protocol bump, or version bump. One env
+knob: `BUILD_A_SPEC_QC_REFUSAL_FALLBACK` (README row). **One default
+changed for everyone running from `master`:** every streamed Final QC
+request now carries `fallbacks: "default"` and the
+`server-side-fallback-2026-07-01` beta; `BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0`
+switches it back off.
+
+**What landed, by design item.**
+
+1. **Read first.** The `claude-api` skill's `shared/model-migration.md` →
+   the refusal section (fallback blocks, `fallback_message` iterations,
+   sticky routing, mid-output declines, the echo rule) gave the shapes.
+   What differs from this spec is recorded under Deviations (2, 3, 4).
+2. **Setting.** `settings.QC_REFUSAL_FALLBACK` (`_bool_env`, default on),
+   pinned once per run by `run_final_qc(refusal_fallback=)` (`None` = the
+   setting) and threaded to every streamed call: `_run_lens`,
+   `_consolidate_candidates` → `_run_consolidation_call`, `_verify_one`, and
+   `_run_batch_calls`' warm leads. Never in the input manifest.
+3. **Request.** `_run_streaming_call` adds it to the per-request
+   `stream_kwargs` copy (`_with_refusal_fallback`: `extra_body` gains
+   `fallbacks: "default"`, `extra_headers` the beta through
+   `with_beta_header`, so it merges with P55-6's), after the tail, the
+   container and `drop_block`, while `refusal_fallback_available()`. Never
+   `_qc_request_kwargs`, so never a batched param. The GA SDK's
+   `messages.stream` does not type the parameter, so it rides `extra_body`
+   (SDK 1.9.0 checked against a mock transport: the body carries
+   `"fallbacks": "default"` and the header carries the beta).
+4. **Detection and record.** `_fallback_served_model(response, requested=,
+   carried=)`: a `fallback_message` iteration's `model`, else the last
+   `fallback` block's `to.model`, else `response.model` when it differs
+   from the requested model — never its own dated snapshot (`_same_model`,
+   the review fix below) — AND the request carried the fallback; `""` for
+   a response whose final `stop_reason` is a refusal. `_CallResult` gains
+   `served_by_model` (`_served_by_label`: distinct, sorted, at most four);
+   `QCLensStatus`, `QCVerdict` and `QCConsolidation` gain `served_by_model`
+   — the lens and seat records from their call, the grouping step
+   aggregating its bucket calls — serialized only when set
+   (`QCFinding.to_dict` drops an unset one from each verdict) and read by
+   `_persisted_served_by_model` (anything that is not model ids is `""`).
+5. **Continuations.** A rescued reply is re-sent by the echo rule
+   (`_fallback_echo_content`) at the pause resume and at P55-4's reminder;
+   the reminder's own turn is built from `_payload_view(response)`, and
+   `_parse` reads the views.
+6. **Cost self-checks.** `cost_checks._tail_saving` returns `unmeasured`
+   when the engine says the conversation fell back
+   (`observe_continuation(fallback_served=)`, from a conversation-local
+   `fallback_in_conversation` a restart clears) or when the continuation or
+   the opening carries a `fallback` block or a `fallback_message`
+   iteration.
+7. **Pricing (D6).** Every record is still estimated at the configured QC
+   model's rates; `cost_basis` is untouched.
+8. **Disclosure.** `docx_export.QC_FALLBACK_RECORD_TEMPLATE`
+   ("Answered by {models} after a safety decline.") and
+   `QC_FALLBACK_LIMITATION_TEMPLATE` ("{count} call(s) were answered by
+   {models} after the configured model declined; their cost is estimated at
+   {qc_model} rates."), mirrored verbatim in `qcReport.ts`. Word: a
+   "Refusal fallback" line on the lens record, each seat (`_qc_render_panel`),
+   the grouping step, and a "Seat N: …" line in a refuted/inconclusive
+   digest row's basis; the limitation under Limitations. The modal: a
+   "Refusal fallback" field on the lens, seat and grouping records, and the
+   limitation through `qcReportLimitations`.
+9. **Out of scope (D6).** Research and the chat keep their decline handling
+   ("A refusal is not a truncation"): a research area names its decline
+   already, and a chat turn answered by another model would change who the
+   user is talking to. Batched seats cannot carry the parameter (the Batches
+   API rejects it). Pinned: batched params, `_qc_request_kwargs` and research
+   requests never carry it.
+
+**Deviations.**
+
+1. **A guard and a latch the spec did not name.** A request the provider
+   refuses BECAUSE of the parameter (a 400 whose text names the fallback,
+   never "prompt is too long") is sent once more without it, at once and
+   counted, and the fallback switches off until the app restarts (one
+   WARNING on `buildaspec.qc`) — CT-1's shape, so a withdrawn or renamed
+   beta costs one request instead of every Final QC call. The latch lives in
+   `qc/engine.py`, not `backend/cost_checks.py`: only Final QC sends the
+   parameter, and the cost self-checks' reason vocabulary is pinned by the
+   frontend. `_open_stream` checks it before the tail's guard, and the resend
+   goes through `_open_stream` so the tail's guard still stands on it. The
+   conftest re-arms it (`reset_refusal_fallback_probe`).
+2. **The model signal counts only when the request carried the fallback.**
+   The spec listed "`response.model` differs from the requested model"
+   unconditionally; an alias or a dated snapshot echoed back would then read
+   as a rescue. `cost_checks` (a leaf that cannot know what the request
+   carried) reads only the block and the iteration; the engine passes the
+   model signal as `fallback_served`. Carrying it was not enough on its own
+   (the review fix below): the fallback is on by default, so every request
+   carries it.
+3. **What SDK 1.9.0 actually delivers.** The GA stream accumulator does not
+   copy `usage.iterations` from `message_delta`, while `message_start`
+   already names the serving model, so on the streamed path the model name
+   is usually the one signal present. A `fallback` block parses as a
+   `TextBlock` with `type="fallback"` (no typed block on the GA endpoint),
+   its `from`/`to` kept as extras; the engine reads `to` either way.
+4. **The echo rule, not "fallback blocks included" verbatim.** The spec said
+   a paused conversation that fell back "re-sends its content, fallback
+   blocks included". The skill's rule is narrower and is what landed: before
+   the last `fallback` block only text blocks, the fallback blocks and paired
+   server-tool blocks are re-sent (thinking, a client `tool_use`, an unpaired
+   server-tool call and anything unrecognized are dropped); everything after
+   it is re-sent as it came. The same view is what a payload is parsed from,
+   so a declined model's cut-short output-tool call is never read as the
+   answer. The echo is the documented shape of a fallback turn, not an edit,
+   so it does not set P55-6's `thinking_edited`.
+5. **A declined attempt's own usage is not metered.** The top-level usage
+   covers only the attempt that answered; the declined attempt's lives in
+   `usage.iterations`, which the GA stream does not carry. Whether a
+   declined attempt bills depends on when it declined (Anthropic's refusals
+   page); one that declines mid-stream bills at normal rates, so a rescued
+   call's estimate can be low by that partial. The limitation already says
+   the estimate is at the configured model's rates; this further limit is
+   recorded here and in CLAUDE.md, not in the report sentence the spec fixed.
+6. **N counts records.** The grouping step is one record however many of its
+   bucket calls fell back; a lens or a seat is one call's record.
+7. **The digest row says it too.** A refuted or inconclusive candidate's
+   seats render as one table row; the rescue is a "Seat N: …" line in that
+   row's basis, so the per-record disclosure reaches every record.
+8. **The trust dossier's ZDR sentence changed**, beyond the Final QC card:
+   "every model it uses … is available under zero data retention" would have
+   claimed a fallback model the API chooses. It now says "every model it
+   selects", and that a declined Final QC call may be answered by a fallback
+   model the API chooses, named in the report, with the knob that keeps it
+   off.
+9. **No release-checklist row.** A tester cannot make the model decline on
+   demand.
+
+**Review fix (Codex, PR #242).** "Do not treat model alias resolution as a
+fallback": with `BUILD_A_SPEC_QC_MODEL` set to an alias, the provider names
+the snapshot it resolved to in `response.model` (`claude-opus-4-5` answers as
+`claude-opus-4-5-20251101`), and with the fallback carried by default every
+such response read as a rescue — a false per-record line, a false Limitations
+line, and every tail observation unmeasured. `_same_model(served, requested)`
+now compares the two ids lower-cased and without a trailing snapshot date
+(`-YYYYMMDD`, or `@YYYYMMDD`) or `-latest`; the model signal counts only for
+a different model. A fallback model is another model entirely, so nothing a
+rescue says is lost. Tests: the five alias shapes read as no rescue, three
+different models still read as one, and a run on an alias whose paused lens
+answers as its snapshot records no rescue, puts nothing under Limitations,
+and has its continuation measured (9 cases). Reverted in place: the raw
+comparison → 5 red; the date suffix not stripped → 4; `-latest` not stripped
+→ 1; case-sensitive → 1; every model "the same" → 6.
+
+**Knowing test changes.** Two helpers that pin today's exact request shape
+now pass `refusal_fallback=False`, each with a comment:
+`tests/test_qc_live_events.py`'s `_run_client` (the continuation tail's
+"the tail and nothing else" key-set tests,
+`test_a_qc_continuation_carries_the_automatic_breakpoint_when_on` and
+`test_the_switch_off_sends_todays_qc_requests_exactly`) and
+`tests/test_qc_batch_warm_lead.py`'s `_run`
+(`test_the_switch_off_is_todays_batch_exactly` compares a lead's request with
+the batched params byte for byte). Those three and the README knob test were
+the full run's only failures before the change was finished. The fallback on
+a lead and on every other streamed call is pinned in the new file. A third:
+`tests/test_cost_checks_tail_value.py`'s `observed` fixture spies on
+`cost_checks.observe_continuation` with a fixed signature, which the engine's
+new `fallback_served=` keyword broke (two end-to-end tests,
+`test_a_paused_compliance_lens_observes_its_continuations` and
+`test_a_streamed_web_tooled_seat_observes_its_continuation`, the final full
+run's only failures). The spy now accepts the keyword, asserts it is `False`
+in every run there, and passes it through; every other assertion is
+unchanged.
+`tests/fakes.py` gains `fallback_served(response, *, to_model, from_model,
+block, iteration, model, partial)`, each signal attached only when asked for;
+`tests/conftest.py` re-arms the latch before and after every test.
+
+**Tests.** `tests/test_prompt55_qc_refusal_fallback.py` (55 cases,
+parametrized included; 46 before the review fix above):
+- the request: every streamed lens request carries the parameter and the
+  beta while the batched params and `_qc_request_kwargs` never do; streamed
+  seats; a warm lead (and its batch not); the switch off sends neither; the
+  setting reaches a run; the `ast` pin; the P55-6 beta merge and its removal;
+  research never;
+- the record: a rescued lens completing with `served_by_model` (all three
+  signals, and each alone), a model name alone not a rescue when none was
+  asked for, an alias answering as its own snapshot never a rescue (and a
+  run on one measured and silent), a doubly declined call still a refusal, a rescued seat, a
+  malformed rescued seat, a rescued grouping call; the payload read after
+  the switch point; the echo rule on a pause and on a reminder (the
+  reminder's turn plain text); an ordinary response re-sent as the same
+  object;
+- the round trip and the quiet unset key, seven malformed values reading
+  `""`, a whole result keeping it and an older one loading;
+- accounting at the QC model's rates, reconciling through a reload;
+- CT-2: the engine's word, a block, an iteration, a switch block beside a
+  usage record that reports one `message` iteration, and an opening told by
+  its block or by its iteration alone — each unmeasured beside a measured
+  control; a model name alone not read by the leaf; end to end, a rescued
+  conversation's continuation unmeasured, and after a restart the new
+  conversation's continuation measured again;
+- the guard: one resend, counted, a latch and one WARNING, later requests
+  without it; a surviving 400 and an unrelated 400 latching nothing; "prompt
+  is too long" never the fallback's;
+- the report: both templates equal to the TypeScript literals; the Word memo
+  naming the lens record, the surviving seat, the refuted digest row and the
+  grouping step, plus the limitation; a clean run silent; F3.
+
+`frontend/tests/prompt55QcFallback.test.ts` (7, registered in
+`frontend/package.json`): the two sentences equal to the memo's (read from
+`docx_export.py`), a clean record silent, a rescued one named, garbage never
+printed as a model, the count and limitation reaching
+`qcReportLimitations`, an older report silent and a missing model degrading,
+and the modal rendering the lens, seat and grouping records through the
+helper.
+
+**Revert matrix.** Each mechanism reverted in place by a script that
+restored the exact text it read (the tree checked unchanged after the run);
+the count is failing tests in the new backend file (plus
+`tests/test_cost_checks_tail_value.py` for the CT-2 rows) and, for the
+report rows, the new frontend file.
+
+| Mechanism reverted | Tests red |
+|---|---|
+| carry: the fallback never added | 10 |
+| latch not read before a request | 1 |
+| forward: _run_lens | 7 |
+| forward: _consolidate_candidates → grouping call | 1 |
+| forward: _run_consolidation_call | 1 |
+| forward: _verify_one | 1 |
+| forward: _run_batch_calls lead | 1 |
+| forward: run_final_qc → lens | 7 |
+| forward: run_final_qc → consolidation | 1 |
+| forward: run_final_qc → batch phase | 1 |
+| forward: run_final_qc → streamed seat | 1 |
+| run pin: None ignores the setting | 1 |
+| default shipped off | 1 |
+| guard: fallback 400 not caught | 2 |
+| guard: latches although the resend is a 400 too | 1 |
+| guard: no latch after a successful resend | 1 |
+| guard: resend not counted | 2 |
+| guard: prompt-too-long read as the fallback's | 1 |
+| detect: iteration signal ignored | 1 |
+| detect: switch-point block ignored | 1 |
+| detect: model signal ignored | 3 |
+| detect: model signal without the request carrying it | 1 |
+| detect: a refused chain counted as served | 1 |
+| call: served model not collected | 14 |
+| record: failed lens | 1 |
+| record: completed lens | 8 |
+| record: failed seat | 1 |
+| record: malformed seat | 1 |
+| record: completed seat | 3 |
+| record: grouping step not aggregated | 1 |
+| serialize: unset key written | 1 |
+| load: served_by_model not validated | 2 |
+| echo: paused rescue re-sent raw | 1 |
+| echo: reminded rescue re-sent raw | 1 |
+| reminder: built from the raw reply | 1 |
+| parse: raw responses, not the echoed view | 1 |
+| CT-2: engine never says fallback | 1 |
+| CT-2: leaf ignores the engine's word | 3 |
+| CT-2: leaf ignores the response | 1 |
+| CT-2: leaf ignores the opening | 1 |
+| CT-2: leaf ignores the iteration | 1 |
+| CT-2: leaf ignores the block | 1 |
+| CT-2: restart keeps the flag | 1 |
+| memo: lens record silent | 1 |
+| memo: seat silent | 1 |
+| memo: digest row silent | 1 |
+| memo: grouping step silent | 1 |
+| memo: no limitation | 1 |
+| memo: sentence drifts from the modal's | 2 |
+| modal: helper silent | 1 |
+| modal: no limitation | 1 |
+| modal: garbage printed as a model | 1 |
+| modal: lens field dropped | 1 |
+| modal: seat field dropped | 1 |
+| modal: grouping field dropped | 1 |
+| modal: sentence drifts from the memo's | 3 |
+
+56 rows, every one red. The first run found six green: the grouping call's
+three forwarding sites (the rescued grouping call was detected by its block
+and iteration whether or not the request asked), a rescued lens and a
+rescued seat that still FAIL (every rescue in the file succeeded), and the
+modal's grouping field (the pin matched the field's child, which survived
+the revert). Each got a stronger test: the grouping request must carry the
+parameter, two new tests rescue a lens and a seat that end at `max_tokens`,
+and the modal pin requires each field's condition and its `DataField`
+together. Then three CT-2 rows turned out green as well — the leaf reading
+the response, the leaf reading the iteration, and the restart clearing the
+flag. They had read red only because `tests/test_cost_checks_tail_value.py`
+had two failing tests of its own at the time (the spy above, fixed after the
+first matrix ran). Re-run with that file clean, they were green. The leaf's
+read of the RESPONSE is redundant with CT-2's iteration rules in every
+shape but one: a usage record that reports a single `message` iteration
+beside a switch block, which the iteration rule measures because it never
+reads the content. Its read of the ITERATION is load-bearing on the
+OPENING, where the declined attempt's `message` entry would be read as the
+prefix. `test_ct2_leaves_a_rescued_response_unmeasured` gained both cases,
+and `test_a_restart_measures_its_new_conversation_again` pins the restart
+end to end. The counts above are the final run, on the finished tree, with
+every test file clean first; the tree was checked unchanged afterwards.
+
+**Verified.** `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q`: 3300 passed, 64 skipped (after the review fix); `npm test` (frontend): 445 passed, 0 failed; `npm run build`: clean.
 
 ---
 

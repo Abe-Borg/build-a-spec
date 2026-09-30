@@ -1562,6 +1562,10 @@ export interface QcConsolidation {
   estimated_cost_usd: number;
   api_request_count: number;
   model_response_count: number;
+  /** The model(s) that answered a grouping call after the configured QC
+   *  model declined it (the 5.5 prompting upgrade, P55-7); absent when the
+   *  configured model answered every call. */
+  served_by_model?: string;
   raw_candidate_count?: number;
   grouped_candidate_count?: number;
   panels_avoided?: number;

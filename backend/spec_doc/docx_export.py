@@ -1362,6 +1362,95 @@ QC_WARM_LEAD_METHODOLOGY_NOTE = (
     "record is priced at list, and the batched seats' at the batch rate."
 )
 
+# Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7). A streamed
+# call the configured QC model declined can be answered by the fallback model
+# the API chooses for that decline, and the record the call produced says so
+# (``served_by_model``). The report states it twice: on every such record,
+# and once in Limitations beside the cost basis — the rescued usage is
+# estimated at the configured QC model's rates (decision D6), so that part of
+# the estimate prices another model's work. Both literals are the same in the
+# report modal (``frontend/src/lib/qcReport.ts``), pinned equal by a test.
+QC_FALLBACK_RECORD_TEMPLATE = "Answered by {models} after a safety decline."
+QC_FALLBACK_LIMITATION_TEMPLATE = (
+    "{count} call(s) were answered by {models} after the configured model "
+    "declined; their cost is estimated at {qc_model} rates."
+)
+_QC_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/-]{0,63}")
+
+
+def _qc_served_by_models(record: object) -> list[str]:
+    """The answering models a record names, as the engine wrote them.
+
+    Anything that is not a model id is not printed as one: a hand-edited
+    record degrades to "not disclosed", never to arbitrary text in a sentence
+    that names a model. Mirrored by ``qcServedByModels``.
+    """
+    if not isinstance(record, dict):
+        return []
+    value = record.get("served_by_model")
+    if not isinstance(value, str):
+        return []
+    parts = [part.strip() for part in value.split(",")]
+    if not all(_QC_MODEL_ID.fullmatch(part) for part in parts):
+        return []
+    return sorted(set(parts))
+
+
+def qc_fallback_record_note(record: object) -> str:
+    """The per-record sentence, or ``""`` for a record the QC model answered."""
+    models = _qc_served_by_models(record)
+    return (
+        QC_FALLBACK_RECORD_TEMPLATE.format(models=", ".join(models))
+        if models
+        else ""
+    )
+
+
+def _qc_fallback_records(qc_result: dict) -> list[dict]:
+    """Every call record another model answered: lenses, the grouping step,
+    and every verifier seat in the four candidate collections."""
+    records: list[dict] = [
+        item
+        for item in _qc_list(qc_result.get("lens_statuses"))
+        if isinstance(item, dict)
+    ]
+    consolidation = _qc_dict(qc_result.get("consolidation"))
+    if consolidation:
+        records.append(consolidation)
+    for key in ("findings", "refuted", "disputed", "inconclusive"):
+        for candidate in _qc_list(qc_result.get(key)):
+            if not isinstance(candidate, dict):
+                continue
+            records.extend(
+                verdict
+                for verdict in _qc_list(candidate.get("verdicts"))
+                if isinstance(verdict, dict)
+            )
+    return [record for record in records if _qc_served_by_models(record)]
+
+
+def qc_refusal_fallback(qc_result: dict) -> tuple[int, str]:
+    """``(record count, limitation)`` for calls another model answered.
+
+    ``(0, "")`` when the configured model answered every call — including
+    every record written before the fallback existed, which carries no
+    ``served_by_model`` at all. Reads the RECORD, never live state or a
+    setting. Mirrored by ``qcReport.qcRefusalFallback``.
+    """
+    records = _qc_fallback_records(qc_result)
+    if not records:
+        return 0, ""
+    models = sorted(
+        {model for record in records for model in _qc_served_by_models(record)}
+    )
+    qc_model = str(qc_result.get("model") or "").strip()
+    qc_model = (
+        qc_model if _QC_MODEL_ID.fullmatch(qc_model) else "the configured model's"
+    )
+    return len(records), QC_FALLBACK_LIMITATION_TEMPLATE.format(
+        count=len(records), models=", ".join(models), qc_model=qc_model
+    )
+
 
 def qc_origins_for(qc_result: dict, finding: dict) -> list[dict]:
     """The original lens claims behind one candidate, in recorded order.
@@ -3403,6 +3492,9 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
     _qc_add_label(
         document, "Recorded work", _qc_lens_telemetry_line(lens)
     )
+    fallback_note = qc_fallback_record_note(lens)
+    if fallback_note:
+        _qc_add_label(document, "Refusal fallback", fallback_note, color=_QC_CAUTION)
     _qc_add_label(
         document,
         "Client API requests (streaming calls, including retries and pause_turn continuations)",
@@ -3811,6 +3903,15 @@ def _qc_render_panel(
                 f"{xml_safe_upper(status)}",
                 str(verdict.get("error") or "No error text was persisted."),
                 accent=_QC_RISK,
+            )
+    for index, verdict in enumerate(verdicts, start=1):
+        fallback_note = qc_fallback_record_note(verdict)
+        if fallback_note:
+            _qc_add_label(
+                document,
+                f"Refusal fallback (seat {_qc_seat_label(verdict, index)})",
+                fallback_note,
+                color=_QC_CAUTION,
             )
 
     queries: list[str] = []
@@ -4434,6 +4535,9 @@ def _qc_render_consolidation(document, qc_result: dict) -> None:
         "Grouping step model responses",
         consolidation.get("model_response_count"),
     )
+    fallback_note = qc_fallback_record_note(consolidation)
+    if fallback_note:
+        _qc_add_label(document, "Refusal fallback", fallback_note, color=_QC_CAUTION)
     if status == "failed":
         _qc_add_callout(
             document,
@@ -4607,6 +4711,13 @@ def _qc_candidate_digest_rows(
                         evidence.append(text)
             if evidence:
                 basis = f"{basis} [Refutation evidence: {'; '.join(evidence)}]"
+        fallback_notes = [
+            f"Seat {_qc_seat_label(item, position)}: {note}"
+            for position, item in enumerate(verdicts, start=1)
+            if (note := qc_fallback_record_note(item))
+        ]
+        if fallback_notes:
+            basis = "\n".join([str(basis), *fallback_notes])
         element_id = str(finding.get("element_id") or "").strip()
         reviewed_ref = str(finding.get("reviewed_ref") or "").strip()
         location = " ".join(
@@ -5306,6 +5417,11 @@ def _qc_render_limitations_and_signoff(
     _capture_limitation = qc_batch_capture(qc_result)[1]
     if _capture_limitation:
         limitations.append(_capture_limitation)
+    # So is a call another model answered after a decline (P55-7): the review
+    # happened, but its cost is estimated at the configured model's rates.
+    _fallback_limitation = qc_refusal_fallback(qc_result)[1]
+    if _fallback_limitation:
+        limitations.append(_fallback_limitation)
     if unresolved:
         limitations.append(
             f"{len(unresolved)} candidate finding(s) have unresolved reviewed anchors. "

@@ -35,6 +35,7 @@ import {
   qcCandidateOrigins,
   qcConsolidationSummary,
   qcDisputedCandidates,
+  qcFallbackRecordNote,
   qcInconclusiveCandidates,
   qcLensCoverage,
   qcOperationEvaluation,
@@ -428,6 +429,9 @@ function VerdictRecord({ verdict, index }: { verdict: QcReportVerdict; index: nu
         <DataField label="Client API requests (streaming calls, including retries and pause_turn continuations)">{formatInteger(verdict.api_request_count)}</DataField>
         <DataField label="Final model responses received">{formatInteger(verdict.model_response_count)}</DataField>
         <DataField label="Estimated seat cost">{formatUsd(verdict.estimated_cost_usd)}</DataField>
+        {qcFallbackRecordNote(verdict) && (
+          <DataField label="Refusal fallback">{qcFallbackRecordNote(verdict)}</DataField>
+        )}
       </dl>
       <div className="mt-2">
         <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">Reviewer note</p>
@@ -809,6 +813,9 @@ function LensRecord({ lens, index }: { lens: QcReportLens; index: number }) {
         <DataField label="Client API requests (streaming calls, including retries and pause_turn continuations)">{formatInteger(lens.api_request_count)}</DataField>
         <DataField label="Final model responses received">{formatInteger(lens.model_response_count)}</DataField>
         <DataField label="Estimated lens cost">{formatUsd(lens.estimated_cost_usd)}</DataField>
+        {qcFallbackRecordNote(lens) && (
+          <DataField label="Refusal fallback">{qcFallbackRecordNote(lens)}</DataField>
+        )}
       </dl>
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
         <div className="rounded-lg border border-edge/60 bg-bg/35 px-3 py-2.5">
@@ -1278,6 +1285,9 @@ export default function QCReportModal({
                     <DataField label="Grouping model responses">{formatInteger(consolidation.modelResponseCount)}</DataField>
                     <DataField label="Grouping error">{consolidation.error || "None recorded"}</DataField>
                     <DataField label="Fallback reason">{consolidation.fallbackReason || "None recorded"}</DataField>
+                    {qcFallbackRecordNote(report.consolidation) && (
+                      <DataField label="Refusal fallback">{qcFallbackRecordNote(report.consolidation)}</DataField>
+                    )}
                   </dl>
                   {consolidation.state === "failed" && (
                     <p className="mt-2 text-[11px] leading-relaxed text-warn">

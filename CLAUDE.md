@@ -174,6 +174,13 @@ backend/
                            pinned per round/run (the self-check latch can
                            only remove the tail), never in the QC input
                            manifest);
+                           QC_REFUSAL_FALLBACK (BUILD_A_SPEC_QC_REFUSAL_
+                           FALLBACK, default ON — the 5.5 prompting
+                           upgrade, P55-7: every STREAMED Final QC request
+                           carries fallbacks "default" + its beta; batched
+                           params never do; 0 switches it off; pinned per
+                           run, never in the QC input manifest; a latch in
+                           qc/engine can only remove it, until a restart);
                            REDLINE_COMMENTS (BUILD_A_SPEC_REDLINE_COMMENTS,
                            default ON — redline Phase 3, owner decision 9;
                            0 = the redline without comments byte for byte;
@@ -696,6 +703,38 @@ backend/
                            path needs nothing (the Batches API's unset
                            default drops a failing block) and says so at
                            remind and the batch pause path.
+                           P55-7: run_final_qc(refusal_fallback=) pins
+                           settings.QC_REFUSAL_FALLBACK and threads it to
+                           every streamed call (lenses, grouping calls,
+                           streamed seats, warm leads); _run_streaming_call
+                           adds fallbacks "default" + REFUSAL_FALLBACK_BETA
+                           to the stream_kwargs copy (_with_refusal_fallback,
+                           merged with any beta P55-6 added) while
+                           refusal_fallback_available() — never
+                           _qc_request_kwargs, never a batched param.
+                           _open_stream checks the fallback's own guard
+                           FIRST (a 400 naming the fallback, never "prompt is
+                           too long": the same request once more without it,
+                           counted, through _open_stream so the tail's guard
+                           still stands; _disable_refusal_fallback latches
+                           unless the resend is a 400 too; one WARNING).
+                           _fallback_served_model reads a response three
+                           ways (a fallback_message iteration, a fallback
+                           block's to.model, response.model naming another
+                           model — never the requested one's dated snapshot
+                           (_same_model) — only when the request CARRIED the
+                           fallback), "" for a refusal;
+                           _CallResult.served_by_model is the
+                           call's _served_by_label; QCLensStatus / QCVerdict
+                           / QCConsolidation gain served_by_model (serialized
+                           only when set, read by _persisted_served_by_model,
+                           bounded); a rescued reply is re-sent by the echo
+                           rule (_fallback_echo_content: before the last
+                           fallback block only text, fallback blocks and
+                           paired server-tool blocks) and parsed from
+                           _payload_view; a conversation a fallback answered
+                           tells CT-2 (observe_continuation(fallback_served=))
+                           and a restart clears it.
                            _early_stop_line(tool, work) is the
                            one sentence the lens, grouping and verifier
                            system prompts carry before their tagged-JSON
@@ -803,7 +842,11 @@ backend/
                            per the Chunk 4 plan's Appendix A, in Decimal at
                            twelve significant digits; `unprofitable` after
                            six measured observations summing below zero) for
-                           CT-2's value check. The warm lead (WL-1):
+                           CT-2's value check (P55-7: a continuation or
+                           opening another model answered — the engine's
+                           fallback_served, or a fallback block / a
+                           fallback_message iteration read here — is
+                           unmeasured). The warm lead (WL-1):
                            warm_lead_enabled / disable_warm_lead /
                            check_warm_leads(WarmLeadLineage…) (Appendix B's
                            h₁, p, C and h₀*; `not_read` below h₁ = 0.5,
@@ -1527,7 +1570,14 @@ backend/
                            adds qc_streamed_lead_seats (a list-price verifier
                            record in a run with discounted ones) and renders
                            QC_WARM_LEAD_METHODOLOGY_NOTE as a "Streamed lead
-                           seat" methodology step ONLY for a run that sent one
+                           seat" methodology step ONLY for a run that sent one;
+                           the 5.5 prompting upgrade (P55-7) adds
+                           QC_FALLBACK_RECORD_TEMPLATE /
+                           QC_FALLBACK_LIMITATION_TEMPLATE,
+                           qc_fallback_record_note (the lens record, each
+                           seat, the refuted/inconclusive digest row and the
+                           grouping step) and qc_refusal_fallback (count +
+                           the Limitations line)
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
                            module_id + legacy discipline fallback (the versioned
                            document project_identity is authoritative) + audit_result +
@@ -1895,7 +1945,10 @@ frontend/src/
                            CAPTURED research manifest the same way;
                            qcStreamedLeadSeats + QC_WARM_LEAD_METHODOLOGY_NOTE
                            mirror docx_export's (cost Tier 1 Chunk 3), the
-                           modal's methodology step gated on it
+                           modal's methodology step gated on it;
+                           QC_FALLBACK_*_TEMPLATE, qcServedByModels,
+                           qcFallbackRecordNote and qcRefusalFallback mirror
+                           docx_export's (P55-7), the literals pinned equal
   lib/capabilities.ts      END_USER_CAPABILITIES: the one vocabulary of end-user
                            capability ids. Production controls declare them via
                            data-capability; tour.ts steps reference them; the
@@ -2254,12 +2307,17 @@ tests/
                            _fresh_session also calls cost_checks.
                            reset_for_tests() before AND after every test (Tier
                            1 finish), beside reset_thinking_display_probe()
+                           and qc engine.reset_refusal_fallback_probe() (P55-7)
   fakes.py                 scripted fake streaming client (text + tool_use turns);
                            usage(..., iterations=) attaches usage.iterations
                            only when supplied (Tier 1 finish, CT-2), entries
                            as given (dicts or objects); raw_turn(...,
                            input_transformations=) and pause_response(...,
-                           answers=) likewise only when supplied (P55-6)
+                           answers=) likewise only when supplied (P55-6);
+                           fallback_served(response, block=, iteration=,
+                           model=, partial=) marks a scripted response as a
+                           fallback model's answer, each signal only when
+                           asked (P55-7)
   test_app.py              API surface: SSE round-trips, tool loop, rollback,
                            undo/redo, export, project save/resume, lint/standards
   test_spec_doc.py         document model units: ids, transactions, versions,
@@ -2961,6 +3019,32 @@ tests/
                            the tail beside it, CT-1 never latching, the INFO
                            line); batched params and _qc_request_kwargs never
                            carrying it; the canary's fold
+  test_prompt55_qc_refusal_fallback.py
+                           [5.5 prompting upgrade, P55-7] every streamed QC
+                           request carrying fallbacks "default" + its beta
+                           (lenses, streamed seats, a warm lead), batched
+                           params and _qc_request_kwargs never, the switch
+                           off and the setting, the ast pin, the P55-6 beta
+                           merge, research never; a rescued lens (each
+                           signal alone), seat, malformed seat and grouping
+                           call recording who answered, a model name alone
+                           not a rescue when none was asked for nor when it
+                           is the requested alias's own snapshot, a doubly
+                           declined call still a refusal, the payload read
+                           after the switch point, the echo rule on a pause
+                           and a reminder; the round trip and an older
+                           record; accounting at the QC model's rates; CT-2
+                           unmeasured; the refusal guard (one resend, a
+                           latch, one WARNING; a surviving 400 and another
+                           400 latching nothing); both report projections'
+                           sentences equal and rendered; F3
+  frontend/tests/prompt55QcFallback.test.ts
+                           [P55-7] the two sentences equal to the memo's, the
+                           per-record note, garbage never printed as a
+                           model, the count and limitation (at the QC
+                           model's rates) reaching the Limitations list, an
+                           older report silent, and the modal rendering
+                           every record through the helper
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,
@@ -19299,6 +19383,165 @@ the why and the traps.
   2. "A long conversation is condensed, never deleted (compaction Phase 3)"
      says a "prompt is too long" 400 "is no longer mistaken for a display
      rejection". Nothing but a display-worded 400 is, now.
+
+## A declined Final QC call is answered, and the report says by whom — implemented notes (5.5 prompting upgrade, P55-7)
+
+The seventh session of the 5.5 prompting upgrade (`docs/plans/prompt55/`),
+finding F9 and decision D6. No route, SSE event type, dependency,
+project-format change, QC schema or protocol bump, or version bump; one env
+knob (`BUILD_A_SPEC_QC_REFUSAL_FALLBACK`, README row). The plan's P55-7 **As
+built** carries the deviations and the full revert matrix; this section is
+the why and the traps.
+
+- **Why.** Opus 5.5's safety classifiers occasionally decline a benign-
+  adjacent review — clean agent chemistry, hazmat classification, a security
+  discipline — and a declined lens made the report partial, a declined seat
+  left its candidate inconclusive, a declined grouping call fell back to
+  singletons. The API can retry a declined request itself: with
+  `fallbacks: "default"` and the beta `server-side-fallback-2026-07-01`, a
+  policy decline is re-run on the model the API chooses for that decline's
+  category, and that model's answer comes back in the same response.
+- **Every STREAMED Final QC request carries it, and nothing else does.**
+  `_run_streaming_call` adds it to the per-request `stream_kwargs` copy
+  (`_with_refusal_fallback`, merged into any `anthropic-beta` P55-6 already
+  put there), beside the container and the tail — so the lenses, the
+  grouping calls, streamed seats and warm leads all ask. Never
+  `_qc_request_kwargs`: that is the one shape both transports build from,
+  and the Batches API rejects the parameter, so a batched seat can never
+  carry it. The GA SDK's `messages.stream` does not type the parameter, so
+  it rides `extra_body`. The scalar `"default"` form takes the `-2026-07-01`
+  beta; the array form takes `-2026-06-01`, and pairing either header with
+  the other form is a 400.
+- **The switch.** `settings.QC_REFUSAL_FALLBACK`, default on, `0` off,
+  pinned once per run by `run_final_qc(refusal_fallback=)` like the other QC
+  switches. How a call may be answered is not a review input, so it is never
+  in the input manifest and a retained result stays current either way
+  (F3, pinned).
+- **Out of scope, on purpose (D6).** Research and the chat keep their own
+  decline handling ("A refusal is not a truncation"): a research area names
+  its decline, and a chat turn answered by a different model would change who
+  the user is talking to. Batched seats cannot carry it at all. A declined
+  batched seat therefore still fails where a streamed one would be rescued —
+  the one place the two verifier transports can still reach different
+  verdicts for the same request (erratum below).
+- **Who answered is read three ways, and one of them needs care.** A
+  `fallback_message` entry in `usage.iterations` (its `model`), a `fallback`
+  content block (the last one's `to.model`), or `response.model` naming
+  another model. The third is the only signal a sticky turn gives (once a
+  conversation fell back, later requests are served by the fallback model
+  directly, with no block), and on the GA SDK it is often the only one at
+  all: the stream accumulator does not copy `iterations` from
+  `message_delta`, while `message_start` already names the serving model. It
+  counts only when the request CARRIED the fallback, and only when the name
+  is another MODEL: a configured alias answers as its dated snapshot
+  (`claude-opus-4-5` as `claude-opus-4-5-20251101`, a `-latest` alias as its
+  snapshot), so `_same_model` compares the two ids lower-cased and without a
+  snapshot date or `-latest` suffix (Codex, PR #242 — carrying the fallback
+  by default had made every request on an alias read as a rescue, with a
+  false Limitations line and every tail observation unmeasured). A response whose
+  final `stop_reason` is `refusal` was declined by the whole chain and was
+  answered by nobody. On SDK 1.9.0 a `fallback` block parses as a
+  `TextBlock` with `type="fallback"` and its `from`/`to` kept as extras;
+  `_item_attr` reads `to` either way.
+- **A rescued reply is re-sent by the echo rule, and read after its switch
+  point.** A mid-output decline keeps the declined model's partial in
+  `content`, and its output-tool call may be cut short. `_fallback_echo_content`
+  keeps, before the LAST `fallback` block, only text blocks, the fallback
+  blocks and paired server-tool blocks — thinking, a client `tool_use`, an
+  unpaired server-tool call and anything unrecognized are dropped — and
+  everything after it; with no fallback block it returns the SAME object, so
+  an ordinary response is re-sent exactly as before. The pause resume and
+  P55-4's reminder both append that, the reminder's own turn is built from
+  `_payload_view(response)` (so an invented call the declined model made is
+  not answered as a request), and `_parse` reads the same views. The echo is
+  the documented shape of a fallback turn, not an edit of what the model
+  saw, so it does not set P55-6's `thinking_edited`.
+- **The record says who answered.** `_CallResult.served_by_model` (the
+  call's distinct answering models, sorted, at most four —
+  `_served_by_label`) reaches `QCLensStatus`, every `QCVerdict` and
+  `QCConsolidation` (the grouping step aggregates its bucket calls). Each is
+  serialized only when set (`QCFinding.to_dict` drops an unset one from its
+  verdicts) and read tolerantly (`_persisted_served_by_model`: anything that
+  is not model ids reads as ""), so an older record loads unchanged and a
+  record never fails to load over a disclosure field. No schema or protocol
+  bump.
+- **Priced at the configured model's rates, and the report says so (D6).**
+  A rescued call's usage is estimated with the QC model's rates, like every
+  other record: per-record model pricing would reshape the strictly
+  validated `cost_basis`, and rescues are rare. The top-level usage covers
+  only the attempt that answered; a declined attempt's usage sits in
+  `usage.iterations`, which the GA stream does not carry, so it is not added.
+  The accounting still reconciles (pinned through a reload). The Word memo
+  and the report modal state the rescue on every such record ("Refusal
+  fallback: Answered by <model> after a safety decline." — the lens record,
+  each seat, the refuted/inconclusive digest row, the grouping step) and
+  once under Limitations ("N call(s) were answered by <model> after the
+  configured model declined; their cost is estimated at <QC model> rates.").
+  `QC_FALLBACK_RECORD_TEMPLATE` / `QC_FALLBACK_LIMITATION_TEMPLATE` are the
+  same literals in `docx_export.py` and `qcReport.ts`, pinned equal from
+  both sides. N counts RECORDS: the grouping step is one record however many
+  of its bucket calls fell back.
+- **CT-2 never measures another model's cache.** A fallback model reads and
+  writes its own cache at its own rates, so a continuation — or an opening —
+  it answered says nothing about the tail. The engine keeps a
+  conversation-local `fallback_in_conversation` (a restart clears it) and
+  passes it as `observe_continuation(fallback_served=)`; the leaf also reads
+  the block and the iteration itself, but never `response.model`, for the
+  alias reason above. Either way the observation is `unmeasured`. Most of
+  the leaf's own read is redundant with CT-2's iteration rules (a switch
+  block is not a single-iteration block, and a `fallback_message` entry is
+  never the one `message` iteration a measurable response has); it is
+  load-bearing in two places. An OPENING whose iterations are the declined
+  attempt's `message` entry then a `fallback_message` would otherwise have
+  that zero-token entry read as its prefix. And a response whose usage
+  reports one `message` iteration beside a switch block would otherwise be
+  measured, because the iteration rule never reads the content. Trap: a
+  revert row can look red only because its test file had failures before
+  the revert — the three CT-2 rows that were green on this code first read
+  red that way, beside the two spy failures below.
+- **A refused fallback costs one request (CT-1's shape).** `_open_stream`
+  checks the fallback's own guard FIRST (the tail's guard reads any 400 as
+  the tail's): a request carrying `fallbacks` refused with a 400 whose text
+  names the fallback — and never "prompt is too long" — is sent once more
+  without it, at once and counted, through `_open_stream` itself so the
+  tail's guard still stands on the resend. The fallback then switches off
+  for the rest of the app session (`_disable_refusal_fallback`, one WARNING
+  on `buildaspec.qc`), unless the resend is refused with a 400 too, which
+  was not the fallback's. The latch lives in `qc/engine.py` (Final QC is the
+  only engine that sends the parameter), is read on every request, and the
+  conftest re-arms it around every test (`reset_refusal_fallback_probe`).
+- **Knowing test changes.** Two helpers that pin today's exact request shape
+  now pass `refusal_fallback=False`, each with a comment pointing here:
+  `tests/test_qc_live_events.py`'s `_run_client` (the continuation tail's
+  "the tail and nothing else" key-set tests) and
+  `tests/test_qc_batch_warm_lead.py`'s `_run` (a lead's request compared
+  with the batched params byte for byte). The fallback on a lead and on
+  every other streamed call is pinned in the new test file instead. And
+  `tests/test_cost_checks_tail_value.py`'s `observed` spy, whose fixed
+  signature rejected the engine's new `observe_continuation(fallback_served=)`
+  keyword, now accepts it and passes it through. A spy on a hook the engines
+  call must take the hook's whole signature.
+- **Tests:** `tests/test_prompt55_qc_refusal_fallback.py` and
+  `frontend/tests/prompt55QcFallback.test.ts` (registered in
+  `frontend/package.json`); `tests/fakes.py` gains `fallback_served(...)`,
+  each signal attached only when asked for. Revert matrix: every mechanism
+  reverted in place and restored from the exact text read (in full in the
+  plan's P55-7 As built).
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "A refusal is not a truncation" says a declined call is terminal and
+     never retried. That still holds for research, the chat, batched Final
+     QC seats, and every Final QC call with the switch off. A STREAMED Final
+     QC call is now retried by the API itself on a fallback model; only a
+     decline that fallback model also declines reaches the refusal path.
+  2. "Final QC phase 2 is batched" (v1.12.0) says batching "changes
+     transport and nothing else", and P55-5 closed the reminder gap. A
+     declined request is the remaining difference: a streamed seat can be
+     rescued by the fallback, a batched one cannot.
+  3. "The two shelved savings are on, and watch themselves" describes
+     `_open_stream` as the tail's guard alone. In Final QC it now checks the
+     refusal fallback's guard first, and CT-2's list of unmeasured
+     continuations gains a fallback-served one.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

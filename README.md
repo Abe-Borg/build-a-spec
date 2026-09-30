@@ -2058,6 +2058,26 @@ actions.
   reminder in the batch's next round (P55-5), priced at the batch rate like
   the rest of the seat; a reminder needs a round left, so one the last round
   would need fails the seat instead.
+- **A review call the reviewer model declines is answered by another model,
+  and the report says so** (the 5.5 prompting upgrade, P55-7). Opus 5.5's
+  safety classifiers occasionally decline a benign-adjacent review — clean
+  agent chemistry, hazmat classification, a security discipline — and a
+  declined lens used to leave the report partial, a declined seat its
+  finding inconclusive. Every *streamed* Final QC call (the lenses, the
+  grouping calls, a streamed verifier seat, a warm lead) now asks the API to
+  retry a declined request on the fallback model it chooses
+  (`fallbacks: "default"`), and the answer comes back in the same response.
+  The record that call produced names the model that answered it, the Word
+  report and the report window say so on that record ("Answered by … after a
+  safety decline.") and once under Limitations, and the cost of those calls
+  is estimated at the configured QC model's rates, which the limitation
+  states. A call the fallback model declines too is still a declined call.
+  Batched verifier seats never carry it (the Batches API rejects the
+  parameter), nor do research and the chat. If the provider ever refuses a
+  request *because* of the parameter, that request is sent once more without
+  it and the fallback switches off until the app restarts. How a call may be
+  answered is not a review input, so a retained Final QC result stays
+  current either way. `BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0` switches it off.
 - **One defect buys one panel, not one per lens that noticed it.** Five
   reviewers reading one document routinely raise the same defect in
   different words, and each variant used to buy its own verification panel.
@@ -2979,6 +2999,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding can never be `disputed` and a single reviewer's refusal deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |
 | `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | `1` | Submit phase 2 (the verifier seats) through the Message Batches API at 50% of standard token prices — one batch per round, a round added whenever a seat pauses or retries — same prompts, seats, adjudication and audit records; no live per-seat frames, except a streamed lead seat's (`BUILD_A_SPEC_QC_BATCH_WARM_LEAD`). `0` streams the seats through the thread pool instead. |
+| `BUILD_A_SPEC_QC_REFUSAL_FALLBACK` | `1` | Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7): every streamed Final QC request — the lenses, the grouping calls, streamed verifier seats and warm leads — carries `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a request the QC model's safety classifiers decline is retried by the API on the fallback model it chooses, and that model's answer is used. The record that call produced names the answering model, and the report states it on that record and under Limitations, with the cost of those calls estimated at the configured QC model's rates. Batched verifier seats never carry it (the Batches API rejects the parameter). A request the provider refuses because of the parameter is sent once more without it, and the fallback then switches off until the app restarts. Not a review input: a retained Final QC result stays current either way. `0` switches it off: a declined call fails as it did before. In PowerShell: `$env:BUILD_A_SPEC_QC_REFUSAL_FALLBACK = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0`. |
 | `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` | `1` | Streamed lead seat (Chunk 3 of the cost program, on by default since the Tier 1 finish program's session WL-2): when one cache group in the batched phase has at least 20 verifier seats (never fewer than 8), one of them is sent first, on its own at list price, and the batch goes out only after it starts answering (at most `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` later), so the rest can read the copy it stored. Same request bytes and verdict rules; the report prices that seat at list and says so in its methodology; a retained Final QC result stays current either way. Watched by a cost self-check: after each Final QC that sent a lead, the app reads how many batched seats read its copy, and if fewer than half did, or the lead cost more than it could have saved, the lead switches off until the app restarts (Settings → Developer tools → Cost self-checks). `0` switches it off: every seat rides the batch. In PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`. Inert when `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` is `0`. |
 | `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |
 | `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` | `7200` | Wall-clock ceiling on the batched phase (floor 60). A runaway guard, not a target: unsettled seats fail and the run reads partial. |

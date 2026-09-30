@@ -1056,7 +1056,14 @@ function Dossier() {
               same conversation, before it counts as failed; each reminder is a
               billed request, counted in the report. A batched seat’s reminder
               goes out in the batch’s next round, at the batch price, and only
-              while a round is left. A failed verifier seat makes its finding{" "}
+              while a round is left. A streamed call — a lens, a grouping call,
+              a streamed seat or a warm lead — that the reviewer’s safety
+              classifiers decline is retried by the API on a fallback model it
+              chooses, in the same request; the record names the model that
+              answered, the report says so on that record and in its
+              limitations, and that call’s cost is estimated at the reviewer
+              model’s rates. Batched seats never carry the fallback (the batch
+              API refuses it). A failed verifier seat makes its finding{" "}
               <b className="text-ink">inconclusive</b> — never counted as either
               confirmed or refuted — and marks the whole run partial. That holds
               on the batched path too: a seat the batch never returned a result
@@ -1802,7 +1809,7 @@ function Dossier() {
             ],
             [
               "Data handling at Anthropic",
-              "Your requests are governed by Anthropic’s commercial API terms and privacy policy, linked below. The app is zero-data-retention eligible end to end: every model it uses, including the Final QC reviewer, is available under zero data retention, and the two web tools are configured to be invoked directly by the model rather than through Anthropic’s server-side code-execution sandbox — a mode that is not zero-retention eligible by default.",
+              "Your requests are governed by Anthropic’s commercial API terms and privacy policy, linked below. The app is zero-data-retention eligible end to end: every model it selects, including the Final QC reviewer, is available under zero data retention (a Final QC call the reviewer declines may be answered by a fallback model the API chooses — the report names it, and BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0 keeps that off), and the two web tools are configured to be invoked directly by the model rather than through Anthropic’s server-side code-execution sandbox — a mode that is not zero-retention eligible by default.",
             ],
           ]}
         />

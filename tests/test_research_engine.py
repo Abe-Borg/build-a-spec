@@ -280,8 +280,10 @@ def test_incomplete_stop_reason_and_missing_payload_fail_cleanly():
                 research_response(items=[], stop_reason="max_tokens")
             ],
             client_standards=[
-                # Completes but never calls the tool nor tagged JSON.
+                # Completes but never calls the tool nor tagged JSON — and
+                # does it again after each of its two reminders (P55-4).
                 research_response(items=None, searched_urls=["https://x.gov"])
+                for _ in range(3)
             ],
         )
     )
@@ -289,6 +291,7 @@ def test_incomplete_stop_reason_and_missing_payload_fail_cleanly():
     statuses = {s.dimension_id: s for s in profile.dimension_statuses}
     assert "stop_reason" in statuses["governing_codes"].error
     assert "no parseable payload" in statuses["client_standards"].error
+    assert "reminders sent: 2" in statuses["client_standards"].error
 
 
 def test_retryable_failure_retries_then_succeeds(monkeypatch):
@@ -1372,7 +1375,8 @@ def test_a_failed_dimension_records_a_sanitized_kind_beside_its_message():
     client = SequencedFakeClient(
         _scripts(
             governing_codes=[research_response(items=[], stop_reason="max_tokens")],
-            client_standards=[research_response(items=None)],
+            # A text-only reply, again after each of its two reminders.
+            client_standards=[research_response(items=None) for _ in range(3)],
             ahj_requirements=[RuntimeError("kaput")],
         )
     )

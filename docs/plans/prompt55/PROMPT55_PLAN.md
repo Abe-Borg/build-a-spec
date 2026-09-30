@@ -1238,7 +1238,209 @@ to hand in its findings is reminded instead of failing).
 
 ### As built
 
-(Filled in by the session.)
+Built 2026-09-30 on `claude/great-curie-0ivy3g`, from `master` at `1d2185c`
+(PR #238's merge). No route, SSE event type, dependency, env knob,
+project-format change, QC schema or protocol bump, or version bump. No
+default changed; what changed for everyone is behaviour: a streamed research
+or Final QC call whose reply ends without its output tool is reminded, up to
+twice, before it fails.
+
+**What landed, by design item.**
+
+1. **When to remind** (`backend/research/engine.py` `_run_dimension`,
+   `backend/qc/engine.py` `_run_streaming_call`). Both loops now parse at the
+   COMPLETING response (the post-loop parse moved up, so a completed
+   conversation always carries a payload). With no payload, fewer than
+   `_MISSING_TOOL_REMINDERS = 2` reminders sent in this conversation, and the
+   continuation budget able to send one more request, the call is reminded;
+   `max_tokens` and a refusal keep their stop classes' paths.
+2. **The reminder's shape.** The reply appended verbatim
+   (`{"role": "assistant", "content": response.content}`), then the one user
+   turn `research.schema.missing_output_tool_reply(response, reminder=,
+   wrong_tool=)` builds: a single text block (research: "Your turn ended
+   without a submit_requirements_research call, so nothing was recorded. Call
+   submit_requirements_research now with your findings. Do not repeat
+   searches you have already run."; QC: "…Call <tool> now with the work you
+   have already done. Do not repeat searches or fetches you have already
+   run."), or, when the reply called client tools, one `tool_result` per
+   `tool_use`, each `is_error: true`, naming the exact tool, and no text
+   beside them. Server-tool blocks are not answered (the provider pairs
+   them). Then `sanitize_messages_for_resend`, and the loop goes on.
+3. **Everything else is the conversation's.** The reminder's response joins
+   `all_responses` (billed once, pooled for grounding, in Final QC's request
+   and response counts, against the continuation budget);
+   `reminders_sent` is kept across a resume and zeroed by a restart; the
+   reminder request ends on the user, so it carries no tail and CT-1/CT-2
+   never see it; when the reminders run out the failure is today's, with
+   the count: "Research produced no parseable payload (no tool call, no
+   tagged JSON; reminders sent: N)." / "QC produced no parseable payload
+   (reminders sent: N).". One INFO line per reminder:
+   `buildaspec.research` ("Research area <id> ended its turn without <tool>;
+   reminder N of 2 sent.") and `buildaspec.qc` ("QC <prefix> call
+   (<id fields>) ended its turn without <tool>; reminder N of 2 sent.").
+4. **The system-prompt line.** Research's `_RESEARCH_PROTOCOL_BLOCK` and
+   QC's `_early_stop_line(tool, work)` (lens "review", grouping "grouping",
+   verifier "verdict"), each placed just before the prompt's tagged-JSON
+   fallback line: "Your <work> is recorded only by the <tool> call. A
+   message without a tool call ends your turn and records nothing, so put
+   any status note in the same message as your next tool call, and end by
+   calling <tool>."
+
+**Deviations.**
+
+1. **A Stop at the reminder decision cancels.** The spec said a Stop keeps
+   its path; the reply has already arrived when the decision is made, so the
+   choice is between today's no-payload failure and the Stop's own path.
+   It takes the Stop's (research `cancelled`, QC "Cancelled by user."):
+   the user asked it to stop, and nothing more is sent.
+2. **A reminder needs budget like a continuation.** The spec counts
+   reminder responses against the budget; the condition makes it explicit
+   that a reminder is only sent while `len(all_responses) <= MAX`, so a
+   conversation that used its budget on pauses fails with "reminders sent:
+   0" rather than sending a request past the ceiling.
+3. **The failure message format** puts the count inside the existing
+   parenthesis for research ("(no tool call, no tagged JSON; reminders sent:
+   N)") and adds one for QC ("(reminders sent: N)").
+4. **One shared shape helper, per-engine wording.** The spec allowed a
+   shared pure helper in `research/schema.py`; the reminder and wrong-tool
+   texts stay in each engine (R4), and QC's are functions of the tool name.
+5. **The wrong-tool text stays true for any client call.** It says only
+   that nothing was recorded by that call and names the exact tool — true
+   of an invented name and of the (unreachable in practice) right name with
+   an input that is not an object.
+6. **The batched seat is untouched.** `_BatchSeatState.settle_parsed` still
+   settles "QC produced no parseable payload." with no reminder; the
+   verifier system prompt's new line reaches batched seats too, because
+   `_verifier_call_spec` builds both transports' requests. Until P55-5 the
+   two transports treat a text-only seat differently (CLAUDE.md erratum).
+7. **Research gets its first logger** (`buildaspec.research`); nothing in
+   `backend/research/` logged before.
+8. **README** gains a sentence in the Final QC "Five lenses" bullet and two
+   architecture lines (research and QC `engine.py`); **the trust dossier**'s
+   Research and Final QC cards say what a reminder costs and that a batched
+   seat is not reminded.
+9. **No release-checklist row.** Nothing a tester can see in the app
+   changed: the reminder is a billed request inside a call that already
+   shows its activity.
+10. **Release note.** v1.20.0 is still the newest published release (GitHub
+    Releases API, 2026-09-30), so the item went into the unreleased 1.21.0
+    entry's Final QC section: "A reviewer that forgets to hand in its work
+    is reminded".
+
+**Knowing test changes.** A test that scripted ONE text-only reply to reach
+the no-payload path now reaches a reminder first, and the fake's exhausted
+script raises `AssertionError` (unknown, non-retryable), so each scripts
+three:
+
+- `tests/test_research_engine.py::test_incomplete_stop_reason_and_missing_payload_fail_cleanly`
+  asserts "reminders sent: 2";
+- `tests/test_research_engine.py::test_a_failed_dimension_records_a_sanitized_kind_beside_its_message`;
+- `tests/test_qc_consolidation.py::test_a_grouping_call_that_produces_no_payload_falls_back_and_keeps_its_cost`,
+  whose request and response counts are now 3;
+- `tests/test_research_cost_profile.py`'s `_researched_session(fail=)`
+  fixture (used by `test_a_failed_dimension_is_billed_and_included` and
+  `test_the_output_carries_no_text_names_or_paths`): its failed area scripts
+  two more text-only replies with no usage, so the area's row is still
+  exactly the first reply's; `test_a_failed_dimension_is_billed_and_included`
+  now also asserts the area failed as `no_payload` with "reminders sent: 2".
+
+The last two were found by a probe, not by a red test: both still passed,
+because the unscripted reminder request raised the fake's `AssertionError`,
+which failed the area as an unknown error with the first reply's usage — the
+same row, reached the wrong way. So two probes ran before this was recorded:
+a pytest plugin wrapping `SequencedFakeClient.stream` over the whole suite
+(it records every reminder request and whether the fake answered it), and
+one wrapping both engines' `missing_output_tool_reply` over the whole suite
+again, with the final verification run (it sees every reminder whatever
+client a test uses). Both found the five tests above and nothing else.
+Neither plugin is committed.
+
+**Tests:** `tests/test_prompt55_missing_tool_reminder.py` (38 cases). One
+assertion set parametrized over research `_run_dimension` and QC
+`_run_lens` (its own harnesses, the `test_retry_resume.py` precedent):
+one reminder then the payload recorded (the reply appended by identity);
+two then the familiar failure with the count; none after `max_tokens` or a
+refusal, none once a Stop has landed, none without budget left (and one
+with exactly one continuation left); the reminder's exact shape (one text
+block naming the tool) and no `cache_control` on it with the tail switched
+on; the reminder request sanitized like a pause resume (a dangling
+`server_tool_use` dropped); `is_error` results for every invented call and
+no text beside them; the INFO lines (ids and counts, never the reply's
+text); each response billed once and Final QC's request and response counts;
+a citation in the reminded reply grounding on a page read before; a failure
+in flight resending the reminder as it stood; a restart zeroing the count;
+a pause after a reminder carrying the tail. Then a streamed verifier seat,
+a paused grouping call and a warm lead reminded end to end; the helper
+directly; the four system-prompt lines, before each fallback and in the
+cached system block; and F3 (a retained result current, its fingerprint
+unmoved by the lines).
+
+**Verified** on the branch, with every doc change in place: `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q` 3192 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean.
+
+**Revert matrix.** 30 rows. Each mechanism was reverted in place,
+one at a time, by a script that restored the exact text it read and checked
+`git diff` and `git status` unchanged after every row. Each row ran
+`tests/test_prompt55_missing_tool_reminder.py`, `test_research_engine.py`,
+`test_qc_live_events.py`, `test_retry_resume.py` and
+`test_continuation_cache.py`.
+
+| Mechanism reverted | Tests red |
+|---|---|
+| research: no reminder at all | 14 |
+| research: no cap on reminders | 3 |
+| research: reminds with no budget left | 1 |
+| research: reminds after a Stop | 1 (0 on the first run) |
+| research: reply not appended before the reminder | 5 |
+| research: reminder request not sanitized | 1 |
+| research: restart keeps the reminder count | 1 |
+| research: failure message without the count | 3 |
+| research: no INFO line per reminder | 1 |
+| research: reminder names no tool | 1 |
+| research: invented-tool result names no tool | 1 |
+| research: system-prompt line removed | 2 |
+| qc: no reminder at all | 16 |
+| qc: no cap on reminders | 1 |
+| qc: reminds with no budget left | 1 |
+| qc: reminds after a Stop | 1 (0 on the first run) |
+| qc: reply not appended before the reminder | 6 |
+| qc: reminder request not sanitized | 1 |
+| qc: restart keeps the reminder count | 1 |
+| qc: failure message without the count | 2 |
+| qc: no INFO line per reminder | 1 |
+| qc: reminder names no tool | 4 |
+| qc: invented-tool result names no tool | 1 |
+| qc: lens system-prompt line removed | 2 |
+| qc: grouping system-prompt line removed | 1 |
+| qc: verifier system-prompt line removed | 1 |
+| helper: invented tools answered with text | 3 |
+| helper: text beside the error results | 3 |
+| helper: server-tool blocks answered too | 3 |
+| helper: results not marked is_error | 3 |
+
+Every row is red. The first run found two green rows, the same mechanism in
+each engine: **"reminds after a Stop"**. The reminder decision's own Stop
+check is not the only one — the loop checks `should_stop()` before every
+request, so a reminder built after a Stop is never sent, and the call still
+reads "Cancelled by user." What the reverted check changes is the record:
+the reminder is counted and its INFO line says "reminder 1 of 2 sent" for a
+request that never went out. `test_no_reminder_once_a_stop_has_landed` now
+also asserts no reminder line is logged, and the two rows were re-run: 1 red
+each. No other test changed between the runs.
+The helper's four rows each turn three tests red — the helper's own unit
+test and the end-to-end test over BOTH engines (the invented-tool test, or
+for the server-tool row the sanitizing test, whose paused reply leaves a
+dangling `server_tool_use`) — because the helper is the one shape both
+engines send.
+
+**For P55-5.** `qc/engine.py` already has what the batch needs:
+`_MISSING_TOOL_REMINDERS`, `_missing_tool_reminder(tool_name)`,
+`_wrong_tool_result(tool_name)` and `research.schema.missing_output_tool_reply`
+(the reply appended verbatim, then that user turn). The batched seat's
+no-payload path is `_BatchSeatState.settle_parsed`, still "QC produced no
+parseable payload."; a reminder there is a new round for that seat, like a
+pause, and `resume_attempt` / `retry` must keep the count the way a resume
+keeps `continuations`. The shared verifier system-prompt line already
+reaches batched seats.
 
 ---
 

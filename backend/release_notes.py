@@ -396,6 +396,21 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "run Final QC again before you apply its fixes."
                         ),
                     ),
+                    ReleaseItem(
+                        title="A reviewer that forgets to hand in its work is reminded",
+                        body=(
+                            "A Final QC reviewer, or a research area, "
+                            "sometimes finished its work with a message "
+                            "instead of handing its results in, and was "
+                            "counted as failed: the review came back "
+                            "partial, or the research had a gap. It is now "
+                            "reminded to hand them in, up to twice, before "
+                            "it counts as failed. Each reminder is a short "
+                            "billed request that the cost line and the "
+                            "report include. The panel reviewers that run "
+                            "in a batch are not reminded."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Callable
 
 from .. import settings
 
@@ -225,6 +225,57 @@ def extract_tool_use_block(response: object, tool_name: str) -> dict[str, Any] |
         if fallback is None and name.casefold() == wanted:
             fallback = tool_input
     return fallback
+
+
+def missing_output_tool_reply(
+    response: object,
+    *,
+    reminder: str,
+    wrong_tool: Callable[[str], str],
+) -> dict[str, Any]:
+    """The user turn that answers a fan-out reply which recorded nothing.
+
+    A research area or a streamed Final QC call is recorded only by its
+    output tool, and the Opus 5.5 prompting guide warns that a model can end
+    an unattended turn with text instead of the tool call (the 5.5 prompting
+    upgrade, P55-4). The engines answer such a turn — at most twice per
+    conversation, each with its own wording — by appending the assistant
+    content verbatim and then this ONE user message:
+
+    - a reply holding no client ``tool_use`` block gets a single text block,
+      ``reminder``;
+    - a reply holding client ``tool_use`` blocks, none of which yielded the
+      output tool's payload (a name the model invented), gets one
+      ``is_error`` ``tool_result`` per call, each reading
+      ``wrong_tool(name)``. The API requires a result for every call, so
+      text must not replace them, and no text rides beside them: the Sonnet
+      5.5 guide says harness text after tool results can read as a prompt
+      injection.
+
+    Server-tool blocks never need an answer (their results arrive in the
+    same response), so only ``tool_use`` counts. Pure: the response is
+    read, never changed. Shared by both engines as the one place the SHAPE
+    is decided; the wording stays each engine's own.
+    """
+    content = getattr(response, "content", None)
+    if content is None and isinstance(response, dict):
+        content = response.get("content")
+    results: list[dict[str, Any]] = []
+    for block in content or []:
+        if _block_field(block, "type") != "tool_use":
+            continue
+        name = _block_field(block, "name")
+        results.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": _block_field(block, "id"),
+                "is_error": True,
+                "content": wrong_tool(name if isinstance(name, str) else ""),
+            }
+        )
+    if results:
+        return {"role": "user", "content": results}
+    return {"role": "user", "content": [{"type": "text", "text": reminder}]}
 
 
 # The prompt-JSON fallback's bound. A real reply holds one tagged block,

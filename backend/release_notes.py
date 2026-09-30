@@ -304,6 +304,23 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "early, while the conversation is short."
                         ),
                     ),
+                    ReleaseItem(
+                        title="A very long PDF no longer breaks the work",
+                        body=(
+                            "When the assistant, a research area or a Final "
+                            "QC reviewer reads a PDF too long to send again, "
+                            "the app replaces its pages with a short note "
+                            "before the next request. On Anthropic accounts "
+                            "created on or after 31 August 2026 that could "
+                            "make the next request fail, because the "
+                            "model's earlier reasoning was tied to the pages "
+                            "it had read. Those requests now ask Anthropic "
+                            "to set that reasoning aside instead, so the "
+                            "work carries on. And an unrelated error no "
+                            "longer switches off the reasoning summary in "
+                            "the chat for as long as the app stays open."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(

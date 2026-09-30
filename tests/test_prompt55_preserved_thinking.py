@@ -190,8 +190,11 @@ def test_input_transformations_are_counted_by_type_and_reason_only():
         "thinking_dropped/model_binding_mismatch": 1,
         "other/other": 1,
     }
+    # A response already turned into a dict reads the same way.
+    assert input_transformation_counts({"input_transformations": entries}) == counts
     # Absent, empty or malformed: nothing.
     assert input_transformation_counts(SimpleNamespace()) == {}
+    assert input_transformation_counts({}) == {}
     assert input_transformation_counts(SimpleNamespace(input_transformations=[])) == {}
     assert input_transformation_counts(SimpleNamespace(input_transformations="x")) == {}
 

@@ -145,15 +145,15 @@ match.
 
 ### P55-6 — Keep thinking valid when the harness edits a request
 
-- [ ] P55-6.1 — the chat, research and streamed Final QC send `drop_block` with the beta on exactly the requests (and, in the engines, the rest of the conversation) the harness edited
-- [ ] P55-6.2 — an unedited request is byte-identical to today; batched params never carry it
-- [ ] P55-6.3 — the display probe degrades only on a display-worded 400
-- [ ] P55-6.4 — CT-1 never latches because of a `block_binding` rejection
-- [ ] P55-6.5 — a non-empty `input_transformations` is logged without content
-- [ ] P55-6.6 — `tests/test_prompt55_preserved_thinking.py` covers every item above
-- [ ] P55-6.7 — verified: ruff, pytest, npm test, npm run build
-- [ ] P55-6.8 — revert matrix recorded in As built
-- [ ] P55-6.9 — CLAUDE.md (and the release note, if warranted) updated
+- [x] P55-6.1 — the chat, research and streamed Final QC send `drop_block` with the beta on exactly the requests (and, in the engines, the rest of the conversation) the harness edited — evidence: `backend/research/schema.py` `with_drop_block` / `with_beta_header`; `conversation._build_chat_request` (`messages is not raw`); `thinking_edited` in `_run_dimension` and `_run_streaming_call` (both sanitize sites, sticky, cleared by a restart); `tests/test_prompt55_preserved_thinking.py::test_every_chat_request_the_sanitizer_edited_carries_drop_block_and_the_beta`, `::test_the_builder_marks_only_a_request_whose_messages_changed`, `::test_the_edit_marks_that_request_and_every_later_one`, `::test_a_resume_keeps_the_flag_and_a_restart_clears_it`, `::test_a_reminder_the_sanitizer_edited_carries_it_too`, `::test_the_tail_and_the_binding_ride_the_same_continuation` (each over research and QC)
+- [x] P55-6.2 — an unedited request is byte-identical to today; batched params never carry it — evidence: `tests/test_prompt55_preserved_thinking.py::test_a_chat_turn_the_harness_never_edits_is_byte_identical`, `::test_a_conversation_the_sanitizer_never_edits_is_byte_identical` (research + qc), `::test_batched_params_never_carry_it_even_after_an_edit`, `::test_the_one_request_shape_carries_nothing_of_it`; comments at `_BatchSeatState.remind` and the batch pause path
+- [x] P55-6.3 — the display probe degrades only on a display-worded 400 — evidence: `conversation._DISPLAY_REJECTION` in `_enter_stream`; `tests/test_prompt55_preserved_thinking.py::test_a_display_worded_400_still_degrades_and_keeps_block_binding`, `::test_any_other_400_is_raised_and_the_summaries_stay_on` (3), `::test_a_prompt_too_long_400_is_still_not_a_display_rejection`, `::test_a_rejected_binding_fails_the_turn_without_silencing_the_next_one`
+- [x] P55-6.4 — CT-1 never latches because of a `block_binding` rejection — evidence: `tests/test_prompt55_preserved_thinking.py::test_ct1_never_latches_on_a_binding_rejection` (research + qc); both `_open_stream` docstrings
+- [x] P55-6.5 — a non-empty `input_transformations` is logged without content — evidence: `input_transformation_counts`; `_log_input_transformations` in the chat, research and QC; `tests/test_prompt55_preserved_thinking.py::test_input_transformations_are_counted_by_type_and_reason_only`, `::test_the_chat_logs_what_the_api_dropped_without_any_path_or_text`, `::test_a_chat_turn_without_the_array_logs_nothing`, `::test_what_the_api_dropped_is_logged_with_the_calls_id_and_counts_only`, `::test_a_response_without_the_array_logs_nothing` (research + qc)
+- [x] P55-6.6 — `tests/test_prompt55_preserved_thinking.py` covers every item above — evidence: `tests/test_prompt55_preserved_thinking.py` (33 cases) covers P55-6.1 to P55-6.5, plus `::test_the_canary_folds_a_production_beta_into_betas`; plan's P55-6 As built, Knowing test changes (`tests/test_qc_live_events.py`'s pause fixture now answers its pending search)
+- [x] P55-6.7 — verified: ruff, pytest, npm test, npm run build — evidence: VERIFIED_EVIDENCE
+- [x] P55-6.8 — revert matrix recorded in As built — evidence: plan's P55-6 As built, Revert matrix (33 rows, every one red; the first run's green dict-response row strengthened)
+- [x] P55-6.9 — CLAUDE.md (and the release note, if warranted) updated — evidence: CLAUDE.md "An edited request keeps its thinking valid" section (with the Batch 2 display-probe erratum) + Layout entries; `backend/release_notes.py` 1.21.0 Chat "A very long PDF no longer breaks the work"
 
 ### P55-7 — Final QC falls back when a streamed call is declined
 

@@ -415,7 +415,16 @@ backend/
                            local like the container (a resume keeps it, a
                            restart zeroes it); one INFO line per reminder on
                            buildaspec.research; the no-payload failure names
-                           the count
+                           the count. P55-6: thinking_edited, conversation-
+                           local, set when sanitize_messages_for_resend
+                           returns a new list (the pause AND the reminder
+                           site), sticky for every later request, kept by a
+                           resume, cleared by a restart; while set every
+                           request goes through with_drop_block on its
+                           stream_kwargs copy (never request_kwargs); a
+                           non-empty input_transformations is one INFO line
+                           (counts only); _open_stream's resend keeps
+                           block_binding, so a binding 400 latches nothing
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -447,7 +456,14 @@ backend/
                            a reply that recorded nothing with (text for a
                            text-only reply; one is_error tool_result per
                            client tool_use, no text beside them); the wording
-                           stays each engine's own
+                           stays each engine's own. P55-6: with_drop_block
+                           (a copy whose thinking gains block_binding
+                           drop_block and whose extra_headers gain
+                           PRESERVED_THINKING_BETA — the two always together),
+                           with_beta_header (merged into any anthropic-beta,
+                           any key case, added once) and
+                           input_transformation_counts (type/reason counts,
+                           snake_case tokens else "other", never text)
   research/runner.py       session-bound run lifecycle: daemon thread, event
                            log, snapshot, SSE follow generator (Build-a-Spec
                            native — no Spec Critic source); Batch 7 adds stop()
@@ -672,6 +688,14 @@ backend/
                            settle_parsed(payload) carries the count in the
                            failure message; one INFO line per reminder
                            ("…queued for the next batch round").
+                           P55-6: _run_streaming_call carries research's
+                           thinking_edited rule, copied (both sanitize
+                           sites, sticky, restart clears it, with_drop_block
+                           on the stream_kwargs copy only, one INFO line per
+                           non-empty input_transformations); the batched
+                           path needs nothing (the Batches API's unset
+                           default drops a failing block) and says so at
+                           remind and the batch pause path.
                            _early_stop_line(tool, work) is the
                            one sentence the lens, grouping and verifier
                            system prompts carry before their tagged-JSON
@@ -1796,7 +1820,15 @@ backend/
                            otherwise; _ChatRequestInputs.effort carries it and
                            _build_chat_request reads only that; the
                            prompt_refs trace event records it; the condensing
-                           summary fork stays at INTERVIEW_EFFORT
+                           summary fork stays at INTERVIEW_EFFORT. P55-6:
+                           _build_chat_request routes a request whose
+                           messages the sanitizer or the citation repair
+                           changed (messages is not raw) through
+                           with_drop_block; _enter_stream degrades the
+                           display only on a 400 matching _DISPLAY_REJECTION
+                           and its resend keeps every other thinking key;
+                           _log_input_transformations writes one INFO line
+                           on buildaspec.chat (the chat's first logger)
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -2205,7 +2237,9 @@ tools/prompt55_progress_update_canary.py
                            retried without the beta; prints every block and
                            progress note, then verdict(): pass = closing text
                            >= 80 chars asking a question after the last tool
-                           call, no progress note asking one
+                           call, no progress note asking one. P55-6: a
+                           production anthropic-beta in extra_headers moves
+                           into betas (extra_headers would override them)
 tools/research_cost_profile.py
                            [Research/QC cost Tier 1, Chunk 1] read-only: saved
                            .baspec / legacy .json / .basproject in, per-round
@@ -2223,7 +2257,9 @@ tests/
   fakes.py                 scripted fake streaming client (text + tool_use turns);
                            usage(..., iterations=) attaches usage.iterations
                            only when supplied (Tier 1 finish, CT-2), entries
-                           as given (dicts or objects)
+                           as given (dicts or objects); raw_turn(...,
+                           input_transformations=) and pause_response(...,
+                           answers=) likewise only when supplied (P55-6)
   test_app.py              API surface: SSE round-trips, tool loop, rollback,
                            undo/redo, export, project save/resume, lint/standards
   test_spec_doc.py         document model units: ids, transactions, versions,
@@ -2910,6 +2946,21 @@ tests/
                            phase-level with no new event; and the two
                            transports reaching the same verdicts and the
                            same failure text
+  test_prompt55_preserved_thinking.py
+                           [5.5 prompting upgrade, P55-6] the helpers
+                           (drop_block without mutation, the beta merge, the
+                           counts); the chat marking exactly the requests
+                           the sanitizer edited and an unedited turn byte
+                           for byte; the display probe degrading only on a
+                           display-worded 400 and keeping block_binding, a
+                           binding 400 failing the turn without silencing
+                           the next; then ONE assertion set over research
+                           and streamed QC (the edited request and every
+                           later one, unedited byte-identical, resume keeps
+                           and restart clears the flag, a reminder sets it,
+                           the tail beside it, CT-1 never latching, the INFO
+                           line); batched params and _qc_request_kwargs never
+                           carrying it; the canary's fold
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,
@@ -19126,6 +19177,128 @@ and the traps.
   3. "Final QC phase 2 is batched" (v1.12.0) lists what each batch result
      does — settle, queue a continuation, or queue a retry. It can now also
      queue a reminder.
+
+## An edited request keeps its thinking valid — implemented notes (5.5 prompting upgrade, P55-6)
+
+The sixth session of the 5.5 prompting upgrade (`docs/plans/prompt55/`),
+finding F8 of the review of Anthropic's Sonnet 5.5 and Opus 5.5 prompting
+guides. No route, SSE event type, dependency, env knob, project-format
+change, QC schema or protocol bump, or version bump. The plan's P55-6 **As
+built** carries the deviations and the full revert matrix; this section is
+the why and the traps.
+
+- **Why an edit could break a turn.** Both 5.5 models bind each thinking
+  block to the conversation prefix that produced it (system, tools, earlier
+  messages). A request that replays a block after the harness CHANGED part
+  of that prefix is a 400 on an Anthropic account created on or after
+  2026-08-31 — and the app is bring-your-own-key, so the user's account age
+  decides, not the owner's. The app makes one such edit mid-conversation:
+  the resend sanitizer (`sanitize_messages_for_resend`) replaces a fetched
+  PDF over the page limit (or one it cannot count) with a note, and drops an
+  unpaired `server_tool_use`. The thinking the model wrote after reading
+  that PDF is then bound to pages the next request no longer carries. In a
+  research area or a Final QC call the 400 is `invalid_request`, which is
+  not retryable, so the call failed; in the chat the turn failed.
+- **The recovery is the API's own.** `research.schema.with_drop_block`
+  returns a copy of the request whose `thinking` gains
+  `block_binding: {"prefix_mismatch_behavior": "drop_block"}` and whose
+  `extra_headers` gains `anthropic-beta: thinking-binding-controls-2026-08-01`
+  (`PRESERVED_THINKING_BETA`). The API then drops the first mismatched block
+  and every thinking block after it instead of failing. The two always
+  travel together: `block_binding` without the beta is itself a 400.
+  `with_beta_header` merges into any `anthropic-beta` already there (any
+  spelling of the key's case, comma-joined, the beta added once), so P55-7's
+  fallback beta can ride the same request. A new `thinking` dict every time,
+  never the shared config a caller reuses.
+- **Only on a request the harness edited, so an unedited one is
+  byte-identical.** Both the sanitizer and the citation repair return the
+  SAME list when they change nothing. The chat (`_build_chat_request`)
+  marks the request when `messages is not raw`; it re-sanitizes the raw
+  history every round, so the condition recurs by itself for as long as the
+  edit does. Counting the citation repair (prefix-stable, so on its own it
+  never invalidates a block) only adds requests that need nothing dropped.
+  Research (`_run_dimension`) and streamed Final QC (`_run_streaming_call`)
+  keep a conversation-local `thinking_edited` flag, set the first time the
+  sanitizer returns a different list — at the pause site AND the reminder
+  site (P55-4's reminder runs it too) — and kept for every later request of
+  the conversation, because the edited list IS the conversation from then
+  on. A resume keeps it (the conversation carries on); a restart clears it
+  with the rest of the conversation. It rides the per-request
+  `stream_kwargs` copy beside the tail and the container, never
+  `request_kwargs`.
+- **Batched Final QC needs nothing.** In the Message Batches API the unset
+  `block_binding` default drops a failing block instead of failing the item,
+  so `_qc_request_kwargs` and the batched params never carry it; comments at
+  `_BatchSeatState.remind` and the batch pause path say so.
+- **The condensing summary needs nothing either.** It is built from
+  committed history, and commit drops every thinking block, so there is no
+  block for an edit to invalidate.
+- **The display probe degrades only on a display-worded 400.**
+  `_enter_stream` used to read ANY 400 on a request whose thinking carried
+  `display` as a rejected `display` key: it switched the reasoning summaries
+  off for the whole process and resent without them. A rejected
+  `block_binding`, or any other 400, therefore silenced the summaries for
+  nothing. It now degrades only when the error text matches `\bdisplay\b`
+  (`_DISPLAY_REJECTION`; the "prompt is too long" exclusion stays first),
+  and the resend drops `display` and nothing else, so `block_binding` and
+  the beta ride the retried request.
+- **CT-1 never latches on a binding rejection.** The tail guard's resend
+  drops `cache_control` and nothing else, so a request the harness edited
+  keeps `block_binding`; a 400 that is the binding's survives the resend,
+  and a surviving 400 is exactly the case that latches nothing.
+- **What the API dropped is logged, counted, never quoted.** With the beta,
+  a response carries a top-level `input_transformations` array (SDK 1.9.0
+  keeps the unknown field; it arrives as a list of dicts).
+  `input_transformation_counts` counts entries per `type/reason`, each value
+  kept only if it is snake_case (`[a-z][a-z0-9_]{0,63}`) and `other`
+  otherwise, reading an attribute or a dict key and treating anything that
+  is not a list as nothing. A non-empty one writes ONE INFO line: on
+  `buildaspec.chat` (the chat's first logger: "Chat round N: the API
+  transformed the request's input (thinking_dropped/prefix_binding_mismatch=1).")
+  and on `buildaspec.research` / `buildaspec.qc` with the call's ids. No new
+  SSE event (tracker rule).
+- **An older account is opted in, on edited requests only.** On an account
+  the check does not enforce, setting the field turns enforcement on for
+  that request, so a mismatched block is dropped where it would otherwise
+  have reached the model. That is limited to requests the harness actually
+  edited, which is why the flag is conditional.
+- **SDK 1.9.0, checked.** The non-beta `client.messages.stream` passes the
+  untyped `block_binding` key inside `thinking` and `extra_headers` through
+  as given. The progress-update canary sends through
+  `client.beta.messages.stream(betas=...)`, where `extra_headers` OVERRIDES
+  the header `betas` builds (the SDK merges `extra_headers` last), so
+  `progress_update_request` now moves any production `anthropic-beta`
+  values into `betas` after its own, and drops `extra_headers` when nothing
+  else is left in it.
+- **Cache.** Adding `block_binding` changes the request's thinking config,
+  so an edited request writes the messages cache once more; an unedited one
+  is unchanged. No request field reaches the QC input manifest, so no
+  retained Final QC result reads stale.
+- **A test fixture was editing itself.** `tests/test_qc_live_events.py`'s
+  `_pausing_qc_scripts` chained two lens pauses, each ending on a pending
+  search, and the second pause's result did not name the first's — so on
+  the second continuation the pairing guard dropped the first pending use
+  as unpaired. That is an edit, and the request carried the beta, failing
+  the Chunk 4 test's "the tail and nothing else". A real resumed response's
+  result names the use it answers, so the fixture now does too
+  (`pause_response(..., answers=)`), and the Chunk 4 assertions stay
+  unchanged. Lesson: a pause fixture whose pending use is never answered is
+  a conversation the sanitizer edits.
+- **Tests:** `tests/test_prompt55_preserved_thinking.py`; `tests/fakes.py`'s
+  `raw_turn` gains `input_transformations=` and `pause_response` gains
+  `answers=`, each attached only when supplied.
+  Revert matrix: every mechanism reverted in place and restored from the
+  exact text read (in full in the plan's P55-6 As built).
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Batch 2 → Thinking display probe" says a model or endpoint that 400s
+     on the `display` key makes `_enter_stream` degrade to `omitted` once.
+     Since P55-6 only a 400 whose text names `display` does; any other 400
+     is raised as it came and the probe stays armed, and the resend keeps
+     every other thinking key.
+  2. "A long conversation is condensed, never deleted (compaction Phase 3)"
+     says a "prompt is too long" 400 "is no longer mistaken for a display
+     rejection". Nothing but a display-worded 400 is, now.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

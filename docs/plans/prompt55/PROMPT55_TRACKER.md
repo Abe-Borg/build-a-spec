@@ -48,7 +48,7 @@ pull request each:
 |---|---|---|---|---|
 | P55-1 | Harden output parsing and the fact harvest | done | PR #236 | `b5c282a` |
 | P55-2 | The interview replies after its last tool call | done | PR #237 | `77da938` |
-| P55-3 | Draft passes finish in one turn, and effort is re-based | done | PR #238 | — |
+| P55-3 | Draft passes finish in one turn, and effort is re-based | done | PR #238 | `1d2185c` |
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | not started | — | — |
 | P55-5 | Remind a batched verifier seat that skipped its output tool | not started | — | — |
 | P55-6 | Keep thinking valid when the harness edits a request | not started | — | — |
@@ -124,14 +124,14 @@ match.
 
 ### P55-4 — Remind a streamed fan-out call that skipped its output tool
 
-- [ ] P55-4.1 — research and streamed Final QC calls remind a text-only end of turn, at most twice per conversation, never after max_tokens, a refusal or a Stop
-- [ ] P55-4.2 — the reminder appends the assistant content verbatim and one user message; an invented tool name gets `is_error` tool results
-- [ ] P55-4.3 — billing, grounding, the continuation budget, retries and the continuation tail behave as specified
-- [ ] P55-4.4 — the research, lens, consolidation and verifier system prompts name the early stop to avoid
-- [ ] P55-4.5 — `tests/test_prompt55_missing_tool_reminder.py` covers every item above, over both engines
-- [ ] P55-4.6 — verified: ruff, pytest, npm test, npm run build
-- [ ] P55-4.7 — revert matrix recorded in As built
-- [ ] P55-4.8 — CLAUDE.md and the release note updated
+- [x] P55-4.1 — research and streamed Final QC calls remind a text-only end of turn, at most twice per conversation, never after max_tokens, a refusal or a Stop — evidence: `backend/research/engine.py` `_run_dimension` and `backend/qc/engine.py` `_run_streaming_call` (`_MISSING_TOOL_REMINDERS = 2` each); `tests/test_prompt55_missing_tool_reminder.py::test_a_text_only_end_of_turn_is_reminded_once_then_recorded`, `::test_two_reminders_then_the_familiar_failure_with_the_count`, `::test_no_reminder_after_max_tokens_or_a_refusal`, `::test_no_reminder_once_a_stop_has_landed`, `::test_a_reminder_needs_budget_left_like_a_continuation` (each over both engines), `::test_a_streamed_verifier_seat_is_reminded`, `::test_a_grouping_call_that_paused_is_reminded`, `::test_a_warm_lead_is_reminded`; As built deviations 1 and 2
+- [x] P55-4.2 — the reminder appends the assistant content verbatim and one user message; an invented tool name gets `is_error` tool results — evidence: `backend/research/schema.py` `missing_output_tool_reply`; `tests/test_prompt55_missing_tool_reminder.py::test_the_reminder_is_one_text_block_naming_the_tool_and_carries_no_tail`, `::test_the_reminder_request_is_sanitized_like_a_pause_resume`, `::test_an_invented_tool_gets_an_error_result_for_every_call`, `::test_the_helper_answers_text_with_text_and_calls_with_results`; As built deviations 4 and 5
+- [x] P55-4.3 — billing, grounding, the continuation budget, retries and the continuation tail behave as specified — evidence: `tests/test_prompt55_missing_tool_reminder.py::test_each_response_is_billed_once_and_every_request_counted`, `::test_a_citation_in_the_reminded_reply_grounds_on_a_page_read_before`, `::test_a_reminder_needs_budget_left_like_a_continuation`, `::test_a_failure_in_flight_resends_the_reminder_as_it_stood`, `::test_a_restart_starts_the_reminder_count_again`, `::test_the_reminder_is_one_text_block_naming_the_tool_and_carries_no_tail`, `::test_a_pause_after_a_reminder_resumes_with_the_tail`, `::test_each_reminder_is_logged_with_the_calls_id_and_never_content` (each over both engines)
+- [x] P55-4.4 — the research, lens, consolidation and verifier system prompts name the early stop to avoid — evidence: `_RESEARCH_PROTOCOL_BLOCK`; `qc/engine.py` `_early_stop_line` in `_lens_system_prompt`, `_consolidation_system_prompt`, `_verifier_system_prompt`; `tests/test_prompt55_missing_tool_reminder.py::test_every_fan_out_system_prompt_names_the_early_stop`, `::test_the_lines_ride_the_cached_system_block_of_every_call`, `::test_a_retained_result_stays_current_across_the_new_lines`
+- [x] P55-4.5 — `tests/test_prompt55_missing_tool_reminder.py` covers every item above, over both engines — evidence: `tests/test_prompt55_missing_tool_reminder.py` (38 cases; one assertion set over research `_run_dimension` and QC `_run_lens`) covers P55-4.1 to P55-4.4; plan's P55-4 As built, Knowing test changes (three no-payload fixtures in `test_research_engine.py` and `test_qc_consolidation.py`, and `test_research_cost_profile.py`'s failed-area fixture, found by a probe)
+- [x] P55-4.6 — verified: ruff, pytest, npm test, npm run build — evidence: ruff clean; `pytest -q` 3192 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean (plan's P55-4 As built, Verified)
+- [x] P55-4.7 — revert matrix recorded in As built — evidence: plan's P55-4 As built, Revert matrix (30 rows, every one red; the first run's two green Stop rows strengthened)
+- [x] P55-4.8 — CLAUDE.md and the release note updated — evidence: CLAUDE.md "A fan-out call that skipped its output tool is reminded" section + Layout entries; `backend/release_notes.py` 1.21.0 Final QC "A reviewer that forgets to hand in its work is reminded"; README Final QC "Five lenses" bullet and the research/QC `engine.py` architecture lines; the trust dossier's Research and Final QC cards
 
 ### P55-5 — Remind a batched verifier seat that skipped its output tool
 

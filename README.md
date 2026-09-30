@@ -2049,7 +2049,12 @@ actions.
   language** (imperative mood, measurable criteria, no "as required"), and
   **provenance hygiene** (risky `assumed` blocks, surviving TBD/imported,
   provisions citing `[UNVERIFIED]` items). One lens failing never cancels the
-  others; all five failing fails clean.
+  others; all five failing fails clean. A lens, a grouping call or a streamed
+  verifier seat that ends its turn with a message instead of handing in its
+  result is reminded to, up to twice in the same conversation, before it
+  counts as failed (the 5.5 prompting upgrade, P55-4; a research area gets
+  the same reminder). Each reminder is a short billed request that the cost
+  line and the report count. A seat verified in a batch is not reminded yet.
 - **One defect buys one panel, not one per lens that noticed it.** Five
   reviewers reading one document routinely raise the same defect in
   different words, and each variant used to buy its own verification panel.
@@ -2630,7 +2635,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          -> adversarial verification
                          -> ops validation -> audit-grade QCResult with versioned
                          input/run identity, evidence and seat telemetry; raw
-                         provider streams relay observable lens/verifier activity
+                         provider streams relay observable lens/verifier activity;
+                         a streamed call that ends its turn without its output
+                         tool is reminded up to twice
                                                         [pattern: research/engine.py]
     runner.py            session-bound QC lifecycle: daemon thread, event log,
                          run-token-isolated SSE follow + exact stream_end
@@ -2673,7 +2680,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          research dimensions                       [Batch 10, native]
   research/
     engine.py            the fan-out: parallel streaming web-search dimensions,
-                         pause_turn continuations, budget ceilings, grounding,
+                         pause_turn continuations, up to two reminders for an
+                         area that ends its turn without its output tool,
+                         budget ceilings, grounding,
                          RequirementsProfile render + context trim
                                                                   [ported from Spec Critic]
     grounding.py         URL normalization, accepted-vs-cited validation, web-tool

@@ -402,7 +402,20 @@ backend/
                            _is_continuation, on every request; right after
                            the append, a response whose request carried the
                            tail goes to cost_checks.observe_continuation with
-                           all_responses[0] (the conversation's opening)
+                           all_responses[0] (the conversation's opening).
+                           The 5.5 prompting upgrade (P55-4): the parse runs
+                           at the completing response, and a reply that ends
+                           without the output tool is REMINDED (the reply
+                           appended verbatim, then missing_output_tool_reply's
+                           one user turn: the reminder text, or an is_error
+                           result per invented client tool) — at most
+                           _MISSING_TOOL_REMINDERS (2) per conversation, only
+                           with continuation budget left, never after a Stop
+                           (which cancels); reminders_sent is conversation-
+                           local like the container (a resume keeps it, a
+                           restart zeroes it); one INFO line per reminder on
+                           buildaspec.research; the no-payload failure names
+                           the count
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -428,7 +441,13 @@ backend/
                            Final QC tags, the audit): openings walked from the
                            last, each against every later closing, the first
                            candidate that is one JSON object wins, bounded by
-                           _TAGGED_JSON_MAX_ATTEMPTS
+                           _TAGGED_JSON_MAX_ATTEMPTS. P55-4:
+                           missing_output_tool_reply(response, reminder=,
+                           wrong_tool=) is the ONE shape both engines answer
+                           a reply that recorded nothing with (text for a
+                           text-only reply; one is_error tool_result per
+                           client tool_use, no text beside them); the wording
+                           stays each engine's own
   research/runner.py       session-bound run lifecycle: daemon thread, event
                            log, snapshot, SSE follow generator (Build-a-Spec
                            native — no Spec Critic source); Batch 7 adds stop()
@@ -628,7 +647,21 @@ backend/
                            each streamed lead's lineage to
                            cost_checks.check_warm_leads at the NORMAL end
                            only, after fold_leads(wait=True), under its own
-                           try (a gathering failure never fails the phase)
+                           try (a gathering failure never fails the phase).
+                           The 5.5 prompting upgrade (P55-4):
+                           _run_streaming_call parses at the completing
+                           response and REMINDS a reply that ended without
+                           its output tool, research's rule copied (its own
+                           _MISSING_TOOL_REMINDERS, _missing_tool_reminder,
+                           _wrong_tool_result; every streamed call — lenses,
+                           grouping calls, streamed seats, warm leads; one
+                           INFO line per reminder on buildaspec.qc naming
+                           event_prefix and event_fields); the batched seat
+                           (_BatchSeatState.settle_parsed) does not remind
+                           yet (P55-5). _early_stop_line(tool, work) is the
+                           one sentence the lens, grouping and verifier
+                           system prompts carry before their tagged-JSON
+                           fallback
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
@@ -2831,6 +2864,23 @@ tests/
                            and a seat at medium; every QC override; and a
                            result retained at the old high default reading
                            stale (the release note's disclosure made true)
+  test_prompt55_missing_tool_reminder.py
+                           [5.5 prompting upgrade, P55-4] ONE assertion set
+                           over research's _run_dimension and QC's _run_lens:
+                           one reminder then the payload; two then the
+                           familiar failure with the count; none after
+                           max_tokens, a refusal or a Stop, nor without
+                           budget left; the reminder's exact shape and no
+                           tail on it; is_error results for invented tools;
+                           the INFO lines (ids and counts, never content);
+                           billing once, Final QC's request and response
+                           counts, grounding on a page read before; a
+                           failure in flight resending the reminder, a
+                           restart zeroing the count; a pause after a
+                           reminder still taking the tail. Then a streamed
+                           seat, a paused grouping call and a warm lead
+                           reminded, the helper, the four system-prompt
+                           lines in the cached system block, and F3
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,
@@ -18805,6 +18855,139 @@ revert matrix; this section is the why and the traps.
      to `medium` for the interview) gains the same exception.
   4. The Batch 4 and "Final QC cost + speed" (v1.8.0) sections describe QC
      effort as `high`; those are history. The default is `medium` now.
+
+## A fan-out call that skipped its output tool is reminded — implemented notes (5.5 prompting upgrade, P55-4)
+
+The fourth session of the 5.5 prompting upgrade (`docs/plans/prompt55/`),
+finding F2 on the streamed paths, and decision D5. No route, SSE event type,
+dependency, env knob, project-format change, QC schema or protocol bump, or
+version bump. The plan's P55-4 **As built** carries the deviations and the
+full revert matrix; this section is the why and the traps.
+
+- **Why a text-only end of turn failed a whole call.** The Opus 5.5 guide:
+  "some of those updates end the turn with text rather than a tool call",
+  and an unattended loop should treat such a turn as a report, not the end
+  of the task. Every research area and every streamed Final QC call ends by
+  calling one output tool (`submit_requirements_research`,
+  `submit_qc_findings`, `submit_qc_consolidation`, `submit_qc_verdict`).
+  A reply that stopped with a status note instead — no tool call, no tagged
+  JSON — failed at once: a research area as `no_payload`, a lens as a failed
+  lens (so the report went partial and blocked readiness), a verifier seat
+  as a failed seat (so its candidate went inconclusive), a grouping call as
+  a fallback to singletons. The work the call had already paid for was
+  thrown away over one missing tool call.
+- **Now it is reminded, at most twice per conversation.** Both engines
+  parse at the COMPLETING response (the parse that ran after the loop moved
+  up; a completed conversation always carries a payload now). With no
+  payload, and fewer than `_MISSING_TOOL_REMINDERS` (2) sent in this
+  conversation, and budget left, the reply is appended verbatim — exactly as
+  a pause resume appends it — and then ONE user turn: the reminder text
+  naming the tool, or, when the reply called client tools none of which is
+  the output tool (a name the model invented), one `is_error` `tool_result`
+  per call naming the right tool (the API requires a result for every call,
+  and no text beside them). `missing_output_tool_reply` in
+  `research/schema.py` is that shape, shared; each engine keeps its own
+  wording, constant and loop (the copy-don't-import posture). Then
+  `sanitize_messages_for_resend`, as the pause path runs it, and the loop
+  goes on. When the reminders run out the call fails as it always did, and
+  the message says how many were sent ("…; reminders sent: 2)" /
+  "QC produced no parseable payload (reminders sent: 2).").
+- **Never after `max_tokens`, a refusal or a Stop.** A cut-off reply and a
+  refusal keep their own stop classes and paths (the reminder sits inside
+  the COMPLETE branch). A Stop that lands at the reminder decision takes the
+  Stop's own path — research's `cancelled`, QC's "Cancelled by user." —
+  rather than today's no-payload failure: nothing more is sent after a
+  Stop, and the call honestly reads as stopped.
+- **A reminder is a continuation for everything that counts.** Its response
+  joins `all_responses`, so it is billed once, pooled for grounding (a
+  citation in the reminded reply grounds on a page read before it), counted
+  in Final QC's `api_request_count` and response count, and counted against
+  the continuation budget: a reminder needs `len(all_responses) <= MAX`,
+  like a continuation, and with none left the call fails with
+  "reminders sent: 0". `reminders_sent` is conversation-local, like the
+  container: a retryable failure while the reminder request is in flight is
+  `in_request`, so a resume sends the reminder request again as it stood and
+  keeps the count; a restart is a new conversation and starts it at zero.
+- **The reminder request carries no continuation tail, and that is kept.**
+  It ends on the user turn, so `_is_continuation` is false: CT-1's refusal
+  guard and CT-2's value check never see it. It re-reads the conversation
+  uncached once, which is cheaper than a failed lens and its re-run. A pause
+  AFTER a reminder is an ordinary continuation and carries the tail as
+  usual (pinned).
+- **Every streamed QC call gets it, through the one loop:** the lenses, the
+  consolidation grouping calls, streamed verifier seats
+  (`BUILD_A_SPEC_QC_BATCH_VERIFICATION=0`) and warm leads. A batched seat
+  does NOT yet (`_BatchSeatState.settle_parsed` still settles "QC produced
+  no parseable payload."): that is P55-5, and until it lands the two
+  transports treat a text-only seat differently (erratum below).
+- **One INFO line per reminder, ids and counts only.** Research gets its
+  first logger, `buildaspec.research` ("Research area <id> ended its turn
+  without <tool>; reminder N of 2 sent."); QC writes on `buildaspec.qc`
+  with the call's `event_prefix` and `event_fields` (`lens_id`,
+  `bucket_id`, `candidate_id` + `reviewer_index` — ids only). No new SSE
+  event (tracker rule): the reminder request relays its own activity frames
+  through the existing relay, like any request.
+- **The system prompts name the early stop.** One sentence, placed just
+  before each prompt's tagged-JSON fallback: the work is recorded only by
+  the `<tool>` call; a message without a tool call ends the turn and records
+  nothing; put any status note in the same message as the next tool call,
+  and end by calling `<tool>`. Research's `_RESEARCH_PROTOCOL_BLOCK` carries
+  its own copy; QC's `_early_stop_line(tool, work)` is the one the lens,
+  grouping and verifier prompts share. The verifier prompt is shared by both
+  transports, so batched seats read the line too.
+- **Cache and staleness.** The four system prompts changed, so every
+  research and Final QC cache lineage is written once more after the
+  update. The QC input manifest hashes lens briefs, not system prompts, so a
+  retained Final QC result stays current (the F3 test compares the input
+  fingerprints with the lines and without them).
+- **Limits, stated.** A tail-carrying continuation after a reminder is
+  measured by CT-2 like any other; its reads can include entries the
+  reminder request's own server-tool results wrote, which can only overstate
+  the saving — so it can delay a latch, never cause a false one. And a call
+  that keeps ending with text costs up to two extra requests before it
+  fails.
+- **Test traps.** (1) The fakes raise `AssertionError` on an exhausted
+  script, which the engines classify as an unknown, non-retryable failure —
+  so a test that used to script ONE text-only reply to reach the no-payload
+  path now needs three (the knowing changes below). (2) In a Final QC
+  run the consolidation call quotes every candidate's title, so a test that
+  counts a seat's requests by title must also match `[[QC-VERIFY:`.
+  (3) The F3 comparison has to pin `QC_BATCH_VERIFICATION` to the run's own
+  transport: the staleness check rebuilds the manifest with the live
+  setting (the Chunk 4 lesson, again).
+- **Knowing test changes.** `tests/test_research_engine.py`:
+  `test_incomplete_stop_reason_and_missing_payload_fail_cleanly` scripts
+  three text-only replies and asserts "reminders sent: 2";
+  `test_a_failed_dimension_records_a_sanitized_kind_beside_its_message`
+  scripts three for its no-payload area. `tests/test_qc_consolidation.py`:
+  `test_a_grouping_call_that_produces_no_payload_falls_back_and_keeps_its_cost`
+  scripts three no-tool replies, and its request and response counts are 3.
+  `tests/test_research_cost_profile.py`'s failed-area fixture scripts two
+  more text-only replies with no usage. That last one still PASSED before it
+  was changed — the unscripted reminder raised the fake's `AssertionError`,
+  which failed the area as `unknown` with the same billed row — so a probe
+  over the whole suite (every reminder a fake was asked, answered or not)
+  was run to find any other test on the wrong path. There was none.
+- **Tests:** `tests/test_prompt55_missing_tool_reminder.py` (38 cases).
+  Revert matrix: 30 mechanisms, each reverted in place and restored
+  from the exact text read, the tree checked unchanged after every row (in
+  full in the plan's P55-4 As built).
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Final QC phase 2 is batched" (v1.12.0) says batching "changes
+     transport and nothing else" and "a batched seat must reach the same
+     verdict a streamed one would". Until P55-5 a streamed seat whose reply
+     ends without `submit_qc_verdict` is reminded and a batched one fails at
+     once, so the two can differ for that one reply.
+  2. "Server-tool caller mode" says the tagged-JSON fallback "catches a text
+     detour, and that fallback is what makes the loop robust". A detour that
+     writes no tagged JSON is now reminded, up to twice, before the call
+     fails.
+  3. Every earlier section that quotes "Research produced no parseable
+     payload (no tool call, no tagged JSON)." or "QC produced no parseable
+     payload." for a streamed call: those messages now come after up to two
+     reminders and end with the count. The batched seat's message is
+     unchanged.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

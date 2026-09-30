@@ -923,8 +923,12 @@ function Dossier() {
               sites, other AI assistants’ outputs, trade forums, and DIY
               content farms are blocked for both search and fetch. A single
               fetched page is capped so one enormous
-              code page cannot swamp the run. One dimension failing never cancels
-              the others — you get a profile flagged as partial; all four failing
+              code page cannot swamp the run. An area that ends its turn without
+              handing in its findings is reminded to, up to twice in the same
+              conversation (each reminder a billed request, counted against the
+              16 continuations), before it counts as failed. One dimension
+              failing never cancels the others — you get a profile flagged as
+              partial; all four failing
               fails cleanly with nothing corrupted. Stopping discards the run,
               and the confirmation says so before you click. When a round
               completes, the chat automatically sends itself{" "}
@@ -1047,7 +1051,11 @@ function Dossier() {
           }
           bounds={
             <>
-              A failed verifier seat makes its finding{" "}
+              A lens, a grouping call or a streamed verifier seat that ends its
+              turn without handing in its result is reminded to, up to twice in
+              the same conversation, before it counts as failed; each reminder
+              is a billed request, counted in the report. A batched seat is not
+              reminded. A failed verifier seat makes its finding{" "}
               <b className="text-ink">inconclusive</b> — never counted as either
               confirmed or refuted — and marks the whole run partial. That holds
               on the batched path too: a seat the batch never returned a result

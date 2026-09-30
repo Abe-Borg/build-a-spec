@@ -91,9 +91,11 @@ from .schema import (
     build_web_fetch_tool,
     build_web_search_tool,
     extract_tool_use_block,
+    input_transformation_counts,
     last_tagged_json_object,
     missing_output_tool_reply,
     requirements_research_tool,
+    with_drop_block,
 )
 
 EventSink = Callable[[dict], None]
@@ -1969,6 +1971,23 @@ def _is_continuation(messages: list) -> bool:
     return role == "assistant"
 
 
+def _log_input_transformations(response: Any, dimension_id: str) -> None:
+    """One INFO line when the API transformed a request's input (P55-6).
+
+    Only a request that carried the preserved-thinking beta gets an
+    ``input_transformations`` array back; an empty or absent one says
+    nothing. Counted per ``type/reason``, never a path or any text. Copied
+    into ``qc.engine``, not imported (the engines keep their own loops).
+    """
+    counts = input_transformation_counts(response)
+    if counts:
+        _log.info(
+            "Research area %s: the API transformed the request's input (%s).",
+            dimension_id,
+            ", ".join(f"{label}={count}" for label, count in sorted(counts.items())),
+        )
+
+
 # The continuation tail's guard (Tier 1 finish, CT-1). Copied into
 # ``qc.engine`` rather than imported, like the constant above; only the latch
 # is shared, in ``backend.cost_checks`` (one per process, one per engine).
@@ -2005,6 +2024,13 @@ def _open_stream(
     relaying its events, or in ``get_final_message()`` — is not a verdict on
     the request's shape and reaches the caller untouched, exactly as every
     other failure to open does.
+
+    The resend drops ``cache_control`` and nothing else, so a request the
+    harness edited keeps its ``block_binding`` and the preserved-thinking
+    beta (the 5.5 prompting upgrade, P55-6). A 400 that is the binding's
+    therefore survives the resend, and survival is exactly the case that
+    latches nothing: a ``block_binding`` rejection never switches the tail
+    off.
     """
     carried = "cache_control" in stream_kwargs
     with contextlib.ExitStack() as stack:
@@ -2353,6 +2379,16 @@ def _run_dimension(
     other: billed once, pooled for grounding, counted against the budget.
     When the reminders run out the area fails as it always did, with the
     count in its message.
+
+    Once the resend sanitizer has EDITED the conversation (a fetched PDF
+    over the page limit elided, an unpaired server-tool call dropped), every
+    later request of it carries ``thinking.block_binding`` ``drop_block``
+    and the preserved-thinking beta (the 5.5 prompting upgrade, P55-6;
+    :func:`with_drop_block`): a thinking block produced before the edit is
+    bound to the prefix it saw, and on an account created on or after
+    2026-08-31 replaying it would be a 400. A conversation the sanitizer
+    never edited sends exactly what it always did; a restart clears the
+    flag with the rest of the conversation.
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
@@ -2481,6 +2517,16 @@ def _run_dimension(
     # (and a reminder request that failed in flight is sent again as it
     # stood); a restart is a new conversation and starts it at zero.
     reminders_sent = 0
+    # Whether the resend sanitizer has EDITED this conversation (the 5.5
+    # prompting upgrade, P55-6): set the first time it returns a list that is
+    # not the one it was given — a fetched PDF over the page limit elided, an
+    # unpaired server-tool call dropped — and kept for every later request of
+    # the conversation, because the edited list IS the conversation from then
+    # on and the thinking blocks produced before the edit stay in it. Those
+    # requests carry ``drop_block`` (:func:`with_drop_block`), so an enforced
+    # account gets the invalidated blocks dropped instead of a 400. A resume
+    # keeps it; a restart is a new conversation and clears it.
+    thinking_edited = False
 
     for attempt in range(attempts_planned):
         if should_stop():
@@ -2536,6 +2582,12 @@ def _run_dimension(
                     stream_kwargs["cache_control"] = dict(
                         _CONTINUATION_CACHE_CONTROL
                     )
+                if thinking_edited:
+                    # A new ``thinking`` dict and the beta header, on this
+                    # request's copy only — ``request_kwargs`` stays
+                    # byte-identical, and a conversation the sanitizer never
+                    # edited sends exactly what it always did.
+                    stream_kwargs = with_drop_block(stream_kwargs)
                 in_request = True
                 with _open_stream(
                     client, messages=messages, stream_kwargs=stream_kwargs
@@ -2553,6 +2605,7 @@ def _run_dimension(
                     response = stream.get_final_message()
                 in_request = False
                 all_responses.append(response)
+                _log_input_transformations(response, dimension.dimension_id)
                 if carried_tail:
                     # The tail's value check (Tier 1 finish CT-2): what this
                     # continuation's usage proves the tail saved, against the
@@ -2613,7 +2666,9 @@ def _run_dimension(
                                 wrong_tool=_wrong_tool_result,
                             )
                         )
-                        messages = sanitize_messages_for_resend(messages)
+                        sanitized = sanitize_messages_for_resend(messages)
+                        thinking_edited = thinking_edited or sanitized is not messages
+                        messages = sanitized
                         reminders_sent += 1
                         _log.info(
                             "Research area %s ended its turn without %s; "
@@ -2654,7 +2709,9 @@ def _run_dimension(
                     messages.append(
                         {"role": "assistant", "content": response.content}
                     )
-                    messages = sanitize_messages_for_resend(messages)
+                    sanitized = sanitize_messages_for_resend(messages)
+                    thinking_edited = thinking_edited or sanitized is not messages
+                    messages = sanitized
                     continue
                 if stop_class == STOP_CLASS_REFUSED:
                     # A safety classifier declined the brief. Terminal by
@@ -2788,6 +2845,7 @@ def _run_dimension(
                 messages = _opening_messages()
                 container_id = ""
                 reminders_sent = 0
+                thinking_edited = False
             backoff = compute_backoff_seconds(
                 policy, attempt=attempt, failure_class=failure_class
             )

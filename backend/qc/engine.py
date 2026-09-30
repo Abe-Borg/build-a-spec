@@ -110,8 +110,10 @@ from ..research.schema import (
     build_web_fetch_tool,
     build_web_search_tool,
     extract_tool_use_block,
+    input_transformation_counts,
     last_tagged_json_object,
     missing_output_tool_reply,
+    with_drop_block,
 )
 from ..runtime_context import (
     current_date_iso,
@@ -3485,6 +3487,26 @@ def _is_continuation(messages: list) -> bool:
     return role == "assistant"
 
 
+def _log_input_transformations(
+    response: Any, *, event_prefix: str, event_fields: dict[str, Any]
+) -> None:
+    """One INFO line when the API transformed a request's input (P55-6).
+
+    Research's helper, copied: only a request that carried the
+    preserved-thinking beta gets an ``input_transformations`` array back,
+    and an empty or absent one says nothing. Counted per ``type/reason``,
+    with the call's ids — never a path or any text.
+    """
+    counts = input_transformation_counts(response)
+    if counts:
+        _log.info(
+            "QC %s call (%s): the API transformed the request's input (%s).",
+            event_prefix,
+            ", ".join(f"{key}={value}" for key, value in event_fields.items()),
+            ", ".join(f"{label}={count}" for label, count in sorted(counts.items())),
+        )
+
+
 # The continuation tail's guard (Tier 1 finish, CT-1). A copy of
 # ``research.engine``'s, not an import; only the latch is shared, in
 # ``backend.cost_checks`` (one per process, one per engine).
@@ -3527,6 +3549,13 @@ def _open_stream(
     relaying its events, or in ``get_final_message()`` — is not a verdict on
     the request's shape and reaches the caller untouched, exactly as every
     other failure to open does.
+
+    The resend drops ``cache_control`` and nothing else, so a request the
+    harness edited keeps its ``block_binding`` and the preserved-thinking
+    beta (the 5.5 prompting upgrade, P55-6). A 400 that is the binding's
+    therefore survives the resend, and survival is exactly the case that
+    latches nothing: a ``block_binding`` rejection never switches the tail
+    off.
     """
     carried = "cache_control" in stream_kwargs
     with contextlib.ExitStack() as stack:
@@ -3847,6 +3876,14 @@ def _run_streaming_call(
     pooled for grounding. When the reminders run out the call fails as it
     always did, with the count in its message. Every streamed QC call gets
     it — lenses, grouping calls, streamed seats and warm leads.
+
+    Once the resend sanitizer has EDITED the conversation, every later
+    request of it carries ``thinking.block_binding`` ``drop_block`` and the
+    preserved-thinking beta (the 5.5 prompting upgrade, P55-6; research's
+    rule, copied): a thinking block produced before the edit would otherwise
+    be a 400 on an account created on or after 2026-08-31. Never in
+    ``request_kwargs``, so the batched transport never carries it (its unset
+    default already drops such a block); a restart clears the flag.
     """
     try:
         # One TTL for every EXPLICIT marker in the request. The API requires
@@ -3908,6 +3945,15 @@ def _run_streaming_call(
         # A resume keeps the count (a reminder request that failed in flight
         # is sent again as it stood); a restart starts it at zero.
         reminders_sent = 0
+        # Whether the resend sanitizer has EDITED this conversation (the 5.5
+        # prompting upgrade, P55-6) — research's rule, copied: set the first
+        # time it returns a list that is not the one it was given, kept for
+        # every later request of the conversation (the edited list IS the
+        # conversation from then on, and the thinking blocks produced before
+        # the edit stay in it), cleared only by a restart. Those requests
+        # carry ``drop_block``, so an enforced account gets the invalidated
+        # blocks dropped instead of a 400.
+        thinking_edited = False
 
         for attempt in range(attempts):
             if should_stop():
@@ -3972,6 +4018,12 @@ def _run_streaming_call(
                         stream_kwargs["cache_control"] = dict(
                             _CONTINUATION_CACHE_CONTROL
                         )
+                    if thinking_edited:
+                        # This request's copy only: ``request_kwargs`` — the
+                        # one shape both transports build from — never
+                        # carries it, and a conversation the sanitizer never
+                        # edited sends exactly what it always did.
+                        stream_kwargs = with_drop_block(stream_kwargs)
                     in_request = True
                     try:
                         with _open_stream(
@@ -3997,6 +4049,9 @@ def _run_streaming_call(
                             first_output.set()
                     in_request = False
                     all_responses.append(response)
+                    _log_input_transformations(
+                        response, event_prefix=event_prefix, event_fields=event_fields
+                    )
                     if carried_tail:
                         # The tail's value check (Tier 1 finish CT-2): what
                         # this continuation's usage proves the tail saved,
@@ -4059,7 +4114,11 @@ def _run_streaming_call(
                                     wrong_tool=_wrong_tool_result(tool_name),
                                 )
                             )
-                            messages = sanitize_messages_for_resend(messages)
+                            sanitized = sanitize_messages_for_resend(messages)
+                            thinking_edited = (
+                                thinking_edited or sanitized is not messages
+                            )
+                            messages = sanitized
                             reminders_sent += 1
                             _log.info(
                                 "QC %s call (%s) ended its turn without %s; "
@@ -4098,7 +4157,11 @@ def _run_streaming_call(
                         messages.append(
                             {"role": "assistant", "content": response.content}
                         )
-                        messages = sanitize_messages_for_resend(messages)
+                        sanitized = sanitize_messages_for_resend(messages)
+                        thinking_edited = (
+                            thinking_edited or sanitized is not messages
+                        )
+                        messages = sanitized
                         continue
                     if stop_class == STOP_CLASS_REFUSED:
                         return _CallResult(
@@ -4167,6 +4230,7 @@ def _run_streaming_call(
                     messages = opening_messages()
                     container_id = ""
                     reminders_sent = 0
+                    thinking_edited = False
                 backoff = compute_backoff_seconds(
                     policy, attempt=attempt, failure_class=failure_class
                 )
@@ -6002,6 +6066,12 @@ class _BatchSeatState:
         result for every client tool the model invented), then the resend
         sanitizer. The seat stays unsettled, so the next round submits it; the
         reminder counts against the continuation budget like a continuation.
+
+        Unlike the streamed path, a sanitizer edit here needs no
+        ``drop_block`` (the 5.5 prompting upgrade, P55-6): in the Message
+        Batches API the unset ``block_binding`` default already drops a
+        thinking block whose prefix the edit invalidated instead of failing
+        the item, so batched params never carry it.
         """
         tool_name = self.spec.tool_name
         self.messages = sanitize_messages_for_resend(
@@ -7181,6 +7251,9 @@ def _apply_batch_item(
         if state.continuations >= QC_MAX_CONTINUATIONS:
             state.settle("QC call did not complete after maximum continuations.")
             return
+        # No ``drop_block`` after a sanitizer edit, deliberately (P55-6): the
+        # Batches API's unset default drops an invalidated thinking block
+        # instead of failing the item.
         state.messages = sanitize_messages_for_resend(
             [*state.messages, {"role": "assistant", "content": response.content}]
         )

@@ -76,6 +76,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
+import logging
 import re
 import threading
 import time
@@ -175,7 +176,12 @@ from ..research.resend_sanitizer import (
     elide_all_pdf_sources,
     sanitize_messages_for_resend,
 )
-from ..research.schema import build_web_fetch_tool, build_web_search_tool
+from ..research.schema import (
+    build_web_fetch_tool,
+    build_web_search_tool,
+    input_transformation_counts,
+    with_drop_block,
+)
 from ..runtime_context import current_date_iso, date_context_block
 from ..followups import (
     PANEL_RESOLUTION,
@@ -3088,6 +3094,22 @@ def _build_chat_request(
         # pending code-execution-called server tool can only be resumed
         # inside the container it started in.
         kwargs["container"] = container_id
+    if messages is not raw:
+        # The harness edited the conversation before sending it (the 5.5
+        # prompting upgrade, P55-6): the resend sanitizer elided a fetched
+        # PDF over the page limit, or dropped an unpaired server-tool call,
+        # or the citation repair re-pointed a citation. A thinking block this
+        # turn produced before such an edit is bound to the prefix it saw, so
+        # on an enforced account (created on or after 2026-08-31) replaying
+        # it is a 400; ``drop_block`` asks the API to drop it instead. Both
+        # return the SAME list when they change nothing, so an unedited
+        # request is byte-identical to what it always was. The chat
+        # re-sanitizes the raw history every round, so the condition recurs
+        # by itself for as long as the edit does. The citation repair is
+        # prefix-stable (it only ever looks backwards), so on its own it
+        # never invalidates a block; counting it only adds requests that
+        # need nothing dropped, never misses one.
+        kwargs = with_drop_block(kwargs)
     return kwargs
 
 
@@ -3462,6 +3484,17 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
 # between hermetic tests via :func:`reset_thinking_display_probe`.
 _display_probe_disabled = False
 
+# A 400 is read as a rejected ``display`` key only when its text says so
+# (the 5.5 prompting upgrade, P55-6). Before, ANY 400 on a request whose
+# thinking carried ``display`` switched the summaries off for the whole
+# process and resent the request — so a rejected ``block_binding`` (or any
+# other 400) silenced the reasoning summaries for nothing.
+_DISPLAY_REJECTION = re.compile(r"\bdisplay\b", re.IGNORECASE)
+
+# The chat's own log (the 5.5 prompting upgrade, P55-6): what the API did to
+# a request's input, counted, never quoted.
+_log = logging.getLogger("buildaspec.chat")
+
 
 def reset_thinking_display_probe() -> None:
     """Re-arm the thinking.display probe (tests; a fresh process)."""
@@ -3485,6 +3518,14 @@ def _enter_stream(
     The request fires when the stream context is entered, so a rejected
     ``display`` key surfaces here; we retry the same round without it,
     remember the degrade for the process, and note it in the trace.
+
+    Only a 400 whose text names ``display`` is read as that rejection. Any
+    other 400 — "prompt is too long", or a rejected ``block_binding`` on a
+    request the harness edited — reaches the caller untouched: it is not the
+    display key's, and resending without it would switch the reasoning
+    summaries off for the whole process for nothing. The resend drops
+    ``display`` and nothing else, so a ``block_binding`` (and the beta
+    header beside it) rides the retried request too.
     """
     global _display_probe_disabled
     try:
@@ -3499,14 +3540,37 @@ def _enter_stream(
             # display key, and retrying it unchanged would fail the same way
             # while switching the thinking summary off for the whole process.
             raise
+        if not _DISPLAY_REJECTION.search(str(exc)):
+            raise
         _display_probe_disabled = True
         _trace.note(
             trace_handle,
             "thinking.display rejected; degraded to omitted for this session",
         )
-        kwargs = {**kwargs, "thinking": {"type": "adaptive"}}
+        kwargs = {
+            **kwargs,
+            "thinking": {k: v for k, v in thinking.items() if k != "display"},
+        }
         manager = client.messages.stream(**kwargs)
         return manager, manager.__enter__()
+
+
+def _log_input_transformations(response: Any, *, round_index: int) -> None:
+    """One INFO line when the API transformed a request's input.
+
+    With the preserved-thinking beta (P55-6) a response lists what the API
+    did to the request's input — a thinking block it dropped, and why — in a
+    top-level ``input_transformations`` array. An empty or absent one says
+    nothing. The line counts entries per ``type/reason``; it never carries a
+    path or any text.
+    """
+    counts = input_transformation_counts(response)
+    if counts:
+        _log.info(
+            "Chat round %d: the API transformed the request's input (%s).",
+            round_index,
+            ", ".join(f"{label}={count}" for label, count in sorted(counts.items())),
+        )
 
 
 def _run_create_figure(
@@ -5152,6 +5216,7 @@ def stream_user_turn(
             # path reads the snapshot for the same reason it reads its
             # content: it is what actually arrived.
             container_id = response_container_id(final) or container_id
+            _log_input_transformations(final, round_index=_round)
 
             _merge_usage(usage_totals, getattr(final, "usage", None))
             final_usage = getattr(final, "usage", None)

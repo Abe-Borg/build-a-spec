@@ -1768,7 +1768,206 @@ very large fetched PDFs for newer accounts).
 
 ### As built
 
-(Filled in by the session.)
+Built 2026-09-30 on `claude/clever-fermi-w3c1w2`, from `master` at `829b839`
+(PR #240's merge). No route, SSE event type, dependency, env knob,
+project-format change, QC schema or protocol bump, or version bump. No
+default changed. What changed for everyone is behaviour on two paths: a
+request whose earlier content the harness edited now asks the API to drop
+the thinking blocks the edit invalidated, and the chat's display probe
+degrades only on a 400 that names `display`.
+
+**What landed, by design item.**
+
+1. **When** (`backend/llm/conversation.py`, `backend/research/engine.py`,
+   `backend/qc/engine.py`).
+   - Chat: `_build_chat_request` routes the request through
+     `with_drop_block` when `messages is not raw`. Both the resend
+     sanitizer and the citation repair return the same list object when
+     they change nothing, so the test is exact.
+   - Research (`_run_dimension`) and streamed Final QC
+     (`_run_streaming_call`): a conversation-local `thinking_edited`,
+     set at BOTH sanitize sites (the pause resume and P55-4's reminder)
+     when `sanitize_messages_for_resend` returns a new list, kept for every
+     later request of the conversation, kept by a resume and cleared by a
+     restart beside `reminders_sent` and the container.
+   - Batched Final QC: nothing, with comments at `_BatchSeatState.remind`
+     and the batch pause path in `_apply_batch_item`.
+2. **What** (`backend/research/schema.py`). `with_drop_block(request)`
+   returns a copy whose `thinking` is a NEW dict with
+   `block_binding: {"prefix_mismatch_behavior": "drop_block"}` and whose
+   `extra_headers` carry `PRESERVED_THINKING_BETA`
+   (`thinking-binding-controls-2026-08-01`), merged by
+   `with_beta_header` into any `anthropic-beta` already there (any case of
+   the key, comma-joined, added once — P55-7's beta can ride the same
+   request). In the engines it is applied to the per-request
+   `stream_kwargs` copy after the tail and the container, never to
+   `request_kwargs`. The `claude-api` skill's `shared/model-migration.md`
+   → "Breaking change 3" gave the shapes; SDK 1.9.0 (the installed
+   version; `requirements.txt` allows `>=1.0,<2`) was checked: the
+   non-beta `client.messages.stream` passes the untyped `block_binding`
+   key and `extra_headers` through as given.
+3. **The display probe** (`_enter_stream`). A 400 degrades the display only
+   when its text matches `_DISPLAY_REJECTION` (`\bdisplay\b`, case
+   blind); the "prompt is too long" exclusion stays first. The resend
+   drops `display` and nothing else, so `block_binding` and the beta ride
+   it.
+4. **CT-1.** Nothing to change: each engine's `_open_stream` resends without
+   `cache_control` only, so a `block_binding` 400 survives the resend, and
+   a surviving 400 latches nothing. Both docstrings now say so.
+5. **`input_transformations`.** `input_transformation_counts` reads the
+   top-level array (an attribute or a dict key; SDK 1.9.0 keeps the
+   unknown field as a list of dicts; anything not a list is nothing) and
+   counts entries per `type/reason`, each value kept only if it is
+   snake_case and `other` otherwise. A non-empty one writes one INFO line:
+   `buildaspec.chat` (new; "Chat round N: …"), `buildaspec.research`
+   ("Research area <id>: …") and `buildaspec.qc` ("QC <prefix> call
+   (<ids>): …"). Never a path or any text.
+6. **Old accounts** are opted in on edited requests only, which the
+   conditional flag gives for free.
+
+**Deviations.**
+
+1. **The canary folds a production beta into `betas`.** The spec did not
+   name the canary. `tools/prompt55_progress_update_canary.py` re-sends each
+   production request through `client.beta.messages.stream(betas=[…])`, and
+   in SDK 1.9.0 `extra_headers` is merged LAST, so an edited request's
+   `extra_headers["anthropic-beta"]` would have overridden the
+   progress-update beta the canary exists to send. `progress_update_request`
+   now moves any production `anthropic-beta` values into `betas` after its
+   own (deduplicated, any key case), keeps any other header, and drops
+   `extra_headers` when nothing else is left in it.
+2. **The chat counts the citation repair too.** The spec said "the
+   sanitizer or the citation repair changed something", and `messages is
+   not raw` is exactly that. The repair is prefix-stable (it only looks
+   backwards), so on its own it never invalidates a block; counting it only
+   adds requests that need nothing dropped.
+3. **The condensing summary needs nothing**, and was left alone: it is
+   built from committed history, and commit drops every thinking block.
+4. **The resend keeps every thinking key but `display`** (the spec said
+   keep the exclusion and do not "quietly drop `block_binding`"): the old
+   resend rebuilt `thinking` as `{"type": "adaptive"}`.
+5. **A new logger, `buildaspec.chat`.** The chat had none; the engines'
+   lines go on their existing loggers.
+6. **No release-checklist row.** Nothing a tester can reproduce without an
+   enforced account and a PDF over the page limit.
+
+**Knowing test changes.** `tests/test_qc_live_events.py`'s
+`_pausing_qc_scripts` chained two compliance-lens pauses, each ending on a
+pending search, and the second pause's result named no use. On the second
+continuation the pairing guard therefore dropped the first pending use as
+unpaired — an edit — and the request carried the beta, failing
+`test_a_qc_continuation_carries_the_automatic_breakpoint_when_on` and
+`test_the_switch_off_sends_todays_qc_requests_exactly` on their "the tail
+and nothing else" assertions (the full run's only two failures). A real
+resumed response's result names the use it answers, so the fixture now
+does too: `tests/fakes.py`'s `pause_response` gains `answers=` (the
+search result's `tool_use_id`, attached only when supplied), and the
+second pause answers the first. Both tests' assertions are unchanged.
+`tests/fakes.py`'s `raw_turn` also gains `input_transformations=`,
+attached only when supplied (and copied onto the final message).
+
+**Tests.** `tests/test_prompt55_preserved_thinking.py` (33 cases,
+parametrized included):
+- the helpers: `drop_block` builds new dicts and leaves the request alone;
+  the beta merges with one already there, in any key case, never twice;
+  `input_transformations` counted by type and reason only, anything
+  unexpected as `other`;
+- the chat: a turn whose fetched PDF the sanitizer elides — the request
+  after the edit and the one after it carry `block_binding` and the beta,
+  the first request does not; an unedited turn byte-identical (every key,
+  the exact thinking dict); `_build_chat_request` marking only a request
+  whose messages changed, keys and all;
+- the display probe: a display-worded 400 still degrades and keeps
+  `block_binding` and the header; a binding, a without-the-beta and an
+  unrelated 400 raised as they came, sent once, the probe armed; "prompt
+  is too long" still not a display rejection; end to end, a binding 400
+  fails the turn and the next turn still asks for the summary;
+- the chat's INFO line (counts, no path or text) and no line without the
+  array;
+- ONE assertion set over research's `_run_dimension` and QC's streamed
+  `_run_lens` (the `test_retry_resume` harnesses): the edit marks that
+  request and every later one, the one before it untouched; an unedited
+  conversation byte-identical; a resume keeps the flag and a restart
+  clears it; a reminder the sanitizer edited carries it too; the tail and
+  the binding ride the same continuation; CT-1 never latches on a binding
+  400 (the resend is a binding 400 too); the INFO line with the call's id
+  and counts only, and nothing without the array;
+- batched params never carry it, even after the sanitizer edited a paused
+  seat (the PDF elided in round 2's params); `_qc_request_kwargs` carries
+  nothing of it;
+- the canary folds a production beta into `betas`.
+
+**Verified** on the branch: `.venv/bin/python -m ruff check .` clean;
+`.venv/bin/python -m pytest -q` 3245 passed, 64 skipped (the run before the
+fixture fix failed exactly the two `test_qc_live_events.py` tests named
+above, and nothing else); `npm test` 438 passed; `npm run build` clean.
+
+**Revert matrix.** 33 rows. Each mechanism was reverted in place,
+one at a time, by a script that restored the exact text it read and checked
+`git diff` and `git status` unchanged after every row. Each row ran
+`tests/test_prompt55_preserved_thinking.py`, `test_streaming.py`,
+`test_retry_resume.py`, `test_prompt55_missing_tool_reminder.py`,
+`test_cost_checks_tail_rejection.py`,
+`test_prompt55_progress_update_canary.py`,
+`test_prompt55_batch_reminder.py` and `test_qc_batch_verification.py`.
+
+| Mechanism reverted | Tests red |
+|---|---|
+| schema: no `block_binding` | 16 |
+| schema: no beta header | 17 |
+| schema: mutates the caller's `thinking` | 5 |
+| schema: an existing beta replaced, not merged | 1 |
+| schema: the beta appended twice | 1 |
+| schema: the header key's case matters | 1 |
+| schema: `type`/`reason` logged as given | 1 |
+| schema: a dict response not read | 1 (0 on the first run) |
+| schema: a non-list read as entries | 1 |
+| chat: never `drop_block` | 3 |
+| chat: always `drop_block` | 5 |
+| chat: any 400 degrades the display | 4 |
+| chat: the display resend drops `block_binding` | 1 |
+| chat: nothing logged | 1 |
+| chat: logged with no array | 2 |
+| research: never `drop_block` | 5 |
+| research: the pause site sets no flag | 4 |
+| research: the reminder site sets no flag | 1 |
+| research: a restart keeps the flag | 1 |
+| research: the flag is attempt-local | 1 |
+| research: the flag is per request, not sticky | 3 |
+| research: nothing logged | 1 |
+| research: logged with no array | 2 |
+| QC: never `drop_block` | 5 |
+| QC: the pause site sets no flag | 4 |
+| QC: the reminder site sets no flag | 1 |
+| QC: a restart keeps the flag | 1 |
+| QC: the flag is attempt-local | 1 |
+| QC: the flag is per request, not sticky | 3 |
+| QC: nothing logged | 1 |
+| QC: logged with no array | 2 |
+| QC: the one request shape (`_qc_request_kwargs`) carries it | 5 |
+| canary: a production beta not folded into `betas` | 1 |
+
+The first run found one green row, **"a dict response not read"**: the
+counts test read only attribute-shaped responses, though the helper's
+docstring promises a dict key too. The test now also reads the same entries
+from a dict (and an empty dict), and the row re-run: 1 red. No other test
+changed between the runs. The fixture fix above landed before the matrix
+ran; reverting it is a test change, not a mechanism, so it has no row (its
+proof is the full run's two failures before it and none after).
+
+**For P55-7.** `research.schema.with_beta_header(extra_headers, beta)`
+merges a beta into any `anthropic-beta` already on a request, so P55-7's
+fallback beta and this session's can ride one request; build on it rather
+than writing a second merge. A request the harness edited carries
+`extra_headers` and `thinking.block_binding` on the `stream_kwargs` copy;
+a fallback that re-sends the call on another model should keep both and
+pass the thinking blocks back unchanged. Per the `claude-api` skill
+(`shared/model-migration.md`, Opus 5.5 "Model binding"), no model but
+Fable 5.1 / Mythos 5.1 reads an Opus 5.5 thinking block, and the API drops
+what the target cannot read whether or not `drop_block` is set; with the
+beta the drop is reported as `model_binding_mismatch`, which the INFO line
+already counts. The canary folds any production `anthropic-beta` into
+`betas`, so a second beta needs no canary change.
 
 ---
 

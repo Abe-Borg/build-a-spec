@@ -278,6 +278,102 @@ def missing_output_tool_reply(
     return {"role": "user", "content": [{"type": "text", "text": reminder}]}
 
 
+# Preserved thinking (the 5.5 prompting upgrade, P55-6). Both 5.5 models bind
+# each thinking block to the conversation prefix that produced it, and a
+# request that replays a block after the harness EDITED an earlier part of
+# that prefix is a 400 on an account created on or after 2026-08-31 — this
+# app is bring-your-own-key, so the user's account age decides, not the
+# owner's. The one edit the app makes mid-conversation is the resend
+# sanitizer's (``sanitize_messages_for_resend``: a fetched PDF over the page
+# limit, or an unpaired server-tool call), and the citation repair that can
+# follow it in the chat. A request the harness edited asks the API to DROP
+# the invalidated thinking blocks instead of failing; a request it did not
+# edit carries none of this and is byte-identical to what it always was.
+# Shared by the chat, research and streamed Final QC: small, pure helpers
+# beside the extractor, the loops that call them stay each engine's own.
+PRESERVED_THINKING_BETA = "thinking-binding-controls-2026-08-01"
+_DROP_BLOCK = "drop_block"
+_BETA_HEADER = "anthropic-beta"
+
+
+def with_beta_header(extra_headers: Any, beta: str) -> dict[str, str]:
+    """``extra_headers`` with ``beta`` merged into its ``anthropic-beta``.
+
+    A new dict; the input is never mutated. An existing ``anthropic-beta``
+    value (any spelling of the key's case) keeps its betas, comma-separated,
+    and ``beta`` is appended once — so a second feature that needs its own
+    beta on the same request (P55-7's fallback) merges rather than replaces.
+    """
+    headers: dict[str, str] = {}
+    existing = ""
+    for key, value in dict(extra_headers or {}).items():
+        if isinstance(key, str) and key.lower() == _BETA_HEADER:
+            existing = str(value or "")
+            continue
+        headers[key] = value
+    betas = [part.strip() for part in existing.split(",") if part.strip()]
+    if beta not in betas:
+        betas.append(beta)
+    headers[_BETA_HEADER] = ",".join(betas)
+    return headers
+
+
+def with_drop_block(request: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``request`` that asks the API to drop invalidated thinking.
+
+    ``thinking`` gains ``block_binding.prefix_mismatch_behavior: "drop_block"``
+    (a new dict built from the one given — never the shared config a caller
+    reuses for every request of a call) and ``extra_headers`` gains the
+    preserved-thinking beta, merged with any beta already there. Sending
+    ``block_binding`` without the beta is itself a 400, so the two always
+    travel together. Every other key is the request as given.
+    """
+    sent = dict(request)
+    thinking = dict(request.get("thinking") or {"type": "adaptive"})
+    thinking["block_binding"] = {"prefix_mismatch_behavior": _DROP_BLOCK}
+    sent["thinking"] = thinking
+    sent["extra_headers"] = with_beta_header(
+        request.get("extra_headers"), PRESERVED_THINKING_BETA
+    )
+    return sent
+
+
+def input_transformation_counts(response: object) -> dict[str, int]:
+    """How many entries of each ``type/reason`` a response's
+    ``input_transformations`` holds — never a path, never any text.
+
+    With the preserved-thinking beta every response carries the array
+    (empty when nothing was dropped). Read defensively: a fake, an older SDK
+    or a response without the beta has no such field, and the entries arrive
+    as plain dicts on a GA response (the SDK keeps the unknown field) or as
+    objects. Anything that is not a list of entries counts as nothing.
+    """
+    entries = getattr(response, "input_transformations", None)
+    if entries is None and isinstance(response, dict):
+        entries = response.get("input_transformations")
+    if not isinstance(entries, (list, tuple)):
+        return {}
+    counts: dict[str, int] = {}
+    for entry in entries:
+        label = (
+            f"{_transformation_token(_block_field(entry, 'type'))}/"
+            f"{_transformation_token(_block_field(entry, 'reason'))}"
+        )
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+_TRANSFORMATION_TOKEN = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _transformation_token(value: Any) -> str:
+    """A ``type`` or ``reason`` as it may be logged: the API's snake_case
+    vocabulary (open — later checks add values), anything else ``other``."""
+    if isinstance(value, str) and _TRANSFORMATION_TOKEN.fullmatch(value):
+        return value
+    return "other"
+
+
 # The prompt-JSON fallback's bound. A real reply holds one tagged block,
 # occasionally a draft followed by the final one; this caps the pairs of
 # opening and closing tags one text is searched through, so a reply that

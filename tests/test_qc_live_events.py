@@ -618,16 +618,23 @@ def _pausing_qc_scripts() -> dict[str, list[object]]:
     """The compliance lens pauses twice; its finding's first seat pauses once.
 
     Each pause ends on a pending search — the block a real pause resumes
-    from. The seat checks a compliance finding, so it carries the web tools
-    and the 1-hour markers: the "streamed web-lineage seat" of the plan.
+    from — and the lens's second pause answers the first one's, as a resumed
+    response does, so the resend sanitizer finds nothing to edit (an
+    unanswered one would be dropped, and the edited request would carry the
+    preserved-thinking beta; P55-6). The seat checks a compliance finding,
+    so it carries the web tools and the 1-hour markers: the "streamed
+    web-lineage seat" of the plan.
     """
+    lens_one = pause_response(
+        searched_urls=["https://example.test/a"], pending_query="lens one"
+    )
     scripts = _scripts(
         code_compliance=[
+            lens_one,
             pause_response(
-                searched_urls=["https://example.test/a"], pending_query="lens one"
-            ),
-            pause_response(
-                searched_urls=["https://example.test/b"], pending_query="lens two"
+                searched_urls=["https://example.test/b"],
+                pending_query="lens two",
+                answers=lens_one.content[-1].id,
             ),
             qc_findings_response(
                 "code_compliance", findings=[_finding(_PAUSED_SEAT_TITLE)]

@@ -98,6 +98,13 @@ def progress_update_request(
     ``max_tokens`` (never raised), and the beta rides ``betas``. The input
     is never mutated; the dicts it holds are shared, as the engine shares
     them between its own rounds.
+
+    A production request can carry betas of its own in
+    ``extra_headers["anthropic-beta"]`` (the preserved-thinking beta on a
+    request the harness edited, the 5.5 prompting upgrade, P55-6). The SDK
+    lets ``extra_headers`` override the header ``betas`` builds, so those
+    betas move into ``betas`` beside this one — the header the request sends
+    is the same, and the progress-update beta is not lost.
     """
     sent = dict(production)
     thinking = dict(production.get("thinking") or {"type": "adaptive"})
@@ -107,7 +114,23 @@ def progress_update_request(
     sent["max_tokens"] = (
         min(int(requested), max_tokens) if requested else max_tokens
     )
-    sent["betas"] = [BETA]
+    betas = [BETA]
+    headers = production.get("extra_headers")
+    if headers:
+        kept: dict[str, Any] = {}
+        for key, value in dict(headers).items():
+            if isinstance(key, str) and key.lower() == "anthropic-beta":
+                for beta in str(value or "").split(","):
+                    beta = beta.strip()
+                    if beta and beta not in betas:
+                        betas.append(beta)
+            else:
+                kept[key] = value
+        if kept:
+            sent["extra_headers"] = kept
+        else:
+            sent.pop("extra_headers", None)
+    sent["betas"] = betas
     return sent
 
 

@@ -683,6 +683,7 @@ def test_the_summary_call_repairs_its_prefix_exactly_as_the_chat_request_does():
             module=session.module,
             model=settings.INTERVIEW_MODEL,
             max_tokens=1024,
+            effort=settings.INTERVIEW_EFFORT,
             view_spec=spec,
         )
     )

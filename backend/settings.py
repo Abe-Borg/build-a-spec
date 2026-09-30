@@ -268,6 +268,20 @@ def _effort_env(name: str, default: str) -> str:
 
 INTERVIEW_EFFORT = _effort_env("BUILD_A_SPEC_INTERVIEW_EFFORT", "medium")
 
+# The two whole-section passes — "Draft full section" and "Adapt imported
+# draft" — run every round of their turn at this effort instead (the 5.5
+# prompting upgrade, P55-3). They are the app's longest multistep turns, and
+# the Sonnet 5.5 guide says to "start at `medium` for well-specified tasks
+# and move to `high` for harder or longer ones"; at `medium` it is also "more
+# likely to stop and check in with the user before it finishes" a long task.
+# ``conversation.turn_effort`` decides it once per turn, from the server-owned
+# READY directives only (never the prerequisites-collecting variants), and
+# the turn's trace records what it chose. A top-level effort change
+# invalidates the messages cache for that turn and the next, which decision
+# D3 accepts: these passes normally run early, while the history is short.
+# Setting this equal to BUILD_A_SPEC_INTERVIEW_EFFORT switches the boost off.
+DRAFT_PASS_EFFORT = _effort_env("BUILD_A_SPEC_DRAFT_PASS_EFFORT", "high")
+
 # AI template generalization is a bounded, mechanical rewrite: same tree,
 # same ids, same unresolved decisions, project-specific wording made
 # reusable. The structural contract (``app._template_structure_contract``)
@@ -366,30 +380,39 @@ RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
 
 # --- Final QC (the pre-issue review pass, on Opus 5.5) -----------------------
 
-# The one model other than Sonnet 5 in the app (frozen decision). A
+# The one model other than Sonnet 5.5 in the app (frozen decision). A
 # user-triggered lens fan-out + adversarial verification pass before a
 # section goes out the door. Opus 5.5 runs adaptive thinking by default;
 # depth is set via output_config effort.
 #
-# Effort is "high" (2026-07-28, was "xhigh"): a run fans out to ~40 calls —
-# five lenses plus two or three verifier seats per finding — so xhigh's extra
+# Effort is "medium" (the 5.5 prompting upgrade, P55-3, decision D4). It was
+# "high" from 2026-07-28 (dialed back from "xhigh": a run fans out to ~40
+# calls — five lenses plus two or three verifier seats per finding — so extra
 # reasoning depth compounded across the whole fan-out, and thinking bills as
-# output. Same reasoning that dialed RESEARCH_EFFORT back at four calls.
+# output), and that "high" was chosen for Opus 5, never re-based. The Opus 5.5
+# guide recalibrated the levels: "Claude Opus 5.5 at `medium` matches or
+# exceeds Claude Opus 5 at `high` on coding and knowledge-work evaluations
+# ... At a given level, Claude Opus 5.5 tends to think more per turn than
+# Claude Opus 5", and says to start at "medium" rather than carry the Opus 5
+# setting over. Effort is a hashed QC input, so a retained Final QC result
+# made at "high" reads stale once after this change (release-noted).
 QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_OPUS_55
 QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
-QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "high")
+QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "medium")
 
 # Effort is now set PER PHASE, because the two phases are not the same kind of
 # work and thinking bills as output at the QC model's output rate.
 #
 # A lens GENERATES: it reads the whole specification cold and has to decide
 # what is wrong with it, so its depth is the review's depth — it stays at
-# QC_EFFORT.
+# QC_EFFORT ("medium" since P55-3; it was "high" while QC_EFFORT was).
 #
 # A verifier seat ADJUDICATES: it is handed one finding, its rationale, its
 # proposed operations and the same document, and answers a bounded question
 # about that one claim. Phase 2 is ~90% of a run's calls, so this is where
-# reasoning depth compounds hardest and buys least. Default "medium".
+# reasoning depth compounds hardest and buys least. Default "medium" — which
+# P55-3 left alone, so both phases now default to the same level. The split
+# stays: each phase is still its own knob, and both are still recorded.
 #
 # BUILD_A_SPEC_QC_EFFORT still moves BOTH (it is each one's fallback), so the
 # existing global override keeps working; the two specific knobs override it

@@ -110,10 +110,15 @@ backend/
                            (interview MEDIUM since 2026-09-29 — Sonnet 5.5
                            recalibrated the levels; research high, dialed back
                            2026-07-28 from xhigh — cost; Final QC's is now
-                           PER PHASE — QC_LENS_EFFORT high / QC_VERIFIER_EFFORT
-                           medium, both falling back to an explicitly-set
+                           PER PHASE — QC_LENS_EFFORT / QC_VERIFIER_EFFORT,
+                           both medium since the 5.5 prompting upgrade's
+                           P55-3 (QC_EFFORT re-based from high for Opus 5.5,
+                           decision D4), both falling back to an explicitly-set
                            QC_EFFORT so the global knob is never silently
-                           overridden upward), QC_BATCH_VERIFICATION (+ poll /
+                           overridden upward; DRAFT_PASS_EFFORT, default high —
+                           P55-3 — every round of a READY full-draft or adapt
+                           turn, decided by conversation.turn_effort),
+                           QC_BATCH_VERIFICATION (+ poll /
                            wait / round ceilings) — see "Final QC phase 2 is
                            batched"; max_tokens at
                            the 128k model ceiling, chat web-tool allowances,
@@ -681,7 +686,9 @@ backend/
                            turn_round/turn_prompts (Project workspace Phase
                            5A: turn_prompts carries the context block's
                            per-block context_sizes on prompt_refs — numbers,
-                           at every capture level); research_event/qc_event
+                           at every capture level — and, since the 5.5
+                           prompting upgrade's P55-3, the turn's `effort`, a
+                           level name); research_event/qc_event
                            rename the sink event's "type" key to event_type
                            (it collided with add_event's positional arg — a
                            swallowed TypeError meant NO research/QC progress
@@ -1638,7 +1645,11 @@ backend/
                            feel confident"; _REPLY_AFTER_TOOL_CALLS is the
                            ONE ordering sentence every chip-staging directive
                            carries (full draft, adapt, both prerequisite
-                           turns, both debriefs and every variant)
+                           turns, both debriefs and every variant). P55-3:
+                           _CARRY_THE_PASS_THROUGH is the ONE carry-it-through
+                           bullet FULL_DRAFT_DIRECTIVE and
+                           ADAPT_IMPORTED_DIRECTIVE carry, just before their
+                           closing bullet (never the prerequisites turns)
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
                            lint event + standards_payload (the event lints
                            exactly as the doc payload does:
@@ -1729,7 +1740,16 @@ backend/
                            that tool's exact name, anything else the full
                            list; a mis-cased call is NEVER dispatched
                            (commit-time elision keys on exact names), and
-                           read_reference_doc names its missing ref_id
+                           read_reference_doc names its missing ref_id.
+                           P55-3: turn_effort(user_text) decides a turn's
+                           effort ONCE, at turn start — DRAFT_PASS_EFFORT for
+                           a text starting with FULL_DRAFT_DIRECTIVE or
+                           ADAPT_IMPORTED_DIRECTIVE (_DRAFT_PASS_DIRECTIVES,
+                           the ready directives only), INTERVIEW_EFFORT
+                           otherwise; _ChatRequestInputs.effort carries it and
+                           _build_chat_request reads only that; the
+                           prompt_refs trace event records it; the condensing
+                           summary fork stays at INTERVIEW_EFFORT
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -2796,6 +2816,21 @@ tests/
                            closing text, a short or question-free close); a 400
                            reported and never retried without the beta; a
                            refusal; the key and ceiling exits
+  test_prompt55_effort.py  [5.5 prompting upgrade, P55-3] the carry-through
+                           bullet in both whole-section directives (before the
+                           closing bullet; never in a prerequisites turn);
+                           turn_effort's prefix rule; every round of a ready
+                           full-draft and adapt turn at DRAFT_PASS_EFFORT, an
+                           ordinary and a collecting turn at INTERVIEW_EFFORT,
+                           the boost switched off by setting the knobs equal;
+                           the effort decided once (a fake that changes both
+                           knobs after round 0); the prompt_refs `effort`; the
+                           condensing summary at INTERVIEW_EFFORT; the
+                           DRAFT_PASS_EFFORT and QC_EFFORT defaults (ast pins)
+                           and the knob's validation; a lens, a grouping call
+                           and a seat at medium; every QC override; and a
+                           result retained at the old high default reading
+                           stale (the release note's disclosure made true)
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,
@@ -18643,6 +18678,133 @@ this section is the why and the traps.
   4. The ground rules' "Two canaries are the only explicit paid exceptions"
      is now three; it was corrected in place, since the ground rules
      describe the current state.
+
+## Draft passes finish in one turn, and effort is re-based — implemented notes (5.5 prompting upgrade, P55-3)
+
+The third session of the 5.5 prompting upgrade (`docs/plans/prompt55/`),
+findings F3 and F6 of the review of Anthropic's Sonnet 5.5 and Opus 5.5
+prompting guides, and decisions D3 and D4. No route, SSE event type,
+dependency, project-format change, QC schema or protocol bump, or version
+bump; one env knob (`BUILD_A_SPEC_DRAFT_PASS_EFFORT`, README row); **one
+default changed for everyone**: `BUILD_A_SPEC_QC_EFFORT` is `medium` (was
+`high`). The plan's P55-3 **As built** carries the deviations and the full
+revert matrix; this section is the why and the traps.
+
+- **Why a whole-section pass needed telling.** The Sonnet 5.5 guide: "At
+  `low` and `medium`, on long agentic tasks, it's more likely to stop and
+  check in with the user before it finishes." The interview runs at
+  `medium` (since `45557bd`), and a full draft or an adapt pass is the app's
+  longest multistep turn — the one most likely to stop after a PART and ask
+  whether to go on. Two changes, each doing a different half.
+- **The directive says to carry it through.** `prompts._CARRY_THE_PASS_THROUGH`
+  is the ONE bullet both `FULL_DRAFT_DIRECTIVE` and `ADAPT_IMPORTED_DIRECTIVE`
+  carry, adapted from the guide's "Keep working until everything the user
+  asked for is done, and only stop to ask when you can't go on without the
+  user": carry the whole pass through in this one turn, do not stop after a
+  PART or an article to ask whether to continue, stop early only for a
+  question you genuinely cannot default, and even then finish everything
+  that does not depend on it first. It sits **just before the closing
+  bullet**, so P55-2's ordering sentence stays the directive's last words
+  (`tests/test_prompt55_closing_message.py` pins that). The
+  prerequisites-collecting turns never carry it: they forbid drafting that
+  turn, and "carry the pass through" would contradict them. Directives are
+  user messages, so the line costs no cached prefix.
+- **The pass runs a level higher.** `settings.DRAFT_PASS_EFFORT`
+  (`BUILD_A_SPEC_DRAFT_PASS_EFFORT`, default `high`, through `_effort_env`,
+  so an unknown value falls back to the default like every effort knob) is
+  the effort for every round of a READY pass. The guide: "start at `medium`
+  for well-specified tasks and move to `high` for harder or longer ones."
+- **Decided once, from the server's own text.** `conversation.turn_effort(
+  user_text)` returns `DRAFT_PASS_EFFORT` when the (left-stripped) text
+  starts with one of `_DRAFT_PASS_DIRECTIVES` — the two READY constants,
+  which `full_draft_directive` / `adapt_imported_directive` append their
+  anchor AFTER — and `INTERVIEW_EFFORT` otherwise. A prerequisites turn
+  starts "Before you …" and never matches; a message that merely quotes a
+  directive mid-text does not either (it is a prefix match, not a
+  substring). A user who pastes a directive gets the boost, which is
+  harmless. `stream_user_turn` calls it once, right after it strips the
+  text, and `_ChatRequestInputs.effort` (a REQUIRED field — no default, so a
+  new constructor cannot forget it) carries it to every round;
+  `_build_chat_request` reads only `inputs.effort`, never the settings. Why
+  "once" matters: a top-level effort change invalidates the messages cache,
+  and a turn's continuation rounds read the cache its own earlier rounds
+  wrote. Pinned by a fake that changes both knobs after round 0 — every
+  round still carries the first value. Settings are read when the turn
+  starts, so setting the two knobs equal switches the boost off without a
+  code change.
+- **The trace says which turn ran at what.** `capture.turn_prompts(effort=)`
+  puts the level on the turn's `prompt_refs` event — decided at turn start,
+  so recorded there rather than per round. A level name, never text, and
+  the key contains no "token", so redaction leaves it alone.
+- **The cache consequence is accepted, not avoided (decision D3).** The
+  boosted turn's first request re-writes the messages cache instead of
+  reading it, and so does the ordinary turn after it; the system and tools
+  prefix is unaffected. These passes normally run early in a session, while
+  the history is short, so the cost is small. The per-message effort beta
+  (`mid-conversation-output-config-2026-07-01`) would keep the cache, but
+  it puts a `role: "system"` message into history that every history
+  consumer — the transcript, the pairing guard, the resend sanitizer, the
+  harvest's `[turn:N]` text, the condensed conversation's digest — would
+  have to learn; D3 declines it.
+- **The condensing summary stays at `INTERVIEW_EFFORT`.** It is a fork of
+  the ordinary chat request and reads the cache the ordinary turns wrote;
+  a summary written right after a boosted turn misses the cache once. The
+  existing rule ("The chat interview runs at medium effort": the summary
+  and the interview must agree) still holds — it is the interview effort
+  both use.
+- **Final QC's lens effort is re-based (decision D4).** `QC_EFFORT` defaults
+  to `medium`. Its `high` was chosen for Opus 5 on 2026-07-28 and never
+  re-based; the Opus 5.5 guide says "Claude Opus 5.5 at `medium` matches or
+  exceeds Claude Opus 5 at `high` … At a given level, Claude Opus 5.5 tends
+  to think more per turn than Claude Opus 5", and to start at `medium`.
+  The lenses and the consolidation calls follow it (they read
+  `QC_LENS_EFFORT`, which falls back to `QC_EFFORT`); the verifier default is
+  the unchanged literal `"medium"`, so both phases now default to the same
+  level while staying separate knobs, both recorded and hashed. Every
+  override keeps working: `BUILD_A_SPEC_QC_EFFORT=high` restores both phases
+  to `high` (an explicitly-set global still moves the seats),
+  `BUILD_A_SPEC_QC_LENS_EFFORT=high` restores only the lenses.
+- **Retained results read stale once, and the release note says so.**
+  `configuration.effort` is in the hashed input manifest, and
+  `QCResult.matches_inputs` rebuilds it with the LIVE lens default, so a
+  result made at `high` no longer matches and its fixes cannot be applied
+  until Final QC is re-run. That is the v1.8.0 posture, and the reason
+  neither version identifier moved (a protocol bump would make `from_dict`
+  discard every saved v4 report). `test_a_result_retained_at_high_reads_
+  stale_against_the_new_default` makes the disclosure true: reverting the
+  freshness check to rebuild with the record's own effort turns it red.
+- **Copy moved with it.** README (the new row, the `QC_EFFORT` and
+  `QC_LENS_EFFORT` rows, the adaptive-thinking bullet); the trust dossier's
+  model table, its chat-turn card, its full-draft card (which now also names
+  the adapt pass — the dossier described it nowhere) and its Final QC card
+  (both stages at `medium`, and why); the 1.21.0 release entry (Chat
+  "Whole-section passes finish in one go"; a new Final QC section "Final QC
+  reasons on Opus 5.5's own scale" with the run-it-again line). v1.20.0 is
+  still the newest published release (GitHub Releases API, 2026-09-30).
+  Help names no effort, so it did not change.
+- **Knowing test changes.** `tests/test_qc_phase_effort.py`'s
+  `test_the_shipped_default_reasons_deeper_in_the_lens_phase` became
+  `test_the_shipped_defaults_run_both_phases_at_medium` (the default is the
+  point of D4). `tests/test_citation_repair.py` constructs
+  `_ChatRequestInputs` directly and now passes `effort=` (the field is
+  required).
+- **Tests:** `tests/test_prompt55_effort.py` (43 cases). Revert matrix: 21
+  mechanisms, each reverted in place and restored from the exact text read,
+  the tree checked unchanged after every row (in full in the plan's P55-3 As
+  built).
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Final QC per-phase effort" says the lens effort "stays `high`" and
+     that `QC_LENS_EFFORT` stays `high`. Since P55-3 `QC_EFFORT` — and so
+     the lens effort — defaults to `medium`; the split, the resolution
+     order and the recording are unchanged.
+  2. "The chat interview runs at medium effort" says the chat interview runs
+     at `medium`. Ordinary turns still do; every round of a ready
+     whole-section pass runs at `DRAFT_PASS_EFFORT` (`high`).
+  3. "Conversation engine invariants → Adaptive thinking" (already corrected
+     to `medium` for the interview) gains the same exception.
+  4. The Batch 4 and "Final QC cost + speed" (v1.8.0) sections describe QC
+     effort as `high`; those are history. The default is `medium` now.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

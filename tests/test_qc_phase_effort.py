@@ -113,13 +113,19 @@ def test_each_phase_is_sent_at_its_own_effort():
     assert _efforts(client) == {"lens": {"high"}, "verifier": {"low"}}
 
 
-def test_the_shipped_default_reasons_deeper_in_the_lens_phase():
-    """The default is the point of the change, so it is pinned directly."""
-    assert settings.QC_LENS_EFFORT == "high"
+def test_the_shipped_defaults_run_both_phases_at_medium():
+    """The defaults are pinned directly.
+
+    The lens phase shipped at "high" from the split until the 5.5 prompting
+    upgrade (P55-3, decision D4) re-based it for Opus 5.5, whose "medium"
+    matches or exceeds Opus 5's "high". The verifier default never moved.
+    The two phases are still separate knobs; they simply agree by default.
+    """
+    assert settings.QC_LENS_EFFORT == "medium"
     assert settings.QC_VERIFIER_EFFORT == "medium"
     client = SequencedFakeClient(_scripts())
     _run(client)
-    assert _efforts(client) == {"lens": {"high"}, "verifier": {"medium"}}
+    assert _efforts(client) == {"lens": {"medium"}, "verifier": {"medium"}}
 
 
 def test_one_effort_still_sets_both_phases():

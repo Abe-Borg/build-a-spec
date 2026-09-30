@@ -482,6 +482,7 @@ def turn_prompts(
     context_text: str,
     user_text: str,
     context_sizes: dict[str, int] | None = None,
+    effort: str = "",
 ) -> None:
     """Record the turn's prompt material as one ``prompt_refs`` event.
 
@@ -495,6 +496,12 @@ def turn_prompts(
     Phase 5A). Numbers, never text, so they ride the event itself at every
     capture level: a trace reader sees what each turn carried without
     resolving a single prompt ref.
+
+    ``effort`` is the adaptive-thinking effort every round of the turn was
+    sent at (the 5.5 prompting upgrade, P55-3): ``conversation.turn_effort``
+    decides it once, at turn start, so a whole-section pass that ran at
+    ``DRAFT_PASS_EFFORT`` is told apart from an ordinary turn. A level name,
+    never text, so it rides the event itself like the sizes.
     """
     try:
         recorder = get_recorder()
@@ -507,6 +514,7 @@ def turn_prompts(
             project_context=recorder.prompt_ref("project_context", context_text),
             user=recorder.prompt_ref("user", user_text),
             context_sizes=dict(context_sizes or {}),
+            effort=str(effort or ""),
         )
     except Exception:  # noqa: BLE001
         pass

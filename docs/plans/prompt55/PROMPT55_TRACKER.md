@@ -2,7 +2,7 @@
 
 <!-- PROMPT55-STATUS: IN PROGRESS -->
 
-**Next session:** P55-2 — The interview replies after its last tool call
+**Next session:** P55-3 — Draft passes finish in one turn, and effort is re-based
 
 Owner: Abraham. Opened 2026-09-29.
 
@@ -47,7 +47,7 @@ pull request each:
 | ID | Title | Status | PR | Merge commit |
 |---|---|---|---|---|
 | P55-1 | Harden output parsing and the fact harvest | done | PR #236 | `b5c282a` |
-| P55-2 | The interview replies after its last tool call | not started | — | — |
+| P55-2 | The interview replies after its last tool call | done | PR #237 | — |
 | P55-3 | Draft passes finish in one turn, and effort is re-based | not started | — | — |
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | not started | — | — |
 | P55-5 | Remind a batched verifier seat that skipped its output tool | not started | — | — |

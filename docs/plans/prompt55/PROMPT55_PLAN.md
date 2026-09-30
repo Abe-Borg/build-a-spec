@@ -409,7 +409,158 @@ list).
 
 ### As built
 
-(Filled in by the session.)
+Built 2026-09-29 on `claude/clever-knuth-fcoh7e`, from `master` at
+`90c7f16`. No route, SSE event type, dependency, project-format change, QC
+schema or protocol bump, or version bump. One knob
+(`BUILD_A_SPEC_HARVEST_MAX_TOKENS`) and one error code (`harvest_cut_off`).
+
+**What landed, by design item.**
+
+1. `extract_tool_use_block` (`backend/research/schema.py`): an exact name
+   wins anywhere in the response; only when nothing matches exactly is the
+   last `str.casefold` match taken. The docstring states why that is
+   unambiguous and names the chat as the one caller that does not use it.
+   A small `_block_field` reads a field off an SDK object or a dict.
+2. The chat (`backend/llm/conversation.py`): `_unknown_tool_message` and
+   `_chat_client_tool_names` (the tools carrying an `input_schema`, so the
+   two server tools are never offered). A mis-cased call is told the exact
+   name ("Tool names are case-sensitive: this tool is `apply_spec_edits`.
+   Nothing was run. Call it again with that exact name."); an unknown one
+   is told the list. Never dispatched.
+3. `last_tagged_json_object` beside the extractor; the five patterns are
+   gone. The QC constants (`_FINDINGS_JSON_TAG`, `_VERDICT_JSON_TAG`,
+   `_CONSOLIDATION_JSON_TAG`) are now tag NAMES and `_parse`'s `json_tag`
+   is a `str`; research has `_RESEARCH_JSON_TAG`, compliance
+   `_COMPLIANCE_JSON_TAG`. `re` and (in compliance) `json` imports that
+   only the patterns used were removed.
+4. The harvest: the guide's line ends `_HARVEST_SYSTEM_PROMPT`; the
+   `max_tokens` check runs BEFORE the tool block is read; the request's
+   `max_tokens` is `settings.HARVEST_MAX_TOKENS`, with a README
+   Configuration row, a README harvest bullet and the routes paragraph
+   naming the new code. As merged the knob is
+   `_int_env(..., min(_HARVEST_MAX_TOKENS_DEFAULT, INTERVIEW_MAX_TOKENS),
+   minimum=min(_HARVEST_MAX_TOKENS_FLOOR, INTERVIEW_MAX_TOKENS))`, the two
+   constants 64,000 and 4,096 (deviation 6).
+
+**Deviations.**
+
+1. **The helper is not the plan's regex.** The sketched
+   `re.finditer(rf"<{tag}>\s*(\{{.*?\}})\s*</{tag}>", …)` has two holes:
+   a draft left UNCLOSED swallows the final block (the lazy match runs on to
+   the final's closing tag, and the one match does not parse, so nothing
+   is found), and a value that quotes the closing tag is cut short. The
+   helper instead walks every opening tag from the last to the first, each
+   against every closing tag after it in order, and returns the first
+   candidate that is exactly one JSON object. Both holes have a test. A
+   runaway bound (`_TAGGED_JSON_MAX_ATTEMPTS = 64` pairs) keeps a reply
+   that repeats a tag hundreds of times from costing a quadratic parse, and
+   `RecursionError` from pathological nesting is caught like a parse error.
+2. **The missing-key audit changed one handler.** Every chat client tool
+   was called with an empty input. `read_reference_doc` said "no reference
+   document with id ''", so it now says "`ref_id` is required — the id of
+   the document to read (e.g. 'ref-1')". The other seven already named
+   their keys (`'edits'`, `'kind'`, `'prompts'`, `'add'`/`'resolve'`,
+   `'record'`/`'supersede'`, `finding_ids`, and `recall_conversation`'s
+   `query`/`turns` once something is condensed); a parametrized test keeps
+   the first six doing it. A non-object `input` was not audited: the API
+   always returns an object for a `tool_use` input.
+3. **`harvest_no_output` lost its "(the reply was cut off)" branch.** A
+   `max_tokens` stop is now `harvest_cut_off` before the tool block is
+   read, so the branch could no longer be reached.
+4. **`HarvestDialog.tsx` needed no change** (checked, as the plan asked).
+   A failed preview renders the server's message verbatim and offers **Run
+   it again** for every code but `tutorial_active` and
+   `nothing_to_harvest`; only the COMMIT path treats `harvest_expired` /
+   `harvest_stale` specially.
+5. **Release note placement.** The GitHub Releases API lists v1.20.0
+   (2026-09-22) as the newest published release on 2026-09-29, so the item
+   ("A harvest that runs out of room says so") went into the unreleased
+   1.21.0 entry's "Project facts" section, in the same commit as the change.
+   The parsing hardenings got no item of their own, as the plan's Docs list
+   says; they are not something a user does.
+6. **A lower global cap still binds the harvest** (caught in review on PR
+   #236, Codex). The first cut defaulted `HARVEST_MAX_TOKENS` to a flat
+   64,000, which RAISED the harvest above a `BUILD_A_SPEC_MAX_TOKENS` an
+   operator had set lower — the cap the harvest had honoured until it got a
+   knob of its own. The default is now `min(64_000, INTERVIEW_MAX_TOKENS)`,
+   and so is the floor's cap (`min(4_096, INTERVIEW_MAX_TOKENS)`): `_int_env`
+   clamps its default too, so a global cap under 4,096 would otherwise have
+   been lifted to 4,096 with a warning about a harvest knob nobody set. An
+   explicit `BUILD_A_SPEC_HARVEST_MAX_TOKENS` still goes above the global
+   cap. `test_a_lower_interview_ceiling_still_caps_the_harvest` pins all
+   four cases, with a positive logging control so its "no warning" check is
+   not vacuous.
+
+**Knowing test changes:** none. No existing test pinned the greedy
+patterns, the bare "Unknown tool: X" text or the removed cut-off wording.
+`tests/test_qc_warm_launch.py` and `tools/qc_verifier_canary.py` pass the
+QC tag constants through to `_parse` unchanged (a name now, a pattern
+before), and `tests/test_qc_batch_warm_lead.py`'s dummy `json_tag="VERDICT"`
+was already a string.
+
+**Tests:** `tests/test_prompt55_parsing_and_harvest.py`, 44 cases
+(parametrized counted). The mis-cased-output-tool case is ONE assertion set
+over both engines, reusing `tests/test_retry_resume.py`'s `_ResearchHarness`
+and `_QcHarness` (tracker R4).
+
+**Verified** on the branch, with every doc change in place:
+`.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q`
+3064 passed, 64 skipped; `npm test` 438 passed; `npm run build` clean
+(re-run after the review fix of deviation 6).
+
+**Revert matrix.** 26 rows: 24 before review, two more for deviation 6
+(the two settings rows above them were re-run against the new shape). Each
+mechanism reverted in place, one at a time, by a script that restored the
+exact text it read; `git status` and `git diff`
+were unchanged afterwards. The new test file ran every time, plus
+`tests/test_settings.py` and `tests/test_docs_consistency.py` for the knob
+rows.
+
+| Mechanism reverted | Tests red |
+|---|---|
+| extractor: no case-insensitive fallback | 4 |
+| extractor: a case-insensitive match returned at once (exact no longer wins) | 2 |
+| extractor: the FIRST case-insensitive match wins | 2 |
+| chat: the bare "Unknown tool: X" text | 2 |
+| chat: no case-insensitive branch (always the list) | 1 |
+| chat: the tool list includes the server tools | 1 |
+| chat: a mis-cased `apply_spec_edits` is dispatched | 1 |
+| chat: `read_reference_doc` names no missing key | 1 |
+| helper: openings walked first to last | 7 |
+| helper: only the first closing after an opening tried | 1 |
+| helper: no attempt cap | 1 |
+| helper: the brace pre-check removed | 0 — see below |
+| helper: `RecursionError` not caught | 1 |
+| helper: a non-object value accepted | 0 — see below |
+| research: back to the greedy first-match pattern | 2 |
+| Final QC: back to the greedy first-match pattern | 3 |
+| compliance: back to the greedy first-match pattern | 2 |
+| harvest: the closing line removed | 1 |
+| harvest: a `max_tokens` stop with a payload accepted | 2 |
+| harvest: the cut-off refusal carries no usage | 2 |
+| harvest: the ceiling back to the interview's | 2 |
+| settings: the default back to 128k (`_HARVEST_MAX_TOKENS_DEFAULT`) | 3 |
+| settings: no floor | 4 |
+| settings: the default not capped by the interview ceiling (review fix) | 2 |
+| settings: the floor not capped by the interview ceiling (review fix) | 2 |
+| README: the knob's Configuration row removed | 0 — see below |
+
+The three green rows, each explained (tracker R8):
+- **The brace pre-check and the object check are one mechanism written
+  twice.** A candidate that starts with `{`, ends with `}` and parses is
+  always a JSON object, so each check alone guards what the other does.
+  Reverted together, `test_nothing_parses_to_none[<qc_json>[1, 2, 3]</qc_json>]`
+  goes red (1).
+- **The README row** is the docs test's known limit (recorded in the Tier 1
+  finish closeout): it asks only that README names the knob somewhere, and
+  the new harvest bullet names it. With every mention removed,
+  `test_the_readme_documents_every_app_env_knob` goes red (1).
+
+**For P55-4.** The case-tolerant extractor is in place, so "the parse finds
+no payload" already means neither an exact nor a mis-cased output-tool call
+and no complete tagged object: research's `_parse_research_payload` returns
+`(None, "no_payload")` and Final QC's `_parse` returns `None`, and the
+reminder keys on that.
 
 ---
 

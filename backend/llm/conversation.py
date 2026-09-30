@@ -3690,14 +3690,19 @@ def _run_read_reference_doc(
             if available
             else "No reference documents are attached to this session."
         )
+        # A missing key names the key the tool expects (the 5.5 prompting
+        # upgrade, P55-1): "no document with id ''" left the model to guess.
+        problem = (
+            f"no reference document with id {ref_id!r}."
+            if ref_id
+            else "`ref_id` is required — the id of the document to read "
+            "(e.g. 'ref-1')."
+        )
         return (
             {
                 "type": "tool_result",
                 "tool_use_id": block.get("id"),
-                "content": (
-                    f"read_reference_doc: no reference document with id "
-                    f"{ref_id!r}. {detail}"
-                ),
+                "content": f"read_reference_doc: {problem} {detail}",
                 "is_error": True,
             },
             [],
@@ -3916,6 +3921,46 @@ def _run_recall_conversation(
     return result, []
 
 
+def _chat_client_tool_names() -> list[str]:
+    """The names of the chat's CLIENT tools, in declaration order.
+
+    The web tools are server tools the API runs itself; a client
+    ``tool_use`` can only ever name one of the rest.
+    """
+    return [
+        tool["name"] for tool in _chat_tools() if "input_schema" in tool
+    ]
+
+
+def _unknown_tool_message(name: Any) -> str:
+    """The ``is_error`` text for a ``tool_use`` naming no chat tool.
+
+    The Sonnet 5.5 prompting guide: the model occasionally calls a declared
+    tool by a name that differs only in letter case, and a result "that
+    states the exact expected name" lets it correct itself. So a name that
+    matches a declared tool case-insensitively is told that tool's exact
+    name; anything else is told the full list. A mis-cased call is never
+    DISPATCHED here, deliberately: commit-time elision keys on exact names
+    (the figure, reference and recall elisions and
+    ``history_hygiene.OUTLINE_BEARING_TOOLS``), so an accepted mis-cased
+    call would leave its source or outline in saved history.
+    """
+    declared = _chat_client_tool_names()
+    if isinstance(name, str):
+        for tool_name in declared:
+            if name.casefold() == tool_name.casefold():
+                return (
+                    f"Unknown tool: {name}. Tool names are case-sensitive: "
+                    f"this tool is `{tool_name}`. Nothing was run. Call it "
+                    "again with that exact name."
+                )
+    return (
+        f"Unknown tool: {name}. Nothing was run. The tools you can call are: "
+        + ", ".join(f"`{tool_name}`" for tool_name in declared)
+        + "."
+    )
+
+
 def _run_tool(
     session: SessionState,
     block: dict[str, Any],
@@ -3962,7 +4007,7 @@ def _run_tool(
             {
                 "type": "tool_result",
                 "tool_use_id": block.get("id"),
-                "content": f"Unknown tool: {name}",
+                "content": _unknown_tool_message(name),
                 "is_error": True,
             },
             [],

@@ -283,6 +283,31 @@ TEMPLATE_EFFORT = _effort_env("BUILD_A_SPEC_TEMPLATE_EFFORT", "medium")
 # reviews every proposal before anything is recorded anyway.
 HARVEST_EFFORT = _effort_env("BUILD_A_SPEC_HARVEST_EFFORT", "medium")
 
+# The harvest's output ceiling (the 5.5 prompting upgrade, P55-1). The
+# Sonnet 5.5 guide: with structured output at low and medium effort the
+# model "occasionally keeps thinking until it reaches max_tokens", and
+# max_tokens should be "high enough for the thinking and the JSON … but no
+# higher than you're willing to spend on one attempt". A harvest writes at
+# most forty short proposals; 64k is far above that and halves the worst
+# case of a runaway against the 128k model ceiling it inherited from the
+# interview. A reply that does reach it is refused as cut off
+# (``harvest.run_harvest``), never shown as a partial list. The floor keeps
+# an override from starving the thinking the prompt asks for.
+#
+# Both are capped by INTERVIEW_MAX_TOKENS (Codex, PR #236): the harvest used
+# that ceiling before it had its own, so an operator who set
+# BUILD_A_SPEC_MAX_TOKENS lower — a spend ceiling, or an interview-model
+# override with a smaller output — keeps that cap on the harvest too, and the
+# floor never lifts it back up. Only an explicit
+# BUILD_A_SPEC_HARVEST_MAX_TOKENS goes above it.
+_HARVEST_MAX_TOKENS_DEFAULT = 64_000
+_HARVEST_MAX_TOKENS_FLOOR = 4_096
+HARVEST_MAX_TOKENS = _int_env(
+    "BUILD_A_SPEC_HARVEST_MAX_TOKENS",
+    min(_HARVEST_MAX_TOKENS_DEFAULT, INTERVIEW_MAX_TOKENS),
+    minimum=min(_HARVEST_MAX_TOKENS_FLOOR, INTERVIEW_MAX_TOKENS),
+)
+
 # Thinking-summary display. Sonnet 5 defaults to ``omitted`` — thinking
 # blocks stream with empty text, so a reasoning-heavy turn looks like a long
 # silent pause. ``summarized`` streams a readable summary of the model's

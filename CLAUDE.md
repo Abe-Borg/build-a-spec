@@ -119,7 +119,12 @@ backend/
                            5.5's is 0.05×; test_usage pins every row's);
                            HARVEST_EFFORT (Project workspace Phase 4, default
                            medium — the fact harvest extracts, it drafts
-                           nothing); ELIDE_FETCHED_PAGE_TEXT
+                           nothing) and HARVEST_MAX_TOKENS
+                           (BUILD_A_SPEC_HARVEST_MAX_TOKENS, 64k, floor 4096,
+                           both capped by INTERVIEW_MAX_TOKENS so a lower
+                           global cap still binds the harvest — the 5.5
+                           prompting upgrade, P55-1; it inherited the 128k
+                           interview ceiling before); ELIDE_FETCHED_PAGE_TEXT
                            (BUILD_A_SPEC_ELIDE_FETCHED_PAGES, default ON —
                            the compaction Phase 2 page-text trim, on since
                            its live canary passed on 2026-09-23; the 1.21.0
@@ -400,7 +405,18 @@ backend/
                            api_config.py web-tool builders + domain blocklist];
                            WEB_TOOL_ALLOWED_CALLERS pins direct invocation on
                            both web tools — the one choke point all three
-                           channels (chat / research / QC) build them from
+                           channels (chat / research / QC) build them from.
+                           The 5.5 prompting upgrade (P55-1):
+                           extract_tool_use_block (every fan-out's, the
+                           harvest's, the template pass's and the audit's
+                           output-tool read) lets an EXACT name win anywhere
+                           in the reply and falls back to the last name that
+                           differs only in case; last_tagged_json_object is
+                           the ONE tagged-JSON fallback (research, the three
+                           Final QC tags, the audit): openings walked from the
+                           last, each against every later closing, the first
+                           candidate that is one JSON object wins, bounded by
+                           _TAGGED_JSON_MAX_ATTEMPTS
   research/runner.py       session-bound run lifecycle: daemon thread, event
                            log, snapshot, SSE follow generator (Build-a-Spec
                            native — no Spec Critic source); Batch 7 adds stop()
@@ -906,7 +922,13 @@ backend/
                            the hint — and `harvestable`, has_material's
                            question asked ahead of time: a reply, a provision
                            or a dismissal reason, so the panel's door opens
-                           for a draft with no conversation)
+                           for a draft with no conversation). The 5.5
+                           prompting upgrade (P55-1): the system prompt ends
+                           with the guide's "Think the problem through before
+                           you answer.", max_tokens is HARVEST_MAX_TOKENS, and
+                           a max_tokens stop is harvest_cut_off even with a
+                           payload (usage attached, checked before the tool
+                           block is read)
   suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
                            MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
                            fold-whitespace/dedupe/cap; empty list valid) +
@@ -1680,7 +1702,15 @@ backend/
                            Phase 3 adds SessionState.qc_fix_log (wiped by
                            reset) + record_qc_fixes (newest 500 kept), and the
                            chat commit writes the fix record for exactly the
-                           surviving ids it marks applied
+                           surviving ids it marks applied. The 5.5 prompting
+                           upgrade (P55-1): _run_tool's unknown-tool result is
+                           _unknown_tool_message — a name matching a declared
+                           client tool (_chat_client_tool_names, the tools
+                           with an input_schema) case-insensitively is told
+                           that tool's exact name, anything else the full
+                           list; a mis-cased call is NEVER dispatched
+                           (commit-time elision keys on exact names), and
+                           read_reference_doc names its missing ref_id
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -2698,6 +2728,24 @@ tests/
                            originals never move, and the closeout stays on
                            the last row), plus the handoff's
                            sessions-left sentence and the prompt template
+  test_prompt55_parsing_and_harvest.py
+                           [5.5 prompting upgrade, P55-1] the output-tool
+                           extractor (exact beats case-insensitive, the last
+                           case-insensitive match wins, SDK objects and
+                           dicts), a mis-cased output tool completing a
+                           research area and a Final QC lens (ONE assertion
+                           set over both engines, the test_retry_resume
+                           harnesses); the chat telling a mis-cased call its
+                           exact name without running it, an unknown name the
+                           client tools, and every chat tool naming the key an
+                           empty call is missing; last_tagged_json_object
+                           (draft then final, a broken final, an unclosed
+                           draft, a quoted closing tag, nesting, the bound)
+                           and each of its five call sites, plus no greedy
+                           pattern left in backend/; the harvest's closing
+                           line, harvest_cut_off (unit and route, metered),
+                           and HARVEST_MAX_TOKENS (an ast pin, the floor, a
+                           lower BUILD_A_SPEC_MAX_TOKENS still binding it)
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,
@@ -18295,6 +18343,143 @@ bump.
   documents" section of the unreleased 1.21.0 entry (v1.20.0 was the latest
   published release, checked through the Releases API), in the same commit
   as the change.
+
+## Output parsing and the fact harvest, hardened — implemented notes (5.5 prompting upgrade, P55-1)
+
+The first session of the "5.5 prompting upgrade" program
+(`docs/plans/prompt55/`: the tracker, the plan, decision D1), implementing
+findings F4 and F5 of the review of Anthropic's Claude Sonnet 5.5 and Opus
+5.5 prompting guides. Four independent hardenings, none touching a request's
+shape except the harvest's `max_tokens`. No route, SSE event type,
+dependency, project-format change, QC schema or protocol bump, or version
+bump; one env knob (`BUILD_A_SPEC_HARVEST_MAX_TOKENS`, README row); one new
+error code (`harvest_cut_off`). The plan's P55-1 **As built** carries the
+deviations and the full revert matrix; this section is the why and the
+traps.
+
+- **A tool name that differs only in case is accepted where it is
+  unambiguous.** The Sonnet 5.5 guide: the model "occasionally calls a
+  declared tool by a name that differs only in letter case … Accept the call
+  when the match is unambiguous". `research.schema.extract_tool_use_block`
+  (shared by research, the three Final QC tools, the harvest, the template
+  pass and the audit) keeps "the last matching block wins", but an EXACT
+  name now wins wherever it appears in the response; only when no block
+  matches exactly is the last `str.casefold` match taken. Unambiguous
+  because every output tool is lowercase snake_case, each request declares
+  exactly one, and no two differ only in case — the docstring says so, and
+  a future output tool that breaks that has to re-argue it. `_block_field`
+  is the one SDK-object-or-dict read the loop uses now.
+- **The chat names the right tool, and never dispatches a mis-cased one.**
+  `conversation._unknown_tool_message`: a name matching a declared CLIENT
+  tool case-insensitively is told "Tool names are case-sensitive: this tool
+  is `apply_spec_edits` … Call it again with that exact name"; anything else
+  is told the full list (`_chat_client_tool_names`: the tools carrying an
+  `input_schema` — the two web tools are server tools, which a client
+  `tool_use` can never name). Dispatching a mis-cased call was ruled out on
+  purpose: commit-time elision keys on EXACT names (the figure, reference and
+  recall elisions, `history_hygiene.OUTLINE_BEARING_TOOLS`), so an accepted
+  mis-cased call would leave its source or outline in saved history — the
+  one place case tolerance costs something. The chat is the fan-outs'
+  opposite here, and the extractor's docstring points at the chat's path.
+- **A missing key names the key.** The audit of every chat client tool
+  called with an empty input found one that did not: `read_reference_doc`
+  said "no reference document with id ''". It now says "`ref_id` is required
+  — the id of the document to read (e.g. 'ref-1')", beside the attached
+  ids. The other seven already named theirs (`'edits'`, `'kind'`,
+  `'prompts'`, `'add'`/`'resolve'`, `'record'`/`'supersede'`,
+  `finding_ids`; `recall_conversation` its `query`/`turns` once something is
+  condensed), and a parametrized test now keeps them doing it.
+- **The tagged-JSON fallback takes the LAST complete value.** The guide:
+  "Don't take everything from the first `{` to the last `}`. The model
+  occasionally writes a draft before its final JSON." All five fallbacks
+  (`<research_json>`, `<qc_json>`, `<qc_verdict_json>`,
+  `<qc_consolidation_json>`, `<compliance_json>`) were `\{.*\}` greedy with
+  the first match — so a draft followed by the final answer spanned both
+  and parsed as NOTHING, the call failing as "no payload". One helper,
+  `research.schema.last_tagged_json_object(text, tag)`, replaces them: every
+  opening tag is tried from the last to the first, each against every
+  closing tag after it in order, and the first candidate that is exactly one
+  JSON object wins. The constants became tag NAMES (`_FINDINGS_JSON_TAG =
+  "qc_json"` and its siblings; research's `_RESEARCH_JSON_TAG`, compliance's
+  `_COMPLIANCE_JSON_TAG`), and QC's `_parse(..., json_tag: str)` passes the
+  name through. Newest response first, as before; the tool still beats any
+  tagged text.
+- **Why not the plan's regex.** The plan sketched a non-greedy
+  `<tag>\s*(\{.*?\})\s*</tag>` over `finditer`. That regex lets a draft left
+  UNCLOSED swallow the final block (its lazy match runs on to the final's
+  closing tag, and the one match it produces does not parse), and a value
+  quoting the closing tag is cut short. Walking openings from the last one,
+  against every later closing, handles both. `_TAGGED_JSON_MAX_ATTEMPTS`
+  (64) bounds the pairs tried, so a reply that repeats a tag hundreds of
+  times cannot cost a quadratic parse; `RecursionError` from pathological
+  nesting is caught like a parse error.
+- **The fact harvest thinks first** — the guide's "Think the problem
+  through before you answer." is now the last line of `_HARVEST_SYSTEM_PROMPT`,
+  verbatim: with a strict output tool at `medium` effort, the model can work
+  the problem out only in its thinking, and "when it skips thinking, it can
+  be less accurate".
+- **A cut-off harvest is refused even when it holds a payload.** The guide:
+  "Treat any response whose `stop_reason` is `max_tokens` as failed, even if
+  its text holds valid JSON, and retry." `run_harvest` checks the stop
+  reason BEFORE it reads the tool block and raises `HarvestError(code=
+  "harvest_cut_off")` with the billed usage attached; the route already
+  meters every `HarvestError` under `harvest`, answers 502, stores no token
+  and moves no marker. It is not retried automatically: a harvest is one
+  paid call the user starts, and `HarvestDialog`'s preview failure already
+  renders an unknown code's server message verbatim with **Run it again**
+  (only `tutorial_active` and `nothing_to_harvest` hide that button; only
+  the COMMIT path treats `harvest_expired`/`harvest_stale` specially) — so
+  the frontend needed no change. `harvest_no_output` lost its "(the reply was
+  cut off)" branch, which can no longer be reached.
+- **`HARVEST_MAX_TOKENS`** (`BUILD_A_SPEC_HARVEST_MAX_TOKENS`, default
+  64,000, floor 4,096). The harvest inherited the interview's 128k ceiling;
+  the guide says `max_tokens` should be "high enough for the thinking and the
+  JSON … but no higher than you're willing to spend on one attempt". Forty
+  short proposals are far below 64k, and the cap halves the worst case of a
+  runaway at Sonnet 5.5's $10/MTok output rate. The floor keeps an override
+  from starving the thinking the prompt now asks for. `max_tokens` is not
+  part of any cached prefix, so the change costs no cache.
+- **A lower global cap still binds the harvest** (caught in review on PR
+  #236, Codex). The first cut defaulted to a flat 64k — which RAISED the
+  harvest above a `BUILD_A_SPEC_MAX_TOKENS` an operator had set lower (a
+  spend ceiling, or an interview-model override with a smaller output),
+  the cap the harvest had honoured until it got a knob of its own. Both the
+  default and the floor are now `min(<constant>, INTERVIEW_MAX_TOKENS)`
+  (`_HARVEST_MAX_TOKENS_DEFAULT` / `_HARVEST_MAX_TOKENS_FLOOR`). Capping the
+  FLOOR matters as much as the default: `_int_env` clamps its default too,
+  so a global cap under 4,096 would otherwise have been lifted to 4,096 with
+  a warning about a harvest knob nobody set. Only an explicit
+  `BUILD_A_SPEC_HARVEST_MAX_TOKENS` goes above the global cap.
+- **What did not change.** No request gained a field; the chat's tool list
+  and the stable prompt are byte-identical (no cache is rewritten); nothing
+  reaches the QC input manifest; the audit route stays retired (its parse is
+  still reachable from `AuditRunner`, and the helper covers it). The
+  batched transport reads the same `_parse`.
+- **Tests: `tests/test_prompt55_parsing_and_harvest.py`** (44, parametrized
+  cases counted). The research-vs-lens case is ONE assertion set over both
+  engines, reusing `tests/test_retry_resume.py`'s harnesses (R4). Knowing
+  test changes: none — no existing test pinned the greedy patterns, the old
+  "Unknown tool" text or the removed cut-off wording, and
+  `tools/qc_verifier_canary.py` / `tests/test_qc_warm_launch.py` pass the tag
+  constants through unchanged (a name now, a pattern before).
+- **Revert matrix** (in full in the plan's As built): 26 rows, each reverted
+  in place and restored from the exact text read, the tree checked clean
+  after. 23 went red on their own. Two are one mechanism written twice —
+  the brace pre-check and the object check in `last_tagged_json_object`
+  (a candidate that starts with `{` and ends with `}` and parses is always
+  an object, so each alone guards what the other does); reverted together,
+  1 red. The third is the known limit of the docs test: removing the
+  README row leaves the knob named in the harvest bullet, and the test asks
+  only that README names it somewhere; removing every mention, 1 red.
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "Nothing settled is left in the transcript (Project workspace Phase
+     4)" describes `run_harvest` as "the template-generalize idiom" and says
+     "a tool-less reply refused" — still true, and a `max_tokens` stop is now
+     refused before the tool block is read, with `harvest_cut_off`.
+  2. The Layout entries for `settings.py`, `research/schema.py`,
+     `harvest.py` and `llm/conversation.py` are maintained current, so they
+     were corrected in place, and the new test file joins them.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

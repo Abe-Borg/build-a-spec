@@ -1051,11 +1051,12 @@ function Dossier() {
           }
           bounds={
             <>
-              A lens, a grouping call or a streamed verifier seat that ends its
-              turn without handing in its result is reminded to, up to twice in
-              the same conversation, before it counts as failed; each reminder
-              is a billed request, counted in the report. A batched seat is not
-              reminded. A failed verifier seat makes its finding{" "}
+              A lens, a grouping call or a verifier seat that ends its turn
+              without handing in its result is reminded to, up to twice in the
+              same conversation, before it counts as failed; each reminder is a
+              billed request, counted in the report. A batched seat’s reminder
+              goes out in the batch’s next round, at the batch price, and only
+              while a round is left. A failed verifier seat makes its finding{" "}
               <b className="text-ink">inconclusive</b> — never counted as either
               confirmed or refuted — and marks the whole run partial. That holds
               on the batched path too: a seat the batch never returned a result

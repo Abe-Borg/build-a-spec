@@ -2054,7 +2054,10 @@ actions.
   result is reminded to, up to twice in the same conversation, before it
   counts as failed (the 5.5 prompting upgrade, P55-4; a research area gets
   the same reminder). Each reminder is a short billed request that the cost
-  line and the report count. A seat verified in a batch is not reminded yet.
+  line and the report count. A seat verified in a batch gets the same
+  reminder in the batch's next round (P55-5), priced at the batch rate like
+  the rest of the seat; a reminder needs a round left, so one the last round
+  would need fails the seat instead.
 - **One defect buys one panel, not one per lens that noticed it.** Five
   reviewers reading one document routinely raise the same defect in
   different words, and each variant used to buy its own verification panel.
@@ -2636,8 +2639,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          -> ops validation -> audit-grade QCResult with versioned
                          input/run identity, evidence and seat telemetry; raw
                          provider streams relay observable lens/verifier activity;
-                         a streamed call that ends its turn without its output
-                         tool is reminded up to twice
+                         a call that ends its turn without its output tool
+                         is reminded up to twice (a batched seat in the next
+                         batch round)
                                                         [pattern: research/engine.py]
     runner.py            session-bound QC lifecycle: daemon thread, event log,
                          run-token-isolated SSE follow + exact stream_end

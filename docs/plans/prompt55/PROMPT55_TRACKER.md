@@ -49,7 +49,7 @@ pull request each:
 | P55-1 | Harden output parsing and the fact harvest | done | PR #236 | `b5c282a` |
 | P55-2 | The interview replies after its last tool call | done | PR #237 | `77da938` |
 | P55-3 | Draft passes finish in one turn, and effort is re-based | done | PR #238 | `1d2185c` |
-| P55-4 | Remind a streamed fan-out call that skipped its output tool | done | PR #239 | — |
+| P55-4 | Remind a streamed fan-out call that skipped its output tool | done | PR #239 | `4e94610` |
 | P55-5 | Remind a batched verifier seat that skipped its output tool | not started | — | — |
 | P55-6 | Keep thinking valid when the harness edits a request | not started | — | — |
 | P55-7 | Final QC falls back when a streamed call is declined | not started | — | — |
@@ -135,10 +135,10 @@ match.
 
 ### P55-5 — Remind a batched verifier seat that skipped its output tool
 
-- [ ] P55-5.1 — a batched seat is reminded in the next round, at most twice, never while recovering or without a round left
-- [ ] P55-5.2 — the reminder count survives a resume and resets on a restart
-- [ ] P55-5.3 — the reminded seat's record reconciles, priced at the batch rate
-- [ ] P55-5.4 — `tests/test_prompt55_batch_reminder.py` covers every item above
+- [x] P55-5.1 — a batched seat is reminded in the next round, at most twice, never while recovering or without a round left — evidence: `backend/qc/engine.py` `_apply_batch_item` (`not recovering and round_left and state.may_remind()`), `_BatchSeatState.may_remind` / `remind`, `round_left=round_index + 1 < max_rounds` in `_run_batch_calls`; `tests/test_prompt55_batch_reminder.py::test_a_seat_that_ends_without_the_tool_is_reminded_in_the_next_round`, `::test_the_reminder_request_is_the_streamed_one`, `::test_an_invented_tool_gets_an_error_result_for_every_call`, `::test_two_reminders_then_the_familiar_failure_with_the_count`, `::test_the_settlement_window_never_reminds`, `::test_the_last_round_never_reminds` (2), `::test_no_reminder_once_a_stop_has_landed`, `::test_a_reminder_needs_budget_left_like_a_continuation` (2); As built deviations 1–3
+- [x] P55-5.2 — the reminder count survives a resume and resets on a restart — evidence: `_BatchSeatState.reminders_sent` (kept by `resume_attempt`, zeroed by `restart_attempt`); `tests/test_prompt55_batch_reminder.py::test_a_resume_resubmits_the_reminder_and_keeps_the_count`, `::test_a_restart_starts_the_count_again`, `::test_the_seat_state_keeps_the_count_on_a_resume_and_drops_it_on_a_restart`
+- [x] P55-5.3 — the reminded seat's record reconciles, priced at the batch rate — evidence: `tests/test_prompt55_batch_reminder.py::test_the_reminded_seat_is_priced_at_the_batch_rate_and_reconciles` (`cost_multiplier`, `estimate_usage_cost(..., multiplier=BATCH_COST_MULTIPLIER)`, `_audit_accounting_consistent()`, the `qc_batched` bucket, a `from_dict` round trip), `::test_progress_stays_phase_level_and_no_new_event_type`
+- [x] P55-5.4 — `tests/test_prompt55_batch_reminder.py` covers every item above — evidence: `tests/test_prompt55_batch_reminder.py` (19 cases) covers P55-5.1 to P55-5.3, plus `::test_batched_and_streamed_verdicts_agree_for_a_reminded_seat` and `::test_batched_and_streamed_fail_the_same_way_when_the_reminders_run_out`; plan's P55-5 As built, Knowing test changes (two `tests/test_qc_audit_report.py` fixtures, found by a probe)
 - [ ] P55-5.5 — verified: ruff, pytest, npm test, npm run build
 - [ ] P55-5.6 — revert matrix recorded in As built
 - [ ] P55-5.7 — CLAUDE.md (and the release note, if needed) updated

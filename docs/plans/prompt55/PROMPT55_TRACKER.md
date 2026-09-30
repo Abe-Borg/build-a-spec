@@ -1,8 +1,22 @@
 # The 5.5 prompting upgrade — tracker
 
-<!-- PROMPT55-STATUS: IN PROGRESS -->
+<!-- PROMPT55-STATUS: COMPLETE -->
 
-**Next session:** P55-8 — Mark pasted text in chat, and close out
+<!-- PROMPT55-BANNER -->
+```text
+########     ########    ########   #######  ##    ## ########
+##           ##          ##     ## ##     ## ###   ## ##
+##           ##          ##     ## ##     ## ####  ## ##
+#######      #######     ##     ## ##     ## ## ## ## ######
+      ##           ##    ##     ## ##     ## ##  #### ##
+##    ## ### ##    ##    ##     ## ##     ## ##   ### ##
+ ######  ###  ######     ########   #######  ##    ## ########
+```
+<!-- /PROMPT55-BANNER -->
+
+**ALL WORK IN THE 5.5 PROMPTING UPGRADE IS COMPLETE.**
+
+**Next session:** none — the program is complete
 
 Owner: Abraham. Opened 2026-09-29.
 
@@ -52,8 +66,8 @@ pull request each:
 | P55-4 | Remind a streamed fan-out call that skipped its output tool | done | PR #239 | `4e94610` |
 | P55-5 | Remind a batched verifier seat that skipped its output tool | done | PR #240 | `829b839` |
 | P55-6 | Keep thinking valid when the harness edits a request | done | PR #241 | `8240f19` |
-| P55-7 | Final QC falls back when a streamed call is declined | done | PR #242 | — |
-| P55-8 | Mark pasted text in chat, and close out | not started | — | — |
+| P55-7 | Final QC falls back when a streamed call is declined | done | PR #242 | `2fe9b4c` |
+| P55-8 | Mark pasted text in chat, and close out | done | PR #243 | — |
 
 ### What each status means
 
@@ -169,14 +183,14 @@ match.
 
 ### P55-8 — Mark pasted text in chat, and close out
 
-- [ ] P55-8.1 — pasted blocks worth marking are recorded by position and wrapped at send (the occurrence the paste inserted, never an identical earlier one) with a random 8-hex ID per block, each tag on its own line
-- [ ] P55-8.2 — the chat never shows the tags, live or after a reload
-- [ ] P55-8.3 — the stable prompt carries the pasted-content note and stays module-deterministic
-- [ ] P55-8.4 — the frontend and backend tests cover every item above
-- [ ] P55-8.5 — verified: ruff, pytest, npm test, npm run build
-- [ ] P55-8.6 — revert matrix recorded in As built
-- [ ] P55-8.7 — closeout: CLAUDE.md closing section, README, release notes checked, the plans index marked complete
-- [ ] P55-8.8 — the tracker reads COMPLETE, with the banner, as the PR's last change
+- [x] P55-8.1 — pasted blocks worth marking are recorded by position and wrapped at send (the occurrence the paste inserted, never an identical earlier one) with a random 8-hex ID per block, each tag on its own line — evidence: `frontend/src/lib/pastedContent.ts` (`movePastedRanges`, `adoptPaste`, `wrapPastedContent`, `randomPasteId`, `PASTE_MARK_MIN_CHARS` 120) called from `Composer.tsx`'s `onPaste` / `onChange` / `replaceValue` / `send`; `frontend/tests/prompt55PastedContent.test.ts` "a multi-line paste is wrapped, and a short one is not", "one line is marked from 120 characters, not below (decision D7)", "each tag is on its own line and carries the same random 8-hex id", "a paste after an identical, earlier, typed clause marks the pasted occurrence only", "an edit inside a paste drops it", "an edit before a paste moves it; typing right before or after leaves it whole", "a paste over part of an earlier paste drops the earlier one", "clipboard text with \r\n line endings is adopted", "a pending paste the value does not hold at its start is discarded", "replacing the whole value drops every range", "two pastes get different ids", and the two seeded ground-truth sweeps
+- [x] P55-8.2 — the chat never shows the tags, live or after a reload — evidence: `MessageBubble.tsx` renders `stripPastedContentTags(msg.text)` for every user bubble (the live one holds the wire text too); `frontend/tests/prompt55PastedContent.test.ts` "strip removes only matching pairs and leaves the rest", "adjacent pastes strip back to the message as typed", "stripping what the send wrote gives back the trimmed message, whatever the ranges" (3,000 seeded cases), "the composer records pastes and sends wrapped text; the bubble shows it stripped"; `tests/test_prompt55_pasted_content.py::test_the_tags_ride_saved_history_and_the_reloaded_transcript`
+- [x] P55-8.3 — the stable prompt carries the pasted-content note and stays module-deterministic — evidence: `prompts._PASTED_CONTENT_POLICY` right after `_REFERENCE_DOC_POLICY` in `render_system_prompt`; `tests/test_prompt55_pasted_content.py::test_the_stable_prompt_carries_the_guides_note` (every module), `::test_the_note_is_the_guides_own_and_carries_no_session_data`, `::test_the_stable_prompt_stays_module_deterministic` (every module), `::test_the_cached_system_block_is_the_same_before_and_after_a_paste`
+- [x] P55-8.4 — the frontend and backend tests cover every item above — evidence: `frontend/tests/prompt55PastedContent.test.ts` (21, registered in `frontend/package.json`) covers P55-8.1 and P55-8.2; `tests/test_prompt55_pasted_content.py` (9 functions, 11 cases) covers P55-8.3, a tagged message reaching the request intact, history and the reload, a plain message unchanged, a pasted directive at the interview effort, and `::test_every_frontend_test_file_runs_under_npm_test`; no existing test changed (plan's P55-8 As built)
+- [x] P55-8.5 — verified: ruff, pytest, npm test, npm run build — evidence: ruff clean; `pytest -q` 3311 passed, 64 skipped; `npm test` 466 passed; `npm run build` clean (plan's P55-8 As built, Verified)
+- [x] P55-8.6 — revert matrix recorded in As built — evidence: plan's P55-8 As built, "Revert matrix": 41 mechanisms reverted in place by a script that restored the exact text read (the tree checked unchanged afterwards); 40 red, and the strip's early return reads the same either way (an optimization, by design); the first run's three other green rows (adopting a paste not worth marking, a stale range, the composer's value ref) got stronger tests, and the recorded counts are the final run
+- [x] P55-8.7 — closeout: CLAUDE.md closing section, README, release notes checked, the plans index marked complete — evidence: CLAUDE.md "Pasted text is marked as pasted" (with the P55-3 pasted-directive erratum) and "The 5.5 prompting upgrade, as shipped" (all eight sessions, switches and defaults, what remains owed, the errata check) + Layout entries; README "The 5.5 prompting upgrade (in the next release)"; `backend/release_notes.py` 1.21.0 Chat "Pasted text is marked as pasted", and every P55-1 to P55-8 item checked to sit in 1.21.0 (unreleased — the Releases API lists v1.20.0 as the latest) and none in a frozen entry; `TrustDeepDiveModal.tsx` chat card + "Text you paste" row; `docs/plans/README.md` marks the program complete; P55-2's As built records the canary as not run and still optional
+- [x] P55-8.8 — the tracker reads COMPLETE, with the banner, as the PR's last change — evidence: this file's status line, banner block, completion line and Next-session line; the P55-8 row done with PR #243; `tests/test_prompt55_tracker.py` passes on the COMPLETE state
 
 ## Rules
 

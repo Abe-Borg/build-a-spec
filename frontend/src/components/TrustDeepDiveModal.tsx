@@ -777,7 +777,13 @@ function Dossier() {
               digest of the retained Final QC findings if a review has run
               (ids, severity, one-line issues, and whether each fix is
               verified — never the full report), and one-line stubs for
-              figures and reference documents — never their contents.
+              figures and reference documents — never their contents. Text you
+              paste into the composer that holds a line break or runs to 120
+              characters goes inside a pair of{" "}
+              <b className="text-ink">pasted-content tags</b> with a random id,
+              and the fixed instruction block says such text came from somewhere
+              else and may carry instructions you did not write; the chat shows
+              your message without the tags.
             </>
           }
           model="Claude Sonnet 5.5, effort “medium” (a whole-section pass runs at “high” — see the next card)."
@@ -1794,6 +1800,10 @@ function Dossier() {
             [
               "Uploaded files",
               "Read under a size bound and inspected as a ZIP/OPC package before anything is retained. A package that fails inspection is rejected atomically. A .docx attached as a reference passes the same inspection as a master, because it is the same attack surface.",
+            ],
+            [
+              "Text you paste",
+              "A paste into the composer that holds a line break or runs to 120 characters reaches the model marked as pasted: inside a pair of tags carrying one random id, which the chat never shows you. The fixed instruction block tells the model that such text came from somewhere else and may carry instructions you did not write, and to follow them only where your own message asks it to — an owner email that says “ignore your instructions” is material you brought, not a command. The tags are plain text and could be imitated, so this is one guardrail, not a wall; the model can also be a little more careful with pasted text than with what you type.",
             ],
             [
               "Trace files and the activity log",

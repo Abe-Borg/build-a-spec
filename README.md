@@ -65,6 +65,55 @@ See [DOCX fidelity and compatibility](docs/DOCX_FIDELITY.md) for the complete
 export, API payload, blocker-code, persistence, diagnostics, and test-fixture
 contracts.
 
+## The 5.5 prompting upgrade (in the next release)
+
+No release entry of its own: every user-visible item rides the newest
+unreleased entry (1.21.0) in `backend/release_notes.py`. On 2026-09-29 the app
+was reviewed against Anthropic's prompting guides for Claude Sonnet 5.5 (the
+chat, research, the fact harvest and the condensing summary) and Claude Opus
+5.5 (Final QC). Eight sessions implemented every recommendation
+(`docs/plans/prompt55/`). What changed for you:
+
+- **Pasted text is marked as pasted** (P55-8). A paste into the chat that
+  holds a line break or runs to 120 characters reaches the assistant inside a
+  pair of `<pasted_content id="…">` tags with a random id, and its standing
+  instructions say such text came from somewhere else and may carry
+  instructions you did not write — it follows them only where your own words
+  ask it to. The chat shows your message as you typed it, live and after a
+  reload. A paste is recorded by its position, so words you typed that happen
+  to match it are never labelled pasted; edit inside a paste and it is sent
+  plain, as before. The tags are plain text and could be imitated: one
+  guardrail, not a wall. The assistant may be a little more careful with
+  pasted text than with what you type.
+- **The assistant's reply comes after its last tool call** (P55-2), so its
+  questions and debriefs stay in the chat and the saved project instead of
+  collapsing into the Thinking panel. It checks code specifics with a web
+  lookup before drafting them, even when it feels sure.
+- **Whole-section passes finish in one go** (P55-3): Draft full section and
+  Adapt imported draft run at `BUILD_A_SPEC_DRAFT_PASS_EFFORT` (`high`) and
+  are told to carry the pass through. Final QC's effort is re-based for Opus
+  5.5 (`BUILD_A_SPEC_QC_EFFORT` now `medium`), so a retained Final QC result
+  reads stale once: run it again before applying its fixes.
+- **A reviewer that forgets to hand in its work is reminded** (P55-4, P55-5):
+  a research area, a Final QC lens, a grouping call or a verifier seat — batched
+  ones in the next round — whose reply ends without its output tool is reminded
+  up to twice before it counts as failed.
+- **A very long PDF no longer breaks the work** (P55-6): a request the app had
+  to edit asks Anthropic to set aside the reasoning tied to what it removed.
+- **A declined Final QC review is answered** (P55-7): streamed Final QC calls
+  carry the API's refusal fallback, and the report says which calls another
+  model answered. `BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0` switches it off.
+- **Sturdier output handling** (P55-1): an output tool called with the wrong
+  letter case still counts; a reply that drafts its JSON before the final one
+  is read from the final one; the fact harvest thinks first, and a harvest cut
+  off at `BUILD_A_SPEC_HARVEST_MAX_TOKENS` (64,000) is refused, never shown
+  half-done.
+
+An optional, owner-run check shows whether Sonnet 5.5's progress notes now
+stay out of the reply: one real interview turn, sent by
+`tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
+on it.
+
 ## Current Status — room for the paper (the panel tray)
 
 No release entry yet: which release carries it is the owner's call, and the
@@ -2783,6 +2832,7 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   llm/
     client.py            Anthropic client factory (monkeypatch seam for tests)
     prompts.py           engine prompt protocol + module-rendered system prompt
+                         (incl. the pasted-content note, P55-8)
                          + the full-draft directive
     conversation.py      streaming turn loop: apply_spec_edits dispatch,
                          web_search/web_fetch with pause_turn continuation,
@@ -2832,8 +2882,12 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          and saved to the server (it must outlive the launch)
   src/lib/panelTray.ts   the panel tray's vocabulary and pure rules: fold,
                          leave out, the tour's lock, the folded bar's counts
-  src/components/        Chat (starter chips), MessageBubble (markdown),
-                         Composer (ask-model prefill),
+  src/lib/pastedContent.ts  pastes recorded by position and wrapped in
+                         <pasted_content id="…"> tags at send; the tags
+                         stripped again for display (the 5.5 upgrade, P55-8)
+  src/components/        Chat (starter chips), MessageBubble (markdown; a
+                         user bubble shows pasted-content tags stripped),
+                         Composer (ask-model prefill; marks pastes),
                          OnboardingOverlay (spotlight + step cards + finish
                          choices; real controls stay interactive),
                          Header (spend ticker + update pill), ApiKeyBanner,

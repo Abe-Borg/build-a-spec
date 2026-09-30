@@ -321,6 +321,22 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "the chat for as long as the app stays open."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Pasted text is marked as pasted",
+                        body=(
+                            "When you paste text into the chat that runs "
+                            "over more than one line, or to 120 characters "
+                            "or more, such as an owner's email or a passage "
+                            "from another specification, the assistant now "
+                            "receives it marked as pasted. It knows the text "
+                            "came from somewhere else and may contain "
+                            "instructions you did not write, and it follows "
+                            "them only where your own words ask it to. Your "
+                            "message shows in the chat just as you typed it. "
+                            "The assistant may be a little more careful with "
+                            "pasted text than with what you type yourself."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(

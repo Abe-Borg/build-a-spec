@@ -893,6 +893,12 @@ so a literal brace added to either must be doubled. Keep the ordering
 sentence in the last bullet when adding the carry-it-through line:
 `tests/test_prompt55_closing_message.py` pins it in every directive.
 
+**Canary status (P55-8 closeout, 2026-09-30).** `tools/prompt55_progress_update_canary.py --run` had not been run when the
+program closed, and no result was reported. It stays optional: nothing
+waited on it, the ordering it checks is pinned offline by
+`tests/test_prompt55_closing_message.py`, and the canary's own hermetic
+tests pass. If Abraham runs it, its output belongs here.
+
 ---
 
 ## P55-3 — Draft passes finish in one turn, and effort is re-based
@@ -2489,4 +2495,166 @@ request's user turn intact.
 
 ### As built
 
-(Filled in by the session.)
+Built 2026-09-30 on `claude/zen-cori-wspwcm`, from `master` at `2fe9b4c`
+(PR #242's merge). No route, SSE event type, dependency, env knob,
+project-format change, QC schema or protocol bump, or version bump. No
+default changed. The stable system prompt changed, so every chat session
+writes its cached prefix once more after the update (research and Final QC
+request bytes are unchanged; nothing reaches the QC input manifest).
+
+**What landed, by design item.**
+
+1. **Record by position, wrap at send.** `frontend/src/lib/pastedContent.ts`
+   (the name was unused): `PASTE_MARK_MIN_CHARS` (120, decision D7),
+   `foldLineEndings`, `isWorthMarking`, `pendingPaste`, `movePastedRanges`
+   (the prefix/suffix diff, the suffix bounded by the prefix; a range ending
+   at or before the edit stays, one starting at or after it shifts, one the
+   edit reaches into is dropped), `adoptPaste` (only when the value holds the
+   paste's exact text at its start, and only when worth marking),
+   `randomPasteId` (`crypto.getRandomValues`, 8 lowercase hex),
+   `wrapPastedContent(value, ranges, makeId)` and `stripPastedContentTags`.
+   The composer only calls them: `onPaste` stashes the pending record
+   (`selectionStart`, `clipboardData.getData("text")`), `onChange` moves the
+   ranges and adopts or discards the pending paste, `replaceValue` (a
+   prefill, a sent message) drops every range, and `send` hands
+   `wrapPastedContent(...)` to `onSend`.
+2. **The chat never shows the tags.** `MessageBubble`'s user branch renders
+   `stripPastedContentTags(msg.text)` — the same line live and after a
+   reload. Only pairs whose opening and closing ids match are removed (a
+   backreference), with the one line break the send added on each side.
+3. **The stable prompt.** `prompts._PASTED_CONTENT_POLICY` ("# Pasted text",
+   then the guide's note word for word), right after `_REFERENCE_DOC_POLICY`
+   in `render_system_prompt`. No digit, no id, nothing session-varying.
+4. **Nothing else changes.** Prefills, starter chips, suggested replies and
+   the server's directives never pass through `onPaste`, so they are never
+   tagged. The tags ride history verbatim.
+5. **The side effect.** The release note says the assistant "may be a
+   little more careful" with pasted text; no knob.
+
+**Deviations.**
+
+1. **The local bubble stores the WIRE text and strips it.** The spec had the
+   local bubble show the text as typed and the API receive the tagged text.
+   Built: the composer hands the tagged text to `onSend`, so the local
+   transcript equals what the server saves, and the one strip in
+   `MessageBubble` serves the live bubble and the reloaded one alike. That
+   is only safe because the wrap is exactly invertible:
+   `stripPastedContentTags(wrapPastedContent(v, r)) === v.trim()`, pinned by
+   a seeded sweep of 3,000 cases.
+2. **Invertible line breaks.** A block gets exactly one `\n` before it only
+   when something precedes it, and exactly one after only when something
+   follows; the strip consumes exactly those. So two adjacent pastes, a
+   paste at the message's start or end, and a paste followed by typed text
+   all come back character for character.
+3. **Wrapped in one forward pass**, reading every offset from the original
+   value, instead of "from the last range back". Equivalent; one pass is
+   simpler.
+4. **The trim.** The send wraps `value.trim()`. A paste the trim cuts into
+   keeps only the part the message still holds, and the D7 rule is applied
+   to what is actually wrapped, so a paste whose only line break was
+   trailing whitespace goes plain.
+5. **Guards the spec did not name.** An id must be 8 hex, unused in this
+   message, and found nowhere in the message's text (up to 16 draws; else
+   that block goes untagged), so a pasted closing tag can never close a
+   block early. `adoptPaste` drops a recorded range the new paste overlaps
+   (a paste inside a range that repeated its own text can leave the diff
+   keeping it). `wrapPastedContent` skips a range whose text no longer
+   matches the value at its position, and never wraps two blocks over one
+   character.
+6. **One place the spec's "drop rather than mislabel" is not literal.** When
+   the diff misplaces an insertion to land exactly at a range's end (the
+   typed character equals the paste's last one), the range is kept. The
+   wrapped text is still exactly the pasted string; only which of two
+   identical adjacent characters counts as pasted can move. Pinned by the
+   sweeps, which check every wrapped block against its paste.
+7. **Drag-and-drop and undo/redo are not pastes.** Text dropped or re-inserted
+   by the browser's undo arrives without `onPaste` and goes plain — the
+   pre-P55-8 behaviour, never worse.
+8. **A pasted directive gets no draft boost.** P55-3's `turn_effort` reads
+   the directive at the START of the text; a user who pastes one sends it
+   inside the tags, so it runs at the interview effort. The app's own
+   directives never pass through the composer's paste handler. Pinned, with
+   a CLAUDE.md erratum on P55-3's "a user who pastes a directive gets the
+   boost".
+9. **A registration guard.** `test_every_frontend_test_file_runs_under_npm_test`
+   fails when a `frontend/tests/*.test.ts` file is left off `npm test`'s
+   explicit list — the pasted-content helpers are tested only there.
+10. **The trust dossier.** The chat card's "what is sent" gains the tags,
+    and the security matrix a "Text you paste" row. Its contract is that it
+    describes what is sent.
+11. **"Replacing the whole value drops every range"** is pinned at the
+    source (the prefill and the clear after a send both go through
+    `replaceValue`; only `onChange` sets the value directly, after moving
+    the ranges), because the composer has no DOM harness.
+
+**Closeout.** CLAUDE.md gains "Pasted text is marked as pasted" and "The 5.5
+prompting upgrade, as shipped" (every session, its switches and defaults,
+what remains owed, and the errata check); README gains "The 5.5 prompting
+upgrade (in the next release)"; every user-visible item from P55-1 to P55-8
+is in the 1.21.0 entry, which is unreleased (the GitHub Releases API lists
+v1.20.0, 2026-09-22, as the latest), and none sits in a frozen entry;
+`docs/plans/README.md` marks the program complete; P55-2's As built records
+that the canary was not run and stays optional.
+
+**Tests.** `frontend/tests/prompt55PastedContent.test.ts` (21, registered in
+`frontend/package.json`) and `tests/test_prompt55_pasted_content.py` (9
+functions, 11 cases). **Knowing test changes:** none — no existing test
+changed.
+
+**Revert matrix.** Each mechanism reverted in place, one at a time, restored
+from the exact text read, the tree checked unchanged afterwards (the
+frontend rows run the frontend file, the backend rows the backend file):
+
+| Mechanism reverted | Red |
+|---|---|
+| fold: line endings not folded | 1 |
+| worth: a line break alone not enough | 16 |
+| worth: length alone not enough | 2 |
+| worth: 120 itself not marked (> not >=) | 2 |
+| pending: an empty clipboard still recorded | 1 |
+| move: a range ending at the edit's start dropped | 8 |
+| move: a range after the edit not shifted | 3 |
+| move: a range the edit reached into kept | 4 |
+| move: suffix not bounded by the prefix | 1 |
+| adopt: value not checked | 1 |
+| adopt: worth-marking not checked | 1 |
+| adopt: an overlapped range kept | 2 |
+| adopt: not sorted | 2 |
+| id: not random | 3 |
+| id: reused within a message | 1 |
+| id: one the text holds accepted | 1 |
+| id: malformed accepted | 1 |
+| wrap: a block with no id still wrapped | 1 |
+| wrap: stale ranges not skipped | 1 |
+| wrap: overlapping ranges both wrapped | 1 |
+| wrap: not clipped to the trimmed message | 4 |
+| wrap: what the trim leaves not re-checked | 2 |
+| wrap: a line break before a block at the start | 2 |
+| wrap: a line break after a block at the end | 2 |
+| strip: any closing id closes | 1 |
+| strip: the line break before a block kept | 5 |
+| strip: the line break after a block kept | 5 |
+| strip: any id, not only 8 hex | 1 |
+| strip: no early return | 0 — an optimization, by design |
+| composer: no paste recorded | 1 |
+| composer: ranges not moved by a change | 1 |
+| composer: pending paste not cleared | 1 |
+| composer: value ref not updated | 1 |
+| composer: send not wrapped | 1 |
+| composer: replacing the value keeps ranges | 1 |
+| composer: a prefill bypasses replaceValue | 1 |
+| bubble: tags shown | 1 |
+| prompt: note not in the stable prompt | 3 |
+| prompt: note reworded | 4 |
+| prompt: note placed after the lint policy | 2 |
+| npm test: the frontend test not registered | 1 |
+
+41 rows; 40 red, and the early return reads the same either way (it only
+skips a regex over text that holds no tag). The first run found three
+more green: adopting a paste not worth marking (the test now asserts the
+recorded ranges hold only the worthy paste), a range whose text no longer
+matches (a new test sends one untagged), and the composer's value ref (the
+source pin now requires `valueRef.current = next;` before `setValue(next)`).
+The counts above are the final run, on the finished tree.
+
+**Verified** on the branch, with every doc change in place: `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q` 3311 passed, 64 skipped; `npm test` (frontend) 466 passed, 0 failed; `npm run build` clean.

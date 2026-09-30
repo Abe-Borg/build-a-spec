@@ -256,6 +256,35 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "still reasons at high."
                         ),
                     ),
+                    ReleaseItem(
+                        title="The assistant's questions stay in the chat",
+                        body=(
+                            "On Claude Sonnet 5.5, anything longer than a "
+                            "sentence or two that the assistant wrote "
+                            "between its edits could arrive only as a "
+                            "collapsed line in its Thinking panel, and was "
+                            "not kept in the saved conversation. That could "
+                            "include the questions it asked you, or a whole "
+                            "research or Final QC debrief. The assistant now "
+                            "makes its edits and stages its suggested "
+                            "replies first, and writes its reply to you "
+                            "after them, so what changed and what it needs "
+                            "from you stay in the chat and in the saved "
+                            "project."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The assistant checks code specifics first",
+                        body=(
+                            "Before it drafts a code requirement's current "
+                            "wording or threshold, the edition a "
+                            "jurisdiction has adopted, or a product's "
+                            "listing or approval, the assistant now checks "
+                            "it with a quick web lookup, even when it feels "
+                            "sure. Expect a few more web searches in a "
+                            "session; each is metered like any other."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(

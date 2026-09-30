@@ -746,7 +746,12 @@ function Dossier() {
               — the app executes that tool locally,
               hands back the result, and the model continues in the same turn.
               Document edits stream into the panel as they are applied, which is
-              why you watch the page fill in.
+              why you watch the page fill in. The model is told to make its tool
+              calls first and write its reply to you after the last one, so what
+              changed and what it needs from you stay in the saved conversation;
+              it is also told to check a code requirement, an adopted edition or
+              a product listing with a quick web lookup before drafting it, even
+              when it feels confident.
             </>
           }
           sent={

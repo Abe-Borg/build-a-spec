@@ -2475,7 +2475,18 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   built from them), keeps a paused turn resumable without a provider
   container id, and keeps the whole app zero-data-retention eligible — one
   declaration in `research/schema.py` covers the interview, the research
-  fan-out, and Final QC alike.
+  fan-out, and Final QC alike. Since the 5.5 prompting upgrade (P55-2) the
+  prompt also tells the model to check specifics that may have changed since
+  its training — a code requirement's current wording or threshold, which
+  edition a jurisdiction has adopted, a product's listing or approval —
+  before drafting them, even when it feels confident, which can add a few
+  web searches per session. The Research button still owns the systematic
+  jurisdiction/AHJ/client/insurer sweep. The same upgrade tells the model to
+  make every tool call first (`suggest_prompts` last) and write its reply to
+  the user after the final one: on Claude Sonnet 5.5 anything longer than a
+  sentence or two written between tool calls comes back as a progress-update
+  thinking block, which the chat collapses and commit drops, so the reply's
+  substance belongs after the last tool call, where it stays text.
 - **Research budgets doubled** (per-dimension searches now 16–40, fetches
   8–12, continuation ceiling 16) and research runs at `high` effort —
   background work where latency is free and quality is the point.
@@ -3025,6 +3036,24 @@ that trim is on by default (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
 
 ```
 .\.venv\Scripts\python tools\fetch_elision_canary.py --run
+```
+
+The third paid check, also opt-in, runs ONE real interview turn (typically
+three or four requests, well under a dollar at list prices) to see whether
+the chat's reply really lands after its last tool call on Claude Sonnet 5.5
+(the 5.5 prompting upgrade, P55-2). On that model, anything longer than a
+sentence or two written between tool calls comes back as a progress-update
+thinking block, which the chat collapses and saved history drops. The
+canary drives the production engine on a fresh in-memory session and
+re-sends each request with `thinking.display: "updates"` (a beta) so
+progress notes can be told apart from reasoning. It prints every progress
+note and a pass/fail verdict: it passes when the turn ends in closing text
+that asks the questions and no progress note asks one. The app itself keeps
+`thinking.display: "summarized"`; running this is optional and nothing waits
+on it:
+
+```
+.\.venv\Scripts\python tools\prompt55_progress_update_canary.py --run
 ```
 
 The DOCX fidelity contract, fixture layers, frontend checks, and release

@@ -11,15 +11,22 @@ file is the working reference for AI-assisted development sessions.
 - Tests are hermetic: no network, no real API key. `tests/conftest.py` injects
   a placeholder `ANTHROPIC_API_KEY`; anything touching the API monkeypatches
   `backend.llm.conversation.get_client` with a fake streaming client.
-  Two canaries are the only explicit paid exceptions, and each is a
-  single low-token request. `tools/qc_verifier_canary.py --run` checks that
-  the provider accepts the strict QC verifier schema; it never runs a full
-  Final QC. `tools/fetch_elision_canary.py --run` checks that the provider
-  accepts a saved chat history whose fetched page text was trimmed to a
-  note carrying the passage a reply quoted (compaction plan Phase 2; it
+  Three canaries are the only explicit paid exceptions. The first two are
+  each a single low-token request. `tools/qc_verifier_canary.py --run`
+  checks that the provider accepts the strict QC verifier schema; it never
+  runs a full Final QC. `tools/fetch_elision_canary.py --run` checks that the
+  provider accepts a saved chat history whose fetched page text was trimmed
+  to a note carrying the passage a reply quoted (compaction plan Phase 2; it
   passed on 2026-09-23, and the trim has been on by default since). Its
-  optional `--control` run is one more request, made only on demand.
-  Without `--run`, neither canary sends anything.
+  optional `--control` run is one more request, made only on demand. The
+  third, `tools/prompt55_progress_update_canary.py --run` (the 5.5 prompting
+  upgrade, P55-2), runs ONE real interview turn through the production
+  engine — typically three or four requests, each re-sent with
+  `thinking.display: "updates"` (beta `thinking-display-updates-2026-08-18`)
+  and `max_tokens` capped — and checks that the reply lands after the last
+  tool call as closing text that asks the questions, with no question left
+  in a progress note. Only Abraham runs any of them; no session does.
+  Without `--run`, no canary sends anything.
 - Reused Spec Critic code is **copied in and adapted**, never imported across
   repos. When porting a file, keep its design and docstring posture, update
   identity strings (BuildASpec / BUILD_A_SPEC_*), and note the provenance in
@@ -934,7 +941,9 @@ backend/
                            fold-whitespace/dedupe/cap; empty list valid) +
                            restore_prompts (lenient project loader) +
                            SUGGEST_PROMPTS_TOOL. Latest-only session state, tiny
-                           payload — no store, no elision (rides history verbatim)
+                           payload — no store, no elision (rides history verbatim).
+                           Since P55-2 its description says to call it as the
+                           LAST tool call and write the closing message after it
   reference_docs.py        user-attached background documents the model reads FROM
                            and never edits: ReferenceDoc (+ kind) + ReferenceDocStore
                            (monotonic ids, loud truncation at MAX_TEXT_CHARS,
@@ -1619,7 +1628,17 @@ backend/
                            fallback — shared w/ reset + project load), renders
                            open-catalog guidance in _render_catalog, and rewords
                            _STANDARDS_POLICY/_PROVENANCE/FULL_DRAFT_DIRECTIVE
-                           to stay true for pinless modules
+                           to stay true for pinless modules. The 5.5
+                           prompting upgrade (P55-2): _HOW_YOU_WORK makes
+                           every tool call first (suggest_prompts last) and
+                           writes the reply after the final one, saying why;
+                           _SUGGESTED_PROMPTS_POLICY calls the tool last,
+                           just before the closing message;
+                           _WEB_LOOKUP_POLICY checks specifics "even when you
+                           feel confident"; _REPLY_AFTER_TOOL_CALLS is the
+                           ONE ordering sentence every chip-staging directive
+                           carries (full draft, adapt, both prerequisite
+                           turns, both debriefs and every variant)
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
                            lint event + standards_payload (the event lints
                            exactly as the doc payload does:
@@ -2107,6 +2126,19 @@ frontend/src/
                            ReactNode>, so tsc refuses a tray missing one; a
                            hidden panel is display:none, never unmounted)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
+tools/prompt55_progress_update_canary.py
+                           [5.5 prompting upgrade, P55-2] PAID, owner-run,
+                           nothing sent without --run: one real interview turn
+                           through stream_user_turn on a fresh SessionState
+                           (generic module), each request re-sent through
+                           client.beta.messages.stream with thinking.display
+                           "updates" + the beta + a max_tokens cap
+                           (ProgressUpdateClient; progress_update_request is
+                           the pure re-shape); a failed request is never
+                           retried without the beta; prints every block and
+                           progress note, then verdict(): pass = closing text
+                           >= 80 chars asking a question after the last tool
+                           call, no progress note asking one
 tools/research_cost_profile.py
                            [Research/QC cost Tier 1, Chunk 1] read-only: saved
                            .baspec / legacy .json / .basproject in, per-round
@@ -2746,6 +2778,24 @@ tests/
                            line, harvest_cut_off (unit and route, metered),
                            and HARVEST_MAX_TOKENS (an ast pin, the floor, a
                            lower BUILD_A_SPEC_MAX_TOKENS still binding it)
+  test_prompt55_closing_message.py
+                           [5.5 prompting upgrade, P55-2] every module's stable
+                           prompt makes tool calls first and replies after the
+                           last (with the reason), suggest_prompts last in the
+                           step list, the policy and the tool description, the
+                           web-lookup "even when you feel confident" sentence
+                           with the "don't search" line gone, and every
+                           chip-staging directive and variant carrying the one
+                           _REPLY_AFTER_TOOL_CALLS sentence
+  test_prompt55_progress_update_canary.py
+                           [P55-2] the canary without a network: nothing sent
+                           without --run, each round's recorded request equal to
+                           a plain engine run's (clock pinned) and re-sent only
+                           through the beta endpoint changed in display, cap and
+                           beta; the verdict (pass, a question in a note, no
+                           closing text, a short or question-free close); a 400
+                           reported and never retried without the beta; a
+                           refusal; the key and ceiling exits
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,

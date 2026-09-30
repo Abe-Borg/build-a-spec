@@ -1498,7 +1498,183 @@ named only streamed calls.
 
 ### As built
 
-(Filled in by the session.)
+Built 2026-09-30 on `claude/eager-tesla-qe1yjm`, from `master` at `4e94610`
+(PR #239's merge). No route, SSE event type, dependency, env knob,
+project-format change, QC schema or protocol bump, or version bump. No
+default changed; what changed for everyone is behaviour: a verifier seat
+sent through the Message Batches API (the default phase-2 transport) whose
+result ends without `submit_qc_verdict` is reminded in the next batch round,
+up to twice, before it fails.
+
+**What landed, by design item.**
+
+1. **The reminder count** (`backend/qc/engine.py`, `_BatchSeatState`).
+   `reminders_sent: int = 0`, kept by `resume_attempt` (untouched, its
+   docstring now says so) and zeroed by `restart_attempt` beside the
+   continuation count.
+2. **The fold** (`_apply_batch_item`). A COMPLETE result parses at once;
+   with no payload, and `not recovering`, and `round_left`, and
+   `state.may_remind()`, the seat is reminded: `state.remind(response)`
+   appends the reply verbatim and the one user turn
+   `research.schema.missing_output_tool_reply(response,
+   reminder=_missing_tool_reminder(tool), wrong_tool=_wrong_tool_result(tool))`
+   builds (P55-4's shape, constant and text, shared within `qc/engine.py`),
+   then `sanitize_messages_for_resend`, and leaves the seat unsettled so the
+   next round submits it. Otherwise `settle_parsed(payload)` settles as
+   before, now with the count. `round_left` is `round_index + 1 <
+   max_rounds`, passed through `_consume_batch_results` from the ordinary
+   read; the settlement window passes `False` (it also reads with
+   `recovering=True`). `settle_parsed` takes the parsed payload (the fold
+   parses once, to decide).
+3. **Priced at the batch rate.** Nothing new: the reminded seat is a
+   batched seat, so `run_final_qc` records it at
+   `settings.BATCH_COST_MULTIPLIER` over every response of its conversation.
+4. **Progress stays phase-level.** Nothing new either: a reminded seat is
+   unsettled, so `verification_batch`'s `settled` does not count it until a
+   later round settles it.
+5. **The warm lead** is an ordinary streamed seat and was covered by P55-4.
+
+**Deviations.**
+
+1. **A reminder needs budget like a continuation** (P55-4 deviation 2,
+   copied). `_BatchSeatState.may_remind()` is the cap AND the continuation
+   budget, and `remind` counts the reminder as a continuation
+   (`continuations += 1`), so `continuations < QC_MAX_CONTINUATIONS` is
+   exactly the streamed `len(all_responses) <= QC_MAX_CONTINUATIONS`. A seat
+   that spent its budget on pauses fails with "reminders sent: 0", on both
+   transports (pinned against the streamed path).
+2. **A Stop at the reminder decision cancels** (P55-4 deviation 1, copied).
+   The spec did not name it for the batch. `_apply_batch_item` gains
+   `should_stop` (threaded through `_consume_batch_results` from the round
+   loop): a Stop that lands while a round's results are read settles a seat
+   that would have been reminded "Cancelled by user." Without the check the
+   seat ends the same way at the next round's top, but its count and INFO
+   line would record a reminder never sent — P55-4's green-row lesson — so
+   the test asserts no reminder line.
+3. **The failure message carries the count**, "QC produced no parseable
+   payload (reminders sent: N).", the streamed path's message. The spec said
+   "Otherwise the seat settles as today"; today's text had no count, and the
+   two transports saying the same thing is the point of the session. It
+   applies to the settlement window and the last round too ("reminders sent:
+   0" says nothing was reminded, and why the seat failed is still its own
+   missing payload, never the round ceiling).
+4. **One INFO line per reminder** on `buildaspec.qc`, the streamed line's
+   batch twin: "QC batched verifier seat (candidate_id=…, reviewer_index=…)
+   ended its turn without submit_qc_verdict; reminder N of 2 queued for the
+   next batch round." `_apply_batch_item` and `_consume_batch_results` gain
+   `event_prefix` for it; "queued", because the batch decides when it runs.
+5. **`round_left` is a required keyword** on `_consume_batch_results` and
+   `_apply_batch_item`, so a future caller has to decide rather than inherit
+   a silent default.
+6. **Copy moved with it** (R10): the release note's P55-4 item ("The panel
+   reviewers that run in a batch are not reminded." → theirs goes out in the
+   batch's next round), README's Final QC "Five lenses" bullet and QC
+   `engine.py` architecture line, the trust dossier's Final QC card, the
+   `_MISSING_TOOL_REMINDERS` comment and `_run_batch_calls`' docstring.
+   v1.20.0 is still the newest published release (GitHub Releases API,
+   2026-09-30), so the release-note edit rides the unreleased 1.21.0 entry.
+7. **No release-checklist row.** `docs/RELEASE_WINDOWS.md` has no row for
+   P55-4's reminder either; nothing a tester can see changed.
+
+**Knowing test changes.** Two `tests/test_qc_audit_report.py` fixtures
+modelled a failed batched seat with ONE reply that carries no verdict. That
+reply now earns a reminder, and the fake's script was exhausted: its
+`AssertionError` inside `batches.create` reads as a refused submission, so
+the seat still failed, with the fake's message. A pytest probe over the
+whole suite (a plugin, not committed, recording every `_BatchSeatState.remind`
+call and every exhausted batch script per test) found both.
+`test_verifier_panel_preserves_exact_seats_including_failures` failed (its
+assertion reads "parseable payload"); `test_infrastructure_failed_verification_is_structurally_inconclusive`
+still PASSED, the wrong way. Each now scripts two more replies without a
+verdict and asserts the failed seat's exact message, "QC produced no
+parseable payload (reminders sent: 2).", so the path is pinned and not only
+the outcome. The probe's two other entries, in `tests/test_qc.py`, exhaust
+their script on `master` too (checked in a worktree), with no reminder
+involved, and were left alone.
+
+**Tests.** `tests/test_prompt55_batch_reminder.py` (20 cases, parametrized
+included): a seat reminded in the next round, alone in that round under its
+own custom id, the request the opening one plus the reply plus one reminder
+turn, then settling with a verdict; the reminder request equal to the
+streamed one (model, system, tools, thinking, effort, messages), with
+`QC_MAX_WORKERS=1` on the streamed side; the reminder request sanitized like
+a pause resume (a dangling `server_tool_use` dropped); `is_error` results
+for every invented tool and no text beside them; two reminders then the
+failure with the count; the INFO line (ids and counts, never the reply);
+none in the settlement window, none on the last round (a one-round phase and
+the second of two rounds), none after a Stop (and no reminder line), none
+past the continuation budget (spent, and exactly one left, on both
+transports); a resume submitting the reminder request again and keeping the
+count, a restart zeroing it, and the seat state directly; `may_remind`
+reading the budget; the reminded seat's record at the batch rate, its
+estimate from `estimate_usage_cost(..., multiplier=BATCH_COST_MULTIPLIER)`,
+`_audit_accounting_consistent()`, the `qc_batched` meter bucket and a
+`from_dict` round trip; progress staying phase-level with no new event
+type; and the two transports reaching the same verdicts, and the same
+failure text when the reminders run out.
+
+**Verified** on the branch, with every doc change in place: `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q` 3212 passed, 64 skipped (a first run, with `npm run build` emptying `frontend/dist` beside it, failed two app-factory tests on the missing `frontend/dist/assets`; the run on its own was clean); `npm test` 438 passed; `npm run build` clean.
+
+**Revert matrix.** 24 rows. Each mechanism was reverted in place, one at a
+time, by a script that restored the exact text it read and checked
+`git diff` and `git status` unchanged after every row. Each row ran
+`tests/test_prompt55_batch_reminder.py`, `test_qc_batch_verification.py`,
+`test_qc_batch_warm_lead.py`, `test_retry_resume.py`,
+`test_qc_audit_report.py` and `test_prompt55_missing_tool_reminder.py`
+(236 tests before the sanitize test was added, 237 after).
+
+| Mechanism reverted | Tests red |
+|---|---|
+| fold: no reminder at all | 16 |
+| fold: reminds without a round left | 2 |
+| fold: never consults `may_remind` | 7 |
+| fold: reminds after a Stop | 1 |
+| fold: no INFO line | 6 |
+| `may_remind`: no cap | 6 |
+| `may_remind`: no budget | 3 |
+| `remind`: reply not appended | 3 |
+| `remind`: reminder request not sanitized | 1 (0 on the first run) |
+| `remind`: count not incremented | 10 |
+| `remind`: not counted as a continuation | 2 |
+| `remind`: reminder names no tool | 2 |
+| `remind`: invented-tool result names no tool | 1 |
+| `restart_attempt` keeps the count | 2 |
+| `resume_attempt` zeroes the count | 2 |
+| `settle_parsed`: failure without the count | 10 |
+| round loop: `round_left` always true | 2 |
+| round loop: `should_stop` not passed to the read | 1 |
+| read: `round_left` not forwarded (reads as False) | 16 |
+| read: `should_stop` not forwarded | 1 |
+| read: `event_prefix` not forwarded | 1 |
+| fold: reminds while recovering | 0 alone; 1 with the next row |
+| settlement window: `round_left` true | 0 alone; 1 with the row above |
+| both of those together | 1 |
+
+The first run found one green row, **"reminder request not sanitized"**:
+every test's reminded reply was clean, so the sanitizer had nothing to
+remove. `test_the_reminder_request_is_sanitized_like_a_pause_resume` (a
+reply ending in a `server_tool_use` with no result, which the round-2
+request must not carry) was added, and the row re-run: 1 red. No other test
+changed between the runs.
+
+The recovering guard and the settlement window's `round_left=False` are one
+mechanism written twice, deliberately: the window reads with
+`recovering=True` AND passes `round_left=False`, and either alone keeps a
+reminder out of the window. Reverted separately each row stays green;
+reverted together the settlement-window test goes red. Both stay, because
+each also states a different rule the code relies on — `recovering` is the
+fold's "never buy new work" (it also settles a pause or a retryable error
+where it stands), and `round_left` is "a reminder needs a round" — and a
+future caller of `_apply_batch_item` could hold either one alone.
+
+**For P55-6.** Both reminder paths run the resend sanitizer over the
+conversation: P55-4's streamed reminder in `_run_dimension` and
+`_run_streaming_call`, and this batched one in `_BatchSeatState.remind`. So
+P55-6's per-conversation flag on the streamed paths has to be set by a
+reminder's `sanitize_messages_for_resend` as well as a continuation's. The
+batched seat needs nothing, per P55-6's own design (the Batches API's unset
+default drops failing blocks), and `remind` is the place a comment saying so
+would go.
 
 ---
 

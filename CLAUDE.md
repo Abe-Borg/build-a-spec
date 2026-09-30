@@ -656,9 +656,23 @@ backend/
                            _wrong_tool_result; every streamed call — lenses,
                            grouping calls, streamed seats, warm leads; one
                            INFO line per reminder on buildaspec.qc naming
-                           event_prefix and event_fields); the batched seat
-                           (_BatchSeatState.settle_parsed) does not remind
-                           yet (P55-5). _early_stop_line(tool, work) is the
+                           event_prefix and event_fields). P55-5: a batched
+                           seat is reminded too, in the NEXT batch round —
+                           _BatchSeatState gains reminders_sent (kept by
+                           resume_attempt, zeroed by restart_attempt),
+                           may_remind() (the cap and the continuation
+                           budget; a reminder counts as a continuation) and
+                           remind(response) (the same shape and text, then
+                           the resend sanitizer); _apply_batch_item reminds
+                           a completed turn with no payload only when not
+                           recovering and round_left (threaded through
+                           _consume_batch_results: round_index + 1 <
+                           max_rounds; the settlement window passes False),
+                           a Stop by then settling "Cancelled by user.";
+                           settle_parsed(payload) carries the count in the
+                           failure message; one INFO line per reminder
+                           ("…queued for the next batch round").
+                           _early_stop_line(tool, work) is the
                            one sentence the lens, grouping and verifier
                            system prompts carry before their tagged-JSON
                            fallback
@@ -2881,6 +2895,21 @@ tests/
                            seat, a paused grouping call and a warm lead
                            reminded, the helper, the four system-prompt
                            lines in the cached system block, and F3
+  test_prompt55_batch_reminder.py
+                           [5.5 prompting upgrade, P55-5] a batched seat
+                           reminded in the next round (its request the
+                           streamed reminder request, byte for byte, and
+                           sanitized like a pause resume; is_error
+                           results for invented tools); two reminders then
+                           the failure with the count; none in the
+                           settlement window, on the last round, after a
+                           Stop or past the continuation budget (both
+                           transports alike); the count kept by a resume and
+                           zeroed by a restart; the seat's record priced at
+                           the batch rate and reconciling; progress staying
+                           phase-level with no new event; and the two
+                           transports reaching the same verdicts and the
+                           same failure text
   frontend/tests/costChecks.test.ts
                            [Tier 1 finish, CT-2 + WL-1] every state's line
                            (switched off in settings, on and measured,
@@ -18988,6 +19017,115 @@ full revert matrix; this section is the why and the traps.
      payload." for a streamed call: those messages now come after up to two
      reminders and end with the count. The batched seat's message is
      unchanged.
+
+## A batched verifier seat that skipped its output tool is reminded — implemented notes (5.5 prompting upgrade, P55-5)
+
+The fifth session of the 5.5 prompting upgrade (`docs/plans/prompt55/`),
+finding F2 on the batch transport, and decision D5. P55-4 made a streamed
+research or Final QC call whose reply ends without its output tool get up
+to two reminders instead of failing; this does the same for a verifier seat
+sent through the Message Batches API, the default phase-2 transport. No
+route, SSE event type, dependency, env knob, project-format change, QC
+schema or protocol bump, or version bump. The plan's P55-5 **As built**
+carries the deviations and the full revert matrix; this section is the why
+and the traps.
+
+- **Why the batch needed its own session.** Until now the two transports
+  could reach different verdicts for the same reply: a streamed seat whose
+  reply ended in text was reminded, a batched one settled "QC produced no
+  parseable payload." at once, so its candidate went inconclusive and the
+  run partial. Batching is supposed to change transport and nothing else
+  ("Final QC phase 2 is batched"), and this was the one reply where it did.
+- **A reminder is a new round for that seat, like a pause.** In
+  `_apply_batch_item` a completed turn with no payload calls
+  `_BatchSeatState.remind(response)`: the reply appended verbatim, then the
+  one user turn `missing_output_tool_reply` builds with the streamed path's
+  own `_missing_tool_reminder` / `_wrong_tool_result` text (a text block, or
+  an `is_error` result per invented client tool), then the resend
+  sanitizer. The seat stays unsettled, so the next round submits it; nothing
+  else about the round loop changed. `verification_batch` stays
+  phase-level: a reminded seat counts as unsettled until it settles.
+- **The limits are the streamed path's, plus one only a batch has.**
+  `may_remind()` is the cap (`_MISSING_TOOL_REMINDERS`, two per
+  conversation) and the continuation budget — `continuations` now counts
+  reminders too, so `continuations < QC_MAX_CONTINUATIONS` is exactly the
+  streamed `len(all_responses) <= QC_MAX_CONTINUATIONS`. The fold adds the
+  batch's own: never while `recovering` (the settlement window buys no new
+  work), and only with `round_left` (`round_index + 1 < max_rounds`,
+  threaded through `_consume_batch_results`). A reminder needs a round to
+  run in, the `no_round_left` rule a refused submission's retry already
+  follows ("The Final QC batch phase cannot hang"); one queued on the last
+  round would only have ended as "did not settle within the round ceiling",
+  naming the wrong cause. Without a reminder the seat fails as it always
+  did, with the count: "QC produced no parseable payload (reminders sent:
+  N)." — the streamed message, so both transports now say the same thing.
+- **A Stop takes the Stop's path.** A Stop that lands while a round's
+  results are being read settles a seat that would have been reminded
+  "Cancelled by user." (P55-4 deviation 1, copied). Without that check the
+  seat would end the same way at the next round's top, but its count and its
+  INFO line would claim a reminder that never went out — the P55-4 green row
+  again, which is why the test asserts no reminder line.
+- **The count is the conversation's.** `reminders_sent` rides
+  `_BatchSeatState` beside `continuations`: `resume_attempt` keeps it (the
+  reminder request that failed is submitted again as it stood — an errored
+  seat with progress resumes, "A dropped connection resumes the
+  conversation"), `restart_attempt` zeroes it with the rest of the
+  conversation.
+- **Priced at the batch rate, with nothing new to price it.** The reminded
+  seat is still a batched seat, so its record carries
+  `settings.BATCH_COST_MULTIPLIER` over every response in its conversation,
+  and the run's summed total reconciles (`_audit_accounting_consistent`).
+  `api_request_count` and the response count include the reminder, as on
+  the streamed path.
+- **The reminder is the streamed one, byte for byte.** For the same
+  scripted panel the batched round-2 request equals the streamed reminder
+  request (model, system, tools, thinking, effort, messages), and the two
+  transports reach the same verdicts and the same failure text when the
+  reminders run out (pinned). A batched request still carries no
+  continuation tail and no new event; the verifier system prompt's
+  early-stop line (P55-4) already reached batched seats.
+- **One INFO line per reminder, ids and counts only**, on `buildaspec.qc`:
+  "QC batched verifier seat (candidate_id=…, reviewer_index=…) ended its
+  turn without submit_qc_verdict; reminder N of 2 queued for the next batch
+  round." — "queued", not "sent", because the batch decides when it runs.
+- **Test traps.** (1) The batch fake answers a round's seats in order from
+  ONE queue per finding title, so a panel's scripts interleave: seat 1's
+  opening reply, seat 2's, then each later round's. A test comparing the
+  transports scripts each in the order that transport asks, with
+  `QC_MAX_WORKERS=1` on the streamed side. (2) The P55-4 trap, on the batch
+  side: a fixture that modelled a failed seat with ONE reply without a
+  verdict now reaches a reminder first, and the fake's exhausted script
+  raises `AssertionError` inside `batches.create`, which the round loop
+  reads as a refused submission — so the seat still fails, with the fake's
+  message. A pytest probe over the whole suite (every `remind` call and
+  every exhausted batch script, per test) found both such fixtures; the two
+  `test_qc.py` tests it also lists exhaust their script on `master` too,
+  with no reminder involved.
+- **Knowing test changes.** `tests/test_qc_audit_report.py`:
+  `test_verifier_panel_preserves_exact_seats_including_failures` (it failed:
+  its assertion reads "parseable payload") and
+  `test_infrastructure_failed_verification_is_structurally_inconclusive`
+  (it still PASSED, the wrong way — found by the probe) each script two more
+  replies without a verdict, and now assert the failed seat's exact message,
+  "QC produced no parseable payload (reminders sent: 2).", so the path is
+  pinned rather than the outcome alone.
+- **Tests:** `tests/test_prompt55_batch_reminder.py`. Revert matrix: every
+  mechanism reverted in place and restored from the exact text read, the
+  tree checked unchanged after every row (in full in the plan's P55-5 As
+  built).
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. "A fan-out call that skipped its output tool is reminded (P55-4)" says a
+     batched seat "does NOT yet" get a reminder, and its erratum 1 that
+     until P55-5 the two transports can differ for a text-only seat. Both
+     are resolved: a batched seat is reminded in the next round, under the
+     same cap, with the same text and the same failure message.
+  2. The same section's erratum 3 says "The batched seat's message is
+     unchanged." It now ends with the count too: "QC produced no parseable
+     payload (reminders sent: N)."
+  3. "Final QC phase 2 is batched" (v1.12.0) lists what each batch result
+     does — settle, queue a continuation, or queue a retry. It can now also
+     queue a reminder.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

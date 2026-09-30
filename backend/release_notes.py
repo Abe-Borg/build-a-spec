@@ -407,8 +407,9 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "reminded to hand them in, up to twice, before "
                             "it counts as failed. Each reminder is a short "
                             "billed request that the cost line and the "
-                            "report include. The panel reviewers that run "
-                            "in a batch are not reminded."
+                            "report include. That holds for the panel "
+                            "reviewers that run in a batch too: theirs "
+                            "goes out in the batch's next round."
                         ),
                     ),
                 ),

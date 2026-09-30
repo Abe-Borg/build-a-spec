@@ -204,8 +204,9 @@ QC_MAX_CONTINUATIONS = 16
 # decision D5: stop "after two or three automatic continuations on the same
 # task"). A module constant, not a knob, and a copy of ``research.engine``'s
 # (the engines keep separate copies of their loop). A restart starts the
-# count again; a resume keeps it. The batched transport does not remind yet
-# (P55-5).
+# count again; a resume keeps it. A batched verifier seat is reminded the same
+# way, with the same text, in the next batch round (P55-5; ``_BatchSeatState
+# .remind``), under the same cap.
 _MISSING_TOOL_REMINDERS = 2
 
 
@@ -5898,6 +5899,11 @@ class _BatchSeatState:
     # (Codex, PR #227). Never part of the record.
     first_round: int | None = None
     first_reply: Any = None
+    # Missing-output-tool reminders this CONVERSATION has sent (the 5.5
+    # prompting upgrade, P55-5): the streamed path's ``reminders_sent``,
+    # carried across rounds. A resume keeps it (the reminder request that
+    # failed is submitted again as it stood); a restart starts it at zero.
+    reminders_sent: int = 0
 
     def initial_messages(self) -> list[dict]:
         return [
@@ -5918,8 +5924,8 @@ class _BatchSeatState:
         this is the retry for a seat with no progress to keep, or on its
         final attempt. Same rule as the streaming path — the abandoned
         conversation's responses stay billed (the spend was real) but its
-        messages, its provider container and its continuation count are
-        dropped rather than inherited.
+        messages, its provider container, its continuation count and its
+        reminder count are dropped rather than inherited.
         """
         self.billed.extend(self.all_responses)
         self.all_responses = []
@@ -5927,16 +5933,18 @@ class _BatchSeatState:
         self.container_id = ""
         self.attempt += 1
         self.continuations = 0
+        self.reminders_sent = 0
 
     def resume_attempt(self) -> None:
         """Begin the next attempt INSIDE the same conversation: the resume.
 
-        The seat's messages, responses, container and continuation count all
-        carry on, so the next round submits exactly the request that failed —
-        a pause_turn continuation it had already earned, not a fresh start
-        that pays for every finished continuation again. Only the attempt
-        advances, so the attempt ceiling and the backoff read it as they
-        always did, and the continuation budget stays the conversation's.
+        The seat's messages, responses, container, continuation count and
+        reminder count all carry on, so the next round submits exactly the
+        request that failed — a pause_turn continuation or a reminder it had
+        already earned, not a fresh start that pays for every finished
+        continuation again. Only the attempt advances, so the attempt
+        ceiling and the backoff read it as they always did, and the
+        continuation budget stays the conversation's.
         """
         self.attempt += 1
 
@@ -5969,15 +5977,57 @@ class _BatchSeatState:
             self.uncollected_requests,
         )
 
-    def settle_parsed(self) -> None:
-        payload = _parse(
-            self.all_responses, self.spec.tool_name, self.spec.json_tag
+    def may_remind(self) -> bool:
+        """Whether the conversation can still take a reminder request.
+
+        The streamed path's two limits, copied: fewer than
+        :data:`_MISSING_TOOL_REMINDERS` sent, and the continuation budget
+        able to send one more request. ``continuations`` counts every request
+        past the opening one — pauses and reminders alike — so this is the
+        streamed ``len(all_responses) <= QC_MAX_CONTINUATIONS`` exactly.
+        Whether a ROUND is left, and whether the phase is still running, is
+        the fold's to decide.
+        """
+        return (
+            self.reminders_sent < _MISSING_TOOL_REMINDERS
+            and self.continuations < QC_MAX_CONTINUATIONS
         )
+
+    def remind(self, response: Any) -> None:
+        """Queue the reminder a text-only end of turn gets, for the next round.
+
+        Append-only, exactly as the streamed path and a pause append: the
+        assistant content verbatim, then ONE user turn naming the output tool
+        (``missing_output_tool_reply``: a text block, or an ``is_error``
+        result for every client tool the model invented), then the resend
+        sanitizer. The seat stays unsettled, so the next round submits it; the
+        reminder counts against the continuation budget like a continuation.
+        """
+        tool_name = self.spec.tool_name
+        self.messages = sanitize_messages_for_resend(
+            [
+                *self.messages,
+                {"role": "assistant", "content": response.content},
+                missing_output_tool_reply(
+                    response,
+                    reminder=_missing_tool_reminder(tool_name),
+                    wrong_tool=_wrong_tool_result(tool_name),
+                ),
+            ]
+        )
+        self.reminders_sent += 1
+        self.continuations += 1
+
+    def settle_parsed(self, payload: dict | None) -> None:
+        """Settle on a completed turn: its payload, or the familiar failure."""
         self.settled = _CallResult(
             payload,
             self.all_responses,
             [*self.billed, *self.all_responses],
-            "" if payload is not None else "QC produced no parseable payload.",
+            ""
+            if payload is not None
+            else "QC produced no parseable payload (reminders sent: "
+            f"{self.reminders_sent}).",
             self.api_request_count,
             "",
             self.uncollected_requests,
@@ -6248,7 +6298,10 @@ def _run_batch_calls(
     (cost Tier 1, Chunk 5): a seat whose conversation has progressed
     re-submits the request that failed, and only a seat with none, or on its
     final attempt, starts a fresh conversation. A refused submission is
-    retried the same way, seat by seat.
+    retried the same way, seat by seat. A result that ends its turn without
+    the output tool queues a REMINDER for the next round (the 5.5 prompting
+    upgrade, P55-5) — the streamed path's reminder, text and cap included —
+    while a round is left; see :func:`_apply_batch_item`.
 
     What is deliberately NOT carried over is the live relay: a batch request
     does not stream, so no per-seat activity/search/fetch frames exist to
@@ -6477,6 +6530,10 @@ def _run_batch_calls(
                         retry_event=f"{seat_event_prefix}_retry",
                         fields_for=fields_for,
                         event_sink=event_sink,
+                        # The review is over: no round is left for a
+                        # reminder, whatever the ceiling says.
+                        round_left=False,
+                        event_prefix=seat_event_prefix,
                         recovering=True,
                         deadline=settle_deadline,
                     )
@@ -6809,6 +6866,11 @@ def _run_batch_calls(
             retry_event=f"{seat_event_prefix}_retry",
             fields_for=fields_for,
             event_sink=event_sink,
+            # A reminder needs a round to run in (P55-5), the ``no_round_left``
+            # rule a refused submission's retry already follows.
+            round_left=round_index + 1 < max_rounds,
+            event_prefix=seat_event_prefix,
+            should_stop=should_stop,
         )
         unassigned_results += read.unassigned
         # Only a request whose row was never read has an unknown charge. A
@@ -6917,6 +6979,9 @@ def _consume_batch_results(
     retry_event: str,
     fields_for: dict[str, dict[str, Any]],
     event_sink: EventSink,
+    round_left: bool,
+    event_prefix: str = "verifier",
+    should_stop: Callable[[], bool] = lambda: False,
     recovering: bool = False,
     deadline: float | None = None,
 ) -> _BatchReadOutcome:
@@ -6943,6 +7008,10 @@ def _consume_batch_results(
     window uses it so a slow stream cannot outlive the window it belongs to.
     The ordinary path passes ``None`` — abandoning a row it could have folded
     would throw away a verdict the run has already paid for.
+
+    ``round_left`` says whether another batch round can still run — what a
+    missing-output-tool reminder needs (see :func:`_apply_batch_item`);
+    ``should_stop`` and ``event_prefix`` are the reminder's too.
     """
     answered: set[str] = set()
     unassigned = 0
@@ -6962,6 +7031,9 @@ def _consume_batch_results(
                 retry_event=retry_event,
                 retry_fields=fields_for.get(key, {}),
                 event_sink=event_sink,
+                round_left=round_left,
+                event_prefix=event_prefix,
+                should_stop=should_stop,
                 recovering=recovering,
             )
     except (KeyboardInterrupt, SystemExit):
@@ -6984,9 +7056,12 @@ def _apply_batch_item(
     retry_event: str,
     retry_fields: dict[str, Any],
     event_sink: EventSink,
+    round_left: bool,
+    event_prefix: str = "verifier",
+    should_stop: Callable[[], bool] = lambda: False,
     recovering: bool = False,
 ) -> None:
-    """Fold one batch result into its seat: settle, continue, or retry.
+    """Fold one batch result into its seat: settle, continue, remind, or retry.
 
     ``recovering`` is the settlement window's read (see ``_settle_open_batch``):
     the phase has already ended, so the fold captures what the provider
@@ -6994,6 +7069,19 @@ def _apply_batch_item(
     a real verdict, and a paused or retryable one settles where it stands with
     its billed responses retained — no continuation is queued and no retry is
     started, because both would be new model work after a Stop.
+
+    A completed turn with no payload — the model ended its turn without the
+    output tool — is REMINDED (the 5.5 prompting upgrade, P55-5), exactly as
+    the streamed path reminds it (P55-4): the seat's conversation takes the
+    reply and one reminder turn and stays unsettled, so the NEXT round
+    submits it. Only while ``may_remind`` holds (two reminders per
+    conversation, the continuation budget), never while ``recovering`` (the
+    settlement window buys no new work), and only when ``round_left`` — a
+    reminder needs a round to run in, like a refused submission's retry, and
+    one queued on the last round would only end as a round-ceiling failure
+    that names the wrong cause. A Stop that has landed by then takes the
+    Stop's path, as on the streamed path. Otherwise the seat fails as it
+    always did, with the count in its message.
     """
     outcome = _item_attr(item, "result")
     outcome_type = str(_item_attr(outcome, "type") or "")
@@ -7050,7 +7138,31 @@ def _apply_batch_item(
 
     stop_class = classify_stop_reason(getattr(response, "stop_reason", None))
     if stop_class == STOP_CLASS_COMPLETE:
-        state.settle_parsed()
+        payload = _parse(
+            state.all_responses, state.spec.tool_name, state.spec.json_tag
+        )
+        if (
+            payload is None
+            and not recovering
+            and round_left
+            and state.may_remind()
+        ):
+            if should_stop():
+                # The Stop's own path: nothing more is queued.
+                state.settle("Cancelled by user.")
+                return
+            state.remind(response)
+            _log.info(
+                "QC batched %s seat (%s) ended its turn without %s; "
+                "reminder %d of %d queued for the next batch round.",
+                event_prefix,
+                ", ".join(f"{key}={value}" for key, value in retry_fields.items()),
+                state.spec.tool_name,
+                state.reminders_sent,
+                _MISSING_TOOL_REMINDERS,
+            )
+            return
+        state.settle_parsed(payload)
         return
     if stop_class == STOP_CLASS_PAUSE:
         if recovering:

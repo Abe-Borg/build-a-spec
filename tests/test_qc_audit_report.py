@@ -302,10 +302,15 @@ def test_verifier_panel_preserves_exact_seats_including_failures() -> None:
     # Two upholds meet the numeric threshold, but the failed response prevents
     # a substantive outcome. The candidate remains a first-class
     # infrastructure-inconclusive record and execution coverage is incomplete.
+    # Seat 2 answers without a verdict, and so do both of the reminders it
+    # then gets in the batch's next rounds (the 5.5 prompting upgrade,
+    # P55-5); only after them does it fail.
     scripts["Three-seat verification"] = [
         qc_verdict_response(True, note="Uphold one."),
         _failed_verdict_response(),
         qc_verdict_response(True, note="Uphold two."),
+        _failed_verdict_response(),
+        _failed_verdict_response(),
     ]
 
     result = _run(SequencedFakeClient(scripts), store)
@@ -322,7 +327,7 @@ def test_verifier_panel_preserves_exact_seats_including_failures() -> None:
     assert sum(verdict.status == "completed" for verdict in finding.verdicts) == 2
     failed = [verdict for verdict in finding.verdicts if verdict.status == "failed"]
     assert len(failed) == 1
-    assert "parseable payload" in failed[0].error
+    assert failed[0].error == "QC produced no parseable payload (reminders sent: 2)."
     assert failed[0].upholds is False
     assert result.coverage_complete() is True
     assert result.verification_complete() is False
@@ -2547,8 +2552,12 @@ def test_infrastructure_failed_verification_is_structurally_inconclusive() -> No
             )
         ]
     )
+    # Seat 2 never returns a verdict: not first time, nor after either of its
+    # two reminders (the 5.5 prompting upgrade, P55-5).
     scripts["Infrastructure-inconclusive candidate"] = [
         qc_verdict_response(True, note="The completed seat upheld the candidate."),
+        _failed_verdict_response(),
+        _failed_verdict_response(),
         _failed_verdict_response(),
     ]
 
@@ -2563,6 +2572,9 @@ def test_infrastructure_failed_verification_is_structurally_inconclusive() -> No
         "completed",
         "failed",
     }
+    assert [v.error for v in candidate.verdicts if v.status == "failed"] == [
+        "QC produced no parseable payload (reminders sent: 2)."
+    ]
     assert result.verification_complete() is False
     assert result.is_complete() is False
 

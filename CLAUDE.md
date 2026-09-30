@@ -19794,8 +19794,11 @@ else, delete, point, and keep no `archive/` folder.
   statements are corrected.
 - **Gates.** `ruff check .` clean. The doc, release-notes, packaging and
   version tests pass. No frontend file changed, so `npm test` and the build
-  were not run. The full backend suite: see the line at the end of this
-  section.
+  were not run. The full backend suite, run on this change after the
+  deletions: 3279 passed, 64 skipped, 7 minutes 22 seconds. The 3311
+  the 5.5 program's closeout counted minus the two tracker tests'
+  35 cases, plus three added since. The PR's CI ran the frontend
+  tests and build and passed them.
 - **Errata** (these notes are append-only, so corrections to earlier
   sections are recorded here):
   1. Every earlier section that says a release note is "owed", "waits for

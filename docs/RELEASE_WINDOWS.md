@@ -365,7 +365,8 @@ invisible to CI and expensive to the user.
 The switch (`BUILD_A_SPEC_CONTINUATION_CACHE`) has been on by default since
 the Tier 1 finish program's CT-3, so these rows run on an ordinary build;
 the last one switches it off. Two runtime self-checks watch it (CT-1 and
-CT-2, `docs/plans/tier1-finish/`). They can only switch it off, one engine
+CT-2; CLAUDE.md "The two shelved savings are on, and watch themselves").
+They can only switch it off, one engine
 at a time, until the app restarts, and Settings → Developer tools shows what
 they decided.
 
@@ -860,9 +861,9 @@ section →) is under v1.20.0 above.
       shows the same numbers under `context_sizes`, one event per turn.
       *New session* and *Open project* each put the row back to "not
       measured". The measurement that decides whether part B is built is
-      owner-run and is described in
-      `docs/plans/project-workspace/05_RELEVANCE_TRIM.md` (the gate), not
-      here — it is not a release check.
+      owner-run and was described in the retired Phase 5 spec
+      (`git show 7d4c0db:docs/plans/project-workspace/05_RELEVANCE_TRIM.md`),
+      not here — it is not a release check.
 
 ### Chat history compaction (Phases 1–2; the page-text trim on by default)
 
@@ -1005,6 +1006,50 @@ code shape, and these rows guard the behavior. Stop the backend process
       re-pins it. The chat no longer re-measures itself every animation
       frame, so an idle stream should show no steady CPU draw in Task
       Manager beyond the streaming text itself.
+
+### Deep-dive remediation live gate (v1.8.0; owner-owed)
+
+Carried here from the retired deep-dive remediation plans (Chunk 6.5, whose
+implementation record says: "Manual QA completed: none. The owner elected to
+defer"). These spend real money; nothing recorded them as done, so they are
+outstanding. Rerun item 1 after any future change to the web-tool
+definitions — the failure it guards against came from provider-side behaviour
+shifting under a pinned tool version.
+
+- [ ] **Research continuation and activity.** Run every area on a realistic
+      project. No container-id 400; every area completes or fails for a
+      substantive reason; the board's query and URL labels and the trace
+      counts populate. If a natural `pause_turn` occurs, its continuation
+      succeeds.
+- [ ] **Chat stop recovery.** Trigger a web search, stop while it is
+      searching, send a follow-up, save the project, reopen it, send another
+      follow-up. No poisoned-history 400, and the stopped output's usage is
+      labelled estimated.
+- [ ] **Research transport recovery.** Interrupt only the SSE transport while
+      the server run continues. The board reconnects on its own, never
+      regresses, and ends on a correct terminal profile.
+- [ ] **QC live state and container.** A normal Final QC shows no stop
+      banner. In a separate run, stop mid-flight: the drawer shows genuine
+      settling until the partial report attaches.
+- [ ] **Truthful partial research report.** With a required area's coverage
+      missing, the model's context, readiness, the report modal's
+      Limitations, the JSON manifest, and the Word identity, Limitations and
+      readiness all agree.
+- [ ] **Cache economics.** Send at least three realistic turns, including a
+      gap longer than five minutes. Diagnostics show a growing cache read at
+      the committed-history boundary and only incremental creation; check
+      the one-hour subtotal and list-price estimate against provider
+      records.
+- [ ] **QC v4.** Current reports say `final-qc/4`; outcomes follow the v4
+      table, a disputed candidate blocking readiness until dispositioned;
+      the masthead and sign-off agree; a saved v3 report is readable as
+      history but asks for a rerun for current readiness.
+- [ ] **Responsiveness.** While chat streams, import a large template, export
+      a large source DOCX, and request a stop, in separate trials. SSE and
+      health stay responsive, and each export opens in Microsoft Word.
+- [ ] **Report visual QA.** Inspect a large Word report for version labels,
+      partial-research limitations, per-TTL cost basis, request-count
+      composition, page breaks and readable tables.
 
 ---
 

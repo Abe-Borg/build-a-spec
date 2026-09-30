@@ -2927,24 +2927,6 @@ tests/
                            the hand-off patched out too; diagnostics through
                            scrub_data. Every engine run passes
                            batch_warm_lead=True and a nonzero wait
-  test_tier1_finish_tracker.py
-                           [Tier 1 finish] the program's tracker cannot say
-                           where it stands wrong: one status line, every
-                           session in order with its PR and merge commit,
-                           titles agreeing across the tracker and both
-                           plans, checklists mirroring the acceptance
-                           items with evidence on every tick, the
-                           Next-session line, and the completion banner +
-                           line exactly when every row is done, in a fixed
-                           order at the top
-  test_prompt55_tracker.py [5.5 prompting upgrade] the same checks for
-                           docs/plans/prompt55/PROMPT55_TRACKER.md against
-                           PROMPT55_PLAN.md, with the session list read
-                           from the plan's headings (a split adds
-                           P55-<n>b right after P55-<n>; the eight
-                           originals never move, and the closeout stays on
-                           the last row), plus the handoff's
-                           sessions-left sentence and the prompt template
   test_prompt55_parsing_and_harvest.py
                            [5.5 prompting upgrade, P55-1] the output-tool
                            extractor (exact beats case-insensitive, the last
@@ -19734,6 +19716,107 @@ this one is the map.
   section itself records as renamed. The one statement found false is
   recorded in the P55-8 section above (a pasted directive no longer gets the
   draft-pass boost).
+
+## The finished plans are retired — implemented notes
+
+Owner ask (Abraham, 2026-09-30), once the last program had closed: find
+every implementation plan and note that is old, finished or no longer
+relevant, with the files that only existed for it, and remove them. Docs,
+one unused tool and two tests went; no route, SSE event, dependency, env
+knob, project-format change or version bump. `docs/plans/README.md` is now
+the retired index, and its table names the CLAUDE.md sections that hold each
+program's as-built record. The 2026-07-29 batch-plan retirement is the
+precedent, and every rule it set was kept: lift what is recorded nowhere
+else, delete, point, and keep no `archive/` folder.
+
+- **What went: 29 files, about 1.2 MB.** Every plan and tracker of the
+  seven programs — deep-dive remediation (closed 2026-07-29), chat history
+  compaction (2026-09-23), the project workspace (Phase 7 merged as PR #188,
+  though its record still read "in review"), the redline on your original
+  (every phase and follow-up built), research and Final QC cost Tier 1
+  (2026-09-24), the Tier 1 finish (2026-09-25) and the 5.5 prompting upgrade
+  (2026-09-30) — and the revision-2 review's execution record, whose two
+  unrun steps were owner-run measurements and whose two deferred ideas Tier
+  1 Chunks 2 and 3 had since built. Every one was judged by its own status
+  block, not by the index. With them: `tests/test_tier1_finish_tracker.py`
+  and `tests/test_prompt55_tracker.py`, whose only job was to police the
+  shape of two trackers for programs with no session left to run, and
+  `tools/lint_block_profile.py`, the execution record's step-4 instrument —
+  no tests, never run in three weeks, and a copy of the LINT REPORT renderer
+  that had to be kept in step with `conversation.py`.
+- **The release-note drafts were lifted first, because the plans were the
+  only place they lived.** Twelve items joined the unreleased 1.21.0 entry
+  of `backend/release_notes.py`: compaction Phases 2 and 3 under Chat; the
+  redline program's six unannounced parts (Phase 1, the links and nesting
+  follow-up, the native moves, the comments, the custom-XML fix, the Phase 0
+  follow-up) under Word export, beside Phase 0's; and the Tier 1 plan's §7,
+  all four, under What a review costs. v1.20.0 was still the newest
+  published release on 2026-09-30 (the GitHub Releases API), so the entry
+  is not frozen, and a v1.21.0 tag cut from `master` carries everything the
+  items describe. The wording is the plans' own.
+- **Two more things had no other home.** The deep-dive program's nine-item
+  owner-owed live and manual QA gate (Chunk 6.5, never performed) now sits
+  in `docs/RELEASE_WINDOWS.md` under "Pre-release manual QA" as its own
+  subsection, carried forward as outstanding, the way the batch plans'
+  owed QA was. The execution record's step-2 decision rule was already what
+  `tools/qc_export_cost_profile.py`'s `_verdict` applies, so its docstring
+  says so instead of pointing at a deleted file.
+- **What stayed, and why.** Every other tool: `qc_export_cost_profile.py`
+  is imported by `tests/test_qc_batch_warm_lead.py`,
+  `research_cost_profile.py` and `chat_history_profile.py` have their own
+  tests, the three canaries are the live checks the ground rules name, and
+  the `render_docx_*` files are the DOCX gate and the Word judge. Project
+  workspace Phase 5 Part B and Phase 6, the two specs never built, are in
+  git history at `7d4c0db`, the last commit that held every retired file;
+  the index and the two docs that still describe the Part B gate point
+  there with a `git show` line.
+- **Every pointer was retargeted, none deleted silently.** Nine backend
+  docstrings and comments (`cost_checks.py`, three in `settings.py`,
+  `compaction.py`, `history_hygiene.py`, `revisions.py`,
+  `source_splice.py`, `revision_marks.py`) now name the CLAUDE.md section or
+  the `DOCX_FIDELITY.md` contract that holds the rule; six test docstrings
+  likewise; five tool docstrings and the prompt55 canary's pass message;
+  nine README passages, whose "no release entry yet", "owes its release
+  notes" and "(in progress)" statements were false once the drafts were
+  lifted; two runbook lines. `tests/test_docs_consistency.py`'s Windows
+  command scan lost its eleven plan, record and lint-profiler entries and
+  keeps the five docs, the five tools and the PyInstaller spec; the retired
+  index itself is not scanned, and a future plan that carries a Windows
+  command joins the list. A repo-wide grep for `docs/plans/` finds the
+  index and the three `git show` pointers, nothing else.
+- **The Layout is maintained current, so its two entries for the deleted
+  tests are gone.** Nothing else in this file was rewritten: the sections
+  above are append-only history, and the errata below are how their stale
+  statements are corrected.
+- **Gates.** `ruff check .` clean. The doc, release-notes, packaging and
+  version tests pass. No frontend file changed, so `npm test` and the build
+  were not run. The full backend suite: see the line at the end of this
+  section.
+- **Errata** (these notes are append-only, so corrections to earlier
+  sections are recorded here):
+  1. Every earlier section that says a release note is "owed", "waits for
+     the next release", or that "the owner picks the release" — the
+     compaction Phase 2 and 3 notes, the Tier 1 closeout's and the Tier 1
+     finish's "The release notes are owed, not written", and every redline
+     section's "No release entry" — is answered: the notes are in the
+     1.21.0 entry as of this change.
+  2. Every earlier section that names a plan or tracker by path
+     (`docs/plans/...`, `docs/review-results/...`) names a retired file.
+     `docs/plans/README.md` maps each program to the sections that hold its
+     record, and `git show 7d4c0db:<path>` shows the file itself.
+  3. "The project has a home", "The brief is a living file" and "Nothing
+     settled is left in the transcript" say the program's phases are
+     recorded "ONLY in the folder README's implementation record". That
+     record is retired; the sections themselves, and "The project
+     workspace program, as shipped", are the record now.
+  4. "Where the revision-2 plan went" says the execution record "is the
+     file to read before either step is picked up". Both steps were
+     owner-run measurements never taken, and their instruments' docstrings
+     (`tools/qc_export_cost_profile.py`; `tools/lint_block_profile.py` is
+     gone) are what remains of them.
+  5. The ground rules' "Only Abraham runs any of them" for the three
+     canaries still holds; the prompt55 canary's pass message now says to
+     record a result in this file rather than in a deleted plan.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

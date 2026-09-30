@@ -1,7 +1,7 @@
 """Real Word as the judge of the redline on your original.
 
-Redline on your original, Phase 2 (``docs/plans/REDLINE_ON_ORIGINAL_
-2026-09-22.md``). The export promises that Accept All gives *Export Word
+Redline on your original, Phase 2 (the plan is retired; the contract is
+``docs/DOCX_FIDELITY.md`` → "Real Word as the judge"). The export promises that Accept All gives *Export Word
 (keeps your formatting)* and Reject All gives the upload back, and proves
 both before it hands a file over — with its own XML resolver
 (``backend/spec_doc/revisions.py``). This module lets REAL Microsoft Word

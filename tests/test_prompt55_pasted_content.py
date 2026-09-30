@@ -1,7 +1,7 @@
 """Pasted text reaches the model marked as pasted (P55-8).
 
-The 5.5 prompting upgrade (``docs/plans/prompt55/``), finding F10 and
-decision D7. The composer wraps each paste worth marking in
+The 5.5 prompting upgrade (its plan is retired; CLAUDE.md "Pasted text is
+marked as pasted" is the record), finding F10 and decision D7. The composer wraps each paste worth marking in
 ``<pasted_content id="…">`` tags with a random id
 (``frontend/src/lib/pastedContent.ts``, tested in
 ``frontend/tests/prompt55PastedContent.test.ts``), and the stable system

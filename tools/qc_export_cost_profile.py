@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Read a saved Final QC export and report where its money went.
 
-This is step 2 of the revision-2 review plan (retired; its acceptance
-criteria live in ``docs/review-results/2026-09-09/EXECUTION_RECORD.md``).
-It answers one question the repository cannot answer for itself: does the
+This was step 2 of the revision-2 review plan (retired, with its execution
+record; the decision rule that step set is the one ``_verdict`` applies, and
+CLAUDE.md "The revision-2 review plan, as executed" is the record). It
+answers one question the repository cannot answer for itself: does the
 batched verifier phase actually READ its shared cached prefix, or does it
 pay to write one per seat?
 
@@ -33,8 +34,8 @@ Accepts, in any mix:
 Runs are deduplicated by ``run_id``, so exporting the same run twice — or
 a project plus an export of the same review — counts it once.
 
-Paste the block it prints into
-``docs/review-results/<date>/measurements.md``.
+Keep the block it prints with the export it describes; it is also the
+baseline reading (M2) for the Tier 1 cost program's warm lead.
 """
 
 from __future__ import annotations

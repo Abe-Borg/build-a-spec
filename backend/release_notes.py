@@ -244,6 +244,51 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                         ),
                     ),
                     ReleaseItem(
+                        title="Web pages the assistant reads stop riding along",
+                        body=(
+                            "When the assistant read a web page during a chat, "
+                            "the page's full text was saved into the "
+                            "conversation and re-sent with every later message, "
+                            "up to about 50,000 tokens a page. Now a saved turn "
+                            "keeps the page's address, its title and the passages "
+                            "the reply quoted, and drops the rest; the assistant "
+                            "reads the page again whenever it needs the exact "
+                            "wording. Research-heavy sessions cost less per "
+                            "message, stay further from the model's context "
+                            "limit, and save smaller project files. Projects "
+                            "saved by earlier versions are trimmed the same way "
+                            "when you open them."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Long conversations keep working",
+                        body=(
+                            "A very long drafting conversation used to grow until "
+                            "the model could no longer take it in, and from then "
+                            "on every message failed. Now the oldest turns are "
+                            "condensed into a summary the model reads instead: in "
+                            "the background, while you read a reply, once a "
+                            "conversation passes about 600,000 tokens, and on the "
+                            "spot whenever a message would not otherwise fit. The "
+                            "summary is kept close to your own words: decisions "
+                            "and why, options ruled out, exact values, your "
+                            "corrections, where things stand. The last three turns "
+                            "stay word for word, and the document, research, QC "
+                            "and project facts still arrive fresh with every "
+                            "message. Nothing is deleted: the chat and the saved "
+                            "project keep every turn, a divider marks where the "
+                            "condensed part ends, and View summary shows exactly "
+                            "what the model reads. When it needs an exact detail "
+                            "from before the cut, the model looks the turn up in "
+                            "your saved conversation. Each summary is one small "
+                            "billed call, with its own line in the usage table. "
+                            "Switch the background summaries off with "
+                            "BUILD_A_SPEC_CHAT_COMPACTION=0 if you would rather "
+                            "the model condense only when a message would not "
+                            "otherwise fit."
+                        ),
+                    ),
+                    ReleaseItem(
                         title="Chat and research run on Claude Sonnet 5.5",
                         body=(
                             "The assistant you chat with and the research "
@@ -359,6 +404,113 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "article headings. The blank lines, page breaks "
                             "and pictures around what you change stay where "
                             "they were."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Redline on your original",
+                        body=(
+                            "Export a copy of the Word file you imported with "
+                            "every change Build-a-Spec made shown as Word tracked "
+                            "changes; your fonts, headers, footers and numbering "
+                            "are untouched. In Word, Accept All gives you the "
+                            "updated section and Reject All gives you your "
+                            "original back — the app checks both before it hands "
+                            "you the file — so you can review it, save it, and use "
+                            "it to replace your master. It is in the Export menu "
+                            "beside Export Word (keeps your formatting), with an "
+                            "Open redline in Word beside it in the desktop app. If "
+                            "your master already carries someone's tracked "
+                            "changes, accept or reject them in Word and import it "
+                            "again first; the redline of extracted provisions "
+                            "still works either way."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Links and new sub-provisions survive the formatted export",
+                        body=(
+                            "A provision holding a hyperlink keeps the link, its "
+                            "bold and italic and the tab after its letter when you "
+                            "edit it or it gets relettered, and words you add "
+                            "beside a link are never pulled into it. In a master "
+                            "whose provisions Word numbers, a new sub-provision "
+                            "(the first “1.” under an “A.”) now prints at "
+                            "its own level instead of one level up, whenever your "
+                            "master's numbering defines that level. The redline on "
+                            "your original inherits both."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Moves show as moves",
+                        body=(
+                            "In the redline on your original, a provision you moved "
+                            "without changing it is now marked with Word's own "
+                            "Moved marks instead of a deletion where it was and an "
+                            "insertion where it is. A provision moved with its "
+                            "sub-provisions, or several moved together, is marked "
+                            "as one move. A move that also changed something (in a "
+                            "master with typed letters, its new letter counts) "
+                            "still shows as a deletion and an insertion. Accept All "
+                            "and Reject All still give the updated section and "
+                            "your original back, and the app still checks both "
+                            "before it hands you the file. If Word ever shows a "
+                            "move wrongly, setting BUILD_A_SPEC_REDLINE_NATIVE_MOVES "
+                            "to 0 brings back the old way of showing moves."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The redline on your original says why",
+                        body=(
+                            "Each change that rests on something carries a Word "
+                            "comment from Build-a-Spec: a provision written from a "
+                            "research finding names the finding — its requirement, "
+                            "authority and code reference — with links to the "
+                            "sources it was verified against (or labels it a lead "
+                            "that was not verified); one written from an attached "
+                            "document names the document; and a change a Final QC "
+                            "fix made names the finding, its severity and issue, "
+                            "and its sources. The links are clickable, and the "
+                            "comments are part of the file — read them before you "
+                            "send it to a client. Your own edits get no comment, "
+                            "your own comments are kept, and everything else in "
+                            "the file is still your original's. Fixes applied from "
+                            "now on are remembered with the project, so their "
+                            "comments survive the next Final QC run; a fix applied "
+                            "before this version has none. Setting "
+                            "BUILD_A_SPEC_REDLINE_COMMENTS to 0 turns the comments "
+                            "off."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A redline of a master with inline custom XML opens in Word",
+                        body=(
+                            "Build-a-Spec used to put that markup inside its tracked "
+                            "changes, which Word refuses to open. It now marks the "
+                            "words inside it instead, and refuses, with a reason, "
+                            "the rare case it cannot mark that way. Word itself "
+                            "removes this markup when it saves, so it only turns "
+                            "up in masters written by other tools."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Four fixes to how an imported master is named and exported",
+                        body=(
+                            "Every list now names a provision the way the panel "
+                            "does: after a preserved table, the provision the panel "
+                            "calls B is 1.2.B in the open items, the Issues list, "
+                            "Final QC, the Word schedules and the import notes too "
+                            "(it used to be 1.2.C), and the table itself is named "
+                            "for what it is and where it sits — “1.2 [preserved "
+                            "table after B]”. Export as Build-a-Spec styled Word no "
+                            "longer gives a preserved table a letter. A file "
+                            "imported without any spec structure, like a memo, "
+                            "exports as it was: the “PART 1 - GENERAL” and "
+                            "“IMPORTED CONTENT” headings the app keeps it under are "
+                            "no longer written into the file, or shown as changes "
+                            "in the redline on your original, until you give the "
+                            "section a number or title. And in a master that still "
+                            "carries someone's tracked changes, a provision you add "
+                            "takes its neighbour's formatting without its pending "
+                            "changes."
                         ),
                     ),
                 ),
@@ -485,6 +637,58 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "was not affected. A Final QC report saved "
                             "before this update keeps the figure it was "
                             "saved with."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Final QC's first stage reuses what it already paid for",
+                        body=(
+                            "Four of Final QC's five reviewers read the same copy "
+                            "of your section. They used to start at the same "
+                            "moment, so each paid to store its own copy. Now one "
+                            "starts a few seconds ahead and the other three reuse "
+                            "its copy. The step that groups duplicate findings does "
+                            "the same when it has several groups to check. The "
+                            "reviewers, their instructions and what they find are "
+                            "unchanged, and a Final QC result you already have "
+                            "stays current; the review simply starts a few seconds "
+                            "later."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A dropped connection no longer starts a research area over",
+                        body=(
+                            "A brief rate limit or connection failure used to throw "
+                            "away every step a research area or reviewer had "
+                            "already finished, and paid for, and start it from the "
+                            "top. The app now retries the step that failed and "
+                            "carries on. If that retry fails too, the last attempt "
+                            "still starts fresh."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Batched verification reuses what it already paid for",
+                        body=(
+                            "When many of Final QC's verifying reviewers work from "
+                            "the same copy of your section, one of them now starts "
+                            "first, at full price, so the rest of the batch can "
+                            "read its copy instead of each storing their own. The "
+                            "report lists that reviewer at full price, so the cost "
+                            "it shows stays exact. Verification may start a few "
+                            "seconds later, and if this turns out not to help, the "
+                            "app stops doing it by itself until you restart it."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Long research stops paying twice for what it already read",
+                        body=(
+                            "A research area that searches the web in several "
+                            "steps used to pay full price, at every step, to "
+                            "re-send everything it had already found. It now reuses "
+                            "its own cached copy. The code-compliance review gets "
+                            "the same benefit. The findings, sources and limits are "
+                            "unchanged. If the service ever refuses this, or it "
+                            "turns out to cost more than it saves, the app stops "
+                            "doing it by itself until you restart it."
                         ),
                     ),
                 ),

@@ -775,7 +775,8 @@ def test_collapsed_whitespace_does_not_count_as_an_edit(tmp_path):
 # ---------------------------------------------------------------------------
 # Redline on your original, Phase 0 — the formatted export's findings
 #
-# docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md, "Findings". The redline's
+# The four findings of the redline plan (retired; CLAUDE.md "The formatted
+# export stops losing things" records them). The redline's
 # Accept All must equal this export, so every defect here would otherwise be
 # reproduced faithfully into it. Each was reproduced before it was fixed.
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Writing Word tracked changes into a copy of an uploaded body.
 
-Redline on your original, D-2/D-3/D-6 (``docs/plans/REDLINE_ON_ORIGINAL_
-2026-09-22.md``). The READING side — Accept All, Reject All, the canonical
+Redline on your original, D-2/D-3/D-6 (the plan is retired; the contract
+is ``docs/DOCX_FIDELITY.md`` → "Redline on your original"). The READING side — Accept All, Reject All, the canonical
 comparison — lives in :mod:`backend.spec_doc.revisions` and deliberately
 shares no code with this module: the export's self-check must not be able to
 agree with the writer because it IS the writer.

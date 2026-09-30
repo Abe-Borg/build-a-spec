@@ -1,7 +1,7 @@
 """The word-level splice: an edit written into a paragraph's original runs.
 
-Redline on your original, D-2 (``docs/plans/REDLINE_ON_ORIGINAL_2026-09-22
-.md``), built in Phase 0 for the appearance-preserving export and shared
+Redline on your original, D-2 (the plan is retired; the contract is
+``docs/DOCX_FIDELITY.md`` → "Appearance-preserving export"), built in Phase 0 for the appearance-preserving export and shared
 with the Phase 1 redline.
 
 Word stores a paragraph as runs, and a bolded phrase is a run boundary. The

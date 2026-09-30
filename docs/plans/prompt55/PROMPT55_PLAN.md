@@ -2355,7 +2355,7 @@ and `test_a_restart_measures_its_new_conversation_again` pins the restart
 end to end. The counts above are the final run, on the finished tree, with
 every test file clean first; the tree was checked unchanged afterwards.
 
-**Verified.** `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q`: 3291 passed, 64 skipped; `npm test` (frontend): 445 passed, 0 failed; `npm run build`: clean.
+**Verified.** `.venv/bin/python -m ruff check .` clean; `.venv/bin/python -m pytest -q`: 3300 passed, 64 skipped (after the review fix); `npm test` (frontend): 445 passed, 0 failed; `npm run build`: clean.
 
 ---
 

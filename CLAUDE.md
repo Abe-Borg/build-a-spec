@@ -11,7 +11,8 @@ file is the working reference for AI-assisted development sessions.
 - Tests are hermetic: no network, no real API key. `tests/conftest.py` injects
   a placeholder `ANTHROPIC_API_KEY`; anything touching the API monkeypatches
   `backend.llm.conversation.get_client` with a fake streaming client.
-  Four canaries are the only explicit paid exceptions. The first two are
+  Four canaries and the compaction evaluator below are the only explicit
+  paid exceptions. The first two canaries are
   each a single low-token request. `tools/qc_verifier_canary.py --run`
   checks that the provider accepts the strict QC verifier schema; it never
   runs a full Final QC. `tools/fetch_elision_canary.py --run` checks that the
@@ -33,6 +34,13 @@ file is the working reference for AI-assisted development sessions.
   disabled. It does not fetch a live PDF or test Batches enforcement, and
   its live result is unrun. Only Abraham runs any of them; no session does.
   Without `--run`, no canary sends anything.
+  `tools/compaction_json_eval.py --run` is a separate paid experiment,
+  also owner-only: up to ten local saved sessions, each with one billed
+  zero-output cache warm and two summaries (at most 30 requests total).
+  SDK retries/display fallbacks are disabled. Without `--run` it only
+  prepares a plan; `--assess` is offline. No session runs its paid mode.
+  Its private review files stay local, and even passing evidence never
+  adopts JSON automatically. Live comparison remains unrun.
 - Reused Spec Critic code is **copied in and adapted**, never imported across
   repos. When porting a file, keep its design and docstring posture, update
   identity strings (BuildASpec / BUILD_A_SPEC_*), and note the provenance in
@@ -2339,6 +2347,22 @@ tools/qc_thinking_binding_canary.py
                            thinking, signatures, response text or error bodies
                            printed or saved. Live result unrun; neither live
                            PDF fetching nor batch enforcement tested.
+tools/compaction_json_eval.py
+                           [report Finding 3 experiment] PAID, owner-run,
+                           local .baspec / legacy JSON inputs; no client or
+                           requests without --run, new PRIVATE --out-dir
+                           required. Detached load + production compaction
+                           builder; zero-output cache warm then alternating
+                           Markdown/JSON, same cached prefix and output
+                           budget, at most 3 requests/session and 10 sessions,
+                           no retries/fallbacks. Counts/costs/timings saved
+                           separately from private paths/summaries; failures
+                           billed before parsing. POSIX directory 0700 and
+                           captures/temporary files 0600 from creation.
+                           Offline --assess binds
+                           fidelity review to source/summary hashes, requires
+                           cache-condition notes and complete near-threshold
+                           evidence; adoption always pending. Live unrun.
 tools/research_cost_profile.py
                            [Research/QC cost Tier 1, Chunk 1] read-only: saved
                            .baspec / legacy .json / .basproject in, per-round
@@ -2991,6 +3015,17 @@ tests/
                            control and exact reported-drop count, incomplete
                            mint and missing telemetry inconclusive; provider
                            errors neither retried nor printed with their body
+  test_compaction_json_eval.py
+                           [report Finding 3 experiment] fake-only session
+                           loading and re-compaction, exact production
+                           prefix/retention, strict JSON and completion
+                           guards, cache/cost/timing telemetry, billed failed
+                           summaries, preflight/run gates, caps/no retries,
+                           history deduplication and alternating order,
+                           private evidence and source-bound fidelity review;
+                           incomplete/regressed evidence cannot pass;
+                           POSIX directory/file modes before writes under
+                           permissive, standard and restrictive umasks
   test_prompt55_progress_update_canary.py
                            [P55-2] the canary without a network: nothing sent
                            without --run, each round's recorded request equal to
@@ -20018,6 +20053,82 @@ did not exercise page counting or the production page ceiling.
   ground rules. The diagnostic follows the official provider probe's
   mint/control/edited pattern:
   [Anthropic's preserved-thinking probe](https://github.com/anthropics/skills/blob/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/claude-api/shared/preserved-thinking-migration/drop_block_probe.py).
+
+## Compaction JSON experiment — evaluator ready, adoption pending
+
+Report follow-up (Abraham, 2026-09-30), step 4 after PR #247: prepare the
+controlled Finding 3 comparison before changing production. Abraham chose
+to select the real saved sessions locally. No suitable saved-session
+dataset exists in this workspace; **no paid comparison has run**.
+
+- **Production baseline.** The evaluator loads native or legacy sessions
+  into detached states, plans an eligible cut, and calls the actual pure
+  compaction request builder. JSON changes only the uncached instruction's
+  format paragraph and adds a closed eight-string schema; system, tools,
+  history/cache breakpoints, adaptive thinking, effort and output ceiling
+  stay identical. Retention, ledger exclusions and re-compaction carry-over
+  instructions survive. JSON validation rejects refusal, tool calls,
+  incomplete output, duplicate/extra/missing keys, empty/non-string values
+  and runaway summaries; accepted data renders the existing Markdown
+  headings. No production parser, session state or saved format changes.
+- **Measured protocol.** Each case first makes a non-streaming,
+  zero-output cache warm of the production request; adaptive thinking and
+  effort stay identical. Markdown/JSON order alternates. Maximum ten
+  distinct loaded histories and three requests per case, with SDK retries
+  and display fallback disabled. The warm is billed. Request failures stop
+  the run; failed output parsing retains measured usage/cost. List-price
+  costs split one-hour cache writes without double-counting thinking.
+  Missing telemetry and unknown prices remain unknown. Reports checkpoint
+  before and after each call, keeping interrupted charges unknown; private
+  paths and normalized summaries live separately from the counts-only
+  results.
+- **Owner assessment.** Default invocation sends nothing and builds no
+  client; paid mode requires `--run` and a new private output directory.
+  Offline `--assess` requires 5–10 distinct near-threshold active views,
+  the production output budget, complete measurements, positive baseline
+  cache hits, source/summary-bound manual fidelity checks, and cache-condition
+  notes. Trial limits apply to every pair: at most two percentage points of
+  cache-read loss, 5% higher summary cost and 10% higher total latency.
+  Even passing evidence leaves adoption pending for an owner-reviewed PR.
+  Lower output ceilings and smaller samples are pilots.
+- **Cache caveat.** A new output directory is not a cold provider cache.
+  Previously written JSON entries can conceal invalidation; a previously
+  compiled schema can conceal grammar first-use latency. The first JSON
+  request marker claims only first in this run. Owner notes must record
+  prefix/TTL freshness and schema warm state before interpreting evidence.
+  Pre-warming uses the provider's documented `max_tokens=0` non-streaming
+  protocol, with no format schema or forced tool choice on the warm:
+  [Anthropic prompt-caching reference](https://github.com/anthropics/skills/blob/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/claude-api/shared/prompt-caching.md#pre-warming-the-cache).
+- **Status.** Production continues using Markdown summaries. Syntax,
+  performance and fidelity acceptance on real sessions are unverified.
+  Abraham will choose and run the local sample after reviewing this PR;
+  the evaluator does not execute application tools or adopt its output.
+- **Validation.** All 67 new fake-client regression cases pass. The full
+  backend suite on Linux/Python 3.12 passes: 3,420 passed, 64 skipped,
+  using a temporary `XDG_CONFIG_HOME` for this workspace's read-only home
+  directory. Ruff, release-version consistency and diff checks pass.
+  Standalone `--help` and the tested default plan/assessment modes send
+  nothing; no paid request was made. Windows runtime and live provider
+  behavior remain unverified.
+
+### PR #248 review — private capture permissions
+
+Review follow-up (2026-09-30): a normal Unix `0022` umask made the original
+output directory `0755` and private files `0644`. The evaluator now creates
+the new directory with `0700`. Reports and summaries share an atomic writer
+that creates randomized temporary files with `0600`, closes them before
+replacement for Windows compatibility, and retains their owner-only POSIX
+permissions on the final captures. Failed writes clean up their temporary
+files. Protection applies from creation, without a post-write chmod window.
+Windows folder ACLs still determine privacy; the README tells the owner to
+choose an account-protected destination.
+
+The three regression cases observe temporary modes before any content is
+written and check the directory before client construction, then all final
+capture modes under `0000`, `0022` and `0077` umasks. The focused evaluator,
+compaction, history, usage and documentation run passes all 164 tests
+(including all 70 evaluator cases); Ruff and diff checks pass. The initial
+full-suite result above predates this permission fix. No paid request ran.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

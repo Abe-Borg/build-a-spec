@@ -19,6 +19,14 @@ with a short plain-text elision note until the total fits. A conversation
 with no fetched PDFs — or whose PDFs fit — is returned as the *same list
 object*, byte-identical. Never raises — an unparseable PDF is treated as
 un-countable and elided first. Dependency: ``pypdf`` (lazy import).
+
+PDF elision can edit a prefix before a preserved thinking block, even when
+the block's text and signature survive serialization unchanged. On the
+5.5 models the streaming callers must also opt into thinking-prefix
+recovery (``research.schema.with_drop_block``); research and QC keep that
+opt-in for every later request in the edited conversation. Batch callers
+use the Batches API's default drop behavior. This sanitizer only edits
+messages: it does not establish provider-side signature validity.
 """
 from __future__ import annotations
 

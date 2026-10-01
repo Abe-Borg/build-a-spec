@@ -11,7 +11,7 @@ file is the working reference for AI-assisted development sessions.
 - Tests are hermetic: no network, no real API key. `tests/conftest.py` injects
   a placeholder `ANTHROPIC_API_KEY`; anything touching the API monkeypatches
   `backend.llm.conversation.get_client` with a fake streaming client.
-  Three canaries are the only explicit paid exceptions. The first two are
+  Four canaries are the only explicit paid exceptions. The first two are
   each a single low-token request. `tools/qc_verifier_canary.py --run`
   checks that the provider accepts the strict QC verifier schema; it never
   runs a full Final QC. `tools/fetch_elision_canary.py --run` checks that the
@@ -25,7 +25,13 @@ file is the working reference for AI-assisted development sessions.
   `thinking.display: "updates"` (beta `thinking-display-updates-2026-08-18`)
   and `max_tokens` capped — and checks that the reply lands after the last
   tool call as closing text that asks the questions, with no question left
-  in a progress note. Only Abraham runs any of them; no session does.
+  in a progress note. The fourth, `tools/qc_thinking_binding_canary.py --run`,
+  sends at most three bounded streaming requests: mint a genuine thinking
+  signature, replay unchanged as a control, then replay an edited prefix
+  with production `with_drop_block`. The control must report no drops and
+  the edit must report the expected prefix-mismatch drops; SDK retries are
+  disabled. It does not fetch a live PDF or test Batches enforcement, and
+  its live result is unrun. Only Abraham runs any of them; no session does.
   Without `--run`, no canary sends anything.
 - Reused Spec Critic code is **copied in and adapted**, never imported across
   repos. When porting a file, keep its design and docstring posture, update
@@ -2320,6 +2326,19 @@ tools/prompt55_progress_update_canary.py
                            call, no progress note asking one. P55-6: a
                            production anthropic-beta in extra_headers moves
                            into betas (extra_headers would override them)
+tools/qc_thinking_binding_canary.py
+                           [report Finding 2 verification] PAID, owner-run,
+                           nothing sent and no client built without --run:
+                           at most three streaming requests on QC_MODEL,
+                           genuine thinking signature then unchanged control
+                           then earlier-user-message edit; production
+                           _to_plain_block and with_drop_block; no drops on
+                           control and the expected prefix-mismatch count on
+                           edit required for a pass. SDK retries off, mint
+                           capped at 2048 (256–4096), replays at 256; no
+                           thinking, signatures, response text or error bodies
+                           printed or saved. Live result unrun; neither live
+                           PDF fetching nor batch enforcement tested.
 tools/research_cost_profile.py
                            [Research/QC cost Tier 1, Chunk 1] read-only: saved
                            .baspec / legacy .json / .basproject in, per-round
@@ -2957,6 +2976,21 @@ tests/
                            with the "don't search" line gone, and every
                            chip-staging directive and variant carrying the one
                            _REPLY_AFTER_TOOL_CALLS sentence
+  test_qc_pdf_continuations.py
+                           [report Finding 2 verification] page-counted SDK
+                           PDF fetches at the real 600-page ceiling; unchanged
+                           identity at/below it, largest older PDF elided
+                           across cumulative totals, thinking and redacted
+                           data preserved, original responses never mutated;
+                           Opus 5.5 compliance lens with repeated pauses,
+                           continuation tail on/off, sticky prefix recovery,
+                           reminder, and separate batch request construction
+  test_qc_thinking_binding_canary.py
+                           [report Finding 2 verification] fake-only guard,
+                           three-request cap, SDK retries off, unchanged
+                           control and exact reported-drop count, incomplete
+                           mint and missing telemetry inconclusive; provider
+                           errors neither retried nor printed with their body
   test_prompt55_progress_update_canary.py
                            [P55-2] the canary without a network: nothing sent
                            without --run, each round's recorded request equal to
@@ -19930,6 +19964,60 @@ in the newest unreleased 1.21.0 notes; README documents the override policy.
   Its model uncertainty is now resolved as unsupported; forcing is enabled
   only for the three compatible overrides above. Earlier notes saying
   there is no `tool_choice` anywhere in the app refer to the earlier code.
+
+## QC PDF continuations — verified construction, pending live acceptance
+
+Report follow-up (Abraham, 2026-09-30), step 3 after PR #246: verify
+Finding 2's oversized-PDF/thinking interaction before changing the resend
+logic. P55-6 already implements the required recovery: preserving thinking
+text/signatures does not keep them valid after a preceding prefix edit.
+The existing tests used an unreadable PDF, so they proved the edit flag but
+did not exercise page counting or the production page ceiling.
+
+- **Valid PDFs and real SDK blocks.** `tests/test_qc_pdf_continuations.py`
+  creates blank-page PDFs with `pypdf` at 599, 600 and 601 pages, without
+  lowering the sanitizer's limit or mocking its counter. A 600-page total
+  retains list identity; 601 pages triggers elision. Cumulative 400 + 201
+  pages elide the larger, older PDF before a later thinking block. SDK
+  thinking text/signatures and redacted data survive exactly; input response
+  objects, URLs, titles, retrieval times and server-tool pair ids survive.
+- **Actual QC paths.** The Opus 5.5 web-tooled compliance lens carries the
+  binding field and beta only after an edit, and keeps them on later pauses;
+  600 pages carry neither. Both continuation-tail settings retain their
+  request shape, stable system/tools/output settings and response accounting.
+  Missing-output-tool reminders sanitize too. Batched verifier histories
+  defensively exercise the separate sanitizer over repeated rounds and keep
+  the stream-only binding field/beta absent. Compliance itself always streams;
+  the batch fixture is not evidence that live verifiers fetch PDFs.
+- **Provider diagnostic, explicitly gated.**
+  `tools/qc_thinking_binding_canary.py --run` makes at most three bounded
+  streaming requests on `QC_MODEL`, with SDK retries disabled. It needs a
+  genuine provider-issued signature, so one synthetic request cannot prove
+  binding behavior. After minting, an unchanged replay must report an empty
+  transformation array, and an edited replay through `with_drop_block` must
+  report the expected `thinking_dropped/prefix_binding_mismatch` count.
+  A missing signature, incomplete mint, absent telemetry, changed control,
+  unexpected drop or provider error is non-passing. Replay `max_tokens` is
+  allowed because this diagnostic checks input validation before generation;
+  it does not parse a QC verdict. No thinking, signatures, reply text, paths
+  or provider error bodies are printed or saved. Without `--run`, no client
+  is built and no request is sent.
+- **Validation.** All 40 new regression/diagnostic cases pass. The full
+  backend suite passes on Linux/Python 3.12: 3,353 passed, 64 skipped. The
+  run uses a temporary `XDG_CONFIG_HOME` because this workspace's home
+  directory is read-only; template and updater tests require writable app
+  configuration. Ruff, release-version consistency and `git diff --check`
+  pass. Comparing the sanitizer's executable AST with `master` confirms
+  only its module documentation changed. The standalone diagnostic without
+  `--run` sends nothing; no paid request was made.
+- **Scope and live status.** This PR adds verification and documentation,
+  not new production request behavior or prompt/cache changes. The canary's
+  prefix edit is synthetic; valid PDFs and batch parameters are verified
+  only hermetically. **Live canary result: unrun. Live PDF/QC acceptance and
+  Batches enforcement: unverified.** Only Abraham runs paid canaries per the
+  ground rules. The diagnostic follows the official provider probe's
+  mint/control/edited pattern:
+  [Anthropic's preserved-thinking probe](https://github.com/anthropics/skills/blob/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/claude-api/shared/preserved-thinking-migration/drop_block_probe.py).
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

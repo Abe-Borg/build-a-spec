@@ -19823,6 +19823,52 @@ else, delete, point, and keep no `archive/` folder.
      canaries still holds; the prompt55 canary's pass message now says to
      record a result in this file rather than in a deleted plan.
 
+## Forced tool choice is a model capability — documentation correction
+
+The 2026-09-28 LLM Prompt Optimization Review found that the fact harvest's
+reason for omitting `tool_choice` was too broad. This correction updates
+`harvest.run_harvest`'s docstring and records the model-specific boundary;
+it changes no request, prompt, tool schema, model default, or error handling.
+
+- **Manual and adaptive thinking have different constraints.** Forced
+  `tool_choice` (`any` or a named `tool`) is incompatible with manual
+  extended thinking (`thinking.type: enabled`). Adaptive thinking does not
+  have that blanket restriction: compatibility depends on the model.
+  The review cites the provider's [adaptive-thinking reference](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
+  for support on Sonnet 5 and exceptions on Opus 5.5, Fable 5.1 and Mythos
+  5.1. Those are the review's dated findings, not a complete capability
+  table for every model the app can select.
+- **The current default postdates that review.** The harvest and template
+  AI-generalize pass both use `settings.INTERVIEW_MODEL`, now Sonnet 5.5
+  (`claude-sonnet-5-5`, since 2026-09-29). The review's Sonnet 5 finding does
+  not establish Sonnet 5.5 support. Check current provider documentation
+  and confirm compatibility on the actual model before changing either
+  request; no live provider check was performed for this correction.
+
+| Configured model | Forced output tool with adaptive thinking |
+|---|---|
+| Sonnet 5.5, the current interview default | Not established by the September 28 review; verify before enabling. |
+| Sonnet 5, selectable by interview-model override | Supported according to that review; reconfirm before enabling. |
+| Opus 5.5, the QC default and also selectable by override | Unsupported according to that review and the existing model-migration notes. |
+| Any other `BUILD_A_SPEC_INTERVIEW_MODEL` override | Verify that exact model; strict-tool support and pricing-table membership do not establish forced-tool compatibility. |
+
+- **The two single-shot requests still select automatically.** The harvest
+  request is in `backend/harvest.py`; the template request is in
+  `backend/app.py`'s `_ai_generalized_template_document` (`templates.py`
+  defines its tool). A future behavioral change must consider the configured
+  model and retain refusal, missing-output and payload validation, including
+  the template's structural contract. Research and QC have separate models
+  and multi-round tool workflows; evaluate their selection policy separately.
+- **Erratum:** "Nothing settled is left in the transcript" describes
+  `no tool_choice` as necessary because "a forced choice is incompatible
+  with adaptive thinking". That rationale is corrected by the distinction
+  above. The historical entry remains append-only; automatic selection is
+  the current behavior, not a universal adaptive-thinking requirement.
+- **Validation:** the existing documentation-consistency and template
+  structural-contract tests passed (6 tests); Ruff and `git diff --check`
+  passed. The harvest's AST is identical to the base after excluding
+  docstrings, including all request arguments and prompt constants.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

@@ -15,6 +15,7 @@ import {
   templateExportUrl,
   updateTemplate,
 } from "../lib/api";
+import { editionsReceipt, factsReceipt, researchReceipt } from "../lib/briefReceipt";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
 
 interface Props {
@@ -62,18 +63,12 @@ function BriefManifestCard({ manifest }: { manifest: ProjectBriefManifest }) {
     ],
     [
       "Editions",
-      manifest.edition_overrides.count
-        ? manifest.edition_overrides.standards.join("; ")
-        : "none recorded",
+      editionsReceipt(manifest.edition_overrides.standards) || "none recorded",
     ],
     [
       "Research",
       research
-        ? `${research.items} finding${research.items === 1 ? "" : "s"} (${research.grounded} grounded) over ${research.rounds} round${
-            research.rounds === 1 ? "" : "s"
-          }; ${research.dimensions_completed} of ${
-            research.dimensions_declared ?? research.dimensions_recorded
-          } areas complete; last researched ${research.last_research_date || "—"}`
+        ? researchReceipt(research)
         : "none — the new section starts unresearched",
     ],
     [
@@ -89,12 +84,7 @@ function BriefManifestCard({ manifest }: { manifest: ProjectBriefManifest }) {
             .join("; ")
         : "none",
     ],
-    [
-      "Facts",
-      `${manifest.facts.active} active (${manifest.facts.confirmed} confirmed, ${manifest.facts.assumed} assumed)${
-        manifest.facts.superseded ? `, ${manifest.facts.superseded} retired` : ""
-      }`,
-    ],
+    ["Facts", factsReceipt(manifest.facts)],
     [
       "Sections so far",
       manifest.sections.length
@@ -108,7 +98,7 @@ function BriefManifestCard({ manifest }: { manifest: ProjectBriefManifest }) {
         {rows.map(([label, value]) => (
           <div key={label} className="contents">
             <dt className="text-ink-faint">{label}</dt>
-            <dd className="min-w-0 break-words text-ink-dim">{value}</dd>
+            <dd className="min-w-0 truncate text-ink-dim" title={value}>{value}</dd>
           </div>
         ))}
       </dl>

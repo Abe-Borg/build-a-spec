@@ -154,7 +154,7 @@ from .research.engine import (
     validate_research_facts,
 )
 from .research.grounding import refusal_category
-from .research.schema import extract_tool_use_block
+from .research.schema import extract_tool_use_block, single_output_tool_kwargs
 from .qc.engine import (
     DISPUTE_REASON_INSUFFICIENT_EVIDENCE,
     QC_PROTOCOL_VERSION,
@@ -3110,6 +3110,10 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
             thinking={"type": "adaptive"},
             output_config={"effort": settings.TEMPLATE_EFFORT},
             tools=[template_document_tool()],
+            **single_output_tool_kwargs(
+                model=settings.INTERVIEW_MODEL,
+                tool_name=TEMPLATE_DOCUMENT_TOOL_NAME,
+            ),
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             response = stream.get_final_message()
@@ -3120,7 +3124,8 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
     # without this it reads as "the model returned malformed content" — the
     # one wording guaranteed to send the user round the same loop again.
     # Checked before the payload read, because there is nothing to read.
-    if getattr(response, "stop_reason", None) == "refusal":
+    stop_reason = str(getattr(response, "stop_reason", "") or "")
+    if stop_reason == "refusal":
         category = refusal_category(response)
         raise TemplateError(
             "The model's safety classifier declined to generalize this "
@@ -3129,6 +3134,18 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
             + ". Nothing was saved. This is about the content of the "
             "section rather than a transient failure, so use Exact to "
             "snapshot it verbatim instead."
+        )
+    # A parseable tool payload can still be an unfinished rewrite. Meter the
+    # response above, but never adopt a cut-off or paused single-shot result.
+    if stop_reason == "max_tokens":
+        raise TemplateError(
+            "The AI template reply was cut off before it finished. "
+            "Nothing was saved; try again or use Exact."
+        )
+    if stop_reason not in ("tool_use", "end_turn"):
+        raise TemplateError(
+            "The AI template reply did not finish. Nothing was saved; "
+            "try again or use Exact."
         )
     # The payload rides a ``tool_use`` block the API has already parsed, so
     # there is no prose to fence-strip and no ``json.loads`` to fail. A turn

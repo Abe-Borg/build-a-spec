@@ -110,6 +110,13 @@ record. What changed for you:
   off at `BUILD_A_SPEC_HARVEST_MAX_TOKENS` (64,000) is refused, never shown
   half-done.
 
+Fact harvesting and template AI Generalize accept only completed replies.
+An unfinished AI template is rejected even when it contains a readable
+document; the attempted call is still billed, and you can try again or use
+Exact. Their output tools are forced only on confirmed compatible model
+overrides (see `BUILD_A_SPEC_INTERVIEW_MODEL` below); the Sonnet 5.5 default
+uses automatic tool selection.
+
 An optional, owner-run check shows whether Sonnet 5.5's progress notes now
 stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
@@ -3022,7 +3029,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | Env var | Default | Effect |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | API key; overrides keyring/file, never persisted. |
-| `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5-5` | Model for interview/drafting turns. |
+| `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5-5` | Model for interview/drafting turns, fact harvesting, and template AI Generalize. Only the two single-shot output calls force their submission tool on confirmed compatible overrides (`claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`); Sonnet 5.5, Opus 5.5, and unverified overrides use automatic selection. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The model's context window: the context gauge's denominator (the header's "142k / 1M" pill) and what the chat's backstop measures a request against — past 85% of it the oldest turns are condensed before sending. Pair it with a model override whose window differs; set lower, conversations are condensed earlier. |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary uses it too. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's. |

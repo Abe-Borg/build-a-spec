@@ -1035,8 +1035,11 @@ backend/
                            inert (neutralize_harvest_frames); run_harvest is
                            the template-generalize idiom (adaptive thinking,
                            HARVEST_EFFORT, the STRICT flat
-                           propose_project_facts tool, no tool_choice,
-                           refusal named, a tool-less reply refused, shape
+                           propose_project_facts tool, model-gated
+                           single_output_tool_kwargs (only confirmed
+                           compatible overrides force the output tool),
+                           refusal named, unfinished and tool-less replies
+                           refused, shape
                            validated all-or-nothing in parse_proposals);
                            assess_proposal is the per-proposal check the
                            preview and the commit share; prepare_preview
@@ -19868,6 +19871,65 @@ it changes no request, prompt, tool schema, model default, or error handling.
   structural-contract tests passed (6 tests); Ruff and `git diff --check`
   passed. The harvest's AST is identical to the base after excluding
   docstrings, including all request arguments and prompt constants.
+
+## Single-shot outputs finish before they are accepted — implemented notes
+
+The fact harvest and template AI-generalize pass now force their output
+tool only on confirmed compatible Claude API models and reject unfinished
+responses even when a readable tool payload is present. One request per
+user action, preview before commit, no automatic retry, no new setting,
+dependency, project-format change or version bump. The template change is
+in the newest unreleased 1.21.0 notes; README documents the override policy.
+
+- **The review's proposed default-model change is no longer applicable.**
+  Current Anthropic guidance says Sonnet 5.5 rejects `tool_choice` `any`
+  and `tool` with HTTP 400, just like Opus 5.5. Both calls now default to
+  Sonnet 5.5, so adding the report's unconditional forcing choice would
+  break them. Verified against Anthropic's published
+  [Sonnet 5.5 migration notes](https://github.com/anthropics/skills/blob/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/claude-api/shared/model-migration.md)
+  ("Breaking change 2: forced tool use is rejected") and
+  [tool-use concepts](https://github.com/anthropics/skills/blob/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/claude-api/shared/tool-use-concepts.md),
+  which explicitly retain forcing on Opus 5 and Fable 5. This is a
+  documentation check, not a live-provider measurement.
+- **A separate, conservative capability list.**
+  `research.schema.single_output_tool_kwargs` returns a named output-tool
+  choice for `claude-sonnet-5`, `claude-opus-5` and `claude-fable-5` only.
+  Every other id gets no extra request field, including Sonnet 5.5, Opus
+  5.5, Fable 5.1, Mythos 5.1 and unverified overrides such as Opus 4.8.
+  This list is independent of `_STRICT_CAPABLE_MODELS`: strict schema
+  support does not establish forced-tool compatibility. It is for the
+  Claude API with adaptive thinking, not manual thinking or other provider
+  platforms. Only `harvest.run_harvest` and
+  `app._ai_generalized_template_document` call it; chat, compaction,
+  research and every QC phase keep their existing selection policy.
+- **A readable payload is not evidence that the turn finished.** The
+  template pass used to parse and structurally validate a tool payload
+  even after a `max_tokens` stop. It now names that reply as cut off, and
+  rejects any other stop reason except `tool_use` or `end_turn` before
+  reading the payload. The harvest keeps its named `harvest_refused` and
+  `harvest_cut_off` paths and adds `harvest_incomplete` for other unfinished
+  replies. Both retain their missing-tool and malformed-payload checks;
+  the template's recursive tool remains non-strict and its structural
+  contract remains the adoption gate.
+- **Billing and user control.** A failed harvest carries its usage to the
+  route as before; the template meters the response before rejecting it.
+  Neither call re-sends an unfinished or missing-tool reply on its own.
+  An unfinished result yields no preview to commit, and the active
+  document and recorded facts are unchanged.
+- **Validation.** The existing harvest/template/parsing suites
+  passed before the change (106 tests). After the change, 306 tests passed:
+  those suites plus refusal handling, the new single-shot regressions,
+  release notes, docs consistency, settings, research and QC. Ruff and `git diff --check`
+  passed. The new tests exercise both real request constructors across
+  compatible, incompatible and unknown models; completed and unfinished
+  turns with valid payloads; retained payload validation; one-call billing
+  and project isolation. No paid provider request or production cost/
+  latency measurement was performed.
+- **Errata.** "Forced tool choice is a model capability" recorded Sonnet
+  5.5 compatibility as unestablished and both calls as always automatic.
+  Its model uncertainty is now resolved as unsupported; forcing is enabled
+  only for the three compatible overrides above. Earlier notes saying
+  there is no `tool_choice` anywhere in the app refer to the earlier code.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

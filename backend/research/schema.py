@@ -164,6 +164,26 @@ _STRICT_CAPABLE_MODELS = frozenset(
 )
 
 
+# Forced tool choice under adaptive thinking is a separate capability from
+# strict schemas. Only explicitly confirmed models belong here: Sonnet 5.5
+# and Opus 5.5 reject forcing, and unknown overrides keep automatic choice.
+# See CLAUDE.md's "Single-shot outputs finish before they are accepted" note.
+_FORCED_OUTPUT_TOOL_MODELS = frozenset(
+    {settings.MODEL_SONNET_5, settings.MODEL_OPUS_5, settings.MODEL_FABLE_5}
+)
+
+
+def single_output_tool_kwargs(*, model: str, tool_name: str) -> dict[str, Any]:
+    """Claude API options for an adaptive-thinking call with one output tool.
+
+    Use only for single-shot extraction, never a multi-round tool workflow.
+    An unverified or incompatible model gets no extra request field.
+    """
+    if model not in _FORCED_OUTPUT_TOOL_MODELS:
+        return {}
+    return {"tool_choice": {"type": "tool", "name": tool_name}}
+
+
 def requirements_research_tool(*, model: str | None = None) -> dict[str, Any]:
     tool: dict[str, Any] = {
         "name": RESEARCH_TOOL_NAME,

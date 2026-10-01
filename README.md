@@ -31,7 +31,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
-| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. A change with a recorded basis carries a Word comment from Build-a-Spec with the research text and source links behind it. Export → *Redline on your original (tracked changes)* (no release entry announces it yet — see "Redline on your original" below). |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. A change with a recorded basis carries a Word comment from Build-a-Spec with the research text and source links behind it. Export → *Redline on your original (tracked changes)* (the unreleased 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the CLAUDE.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -859,7 +859,7 @@ given a numbering level of their own — never their text.
 
 ### Four things Phase 0 left behind, fixed (Phase 0 follow-up)
 
-On `master`, with no release entry yet (its draft is in the plan).
+The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Four fixes to how an imported master is named and exported"; the record is the CLAUDE.md section "Phase 0's four leftovers — implemented notes".
 
 - **Every list names a provision the way the panel does.** A preserved
   table, picture or other block takes no letter in the panel, but the open
@@ -963,8 +963,7 @@ On `master`, with no release entry yet (its draft is in the plan).
 
 ### Links and deeper provisions (the two losses Phase 1 recorded)
 
-Both are on `master` with no release entry yet; the plan carries the
-release-note draft.
+The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Links and new sub-provisions survive the formatted export"; the record is the CLAUDE.md section "Links and the nesting level survive the formatted export — implemented notes".
 
 - **A provision holding a hyperlink keeps it.** Editing or relettering such
   a provision used to rebuild the whole paragraph from its first run: the
@@ -1041,8 +1040,7 @@ real Word can check it too.
 
 ### Word's own "Moved" marks (Phase 2, second half)
 
-On `master` with no release entry yet; the plan carries the release-note
-draft. **Built without real Word's verdict:** the plan made this wait for the
+The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Moves show as moves"; the record is the CLAUDE.md section "Word's own \"Moved\" marks — implemented notes (redline Phase 2, PR B)". **Built without real Word's verdict:** the plan made this wait for the
 owner's Windows run of the judge above and Word's own tracked-move sample, and
 the owner waived that on 2026-09-23. So it ships behind a switch
 (`BUILD_A_SPEC_REDLINE_NATIVE_MOVES`, on by default; `0` gives back the
@@ -1084,8 +1082,7 @@ Word run should check first.
 
 ### Comments on the changes (Phase 3)
 
-On `master` with no release entry yet; the plan carries the release-note
-draft. The owner asked for it on 2026-09-23: always on, with clickable
+The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "The redline on your original says why"; the record is the CLAUDE.md section "Comments on the changes — implemented notes (redline Phase 3)". The owner asked for it on 2026-09-23: always on, with clickable
 source links. **The redline now carries research text and links to your
 sources, and it is the file you may send to a client** — read its comments
 first.

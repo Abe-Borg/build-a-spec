@@ -28,6 +28,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { NextSectionOptions, NextSectionRequest, ProjectBriefManifest } from "../types";
 import { nextSectionOptions } from "../lib/api";
+import { editionsReceipt, factsReceipt, researchReceipt } from "../lib/briefReceipt";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
 
 const fieldClass =
@@ -51,17 +52,11 @@ function BriefContents({ manifest }: { manifest: ProjectBriefManifest }) {
     ["Project type", manifest.project_type || "not recorded"],
     [
       "Editions",
-      manifest.edition_overrides.count
-        ? manifest.edition_overrides.standards.join("; ")
-        : "none recorded",
+      editionsReceipt(manifest.edition_overrides.standards) || "none recorded",
     ],
     [
       "Research",
-      research
-        ? `${research.items} finding${research.items === 1 ? "" : "s"} over ${research.rounds} round${
-            research.rounds === 1 ? "" : "s"
-          }, last ${research.last_research_date || "—"}`
-        : "none",
+      research ? researchReceipt(research) : "none",
     ],
     [
       "References",
@@ -73,12 +68,7 @@ function BriefContents({ manifest }: { manifest: ProjectBriefManifest }) {
             .join("; ")}`
         : "none",
     ],
-    [
-      "Facts",
-      `${manifest.facts.active} active${
-        manifest.facts.superseded ? `, ${manifest.facts.superseded} retired` : ""
-      }`,
-    ],
+    ["Facts", factsReceipt(manifest.facts)],
     [
       "Sections",
       manifest.sections.map((s) => `${s.number} ${s.title}`.trim()).join("; ") ||
@@ -91,7 +81,7 @@ function BriefContents({ manifest }: { manifest: ProjectBriefManifest }) {
         {rows.map(([label, value]) => (
           <div key={label} className="contents">
             <dt className="text-ink-faint">{label}</dt>
-            <dd className="min-w-0 break-words text-ink-dim">{value}</dd>
+            <dd className="min-w-0 truncate text-ink-dim" title={value}>{value}</dd>
           </div>
         ))}
       </dl>

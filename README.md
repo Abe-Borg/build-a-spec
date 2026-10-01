@@ -3231,6 +3231,9 @@ Attempts are checkpointed before sending; an interrupted request keeps its
 potential charge unknown and cannot produce a passing assessment.
 **The summary files and `review.json` contain private project content and
 source paths.** Keep them local; the repository ignores `artifacts/`.
+On Unix, the evaluator creates the output directory and every capture,
+including temporary files, with owner-only permissions. On Windows, choose
+a destination protected by your account's folder permissions.
 Review both summaries against each original session and mark the six checks
 for each case in `review.json` as `true`, `false`, or leave them `null`:
 decisions/reasons; exact values, names, editions and links; preferences and

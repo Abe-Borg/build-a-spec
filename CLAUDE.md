@@ -2357,7 +2357,9 @@ tools/compaction_json_eval.py
                            budget, at most 3 requests/session and 10 sessions,
                            no retries/fallbacks. Counts/costs/timings saved
                            separately from private paths/summaries; failures
-                           billed before parsing. Offline --assess binds
+                           billed before parsing. POSIX directory 0700 and
+                           captures/temporary files 0600 from creation.
+                           Offline --assess binds
                            fidelity review to source/summary hashes, requires
                            cache-condition notes and complete near-threshold
                            evidence; adoption always pending. Live unrun.
@@ -3021,7 +3023,9 @@ tests/
                            summaries, preflight/run gates, caps/no retries,
                            history deduplication and alternating order,
                            private evidence and source-bound fidelity review;
-                           incomplete/regressed evidence cannot pass
+                           incomplete/regressed evidence cannot pass;
+                           POSIX directory/file modes before writes under
+                           permissive, standard and restrictive umasks
   test_prompt55_progress_update_canary.py
                            [P55-2] the canary without a network: nothing sent
                            without --run, each round's recorded request equal to
@@ -20106,6 +20110,25 @@ dataset exists in this workspace; **no paid comparison has run**.
   Standalone `--help` and the tested default plan/assessment modes send
   nothing; no paid request was made. Windows runtime and live provider
   behavior remain unverified.
+
+### PR #248 review — private capture permissions
+
+Review follow-up (2026-09-30): a normal Unix `0022` umask made the original
+output directory `0755` and private files `0644`. The evaluator now creates
+the new directory with `0700`. Reports and summaries share an atomic writer
+that creates randomized temporary files with `0600`, closes them before
+replacement for Windows compatibility, and retains their owner-only POSIX
+permissions on the final captures. Failed writes clean up their temporary
+files. Protection applies from creation, without a post-write chmod window.
+Windows folder ACLs still determine privacy; the README tells the owner to
+choose an account-protected destination.
+
+The three regression cases observe temporary modes before any content is
+written and check the directory before client construction, then all final
+capture modes under `0000`, `0022` and `0077` umasks. The focused evaluator,
+compaction, history, usage and documentation run passes all 164 tests
+(including all 70 evaluator cases); Ruff and diff checks pass. The initial
+full-suite result above predates this permission fix. No paid request ran.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

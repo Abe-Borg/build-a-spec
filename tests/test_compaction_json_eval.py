@@ -4,6 +4,9 @@ from __future__ import annotations
 import copy
 import itertools
 import json
+import os
+import stat
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -324,6 +327,43 @@ def test_cli_requires_explicit_run_and_new_output_directory(saved_session, tmp_p
     assert str(path) not in stdout + public and "42 gpm" not in stdout + public
     assert str(path) in (output / "review.json").read_text()
     assert "42 gpm" in (output / f"{evaluator._digest(before)}-json.md").read_text()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits and umask; Windows uses folder ACLs")
+@pytest.mark.parametrize("umask", [0o000, 0o022, 0o077])
+def test_private_captures_are_owner_only_from_creation(saved_session, tmp_path, monkeypatch, umask):
+    source = saved_session()
+    output = tmp_path / "nested" / "private-output"
+    client = EvalClient()
+    directory_modes = []
+    temporary_modes = []
+    real_temporary = tempfile.NamedTemporaryFile
+
+    def get_client():
+        directory_modes.append(stat.S_IMODE(output.stat().st_mode))
+        return client
+
+    def inspect_temporary(*args, **kwargs):
+        handle = real_temporary(*args, **kwargs)
+        # Observe the file before any confidential content is written.
+        temporary_modes.append(stat.S_IMODE(os.fstat(handle.fileno()).st_mode))
+        assert os.fstat(handle.fileno()).st_size == 0
+        return handle
+
+    monkeypatch.setattr(evaluator, "get_client", get_client)
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", inspect_temporary)
+    previous_umask = os.umask(umask)
+    try:
+        result = evaluator.main([str(source), "--run", "--out-dir", str(output)])
+    finally:
+        os.umask(previous_umask)
+    assert result == 0
+    assert directory_modes == [0o700]
+    assert temporary_modes and set(temporary_modes) == {0o600}
+    captures = list(output.iterdir())
+    assert len(captures) == 4
+    assert {stat.S_IMODE(path.stat().st_mode) for path in captures} == {0o600}
+    assert not list(output.glob("*.tmp"))
 
 
 def test_preflight_validates_all_selected_inputs_before_client(saved_session, tmp_path, monkeypatch):

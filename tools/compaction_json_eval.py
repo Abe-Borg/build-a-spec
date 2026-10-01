@@ -20,6 +20,7 @@ import hashlib
 import json
 import math
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -251,11 +252,26 @@ def run_arm(client, request: dict, arm: str) -> tuple[dict, str | None]:
         return record, None
 
 
+def _write_private_text(path: Path, text: str) -> None:
+    # NamedTemporaryFile creates with 0600, even under a permissive Unix
+    # umask. Close before replacing for Windows; final files inherit the
+    # private mode, and interruptions never expose half-written captures.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def _write(path: Path, value: dict) -> None:
-    # Checkpoints do not expose a half-written report after interruption.
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _write_private_text(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
 def _save_report(folder: Path, report: dict) -> None:
@@ -311,7 +327,7 @@ def run_cases(client, cases: list[Case], folder: Path) -> dict:
             row["arms"][arm] = record
             _save_report(folder, report)
             if summary is not None:
-                (folder / f"{case.artifact}-{arm}.md").write_text(summary + "\n", encoding="utf-8")
+                _write_private_text(folder / f"{case.artifact}-{arm}.md", summary + "\n")
             if record["status"] == "request_error":
                 return report
     report["run_complete"] = len(report["cases"]) == len(cases) and all(
@@ -440,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.out_dir is None:
             raise EvaluationError("--run requires a new --out-dir for private local review files.")
-        args.out_dir.mkdir(parents=True, exist_ok=False)
+        args.out_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
         client = get_client().with_options(**bounded_request_options(180.0))
         report = run_cases(client, cases, args.out_dir)
         print(json.dumps({"calls_recorded": sum(1 + len(case["arms"]) for case in report["cases"]),

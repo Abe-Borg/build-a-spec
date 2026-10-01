@@ -3184,6 +3184,86 @@ continuations and reminders on Opus 5.5, and the distinct batch request
 shape. These checks verify construction of outgoing requests; live PDF/QC
 acceptance remains unverified. No production continuation behavior changed.
 
+The compaction format evaluator prepares the report's Markdown/JSON
+experiment from sessions you select locally. **Only the owner runs its paid
+mode. Live comparison: not run; production still uses Markdown.** Preview a
+plan without building an API client or sending requests:
+
+```powershell
+.\.venv\Scripts\python tools\compaction_json_eval.py "C:\specs\*.baspec"
+```
+
+Select **5–10 distinct sessions whose active conversation view is near the
+compaction threshold**, including a re-compaction if available. Native
+`.baspec`, legacy `.json`, directories and quoted globs are supported.
+Identical loaded histories are deduplicated across saves and formats. The
+preview shows estimated history tokens, eligibility and a rough cold-input,
+full-output list-price cost scenario; that estimate is neither a billing
+cap nor an invoice. Near-threshold eligibility uses an estimate from 80% of
+the configured trigger through the context backstop. A session saved just
+after compaction may have too small an active view, despite a large file.
+Ineligible cuts fail before any client is built.
+
+To collect the comparison, use a **new, private output directory**:
+
+```powershell
+.\.venv\Scripts\python tools\compaction_json_eval.py "C:\specs\*.baspec" --run --out-dir artifacts\compaction-json-1
+```
+
+Each session makes at most **three requests**: a billed, non-streaming
+`max_tokens=0` cache warm with the production Markdown request, then one
+Markdown and one experimental JSON summary. Order alternates across
+sessions; the ten-session cap permits at most 30 requests. Both summaries
+use the production output ceiling (currently 64,000 tokens), thinking,
+effort, tools and cache breakpoints. Only the uncached summary instruction
+and JSON `output_config.format` differ. SDK retries and display fallbacks
+are disabled; a failed warm or request stops the run. Summaries are never
+adopted, source files are never rewritten, and no tool calls are executed
+by the app. If the provider nevertheless invokes a server tool, the summary
+is rejected and reported usage remains in the cost estimate. A smaller
+`--max-sessions 1 --max-tokens 8192` run is a pilot; it cannot satisfy the
+adoption assessment.
+
+`results.json` contains hashes, counts, cache-read shares, first-output and
+total timings, parse outcomes and list-price estimates, including failed
+summaries and cache warms. Missing counts or unknown prices stay unknown.
+Attempts are checkpointed before sending; an interrupted request keeps its
+potential charge unknown and cannot produce a passing assessment.
+**The summary files and `review.json` contain private project content and
+source paths.** Keep them local; the repository ignores `artifacts/`.
+Review both summaries against each original session and mark the six checks
+for each case in `review.json` as `true`, `false`, or leave them `null`:
+decisions/reasons; exact values, names, editions and links; preferences and
+corrections; open work/current state; missing-ledger decisions with turn
+tags; and exclusion of kept turns and fresh context. These checks cover
+omissions and invented details; JSON syntax alone cannot establish fidelity.
+
+Also record the cache conditions in `cache_conditions_notes` and set
+`cache_conditions_reviewed` to `true` only after checking whether these
+prefixes already had JSON cache entries, the relevant TTLs, and whether the
+schema was already compiled. A new output directory does **not** make the
+provider cache cold. Repeated JSON hits cannot prove reuse of the chat's
+Markdown cache. `first_json_in_run` identifies the first JSON request here;
+it does not establish first-use schema latency. Select fresh prefixes or
+wait for relevant cache entries to expire when needed, and record the basis.
+The zero-output warm follows the provider's
+[documented pre-warming protocol](https://github.com/anthropics/skills/blob/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/claude-api/shared/prompt-caching.md#pre-warming-the-cache).
+
+Then assess the evidence offline:
+
+```powershell
+.\.venv\Scripts\python tools\compaction_json_eval.py --assess artifacts\compaction-json-1
+```
+
+Assessment binds the review to the original files and generated summaries.
+Every pair must have complete measurements, a Markdown cache hit, no more
+than two percentage points of cache-read loss, 5% higher summary cost or
+10% higher total latency, plus all fidelity checks passed. Those are trial
+limits for owner review, not provider guarantees. Small samples, pilots,
+missing evidence and regressions leave the assessment incomplete.
+**Even a passing assessment leaves adoption pending.** A later PR must
+review the real measurements before changing production compaction.
+
 The DOCX fidelity contract, fixture layers, frontend checks, and release
 verification commands are documented in
 [`docs/DOCX_FIDELITY.md`](docs/DOCX_FIDELITY.md). Renderer-backed visual tests

@@ -225,6 +225,22 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 ),
             ),
             ReleaseSection(
+                title="Templates",
+                items=(
+                    ReleaseItem(
+                        title="An unfinished AI template is rejected",
+                        body=(
+                            "AI Generalize now rejects a reply that stops "
+                            "before finishing, even if it contains a readable "
+                            "template. Nothing is saved or changed in the "
+                            "active section. The attempted call still appears "
+                            "in Usage; try again or use Exact to save the "
+                            "section as it is."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
                 title="Chat",
                 items=(
                     ReleaseItem(

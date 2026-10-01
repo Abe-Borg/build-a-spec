@@ -46,7 +46,8 @@ MODEL_OPUS_5 = "claude-opus-5"
 # $5/$25. The breaking changes vs Opus 5 do not touch this app: thinking
 # cannot be disabled (QC always sends adaptive), its default effort is
 # "medium" (QC always states effort explicitly), and forced tool_choice
-# any/tool 400s (no request in the app sends tool_choice). Opus 5 stays in
+# any/tool 400s (the single-shot output calls force only compatible model
+# overrides; QC never forces). Opus 5 stays in
 # PRICING and the strict-capable list so retained reports and a
 # BUILD_A_SPEC_QC_MODEL override on it are still priced and strict.
 MODEL_OPUS_55 = "claude-opus-5-5"

@@ -277,6 +277,7 @@ def test_ai_generalization_is_usage_metered_and_must_preserve_structure(
                             "input": {"document": generalized.to_dict()},
                         }
                     ],
+                    stop_reason="tool_use",
                     usage={"input_tokens": 9, "output_tokens": 4},
                 )
             )
@@ -328,6 +329,7 @@ def test_a_reply_without_the_output_tool_is_refused_not_parsed(tmp_path, monkeyp
             return _FinalMessageStream(
                 SimpleNamespace(
                     content=[{"type": "text", "text": f"```json\n{document}\n```"}],
+                    stop_reason="end_turn",
                     usage={"input_tokens": 9, "output_tokens": 4},
                 )
             )

@@ -69,7 +69,11 @@ from .project_facts import (
     resolve_fact_source,
 )
 from .research.grounding import refusal_category
-from .research.schema import _STRICT_CAPABLE_MODELS, extract_tool_use_block
+from .research.schema import (
+    _STRICT_CAPABLE_MODELS,
+    extract_tool_use_block,
+    single_output_tool_kwargs,
+)
 from .spec_doc import outline
 from .spec_doc.project import chat_transcript
 from .standards import standards_context_block
@@ -732,13 +736,11 @@ def run_harvest(
     """The one model call — the template studio's AI-generalize idiom.
 
     Adaptive thinking and the effort stated explicitly, one strict output
-    tool, automatic tool selection. Forced tool choice is incompatible with
-    manual extended thinking; with adaptive thinking, compatibility depends
-    on the model. Verify the configured model, including interview-model
-    overrides, before forcing this tool (see CLAUDE.md's "Forced tool choice
-    is a model capability" note). A declined turn is named rather than parsed;
-    a reply cut off at ``settings.HARVEST_MAX_TOKENS`` is refused even when
-    it holds a payload (``harvest_cut_off``), a reply without the tool is refused
+    tool, forced selection only on confirmed compatible models (see
+    ``single_output_tool_kwargs``). Sonnet 5.5 and unverified overrides keep
+    automatic selection. A declined turn is named rather than parsed; an
+    unfinished reply is refused even when it holds a payload (a token-limit
+    stop remains ``harvest_cut_off``), a reply without the tool is refused
     rather than mined, and every error that follows a response carries its
     billed usage for the caller to meter.
     """
@@ -749,6 +751,7 @@ def run_harvest(
         output_config={"effort": effort},
         system=HARVEST_SYSTEM_PROMPT,
         tools=[harvest_tool(model=model)],
+        **single_output_tool_kwargs(model=model, tool_name=HARVEST_TOOL_NAME),
         messages=[{"role": "user", "content": harvest_user_message(inputs)}],
     ) as stream:
         response = stream.get_final_message()
@@ -778,6 +781,13 @@ def run_harvest(
             "its output limit). Nothing was proposed or recorded; run the "
             "harvest again.",
             code="harvest_cut_off",
+            usage=usage,
+        )
+    if stop_reason not in ("tool_use", "end_turn"):
+        raise HarvestError(
+            "The harvest reply did not finish. Nothing was proposed or "
+            "recorded; run the harvest again.",
+            code="harvest_incomplete",
             usage=usage,
         )
     payload = extract_tool_use_block(response, HARVEST_TOOL_NAME)

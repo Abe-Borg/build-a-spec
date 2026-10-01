@@ -325,7 +325,8 @@ def test_cli_requires_explicit_run_and_new_output_directory(saved_session, tmp_p
     stdout = capsys.readouterr().out
     public = (output / "results.json").read_text()
     assert str(path) not in stdout + public and "42 gpm" not in stdout + public
-    assert str(path) in (output / "review.json").read_text()
+    review = json.loads((output / "review.json").read_text())
+    assert review["cases"][evaluator._digest(before)]["source"] == str(path)
     assert "42 gpm" in (output / f"{evaluator._digest(before)}-json.md").read_text()
 
 

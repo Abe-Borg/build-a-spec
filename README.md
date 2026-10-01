@@ -3158,6 +3158,32 @@ on it:
 .\.venv\Scripts\python tools\prompt55_progress_update_canary.py --run
 ```
 
+The fourth paid check verifies the provider's thinking-prefix recovery on
+the configured QC model. Only the owner runs it. It sends at most three
+small streaming requests with SDK retries disabled: obtain a genuine signed
+thinking block, replay it unchanged as a control, then edit an earlier user
+message and replay through the production `with_drop_block` helper. The
+control must report an empty `input_transformations` array; the edited replay
+must explicitly report the expected `thinking_dropped/prefix_binding_mismatch`
+count. A successful HTTP response alone is inconclusive. The first response
+is capped at 2,048 output tokens (adjustable with `--max-tokens`, 256–4,096);
+each replay is capped at 256. It prints no thinking, signatures, response
+text or provider error bodies, and writes no captures:
+
+```
+.\.venv\Scripts\python tools\qc_thinking_binding_canary.py --run
+```
+
+Without `--run`, this command sends nothing and does not build a client.
+**Live result: not run.** This diagnostic uses a synthetic prefix edit; it
+does not fetch a live oversized PDF or verify provider enforcement in
+Batches. Hermetic `tests/test_qc_pdf_continuations.py` separately exercises
+valid 600- and 601-page PDFs, cumulative page totals that edit an older
+message, SDK thinking/signature preservation, repeated compliance-lens
+continuations and reminders on Opus 5.5, and the distinct batch request
+shape. These checks verify construction of outgoing requests; live PDF/QC
+acceptance remains unverified. No production continuation behavior changed.
+
 The DOCX fidelity contract, fixture layers, frontend checks, and release
 verification commands are documented in
 [`docs/DOCX_FIDELITY.md`](docs/DOCX_FIDELITY.md). Renderer-backed visual tests

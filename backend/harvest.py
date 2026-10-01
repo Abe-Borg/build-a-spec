@@ -732,10 +732,13 @@ def run_harvest(
     """The one model call — the template studio's AI-generalize idiom.
 
     Adaptive thinking and the effort stated explicitly, one strict output
-    tool, no ``tool_choice`` (a forced choice is incompatible with adaptive
-    thinking). A declined turn is named rather than parsed, a reply cut off
-    at ``settings.HARVEST_MAX_TOKENS`` is refused even when it holds a
-    payload (``harvest_cut_off``), a reply without the tool is refused
+    tool, automatic tool selection. Forced tool choice is incompatible with
+    manual extended thinking; with adaptive thinking, compatibility depends
+    on the model. Verify the configured model, including interview-model
+    overrides, before forcing this tool (see CLAUDE.md's "Forced tool choice
+    is a model capability" note). A declined turn is named rather than parsed;
+    a reply cut off at ``settings.HARVEST_MAX_TOKENS`` is refused even when
+    it holds a payload (``harvest_cut_off``), a reply without the tool is refused
     rather than mined, and every error that follows a response carries its
     billed usage for the caller to meter.
     """

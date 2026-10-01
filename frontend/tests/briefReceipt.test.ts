@@ -41,6 +41,31 @@ test("an edition stops at the year", () => {
   assert.equal(editionDesignation("NFPA 14 — 2022"), "NFPA 14 — 2022");
 });
 
+test("an alias and a reapproval suffix survive the basis cut", () => {
+  // The first " (" is the alias, not the basis. Cutting there drops the year.
+  assert.equal(
+    editionDesignation("NFPA 70 (NEC) — 2023 (basis)"),
+    "NFPA 70 (NEC) — 2023",
+  );
+  assert.equal(
+    editionDesignation(
+      "NFPA 13 — 2016 (R2019) (AHJ adopted the 2016 edition with a reapproval)",
+    ),
+    "NFPA 13 — 2016 (R2019)",
+  );
+  assert.equal(
+    editionDesignation("NFPA 13 — 2019 (see NFPA 13 (2016) section 8)"),
+    "NFPA 13 — 2019",
+  );
+  assert.equal(
+    editionsReceipt([
+      "NFPA 70 (NEC) — 2023 (basis)",
+      "NFPA 13 — 2016 (R2019) (AHJ adopted the 2016 edition with a reapproval)",
+    ]),
+    "NFPA 70 (NEC) — 2023; NFPA 13 — 2016 (R2019) (2)",
+  );
+});
+
 test("editions join as designations and a count", () => {
   assert.equal(
     editionsReceipt([

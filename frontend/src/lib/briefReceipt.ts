@@ -7,10 +7,24 @@ import type { ProjectBriefManifest } from "../types";
 type Research = NonNullable<ProjectBriefManifest["research"]>;
 type Facts = ProjectBriefManifest["facts"];
 
-/** Designation and year. The adoption-basis essay starts at the first " (". */
+/**
+ * Designation and year. brief_manifest appends the adoption basis as the
+ * trailing parenthetical, so only that suffix is dropped. An alias such as
+ * "NFPA 70 (NEC)" and a reapproval such as "2016 (R2019)" sit before it.
+ */
 export function editionDesignation(standard: string): string {
-  const cut = standard.indexOf(" (");
-  return (cut === -1 ? standard : standard.slice(0, cut)).trim();
+  const text = standard.trim();
+  if (!text.endsWith(")")) return text;
+  let depth = 0;
+  for (let i = text.length - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch === ")") depth += 1;
+    else if (ch === "(") {
+      depth -= 1;
+      if (depth === 0) return text.slice(0, i).trimEnd();
+    }
+  }
+  return text;
 }
 
 /** "NFPA 13 — 2019; NFPA 14 — 2022 (2)". Empty when nothing names itself. */

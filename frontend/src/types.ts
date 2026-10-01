@@ -1068,6 +1068,8 @@ export interface DocPayload {
   preserved_redline_available: boolean;
   /** Why it cannot, when it cannot; null when it can. */
   preserved_redline_reason: PreservedRedlineReason | null;
+  tracked_export_available: boolean;
+  tracked_export_reason: PreservedRedlineReason | null;
   /** True when edits can be exported by cloning and narrowly patching the source. */
   preservation_ready: boolean;
   /** Detailed imported-source capability state; null for from-scratch documents. */
@@ -2784,6 +2786,7 @@ declare global {
         open_in_word?: (
           mode: "preserved" | "normalized",
           redline?: "" | "master",
+          trackChanges?: boolean,
         ) => Promise<OpenInWordResult>;
       };
     };

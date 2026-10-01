@@ -93,6 +93,10 @@ test("a non-JSON failure body still produces a readable, labelled error", async 
 
 test("the export URL builder covers every shape the menu offers", () => {
   assert.equal(exportDocxUrl({ mode: "preserved" }), "/api/export/docx?mode=preserved");
+  assert.equal(
+    exportDocxUrl({ mode: "preserved", trackChanges: true }),
+    "/api/export/docx?mode=preserved&track_changes=true",
+  );
   assert.equal(exportDocxUrl({ mode: "source" }), "/api/export/docx?mode=source");
   assert.equal(
     exportDocxUrl({ mode: "normalized" }),
@@ -236,7 +240,22 @@ test("Open redline in Word asks the shell for the redline on your original, desk
   // App hands the redline through to the bridge untouched.
   const app = readSource("App.tsx");
   assert.match(app, /redline: "" \| "master" = ""/);
-  assert.match(app, /api\.open_in_word\(mode, redline\)/);
+  assert.match(app, /api\.open_in_word\(mode, redline, trackChanges\)/);
+});
+
+test("the primary Word export keeps formatting and requests tracking for download and Word", () => {
+  const panel = readSource("components", "ArtifactPanel.tsx");
+  const primary = panel.match(/runExport\(\s*"preserved",\s*exportDocxUrl\(\{([^}]*)\}\)/);
+  assert.ok(primary);
+  assert.match(primary[1], /mode:\s*"preserved"/);
+  assert.match(primary[1], /trackChanges:\s*true/);
+  assert.match(panel, /Export Word - Tracked Changes ON/);
+  assert.doesNotMatch(panel, /Export Word \(keeps your formatting\)/);
+  // The primary option uses the stricter server capability, so it cannot
+  // promise tracking when only a clean formatted export is available.
+  assert.match(panel, /trackedExportAvailable \? \([\s\S]*?runExport\(\s*"preserved"/);
+  assert.match(panel, /title=\{trackedExportReason\?\.message \?\? REDLINE_REASON_MISSING\}/);
+  assert.match(panel, /await onOpenInWord\("preserved", "", true\)/);
 });
 
 test("the project file download surfaces a refusal's message and scopes the tutorial", async (t) => {

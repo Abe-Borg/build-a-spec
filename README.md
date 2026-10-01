@@ -46,9 +46,13 @@ flattens or normalizes an imported package as an implicit recovery path.
 Since v1.14.0 every import lands **detached and editable**: the permission
 sweep and the frozen / pass-through-only class described above are gone for
 new imports (a tracked-changes, macro-bearing, embedded-object or protected
-master imports editable rather than read-only), and *Export Word (keeps your
-formatting)* — the appearance-preserving export — is the default. The rows
-above still describe a `.baspec` saved before v1.14.0, which keeps the
+master imports editable rather than read-only). *Export Word - Tracked Changes
+ON* is now the primary Word export: it keeps the uploaded formatting and records
+every edit since import as a native Word revision,
+and leaves Track Changes on for further edits in Word. Accept All gives the
+current edited content; Reject All restores the accepted content read at import. An unavailable
+tracked export shows the server's reason and never downloads a clean substitute.
+The rows above still describe a `.baspec` saved before v1.14.0, which keeps the
 byte-exact contract it was saved under until its owner chooses *Edit freely*.
 
 Full Strict OOXML semantic import is a current compatibility limitation. The
@@ -64,6 +68,28 @@ contain no source bytes and therefore offer normalized export only.
 See [DOCX fidelity and compatibility](docs/DOCX_FIDELITY.md) for the complete
 export, API payload, blocker-code, persistence, diagnostics, and test-fixture
 contracts.
+
+## The primary Word export tracks changes
+
+Export → **Export Word - Tracked Changes ON** replaces **Export Word (keeps
+your formatting)**. It uses the checked original-format redline renderer and
+changes only Word's tracking setting after the revisions have been verified.
+Headers, footers, styles, fonts, numbering definitions, page setup, and other
+unchanged parts retain the uploaded bytes. The desktop **Open in Word** uses the
+same tracked export. **Redline of extracted provisions** and **Redline vs
+version** retain their existing behavior.
+
+The primary download explicitly requests
+`GET /api/export/docx?mode=preserved&track_changes=true`; a request that cannot
+preserve the original formatting and track edits is refused. Existing
+`mode=preserved` callers without the flag still receive the clean formatted
+render. The separate **Redline on your original** keeps the original tracking
+setting. If the retained master already contains tracked changes, the primary
+export accepts those earlier revisions in an export-only copy, matching the view
+read at import, then tracks the app's subsequent edits against that baseline.
+Reject All restores that accepted import view. The exact original and the saved
+project stay unchanged; the separate original-format redline still refuses
+pending revisions.
 
 ## The 5.5 prompting upgrade (in the next release)
 

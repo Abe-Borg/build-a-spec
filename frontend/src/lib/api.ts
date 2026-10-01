@@ -119,14 +119,17 @@ export async function downloadAttachment(
  * on the original (master only); `normalized` the redline of extracted
  * provisions. */
 export type ExportDocxQuery =
-  | { mode: "preserved" | "source" | "normalized" }
+  | { mode: "preserved"; trackChanges?: boolean }
+  | { mode: "source" | "normalized" }
   | { redline: "master"; mode: "preserved" | "normalized" }
   | { redline: "version"; base: number; mode: "normalized" };
 
 /** URL for one `.docx` export of the specification. */
 export function exportDocxUrl(query: ExportDocxQuery): string {
   if (!("redline" in query)) {
-    return `/api/export/docx?mode=${encodeURIComponent(query.mode)}`;
+    return `/api/export/docx?mode=${encodeURIComponent(query.mode)}${
+      "trackChanges" in query && query.trackChanges ? "&track_changes=true" : ""
+    }`;
   }
   const mode = encodeURIComponent(query.mode);
   if (query.redline === "master") {

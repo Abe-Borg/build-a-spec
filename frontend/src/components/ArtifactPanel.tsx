@@ -193,6 +193,9 @@ interface Props {
   /** Why it cannot, when it cannot: the server's closed code and its own
    *  sentence, shown verbatim (never client prose); null when it can. */
   preservedRedlineReason: PreservedRedlineReason | null;
+  /** Primary tracked export uses the accepted view of revision-bearing imports. */
+  trackedExportAvailable: boolean;
+  trackedExportReason: PreservedRedlineReason | null;
   /** Export to a temporary .docx and open it with Word through the native
    *  shell; resolves to the shell's result (never throws). Rendered only
    *  when the bridge exists at click time. `redline` "master" opens the
@@ -200,6 +203,7 @@ interface Props {
   onOpenInWord?: (
     mode: "preserved" | "normalized",
     redline?: "" | "master",
+    trackChanges?: boolean,
   ) => Promise<OpenInWordResult>;
   sourceCapabilities: SourceCapabilitiesState | null;
   templateOrigin: TemplateOrigin | null;
@@ -462,6 +466,8 @@ export default function ArtifactPanel({
   preservedExportAvailable,
   preservedRedlineAvailable,
   preservedRedlineReason,
+  trackedExportAvailable,
+  trackedExportReason,
   onOpenInWord,
   sourceCapabilities,
   templateOrigin,
@@ -612,9 +618,9 @@ export default function ArtifactPanel({
       const result =
         target === "redline"
           ? await onOpenInWord("preserved", "master")
-          : await onOpenInWord(
-            preservedExportAvailable ? "preserved" : "normalized",
-          );
+          : preservedExportAvailable
+            ? await onOpenInWord("preserved", "", true)
+            : await onOpenInWord("normalized");
       if (!result.ok) setOpenInWordError(result.error || "Open in Word failed.");
     } finally {
       setOpenInWordBusy(null);
@@ -1073,40 +1079,35 @@ export default function ArtifactPanel({
               >
                 {importedMode ? (
                   <>
-                    {/* The product's import path: the retained original
-                        rebuilt with the current content. It needs the
-                        original AND its formatting map, which the server
-                        alone can vouch for — hence the payload flag. Before
-                        this entry existed the menu offered only the
-                        byte-exact mode (gone the moment a document is
-                        detached, i.e. on every import) and the normalized
-                        re-render, so a user who imported a master to keep
-                        its formatting got the app's fonts back. */}
-                    {preservedExportAvailable ? (
+                    {/* The primary Word export keeps the uploaded formatting,
+                        redlines every edit since import, and records further
+                        edits in Word. Use the server's redline capability so
+                        an unavailable export cannot deliver a clean file. */}
+                    {trackedExportAvailable ? (
                       <button
                         type="button"
                         className="block w-full px-3 py-1.5 text-left font-medium text-accent hover:bg-surface hover:text-accent-hover disabled:opacity-50"
                         onClick={() =>
                           runExport(
                             "preserved",
-                            exportDocxUrl({ mode: "preserved" }),
+                            exportDocxUrl({ mode: "preserved", trackChanges: true }),
                             "specification.docx",
                           )
                         }
                         disabled={exportsBusy}
-                        title="Your original Word file rebuilt with the current content: headers, footers, fonts, styles, numbering and page setup are kept, untouched provisions are copied exactly, and tables and pictures come through as they were"
+                        title="Keeps your original Word formatting and shows every change since import as a Word tracked change. Track Changes stays ON for further edits in Word. Accept All keeps the edited content; Reject All restores the imported content. Existing revisions in the master are accepted in the exported copy, as they are in the app."
                       >
-                        Export Word (keeps your formatting)
+                        Export Word - Tracked Changes ON
                       </button>
                     ) : (
                       <span
                         className="block cursor-default px-3 py-1.5 text-ink-faint"
-                        title="This project has no retained Word original with a formatting map to rebuild from — a project saved before formatting-preserving import, or a legacy JSON project. Export the Build-a-Spec styled file, or import the original again."
+                        title={trackedExportReason?.message ?? REDLINE_REASON_MISSING}
                       >
-                        Export Word (keeps your formatting) unavailable
+                        Export Word - Tracked Changes ON
                       </span>
                     )}
-                    {hasNativeBridge && onOpenInWord && (
+                    {hasNativeBridge && onOpenInWord && (!preservedExportAvailable || trackedExportAvailable) && (
                       <button
                         className="block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50"
                         onClick={() => {
@@ -1115,7 +1116,7 @@ export default function ArtifactPanel({
                         disabled={openInWordBusy !== null}
                         title={
                           preservedExportAvailable
-                            ? "Write the formatting-preserving export to a temporary file and open it in Word, so you see the real layout"
+                            ? "Open the formatting-preserving export in Word with all changes tracked and Track Changes ON"
                             : "Write the Build-a-Spec styled export to a temporary file and open it in Word"
                         }
                         data-capability="export.open-in-word"
@@ -1141,7 +1142,7 @@ export default function ArtifactPanel({
                     <Tip
                       tip={
                         preservedRedlineAvailable
-                          ? "A copy of the Word file you imported with every change since the import as a Word tracked change by Build-a-Spec. In Word, Accept All gives exactly Export Word (keeps your formatting) and Reject All gives your original back; the file is checked for both before it is handed over."
+                          ? "A copy of the Word file you imported with every change since the import as a Word tracked change by Build-a-Spec. Accept All keeps the edited content and Reject All restores the original content; both are checked before the file is handed over. This option keeps the original Track Changes setting."
                           : (preservedRedlineReason?.message ??
                             REDLINE_REASON_MISSING)
                       }

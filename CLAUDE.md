@@ -58,6 +58,27 @@ file is the working reference for AI-assisted development sessions.
   sassy, spicy, and funny where warranted — especially when something fought
   back — never obnoxious.
 
+## Primary Word export with tracking enabled (2026-10-01)
+
+The primary imported-document menu item is **Export Word - Tracked Changes ON**.
+It requests `mode=preserved&track_changes=true`, which resolves the imported
+baseline and uses `render_preserving_redline` with its existing Accept/Reject
+self-check and comment pass. `tracked_export.enable_track_changes` then updates
+only the settings part through the raw ZIP rewriter, adding a minimal registered
+settings part when needed. It never resaves the package through python-docx.
+Revision-bearing masters use `tracked_export.accepted_revision_baseline` on an
+export-only copy: resolve pre-existing revisions in all stories, remap body
+origins, and bind the new map to that copy. Reject All restores the accepted
+import view. Merged plain paragraphs use the normal tracked-insertion path;
+removed opaque mapped blocks are refused. The retained original remains exact.
+The ordinary export filename is kept. The primary menu availability reads
+`tracked_export_available` and its server reason; it cannot silently fall back
+to a clean or normalized export. Desktop `open_in_word` accepts an optional third
+boolean, passed through the same route. Existing clean API calls, separate
+original-format redline, and both normalized redline actions retain their contracts.
+`tests/test_tracked_word_export.py` checks body revisions, tracking settings,
+Accept/Reject parity, unchanged package parts, and native `.baspec` reopening.
+
 ## Event protocol (SSE, `POST /api/chat`)
 
 Each frame is `data: <json>\n\n`. Event types:

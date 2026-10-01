@@ -1334,6 +1334,12 @@ function Dossier() {
           trigger="Choose an option from the Export menu."
           runs={
             <>
+              The primary Export Word - Tracked Changes ON option preserves your
+              formatting, records every edit since import as a native Word
+              revision, and enables tracking for further edits in Word. Earlier pending
+              revisions are accepted in an export-only copy, matching the view
+              read at import; Reject All restores that accepted view. The retained
+              original stays unchanged.
               Deterministic document generation. Which guarantee you get is your
               explicit choice, and the options are never silently substituted for
               one another — if a source-preserving export cannot be proven safe,
@@ -1349,8 +1355,8 @@ function Dossier() {
                 <b className="text-ink">resolves it both ways itself</b> —
                 Accept All and Reject All, in code that shares nothing with the
                 code that wrote the changes — and compares, element by element,
-                Accept All’s result with <em>Export Word (keeps your
-                formatting)</em> and Reject All’s with your upload. If either
+                Accept All’s result with <em>the current edited
+                content in your original formatting</em> and Reject All’s with your upload. If either
                 comparison fails, the export is refused with the reason and
                 nothing is delivered. A master that already carries tracked
                 changes is refused before that, with the fix named: accept or

@@ -335,6 +335,35 @@ state do not apply. The byte-exact machinery below is still reachable at
 `?mode=source` for a project that never released the claim, and its own
 suites still pin it.
 
+## Primary Word export: tracked changes on
+
+**Export Word - Tracked Changes ON** requests
+`GET /api/export/docx?mode=preserved&track_changes=true`. It uses the checked
+original-format redline described below, then sets `w:trackRevisions` to true in
+Word's settings part. Accept/Reject checks cover the body before that settings
+change. All formatting parts and the proved revision markup remain untouched.
+A missing settings part is created with only the tracking switch and registered
+in document relationships and content types. Existing settings keep every other
+setting, and the switch is placed in CT_Settings schema order.
+
+The primary option uses `tracked_export_available` and the server's reason;
+it refuses unavailable redlines instead of handing over an untracked file.
+The desktop Open in Word uses the same request. The primary file uses the
+ordinary section export filename. `track_changes=true` requires explicit
+`mode=preserved` and only the imported master comparison (an omitted `redline`
+is treated as `master`); other pairings are 400.
+
+Revision-bearing masters are accepted on an export-only copy before rendering,
+matching the view the importer reads; body origins are remapped and the format
+map is rebound to those copied bytes. A merged plain paragraph uses the normal
+insertion path, and a removed opaque mapped block is refused. Reject All then
+restores that accepted baseline. Headers and footers carrying earlier revisions
+are resolved to their accepted appearance; other formatting parts remain exact.
+The retained original and saved project remain unchanged. An unresolvable
+baseline is 409 with `accepted_revision_baseline_unavailable`; a failed tracking
+setting update is 409 with `tracking_settings_unavailable`. Existing clean
+`mode=preserved` requests without the flag and the separate redline options keep their contracts.
+
 ## Redline on your original (tracked changes in the file you imported)
 
 `GET /api/export/docx?redline=master&mode=preserved` returns a copy of the

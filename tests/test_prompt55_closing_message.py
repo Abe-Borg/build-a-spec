@@ -1,6 +1,6 @@
 """The interview writes its reply after its last tool call (P55-2).
 
-The 5.5 prompting upgrade (its plan is retired; CLAUDE.md "The reply comes
+The 5.5 prompting upgrade (its plan is retired; docs/as-built.md "The reply comes
 after the last tool call" is the record), findings F1 and F7.
 On Claude Sonnet 5.5, a note of more than a sentence or two written BETWEEN
 tool calls comes back as a progress-update ``thinking`` block: the chat

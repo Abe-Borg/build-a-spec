@@ -450,7 +450,7 @@ QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3, minimu
 # rather than merely how much of it there is: a panel of one cannot split,
 # so `disputed` is unreachable for medium/low and a lone reviewer's
 # refusal deletes the finding with no escalation to anyone. That is a
-# defensible choice and it stays available (CLAUDE.md records 2 -> 1 as a
+# defensible choice and it stays available (docs/as-built.md records 2 -> 1 as a
 # deferred cost lever), but it must never be a silent one. Warned on the
 # RESOLVED value, so a clamp up from 0 says this too.
 if QC_VERIFIERS_STANDARD < 2:
@@ -561,7 +561,7 @@ QC_WARM_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_WARM_WAIT_SECONDS", 45, minimum
 # ON by default since the Tier 1 finish program's WL-2, without the measured
 # trial the flip once waited on. A lead pays for itself only if the batch can
 # read the entry a STREAMED request wrote, and no document states that the two
-# transports share it; decision FD1 (the Tier 1 finish program; CLAUDE.md
+# transports share it; decision FD1 (the Tier 1 finish program; docs/as-built.md
 # "The two shelved savings are on, and watch themselves") replaced the
 # trial that was to settle it with a runtime self-check
 # (backend/cost_checks.py, session WL-1) that can only switch the lead OFF,
@@ -593,7 +593,7 @@ QC_BATCH_WARM_LEAD = _bool_env("BUILD_A_SPEC_QC_BATCH_WARM_LEAD", True)
 #
 # ON by default since the Tier 1 finish program's CT-3, without the measured
 # trial the flip once waited on: decision FD1 (the Tier 1 finish program;
-# CLAUDE.md "The two shelved savings are on, and watch themselves")
+# docs/as-built.md "The two shelved savings are on, and watch themselves")
 # replaced that trial with runtime self-checks (backend/cost_checks.py) that
 # watch the runs the app makes anyway and can only switch the tail OFF, one
 # engine at a time, until the app restarts. If the provider ever refuses a
@@ -813,7 +813,7 @@ CHAT_CACHE_TTL = _cache_ttl_env(
 # summary plus the newest turns instead of the whole transcript (the full
 # transcript is never deleted, and the model can read any condensed turn back
 # with ``recall_conversation``). ON by default since the owner decided it on
-# 2026-09-23 (the compaction plan's decision D5; CLAUDE.md "Routine
+# 2026-09-23 (the compaction plan's decision D5; docs/as-built.md "Routine
 # condensing is on by default"),
 # without the paid recall check that plan had named as the gate. Each summary
 # is a billed background call with no click behind it, so ``0`` switches it

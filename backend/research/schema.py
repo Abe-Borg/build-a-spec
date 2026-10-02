@@ -167,7 +167,7 @@ _STRICT_CAPABLE_MODELS = frozenset(
 # Forced tool choice under adaptive thinking is a separate capability from
 # strict schemas. Only explicitly confirmed models belong here: Sonnet 5.5
 # and Opus 5.5 reject forcing, and unknown overrides keep automatic choice.
-# See CLAUDE.md's "Single-shot outputs finish before they are accepted" note.
+# See docs/as-built.md's "Single-shot outputs finish before they are accepted" note.
 _FORCED_OUTPUT_TOOL_MODELS = frozenset(
     {settings.MODEL_SONNET_5, settings.MODEL_OPUS_5, settings.MODEL_FABLE_5}
 )

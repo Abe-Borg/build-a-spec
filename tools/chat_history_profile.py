@@ -2,7 +2,7 @@
 """Measure what a saved project's chat history is made of.
 
 This is the measurement half of the chat-history compaction program (its
-plan is retired; CLAUDE.md "Stale outlines stay out of saved history" is
+plan is retired; docs/as-built.md "Stale outlines stay out of saved history" is
 the record). The plan's numbers
 came from a synthetic section; this script replaces them with real ones.
 For each project file it reports the saved conversation by category —

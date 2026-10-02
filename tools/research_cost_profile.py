@@ -2,7 +2,7 @@
 """Read saved research rounds and report what they cost.
 
 Chunk 1 of the Research and Final QC cost program, Tier 1 (its plan is
-retired; CLAUDE.md "Research cost is measurable" is the record). It is the
+retired; docs/as-built.md "Research cost is measurable" is the record). It is the
 sibling of
 ``tools/qc_export_cost_profile.py``, and the before-and-after instrument for
 the plan's Chunks 4 and 5: the headline it prints — the UNCACHED share of

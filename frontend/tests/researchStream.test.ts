@@ -76,7 +76,7 @@ test("breaking out of the stream releases the body", async (t) => {
  *
  * App.tsx has no DOM harness, so these pin the wiring at the source level
  * (the qcStream.test.ts idiom). The race itself was reproduced and the fix
- * checked in a real browser; CLAUDE.md records how. */
+ * checked in a real browser; docs/as-built.md records how. */
 
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 

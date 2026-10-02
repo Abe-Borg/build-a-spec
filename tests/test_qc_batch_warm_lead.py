@@ -22,7 +22,7 @@ file defends has four halves:
   current with the switch in either position (the plan's F3).
 
 Every wait here is an event, never a real sleep (the Windows lesson in
-CLAUDE.md, "A test that had only ever run on Linux").
+docs/as-built.md, "A test that had only ever run on Linux").
 """
 from __future__ import annotations
 

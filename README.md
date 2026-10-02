@@ -31,7 +31,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
-| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. A change with a recorded basis carries a Word comment under your export author name with the research text and source links behind it. Export → *Redline on your original (tracked changes)* (the unreleased 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the CLAUDE.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. A change with a recorded basis carries a Word comment under your export author name with the research text and source links behind it. Export → *Redline on your original (tracked changes)* (the unreleased 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the docs/as-built.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -103,7 +103,7 @@ unreleased entry (1.21.0) in `backend/release_notes.py`. On 2026-09-29 the app
 was reviewed against Anthropic's prompting guides for Claude Sonnet 5.5 (the
 chat, research, the fact harvest and the condensing summary) and Claude Opus
 5.5 (Final QC). Eight sessions implemented every recommendation; the plan
-is retired, and CLAUDE.md's "The 5.5 prompting upgrade, as shipped" is the
+is retired, and docs/as-built.md's "The 5.5 prompting upgrade, as shipped" is the
 record. What changed for you:
 
 - **Pasted text is marked as pasted** (P55-8). A paste into the chat that
@@ -156,7 +156,7 @@ on it.
 ## Current Status — room for the paper (the panel tray)
 
 No release entry yet: which release carries it is the owner's call, and the
-release-note draft is in CLAUDE.md ("Room for the paper").
+release-note draft is in docs/as-built.md ("Room for the paper").
 
 **The panels under the paper no longer crowd it out.** Review, Research,
 Final QC, Issues, Open items, Waiting on you, Project, Project facts,
@@ -223,7 +223,7 @@ full provision subtree.
 
 In the unreleased 1.21.0 entry, the same commit as the fix, so any 1.21.0
 tag that includes one includes the other. The engineering notes are in
-CLAUDE.md ("Choosing research areas registers; Research again runs them").
+docs/as-built.md ("Choosing research areas registers; Research again runs them").
 
 **Choosing areas no longer starts a round.** The Research panel's
 *Choose areas…* list had its own "Research N selected areas" button, so
@@ -260,7 +260,7 @@ does not wait for the stopped round's connection to close.
 ## Current Status — SectionFormat's fifth paragraph level
 
 PR #199, with no release entry yet: which release carries it is the
-owner's call, and the release-note draft is in CLAUDE.md ("The fifth
+owner's call, and the release-note draft is in docs/as-built.md ("The fifth
 paragraph level").
 
 **A master that nests five levels deep now imports whole.** CSI SectionFormat
@@ -362,7 +362,7 @@ sheet, a previous project's section, or meeting notes.
 
 ## Shipped in v1.21.0 (Project workspace — every section of a project stays in step)
 
-The project-workspace program (its plans are retired; CLAUDE.md's "The
+The project-workspace program (its plans are retired; docs/as-built.md's "The
 project workspace program, as shipped" is the record) makes a project a
 first-class thing: one project folder, sections that hang off it,
 switching between them in one click. Its phases shipped together in
@@ -675,7 +675,7 @@ spec is retired with the program's plans
 Every chat turn re-sends the whole conversation, and nothing bounded it: a
 long enough session would eventually exceed the model's 1M-token window,
 after which every message fails and the saved project keeps the problem.
-The plan (retired; CLAUDE.md's compaction sections are the record) was:
+The plan (retired; docs/as-built.md's compaction sections are the record) was:
 first stop saving data that is already stored elsewhere, then condense the
 conversation rarely between turns, with the original transcript always
 kept and recallable. Phases 1 and 2 ship in v1.21.0. Phase 2's trim is on
@@ -817,7 +817,7 @@ record's sizes (never its text).
 
 ## Redline on your original
 
-The redline-on-your-original program (its plan is retired; CLAUDE.md's
+The redline-on-your-original program (its plan is retired; docs/as-built.md's
 "Redline on your original" sections and `docs/DOCX_FIDELITY.md` are the
 record) exports a copy of the Word
 file you imported with every change Build-a-Spec made shown as Word tracked
@@ -890,7 +890,7 @@ given a numbering level of their own — never their text.
 
 ### Four things Phase 0 left behind, fixed (Phase 0 follow-up)
 
-The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Four fixes to how an imported master is named and exported"; the record is the CLAUDE.md section "Phase 0's four leftovers — implemented notes".
+The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Four fixes to how an imported master is named and exported"; the record is the docs/as-built.md section "Phase 0's four leftovers — implemented notes".
 
 - **Every list names a provision the way the panel does.** A preserved
   table, picture or other block takes no letter in the panel, but the open
@@ -994,7 +994,7 @@ The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Fou
 
 ### Links and deeper provisions (the two losses Phase 1 recorded)
 
-The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Links and new sub-provisions survive the formatted export"; the record is the CLAUDE.md section "Links and the nesting level survive the formatted export — implemented notes".
+The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Links and new sub-provisions survive the formatted export"; the record is the docs/as-built.md section "Links and the nesting level survive the formatted export — implemented notes".
 
 - **A provision holding a hyperlink keeps it.** Editing or relettering such
   a provision used to rebuild the whole paragraph from its first run: the
@@ -1071,7 +1071,7 @@ real Word can check it too.
 
 ### Word's own "Moved" marks (Phase 2, second half)
 
-The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Moves show as moves"; the record is the CLAUDE.md section "Word's own \"Moved\" marks — implemented notes (redline Phase 2, PR B)". **Built without real Word's verdict:** the plan made this wait for the
+The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Moves show as moves"; the record is the docs/as-built.md section "Word's own \"Moved\" marks — implemented notes (redline Phase 2, PR B)". **Built without real Word's verdict:** the plan made this wait for the
 owner's Windows run of the judge above and Word's own tracked-move sample, and
 the owner waived that on 2026-09-23. So it ships behind a switch
 (`BUILD_A_SPEC_REDLINE_NATIVE_MOVES`, on by default; `0` gives back the
@@ -1113,7 +1113,7 @@ Word run should check first.
 
 ### Comments on the changes (Phase 3)
 
-The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "The redline on your original says why"; the record is the CLAUDE.md section "Comments on the changes — implemented notes (redline Phase 3)". The owner asked for it on 2026-09-23: always on, with clickable
+The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "The redline on your original says why"; the record is the docs/as-built.md section "Comments on the changes — implemented notes (redline Phase 3)". The owner asked for it on 2026-09-23: always on, with clickable
 source links. **The redline now carries research text and links to your
 sources, and it is the file you may send to a client** — read its comments
 first.
@@ -1156,7 +1156,7 @@ verifier panel, adjudication rule or output changes. Only how and when the
 same requests reach the provider changes — calls that share a cached prefix
 stop writing it several times over, a paused call reads its own cache, and a
 retry resumes instead of starting over. The plan and its progress file are
-retired; CLAUDE.md's "Research and Final QC cost, Tier 1, as shipped" is
+retired; docs/as-built.md's "Research and Final QC cost, Tier 1, as shipped" is
 the record.
 
 **The program is complete** (six chunks, closed 2026-09-24), and its release
@@ -1178,7 +1178,7 @@ a separately streamed request stored (Chunk 3), and whether a resumed
 request's automatic cache breakpoint is accepted and read (Chunk 4). Each
 was to turn on only when a measured run (the plan's M3) passed its own test,
 and no such run is planned (the progress file's O6, 2026-09-24). So a
-second program, the **Tier 1 finish** (complete; CLAUDE.md's "The two
+second program, the **Tier 1 finish** (complete; docs/as-built.md's "The two
 shelved savings are on, and watch themselves" is the record), replaced that
 run with **cost self-checks** that watch the runs
 the app makes anyway and can only switch a saving off
@@ -1981,7 +1981,7 @@ next message, so an interview is mostly tapping, not typing.
 
 > Note: the v1.2.0 (Batch 7: stop generation / research / QC) and v1.3.0
 > (Batch 8: chat figures) status sections were never written into this README;
-> both shipped and are described in `CLAUDE.md`. This is a pre-existing
+> both shipped and are described in `docs/as-built.md`. This is a pre-existing
 > documentation gap, called out here rather than silently left implied.
 
 ## Reusable templates

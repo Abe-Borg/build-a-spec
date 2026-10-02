@@ -14,7 +14,7 @@ rest. The claim this file defends has two halves:
   switch in either position.
 
 Every wait here is an event or a stepped clock, never a real sleep (the
-Windows lesson in CLAUDE.md, "A test that had only ever run on Linux").
+Windows lesson in docs/as-built.md, "A test that had only ever run on Linux").
 """
 from __future__ import annotations
 

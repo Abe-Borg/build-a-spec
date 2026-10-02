@@ -365,7 +365,7 @@ invisible to CI and expensive to the user.
 The switch (`BUILD_A_SPEC_CONTINUATION_CACHE`) has been on by default since
 the Tier 1 finish program's CT-3, so these rows run on an ordinary build;
 the last one switches it off. Two runtime self-checks watch it (CT-1 and
-CT-2; CLAUDE.md "The two shelved savings are on, and watch themselves").
+CT-2; docs/as-built.md "The two shelved savings are on, and watch themselves").
 They can only switch it off, one engine
 at a time, until the app restarts, and Settings → Developer tools shows what
 they decided.

@@ -28,6 +28,15 @@ interface Props {
  *  - the in-app New-session / Open-project gate (custom copy) — Save writes a
  *    file then proceeds, Discard proceeds unsaved, Cancel keeps the session.
  * Escape always cancels (safest — never lose work on a stray keypress).
+ *
+ * Layer: z-[75], above every ordinary window (the z-[70] ModalShells and the
+ * Final QC dismiss dialog) and below the z-[80] elevated confirmations. The
+ * prompt answers an action the user just took, and that action is often a
+ * button INSIDE one of those windows — Start in the template studio, Start
+ * with the brief in New session. Those windows stay open underneath (so
+ * Cancel returns to them as they were), so at z-[60] the prompt rendered
+ * behind its own caller, which swallowed every click on it. The dialog stack
+ * already gave it the keyboard; this gives it the mouse.
  */
 export default function CloseDialog({
   open,
@@ -49,7 +58,7 @@ export default function CloseDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-6"
+      className="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-6"
       onClick={onCancel}
       role="dialog"
       aria-modal="true"

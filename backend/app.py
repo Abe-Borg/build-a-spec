@@ -5235,7 +5235,7 @@ def create_app(
                 format_map=format_map,
                 baseline=inputs.redline_base,
                 current=inputs.current,
-                author=settings.APP_NAME,
+                author=settings.WORD_AUTHOR,
                 date=_revision_timestamp(),
                 stats=stats,
                 # Read per request, never bound at import (Phase 2 PR B).

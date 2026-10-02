@@ -80,6 +80,9 @@ boolean, passed through the same route. Existing clean API calls, separate
 original-format redline, and both normalized redline actions retain their contracts.
 `tests/test_tracked_word_export.py` checks body revisions, tracking settings,
 Accept/Reject parity, unchanged package parts, and native `.baspec` reopening.
+All Word redlines use `settings.WORD_AUTHOR` (default `Abraham Borg`, overridden
+with `BUILD_A_SPEC_WORD_AUTHOR`) for new revisions and associated comments.
+Comment initials come from that author; existing reviewers' metadata is retained.
 
 ## Event protocol (SSE, `POST /api/chat`)
 

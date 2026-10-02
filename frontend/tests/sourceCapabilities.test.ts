@@ -77,7 +77,7 @@ test("the redline on your original states its promise, its check, its refusal an
   // Phase 3: the file carries Build-a-Spec's comments, with research text
   // and source links, and may go to a client — the entry must say so rather
   // than promise the upload's parts untouched without exception.
-  assert.match(entry.description, /Word comment from Build-a-Spec/);
+  assert.match(entry.description, /Word comment under that same author name/);
   assert.match(entry.description, /research text and links to its sources/);
   assert.match(entry.description, /may go to a client/);
   assert.match(entry.description, /Apart from the comments, every part of the file outside the document body/);

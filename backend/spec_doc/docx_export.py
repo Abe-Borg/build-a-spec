@@ -124,7 +124,7 @@ def build_docx(
             document,
             section,
             redline,
-            settings.APP_NAME,
+            settings.WORD_AUTHOR,
             redline_date or _redline_now(),
         )
     else:

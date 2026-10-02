@@ -31,7 +31,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
-| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. A change with a recorded basis carries a Word comment from Build-a-Spec with the research text and source links behind it. Export → *Redline on your original (tracked changes)* (the unreleased 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the CLAUDE.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. A change with a recorded basis carries a Word comment under your export author name with the research text and source links behind it. Export → *Redline on your original (tracked changes)* (the unreleased 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the CLAUDE.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -78,6 +78,11 @@ Headers, footers, styles, fonts, numbering definitions, page setup, and other
 unchanged parts retain the uploaded bytes. The desktop **Open in Word** uses the
 same tracked export. **Redline of extracted provisions** and **Redline vs
 version** retain their existing behavior.
+
+Exported revisions and their associated comments show **Abraham Borg** as the
+author, with **AB** as the comment initials. Other installations can set
+`BUILD_A_SPEC_WORD_AUTHOR` to the name they want Word to display; comment initials
+are derived from that name. Existing comments by other reviewers are retained.
 
 The primary download explicitly requests
 `GET /api/export/docx?mode=preserved&track_changes=true`; a request that cannot
@@ -1114,8 +1119,8 @@ sources, and it is the file you may send to a client** — read its comments
 first.
 
 - **Each change that rests on something says what.** A provision the
-  assistant wrote from a research finding carries a Word comment from
-  Build-a-Spec naming the finding — its requirement, authority and code
+  assistant wrote from a research finding carries a Word comment under your
+  export author name, naming the finding — its requirement, authority and code
   reference, dated, with links to the sources it was verified against. A
   lead research could not verify is labelled so, and lists what it cited as
   not verified. One written from an attached document names the document. A
@@ -3097,8 +3102,9 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_LENS` | `8` | web_search allowance for the other lenses + verifiers. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE` | `8` | web_fetch allowance for the code-compliance lens. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_LENS` | `4` | web_fetch allowance for the other lenses + verifiers. |
+| `BUILD_A_SPEC_WORD_AUTHOR` | `Abraham Borg` | Name shown on new Word tracked changes and associated comments. Comment initials are derived from this name. Existing reviewers are retained. |
 | `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` | `1` | In the redline on your original, show a provision you moved without changing it as Word's own "Moved" marks (`w:moveFrom` where it was and `w:moveTo` where it is) instead of a deletion there and an insertion here. On by default since redline Phase 2 PR B, which was built without real Word's verdict on it (the owner waived that gate on 2026-09-23). `0` gives back the Phase 1 rendering, byte for byte — the switch to reach for if Word ever shows a native move wrongly. Either way the export checks that Accept All gives the formatted export and Reject All your original before handing the file over, and a native rendering that fails that check is rendered again without Moved marks. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_NATIVE_MOVES = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0`. |
-| `BUILD_A_SPEC_REDLINE_COMMENTS` | `1` | In the redline on your original, give each change with a recorded basis a Word comment from Build-a-Spec saying what it rests on — a research finding (with its requirement, authority, code reference and links to its sources), an attached document, or a Final QC fix (with its issue and sources). The comments travel in the file, which may go to a client. Read per export; `0` gives back the redline without comments, byte for byte. If the comments cannot be proved additive, the file goes out without them rather than being refused. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_COMMENTS = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_COMMENTS=0`. |
+| `BUILD_A_SPEC_REDLINE_COMMENTS` | `1` | In the redline on your original, give each change with a recorded basis a Word comment under your export author name saying what it rests on — a research finding (with its requirement, authority, code reference and links to its sources), an attached document, or a Final QC fix (with its issue and sources). The comments travel in the file, which may go to a client. Read per export; `0` gives back the redline without comments, byte for byte. If the comments cannot be proved additive, the file goes out without them rather than being refused. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_COMMENTS = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_COMMENTS=0`. |
 | `BUILD_A_SPEC_PORT` | `8756` | Fixed loopback backend port used only in Vite development. Packaged/browser production pre-binds an exclusive OS-assigned ephemeral loopback port per launch. |
 | `BUILD_A_SPEC_DEV` | off | Point the window at the Vite dev server. |
 | `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). Traces may contain document text; treat them as sensitive project data. `0` disables. |

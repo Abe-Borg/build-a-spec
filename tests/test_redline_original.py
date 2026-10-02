@@ -2972,7 +2972,7 @@ def test_the_route_hands_over_the_redline_on_the_original(client):
     assert [n for n in before if before[n] != after[n]] == ["word/document.xml"]
     changes = _revisions(r_body)
     assert changes
-    assert {c.get(qn("w:author")) for c in changes} == {"Build-a-Spec"}
+    assert {c.get(qn("w:author")) for c in changes} == {"Abraham Borg"}
     assert {c.get(qn("w:date")) for c in changes} == {_FIXED_DATE}
     # The firm's header travelled with the file untouched.
     assert Document(io.BytesIO(redline)).sections[0].header.paragraphs[0].text == (

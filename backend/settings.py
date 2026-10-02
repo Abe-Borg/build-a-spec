@@ -838,6 +838,10 @@ CHAT_COMPACTION_MAX_TOKENS = 64_000
 
 # --- Redline on your original (redline plan Phase 2) --------------------------
 
+# The person's name Word displays on exported revisions and their comments.
+# Keep application branding separate; another install can override the name.
+WORD_AUTHOR = os.environ.get("BUILD_A_SPEC_WORD_AUTHOR", "Abraham Borg").strip() or "Abraham Borg"
+
 # Whether the redline on your original shows a provision moved unchanged as
 # Word's own "Moved" marks (w:moveFrom where it was, w:moveTo where it is,
 # paired by name) instead of a tracked deletion plus a tracked insertion. ON by

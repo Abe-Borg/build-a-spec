@@ -371,7 +371,7 @@ def test_redline_xml_shapes():
     ids: list[str] = []
     for element in inserts + deletes:
         assert element.get(qn("w:id")) is not None
-        assert element.get(qn("w:author")) == "Build-a-Spec"
+        assert element.get(qn("w:author")) == "Abraham Borg"
         assert element.get(qn("w:date")) == _DATE
         ids.append(element.get(qn("w:id")))
     assert len(ids) == len(set(ids)), "w:id values must be unique"

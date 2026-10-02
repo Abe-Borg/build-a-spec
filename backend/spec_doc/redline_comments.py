@@ -2,7 +2,7 @@
 
 Every tracked change in the redline on your original that has a recorded
 basis — the research finding behind it, the attached document behind it, or
-the Final QC fix that made it — carries a Word comment from "Build-a-Spec"
+the Final QC fix that made it — carries a Word comment from the export author
 saying what the change rests on, with its source web links. A reviewer sees
 why each change was made without opening the app.
 
@@ -46,6 +46,7 @@ from __future__ import annotations
 import copy
 import io
 import posixpath
+import re
 import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -73,9 +74,6 @@ COMMENTS_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
 )
 RELS_CONTENT_TYPE = "application/vnd.openxmlformats-package.relationships+xml"
-#: The initials Word shows beside a comment's author.
-COMMENT_INITIALS = "BAS"
-
 _CONTENT_TYPES_PART = "[Content_Types].xml"
 _DOCUMENT_RELS = "word/_rels/document.xml.rels"
 _NEW_COMMENTS_PART = "word/comments.xml"
@@ -439,9 +437,11 @@ def _comment_element(
 ):
     comment = etree.Element(_W_COMMENT, nsmap={"w": W_NS, "r": R_NS})
     comment.set(_W_ID, comment_id)
-    comment.set(qn("w:author"), xml_safe_text(author))
+    author = xml_safe_text(author)
+    comment.set(qn("w:author"), author)
     comment.set(qn("w:date"), xml_safe_text(date))
-    comment.set(qn("w:initials"), COMMENT_INITIALS)
+    initials = "".join(word[0].upper() for word in re.findall(r"[^\W_]+", author))[:9]
+    comment.set(qn("w:initials"), initials)
     for number, segments in enumerate(paragraphs):
         paragraph = etree.SubElement(comment, _W_P)
         paragraph.append(_paragraph_properties(styles))
@@ -800,7 +800,6 @@ __all__ = [
     "CHANGE_INSERTED",
     "CHANGE_MOVED",
     "COMMENT_FALLBACK_REASONS",
-    "COMMENT_INITIALS",
     "COMMENT_SKIP_REASONS",
     "CommentBasis",
     "CommentLink",

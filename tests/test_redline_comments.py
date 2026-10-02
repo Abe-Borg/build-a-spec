@@ -1099,13 +1099,15 @@ def _export_redline(client):
 
 
 def _redline_comment_lines(payload: bytes) -> list[list[str]]:
+    from backend import settings
+
     root = _comments_root(payload)
     if root is None:
         return []
     return [
         ["".join(t.text or "" for t in p.iter(qn("w:t"))) for p in c.iter(qn("w:p"))]
         for c in root.iter(qn("w:comment"))
-        if c.get(qn("w:author")) == AUTHOR
+        if c.get(qn("w:author")) == settings.WORD_AUTHOR
     ]
 
 

@@ -64,6 +64,49 @@ def test_formatted_export_tracks_existing_edits_and_enables_future_edits(client)
     assert _members(redline.content)["word/document.xml"] == after["word/document.xml"]
 
 
+@pytest.mark.parametrize("params", [
+    {},
+    {"track_changes": False, "redline": "master"},
+    {"track_changes": False, "redline": "master", "mode": "normalized"},
+])
+@pytest.mark.parametrize("author,initials", [(None, "AB"), ("Renée Garcia", "RG")])
+def test_exports_use_the_personal_author_and_keep_other_reviewers(client, monkeypatch, params, author, initials):
+    from docx import Document
+    from backend import settings
+    from tests.test_redline_comments import _install_fix
+
+    monkeypatch.setattr(settings, "REDLINE_COMMENTS", True)
+    if author is not None:
+        monkeypatch.setattr(settings, "WORD_AUTHOR", author)
+    expected_author = author or "Abraham Borg"
+    document = Document(io.BytesIO(_master_bytes()))
+    document.add_comment(document.paragraphs[4].runs, text="Confirm scope.", author="Reviewer", initials="RV")
+    source = _save(document)
+    _import(client, source)
+    target = sessions.get_session().doc.doc.parts[0].articles[0].paragraphs[0].uid
+    _install_fix(client, target, [{
+        "action": "replace", "target_id": target,
+        "text": "Section includes seismic isolation for mechanical equipment.",
+    }])
+    result = _export(client, **params)
+    assert result.status_code == 200, result.text
+    changes = [element for element in _body(result.content).iter()
+               if element.tag in {qn("w:ins"), qn("w:del")}]
+    assert changes and {element.get(qn("w:author")) for element in changes} == {expected_author}
+    if params.get("mode") != "normalized":
+        before = etree.fromstring(_members(source)["word/comments.xml"])
+        after = etree.fromstring(_members(result.content)["word/comments.xml"])
+        original = {comment.get(qn("w:id")): comment for comment in before}
+        added = [comment for comment in after if comment.get(qn("w:id")) not in original]
+        assert added
+        assert {comment.get(qn("w:author")) for comment in added} == {expected_author}
+        assert {comment.get(qn("w:initials")) for comment in added} == {initials}
+        for comment in after:
+            if comment.get(qn("w:id")) in original:
+                assert first_difference(original[comment.get(qn("w:id"))], comment) is None
+    assert sessions.get_session().source_docx_bytes == source
+
+
 def test_unedited_export_has_tracking_on_without_inventing_revisions(client):
     source = _master_bytes()
     _import(client, source)

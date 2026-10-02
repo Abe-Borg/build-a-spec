@@ -410,7 +410,9 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "formatting and records every change since import as a "
                             "native Word tracked change. Track Changes stays on for "
                             "further edits in Word, and Open in Word uses the same "
-                            "export. Accept All gives your edited content; Reject "
+                            "export. Revisions and their associated comments show "
+                            "Abraham Borg as author, with AB as the comment initials. "
+                            "Accept All gives your edited content; Reject "
                             "All restores the imported content. Earlier pending revisions "
                             "are accepted in the exported copy to match the import view; "
                             "your retained original stays unchanged. The app checks both "
@@ -492,7 +494,7 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                         title="The redline on your original says why",
                         body=(
                             "Each change that rests on something carries a Word "
-                            "comment from Build-a-Spec: a provision written from a "
+                            "comment under your export author name: a provision written from a "
                             "research finding names the finding — its requirement, "
                             "authority and code reference — with links to the "
                             "sources it was verified against (or labels it a lead "

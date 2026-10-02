@@ -74,7 +74,7 @@ test("the redline on your original states its promise, its check, its refusal an
   // and the entry says which moves are not.
   assert.match(entry.description, /moved without changing it shows as Word's own Moved marks/);
   assert.match(entry.description, /also changed shows as a deletion and an insertion/);
-  // Phase 3: the file carries Build-a-Spec's comments, with research text
+  // Phase 3: the file carries the export's added comments, with research text
   // and source links, and may go to a client — the entry must say so rather
   // than promise the upload's parts untouched without exception.
   assert.match(entry.description, /Word comment under that same author name/);

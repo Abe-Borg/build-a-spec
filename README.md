@@ -1137,7 +1137,7 @@ first.
   so they stay through Accept All and Reject All; your own comments are kept,
   and new ones are appended to your comments part. Nothing else in the file
   changes: every other part is still your upload's, byte for byte, and the
-  export proves it — removing Build-a-Spec's comments gives back exactly the
+  export proves it — removing the added comments gives back exactly the
   checked redline. If that proof ever fails, you get the redline without
   comments rather than a refusal.
 - **Switchable.** `BUILD_A_SPEC_REDLINE_COMMENTS=0` gives back the redline

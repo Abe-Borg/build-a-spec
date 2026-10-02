@@ -17195,3 +17195,83 @@ knob, project-format change, capability or `TOUR_VERSION` change.
 - **Erratum** (these notes are append-only): "Content persistence" calls
   `CloseDialog` the shared three-way modal and says nothing of its layer; it
   rendered at `z-[60]`, below the windows that request it, until this change.
+
+## A template's delete confirmation belongs to that template — implemented notes
+
+Reported (Abraham, 2026-10-02): in the template studio, deleting a personal
+template and then importing its exported `.bastemplate`, without closing the
+window, opened the imported template's Manage view already showing **Confirm
+delete** and **Keep**. One click deleted a template the user never chose to
+delete. Frontend fix plus one backend test: no route, SSE event, dependency,
+env knob, project-format change or version bump.
+
+- **The cause was a bare boolean.** `NewSessionDialog`'s `confirmDelete` was
+  set by **Delete…** and cleared only by **Keep**, the Manage button, Escape
+  and reopening the dialog. A completed deletion left it `true`, and the import
+  path (`importFile`) and the save-template path (`commitTemplate`) opened
+  Manage without resetting it. So the next template to open in Manage
+  inherited the confirmation.
+- **The confirmation is now the template's id.** `pendingDeleteId:
+  PendingTemplateDelete` (`string | null`, `lib/templateDelete.ts`).
+  **Delete…** sets it to `selected.id`, which is the only non-null write.
+  Confirm delete / Keep render only while `confirmsDeleteOf(pendingDeleteId,
+  selected.id)` holds. **Confirm delete** captures the id, re-checks that
+  rule before sending `deleteTemplate`, and clears the confirmation once the
+  deletion succeeds. **Keep**, Escape, **‹ All templates** and reopening the
+  dialog clear it.
+- **`openManage(template)` is now the only way into Manage**, and it clears
+  the confirmation. It also sets the name and description fields from the
+  template. Import, a newly saved template and the Manage button all go
+  through it, and `setView("manage")` appears nowhere else.
+- **Two guards, each enough alone.** Clearing the confirmation on entry and
+  after a deletion fixes the reported sequence. The id rule is the second
+  guard: a re-import mints a fresh `personal:` id
+  (`TemplateCatalog.import_bytes`), so even a confirmation some future code
+  path leaves behind cannot show on another template.
+- **Found and fixed on the same path: import showed the wrong details.**
+  `importFile` never set the name and description fields, so an imported
+  template's Manage view showed whatever the fields last held: an earlier
+  template's name, or a blank one. **Save details** would then have written
+  that onto the imported template. `openManage` sets both fields.
+- **Checked in a real browser.** A scratch harness (not committed) ran the real
+  backend and the production build in headless Chromium at 1440×900 and
+  followed the report's steps. On the unfixed build, the imported template
+  opened showing Confirm delete and Keep, with no Delete… button. On the fixed
+  build it opened clean with its own name. **Keep** cancelled without
+  deleting, and a fresh **Delete…** then **Confirm delete** deleted it.
+- **Tests.** `frontend/tests/templateDelete.test.ts` (8, registered in
+  `package.json`). Three are unit tests of the rule, one of them replaying the
+  delete-then-import sequence. Five pin the dialog's source, since it has no
+  DOM harness (the `tour.test.ts` idiom): the state is an id, the gate and the
+  only non-null write use `selected.id`, `openManage` is the one way into
+  Manage, and the delete handler is guarded and clears afterwards. They also
+  pin **Keep** and the three exits. `tests/test_templates.py::
+  test_a_deleted_template_re_imported_from_its_export_is_a_new_template` runs
+  the backend half through the API: create, export, delete, import → a fresh
+  id with the same name, the deleted id answering 404, and the imported copy
+  deletable on its own.
+- **Revert matrix.** Each mechanism was reverted in place and its exact text
+  restored after; every row turned red:
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | the unfixed dialog, whole | 5 (the three unit tests pass by design) |
+  | no clear on opening Manage | 1 |
+  | no clear after a deletion | 1 |
+  | confirmation shown for any pending id | 1 |
+  | import bypassing `openManage` | 1 |
+  | `openManage` not setting the name | 1 |
+  | **Keep** not cancelling | 1 |
+  | no guard before the delete request | 1 |
+  | Escape keeping the confirmation | 1 |
+  | **‹ All templates** keeping it | 1 |
+  | **Delete…** raising for another value | 1 |
+  | the rule ignoring the id | 2 |
+  | the rule accepting an empty id | 1 |
+  | backend: import keeping an exported personal id | 1 |
+
+- **Release-note draft** (v1.22.1 is published and its entry is frozen; the
+  owner picks the release): "Deleting a template and then importing it again
+  no longer opens the imported copy one click from deletion; its delete
+  confirmation starts fresh, and its Manage view shows its own name and
+  description."

@@ -1998,7 +1998,8 @@ built-in starters.
   open decision, the preview is rejected outright and nothing is written.
 - **They are files.** Export a template to a `.bastemplate` and hand it to a
   colleague; import theirs. Rename, re-describe, or delete your own; built-in
-  starters are read-only.
+  starters are read-only. Deleting asks you to confirm every time, and the
+  confirmation applies only to the template you pressed **Delete…** on.
 - **Template content is labeled.** A section seeded from a template badges
   those blocks as a template starter, so nobody mistakes reusable boilerplate
   for a decision made about this project. It is not Word-source provenance

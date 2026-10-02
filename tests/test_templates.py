@@ -204,6 +204,51 @@ def test_personal_crud_and_curated_immutability(tmp_path):
     assert all(item["id"] != template_id for item in catalog.list().templates)
 
 
+def test_a_deleted_template_re_imported_from_its_export_is_a_new_template(
+    tmp_path, monkeypatch
+):
+    """Create, export, delete, then import the export again, through the API.
+
+    The template studio keeps a delete confirmation per template id
+    (frontend/src/lib/templateDelete.ts), so the re-imported copy must be a
+    different template from the one just deleted: a fresh id, its own
+    details, and deletable only by its own request.
+    """
+    catalog = _catalog(tmp_path)
+    monkeypatch.setattr("backend.templates._CATALOG", catalog)
+    token, _preview = catalog.preview(
+        _starter(catalog), name="Office starter", module_id="generic"
+    )
+    deleted_id = catalog.commit_preview(token)["id"]
+    client = TestClient(create_app())
+
+    exported = client.get(f"/api/templates/{deleted_id}/export")
+    assert exported.status_code == 200
+    assert client.delete(f"/api/templates/{deleted_id}").status_code == 200
+
+    imported = client.post(
+        "/api/templates/import",
+        files={"file": ("office-starter.bastemplate", exported.content)},
+    )
+    assert imported.status_code == 200
+    summary = imported.json()["template"]
+    assert summary["id"].startswith("personal:")
+    assert summary["id"] != deleted_id
+    assert summary["name"] == "Office starter"
+    assert summary["editable"] is True
+
+    listed = {item["id"]: item for item in client.get("/api/templates").json()["templates"]}
+    assert summary["id"] in listed
+    assert deleted_id not in listed
+
+    # The deleted id names nothing now; deleting it again touches no template.
+    assert client.delete(f"/api/templates/{deleted_id}").status_code == 404
+    assert summary["id"] in {item["id"] for item in catalog.list().templates}
+
+    assert client.delete(f"/api/templates/{summary['id']}").status_code == 200
+    assert all(item["source"] != "personal" for item in catalog.list().templates)
+
+
 def test_unknown_module_falls_back_visibly_and_template_is_independent_version_zero(tmp_path):
     catalog = _catalog(tmp_path)
     token, preview = catalog.preview(

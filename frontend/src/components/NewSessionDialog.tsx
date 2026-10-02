@@ -16,6 +16,7 @@ import {
   updateTemplate,
 } from "../lib/api";
 import { editionsReceipt, factsReceipt, researchReceipt } from "../lib/briefReceipt";
+import { confirmsDeleteOf, type PendingTemplateDelete } from "../lib/templateDelete";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
 
 interface Props {
@@ -145,7 +146,10 @@ export default function NewSessionDialog({
   const [description, setDescription] = useState("");
   const [mode, setMode] = useState<"exact" | "ai_generalize">("exact");
   const [preview, setPreview] = useState<TemplatePreviewResult | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  // The id of the template whose Delete… was pressed — never a bare flag,
+  // which outlived the deleted template and greeted the next one opened in
+  // Manage with Confirm delete already showing (lib/templateDelete.ts).
+  const [pendingDeleteId, setPendingDeleteId] = useState<PendingTemplateDelete>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const previewRunRef = useRef(0);
   const filteredTemplates = useMemo(() => {
@@ -193,7 +197,7 @@ export default function NewSessionDialog({
     setPreview(null);
     setSelected(null);
     setTemplateFilter("");
-    setConfirmDelete(false);
+    setPendingDeleteId(null);
     setBrief(null);
     setBriefDiscipline("");
     void refresh();
@@ -222,12 +226,22 @@ export default function NewSessionDialog({
     setView("create");
   };
 
+  // The one way into the Manage view. Each template opens with its own
+  // details and no delete confirmation: a confirmation is raised only by that
+  // template's own Delete….
+  const openManage = (template: TemplateSummary) => {
+    setSelected(template);
+    setName(template.name);
+    setDescription(template.description);
+    setPendingDeleteId(null);
+    setView("manage");
+  };
+
   const importFile = (file: File) =>
     run(async () => {
       const created = await importTemplate(file);
       await refresh();
-      setSelected(created);
-      setView("manage");
+      openManage(created);
     });
 
   const chooseImportFile = async () => {
@@ -291,7 +305,7 @@ export default function NewSessionDialog({
         if (view !== home) {
           setView(home);
           setSelected(null);
-          setConfirmDelete(false);
+          setPendingDeleteId(null);
           setBrief(null);
         } else onCancel();
       }}
@@ -514,13 +528,7 @@ export default function NewSessionDialog({
                         {template.editable && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setSelected(template);
-                              setName(template.name);
-                              setDescription(template.description);
-                              setConfirmDelete(false);
-                              setView("manage");
-                            }}
+                            onClick={() => openManage(template)}
                             className={quietBtn}
                           >
                             Manage
@@ -691,10 +699,7 @@ export default function NewSessionDialog({
                   void run(async () => {
                     const created = await commitTemplate(preview.preview_token);
                     await refresh();
-                    setSelected(created);
-                    setName(created.name);
-                    setDescription(created.description);
-                    setView("manage");
+                    openManage(created);
                   })
                 }
                 className={primaryBtn}
@@ -754,27 +759,36 @@ export default function NewSessionDialog({
               >
                 Export template
               </a>
-              {!confirmDelete ? (
-                <button type="button" onClick={() => setConfirmDelete(true)} className={quietBtn}>
+              {!confirmsDeleteOf(pendingDeleteId, selected.id) ? (
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteId(selected.id)}
+                  className={quietBtn}
+                >
                   Delete…
                 </button>
               ) : (
                 <>
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      const target = selected.id;
                       void run(async () => {
-                        await deleteTemplate(selected.id);
+                        // Only the template this confirmation was raised for.
+                        if (!confirmsDeleteOf(pendingDeleteId, target)) return;
+                        await deleteTemplate(target);
+                        // Spent: the confirmation goes with its template.
+                        setPendingDeleteId(null);
                         await refresh();
                         setSelected(null);
                         setView("browse");
-                      })
-                    }
+                      });
+                    }}
                     className="rounded-md border border-err/60 bg-err/10 px-2.5 py-1.5 text-xs text-err"
                   >
                     Confirm delete
                   </button>
-                  <button type="button" onClick={() => setConfirmDelete(false)} className={quietBtn}>Keep</button>
+                  <button type="button" onClick={() => setPendingDeleteId(null)} className={quietBtn}>Keep</button>
                 </>
               )}
             </div>
@@ -812,7 +826,16 @@ export default function NewSessionDialog({
 
         <div className="mt-4 flex items-center gap-2 border-t border-edge pt-3">
           {view !== (templatesOnly ? "browse" : "start") && view !== "preview" && view !== "create" && view !== "brief" && (
-            <button type="button" onClick={() => setView("browse")} className={quietBtn}>‹ All templates</button>
+            <button
+              type="button"
+              onClick={() => {
+                setPendingDeleteId(null);
+                setView("browse");
+              }}
+              className={quietBtn}
+            >
+              ‹ All templates
+            </button>
           )}
           {view === "browse" && !templatesOnly && (
             <button

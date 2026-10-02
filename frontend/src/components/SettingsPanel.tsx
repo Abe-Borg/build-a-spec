@@ -7,6 +7,8 @@ import {
   testKey,
 } from "../lib/api";
 import DeveloperToolsModal from "./DeveloperToolsModal";
+import QcTransportChoice from "./QcTransportChoice";
+import { useQcTransportPreference } from "../lib/useQcTransportPreference";
 import { useDialogFocus } from "../lib/dialogFocus";
 
 interface Props {
@@ -202,6 +204,7 @@ export default function SettingsPanel({
   onShowReleaseNotes,
 }: Props) {
   const [status, setStatus] = useState<KeyStatus | null>(null);
+  const qcTransport = useQcTransportPreference(open);
   const [replaceValue, setReplaceValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
@@ -434,6 +437,9 @@ export default function SettingsPanel({
               API.
             </p>
           </section>
+
+          {/* --- Final QC transport --- */}
+          <section><QcTransportChoice {...qcTransport} /></section>
 
           {/* --- Usage (WI4) --- */}
           <section data-capability="usage.details">

@@ -111,7 +111,7 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, StringConstraints
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from . import diagnostics, onboarding_state, settings, sessions, ui_preferences
+from . import diagnostics, onboarding_state, qc_preferences, settings, sessions, ui_preferences
 from .api_key_store import (
     delete_api_key,
     key_status,
@@ -684,6 +684,7 @@ class QcApplyPreviewResponse(BaseModel):
 
 
 class QcStartRequest(BaseModel):
+    batch_verification: StrictBool | None = None
     acknowledge_scope_mismatch: bool = False
     workspace_id: int | None = None
     generation: int | None = None
@@ -711,6 +712,10 @@ class UiPreferencesRequest(BaseModel):
             StringConstraints(pattern=ui_preferences.PANEL_ID_PATTERN.pattern),
         ]
     ] = Field(default_factory=list, max_length=ui_preferences.MAX_HIDDEN_PANELS)
+
+
+class QcPreferencesRequest(BaseModel):
+    batch_verification: StrictBool
 
 
 class OnboardingCompletionRequest(BaseModel):
@@ -3197,6 +3202,9 @@ def create_app(
     desktop_security: DesktopSecurityConfig | None = None,
     _record_start_event: bool = True,
 ) -> FastAPI:
+    # Keep the existing current-input manifest comparison on the saved regime.
+    # Each worker receives its own immutable transport at start.
+    settings.QC_BATCH_VERIFICATION = qc_preferences.resolve_batch_verification()
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.VERSION,
@@ -6847,6 +6855,9 @@ def create_app(
             remembered = session.qc.remembered_dismissals()
             run_generation = session.generation
             started = session.qc.start(
+                batch_verification=qc_preferences.resolve_batch_verification(
+                    body.batch_verification if body is not None else None
+                ),
                 section=snapshot,
                 profile=session.research.profile_result,
                 module=session.module,
@@ -9092,6 +9103,27 @@ def create_app(
             "onboarding_completed", completed_version=body.completed_version
         )
         return {"ok": True, **state.to_dict()}
+
+    @app.get("/api/ui/qc-preferences")
+    def ui_qc_preferences_get() -> dict:
+        return qc_preferences.preference_payload()
+
+    @app.put("/api/ui/qc-preferences")
+    def ui_qc_preferences_put(body: QcPreferencesRequest) -> Any:
+        if settings.qc_batch_verification_override() is not None:
+            return qc_preferences.preference_payload()
+        try:
+            with qc_preferences.PREFERENCES_LOCK:
+                qc_preferences.save_batch_verification(body.batch_verification)
+                settings.QC_BATCH_VERIFICATION = body.batch_verification
+        except OSError:
+            _api_log.warning("Could not save the Final QC transport", exc_info=True)
+            return _coded_error_response(
+                {"ok": False, "code": "write_failed",
+                 "error": "The Final QC choice could not be saved on this computer."},
+                status_code=500,
+            )
+        return qc_preferences.preference_payload()
 
     # --- Self-update (Phase 5) ----------------------------------------------
 

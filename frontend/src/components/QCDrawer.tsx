@@ -69,6 +69,8 @@ import {
 } from "../lib/qcLive";
 import { useDialogFocus } from "../lib/dialogFocus";
 import ConfirmDialog from "./ConfirmDialog";
+import QcTransportChoice from "./QcTransportChoice";
+import { useQcTransportPreference } from "../lib/useQcTransportPreference";
 import QCReportModal from "./QCReportModal";
 import Tip from "./Tip";
 import { qcModelLabel, type QcModelLabel } from "../lib/qcModel";
@@ -84,7 +86,7 @@ interface Props {
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
   usage: UsageSummary | null;
-  onStart: (acknowledgeScopeMismatch: boolean) => void;
+  onStart: (acknowledgeScopeMismatch: boolean, batchVerification: boolean) => void;
   onStop: () => void;
   onPreview: (findingIds: string[]) => Promise<QcApplyPreviewResult>;
   onApply: (
@@ -1035,9 +1037,9 @@ export default function QCDrawer({
 
   // The start button opens the confirmation dialog; the run only fires once
   // the user confirms in it (Opus 5.5 is expensive and a pass takes minutes).
-  const confirmStart = (acknowledgeScopeMismatch: boolean) => {
+  const confirmStart = (acknowledgeScopeMismatch: boolean, batchVerification: boolean) => {
     setConfirmOpen(false);
-    onStart(acknowledgeScopeMismatch);
+    onStart(acknowledgeScopeMismatch, batchVerification);
   };
 
   const remediationSections: {
@@ -2095,10 +2097,11 @@ function ConfirmQCModal({
   costEstimate: string;
   busy: boolean;
   moduleSectionCompatibility?: QcModuleSectionCompatibility;
-  onConfirm: (acknowledgeScopeMismatch: boolean) => void;
+  onConfirm: (acknowledgeScopeMismatch: boolean, batchVerification: boolean) => void;
   onCancel: () => void;
 }) {
   const acknowledgementId = useId();
+  const qcTransport = useQcTransportPreference(true);
   const [scopeMismatchAcknowledged, setScopeMismatchAcknowledged] =
     useState(false);
   const compatibilityKey = JSON.stringify([
@@ -2129,7 +2132,7 @@ function ConfirmQCModal({
   const sectionLabel =
     "text-[11px] font-semibold tracking-wide text-ink-faint uppercase";
   const canConfirm =
-    !busy && (!scopeMismatch || scopeMismatchAcknowledged);
+    !busy && !!qcTransport.preference && !qcTransport.pending && (!scopeMismatch || scopeMismatchAcknowledged);
 
   return (
     <div
@@ -2159,6 +2162,7 @@ function ConfirmQCModal({
         </div>
 
         <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-5 text-[13px] leading-relaxed text-ink-dim">
+          <QcTransportChoice {...qcTransport} />
           {scopeMismatch && moduleSectionCompatibility && (
             <div
               className="rounded-xl border border-warn/60 bg-warn/10 px-3.5 py-3 text-warn"
@@ -2287,7 +2291,7 @@ function ConfirmQCModal({
           </button>
           <button
             className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
-            onClick={() => onConfirm(scopeMismatch && scopeMismatchAcknowledged)}
+            onClick={() => onConfirm(scopeMismatch && scopeMismatchAcknowledged, qcTransport.preference!.batch_verification)}
             disabled={!canConfirm}
             title={
               scopeMismatch && !scopeMismatchAcknowledged

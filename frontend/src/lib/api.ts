@@ -1417,12 +1417,14 @@ export class QcStartError extends Error {
 export async function startQc(
   acknowledgeScopeMismatch = false,
   lease: WorkspaceLeaseInput = {},
+  batchVerification?: boolean,
 ): Promise<void> {
   const resp = await fetch("/api/qc/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       acknowledge_scope_mismatch: acknowledgeScopeMismatch,
+      batch_verification: batchVerification,
       workspace_id: lease.workspaceId,
       generation: lease.generation,
     }),
@@ -1678,6 +1680,28 @@ export async function saveOnboardingCompletion(
     body: JSON.stringify({ completed_version: completedVersion }),
   });
   if (!resp.ok) throw new Error(`onboarding completion save ${resp.status}`);
+}
+
+export interface QcTransportPreference {
+  batch_verification: boolean;
+  locked: boolean;
+}
+
+export async function getQcTransportPreference(): Promise<QcTransportPreference> {
+  const resp = await fetch("/api/ui/qc-preferences");
+  if (!resp.ok) throw new Error(`Final QC choice ${resp.status}`);
+  return resp.json();
+}
+
+export async function saveQcTransportPreference(batch: boolean): Promise<QcTransportPreference> {
+  const resp = await fetch("/api/ui/qc-preferences", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ batch_verification: batch }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error ?? `Final QC choice save ${resp.status}`);
+  return data;
 }
 
 export class UpdateInstallError extends Error {

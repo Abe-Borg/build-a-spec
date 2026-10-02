@@ -1056,9 +1056,9 @@ export default function App() {
     replaceQcSnapshot,
   ]);
 
-  const onStartQc = useCallback(async (acknowledgeScopeMismatch = false) => {
+  const onStartQc = useCallback(async (acknowledgeScopeMismatch = false, batchVerification = true) => {
     try {
-      await startQc(acknowledgeScopeMismatch, currentWorkspaceLease());
+      await startQc(acknowledgeScopeMismatch, currentWorkspaceLease(), batchVerification);
       // Clear the auth-modal dedup ref for this fresh attempt — see its
       // declaration comment: refreshQc (not an effect) is what actually
       // reopens the modal, so this reset is read on the very next poll.

@@ -599,6 +599,20 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 title="Final QC",
                 items=(
                     ReleaseItem(
+                        title="Choose how the reviewers report back",
+                        body=(
+                            "Before running or re-running Final QC, choose "
+                            "Batch the reviewers at half price, with a count "
+                            "of seats returned, or Stream the reviewers at "
+                            "full price, with each seat's live activity. "
+                            "The same choice is in Settings and is remembered "
+                            "on this computer, starting with Batch. An "
+                            "explicit environment override locks the choice. "
+                            "Changing it applies to the next review and "
+                            "makes a retained result read out of date."
+                        ),
+                    ),
+                    ReleaseItem(
                         title="Final QC reasons on Opus 5.5's own scale",
                         body=(
                             "Final QC's five specialist reviewers now "

@@ -17088,3 +17088,30 @@ here, nothing to cache), `corpus_signals.py` (re-evaluate if research
 should ever scrape imported masters for vocabulary), the adaptive
 thinking/effort config and diagnostics rollups (no capability table /
 diagnostics surface in this app yet).
+
+## Final QC lets the user pick Batch or Stream
+
+The Final QC start/re-run confirmation and Settings share
+`QcTransportChoice`, under the existing `qc.run` capability. Batch starts
+selected: half-price reviewer tokens with the returned-seat counter. Stream
+uses full-price tokens and the existing per-seat activity. No tour order or
+`TOUR_VERSION` change.
+
+`backend/qc_preferences.py` stores a strict boolean in `qc_preferences.json`
+beside `onboarding_state.json`, with lenient bounded UTF-8/BOM reads and the
+shared atomic writer. The file is independent of `.baspec` and the panel
+layout. `GET`/`PUT /api/ui/qc-preferences` share it between both controls.
+An explicitly present `BUILD_A_SPEC_QC_BATCH_VERIFICATION` locks both:
+`0`, `false`, `no`, `off` are Stream; an unset variable uses the saved GUI
+choice. The existing setting is initialized at app startup and updated only
+after a successful GUI save, so the existing manifest comparison makes the
+retained result stale on a transport change without changing the QC engine.
+`POST /api/qc/start` accepts the per-run `batch_verification`; environment,
+request, saved choice is its precedence. `QCRunner.start` captures it for
+`run_final_qc`, so a running review keeps its transport. The request alone
+never saves a preference. Receipt work from PR #252 is unchanged.
+
+Regression coverage: `tests/test_qc_preferences.py` (defaults, persistence,
+lenient reads, strict/atomic writes, independent files, environment locks,
+start precedence, manifest staleness and running-worker capture) and
+`frontend/tests/qcApi.test.ts` (chosen transport and preference requests).

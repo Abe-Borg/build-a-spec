@@ -7,6 +7,8 @@ import {
   downloadQcReport,
   previewQcApply,
   startQc,
+  getQcTransportPreference,
+  saveQcTransportPreference,
 } from "../src/lib/api.ts";
 
 test("Final QC start always posts the explicit scope-mismatch acknowledgement", async (t) => {
@@ -37,6 +39,39 @@ test("Final QC start always posts the explicit scope-mismatch acknowledgement", 
   assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
     acknowledge_scope_mismatch: false,
   });
+});
+
+test("Final QC start carries the chosen transport with the workspace lease", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const bodies: unknown[] = [];
+  globalThis.fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ ok: true }));
+  };
+  for (const batch of [true, false]) {
+    await startQc(false, { workspaceId: 7, generation: 11 }, batch);
+  }
+  assert.deepEqual(bodies, [true, false].map((batch) => ({
+    acknowledge_scope_mismatch: false, workspace_id: 7, generation: 11,
+    batch_verification: batch,
+  })));
+});
+
+test("Final QC preferences read the locked mode and save the machine choice", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests: unknown[] = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push([input, init?.method, init?.body]);
+    return new Response(JSON.stringify({ batch_verification: false, locked: true }));
+  };
+  assert.deepEqual(await getQcTransportPreference(), { batch_verification: false, locked: true });
+  assert.deepEqual(await saveQcTransportPreference(false), { batch_verification: false, locked: true });
+  assert.deepEqual(requests, [
+    ["/api/ui/qc-preferences", undefined, undefined],
+    ["/api/ui/qc-preferences", "PUT", JSON.stringify({ batch_verification: false })],
+  ]);
 });
 
 test("Final QC start preserves structured mismatch details from a 409", async (t) => {

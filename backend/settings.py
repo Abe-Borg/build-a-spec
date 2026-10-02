@@ -483,6 +483,15 @@ if QC_VERIFIERS_STANDARD < 2:
 # verbatim and is still what phase 1 uses. The flag is recorded in the hashed
 # input manifest, so a report always states which transport produced it.
 QC_BATCH_VERIFICATION = _bool_env("BUILD_A_SPEC_QC_BATCH_VERIFICATION", True)
+
+
+def qc_batch_verification_override() -> bool | None:
+    """None means never set; even an empty explicit value locks the GUI."""
+    if "BUILD_A_SPEC_QC_BATCH_VERIFICATION" not in os.environ:
+        return None
+    return _bool_env("BUILD_A_SPEC_QC_BATCH_VERIFICATION", True)
+
+
 # Poll interval while a verification batch is in flight. Also the granularity
 # at which a user Stop is noticed, so it is seconds, not minutes.
 QC_BATCH_POLL_SECONDS = _int_env("BUILD_A_SPEC_QC_BATCH_POLL_SECONDS", 5, minimum=1)

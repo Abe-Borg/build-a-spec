@@ -89,7 +89,7 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
-        version="1.22.0",
+        version="1.22.1",
         date="2026-10-01",
         headline="Pick how reviewers report back and keep Word changes tracked",
         summary=(

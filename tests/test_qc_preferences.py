@@ -83,7 +83,7 @@ def test_bad_files_read_as_batch(prefs_path, raw):
 
 
 def test_bom_is_read_and_layout_and_onboarding_saves_are_independent(prefs_path):
-    prefs_path.write_text('\ufeff{"batch_verification":false}')
+    prefs_path.write_text('\ufeff{"batch_verification":false}', encoding="utf-8")
     c = client()
     c.put("/api/ui/preferences", json={"panels_folded": True})
     c.put("/api/ui/onboarding", json={"completed_version": 2})

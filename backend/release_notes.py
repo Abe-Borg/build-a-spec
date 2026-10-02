@@ -89,6 +89,107 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.22.0",
+        date="2026-10-01",
+        headline="Pick how reviewers report back and keep Word changes tracked",
+        summary=(
+            "Choose half-price batched Final QC reviewers or "
+            "full-price live activity. The primary Word export "
+            "keeps your master's formatting and tracks your "
+            "edits under your author name. Starting the next "
+            "section shows a shorter project receipt while "
+            "keeping the full project brief."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="Choose how the reviewers report back",
+                        body=(
+                            "Before running or re-running Final QC, choose "
+                            "Batch the reviewers at half price, with a count of "
+                            "seats returned, or Stream the reviewers at full "
+                            "price, with each seat's live activity. The same "
+                            "choice is in Settings and is remembered on this "
+                            "computer, starting with Batch. An explicit "
+                            "environment override locks the choice. Changing it "
+                            "applies to the next review and makes a retained "
+                            "result read out of date."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Word export",
+                items=(
+                    ReleaseItem(
+                        title="Export Word - Tracked Changes ON",
+                        body=(
+                            "The primary Word export keeps your uploaded "
+                            "document's formatting and records every change "
+                            "since import as a native Word tracked change. "
+                            "Track Changes stays on for further edits in Word, "
+                            "and Open in Word uses the same export. Revisions "
+                            "and their associated comments show Abraham Borg as "
+                            "author, with AB as the comment initials. Accept "
+                            "All gives your edited content; Reject All restores "
+                            "the imported content. Earlier pending revisions "
+                            "are accepted in the exported copy to match the "
+                            "import view; your retained original stays "
+                            "unchanged. The app checks both before handing over "
+                            "the file. The two extracted-text redline options "
+                            "keep working as before."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The formatted Word export keeps more of it",
+                        body=(
+                            "Provisions that get relettered when you add or "
+                            "remove one above them keep their tab and any bold "
+                            "or italic. So do the unchanged words of a "
+                            "provision you edit. Word section breaks survive "
+                            "your edits: deleting or moving the provision below "
+                            "one no longer removes or moves the break, and "
+                            "adding a provision no longer duplicates one. A "
+                            "“(Not used.)” line disappears once its PART has an "
+                            "article. Article numbers keep your master's format "
+                            "(1.01 stays 1.01), and a new article looks like "
+                            "your other article headings. The blank lines, page "
+                            "breaks and pictures around what you change stay "
+                            "where they were."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Word knows who made the changes",
+                        body=(
+                            "New tracked changes and their associated comments "
+                            "show Abraham Borg as the author, with AB as the "
+                            "comment initials. Other installations can set "
+                            "their own export author name; existing reviewers "
+                            "and their comments are kept."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Projects",
+                items=(
+                    ReleaseItem(
+                        title="The next-section receipt gets to the point",
+                        body=(
+                            "Starting a section from a project brief shows "
+                            "short edition labels, a count of established facts "
+                            "and a compact research summary. The saved brief "
+                            "and the information used to draft the section "
+                            "still keep every word."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.21.0",
         date="2026-09-23",
         headline="Every section of a project stays in step",
@@ -100,8 +201,8 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
             "siblings learned since it last looked. Facts the conversation "
             "settled but nobody wrote down can be found in one reviewed "
             "pass. Long drafting sessions re-send far less with every "
-            "message, and Export Word - Tracked Changes ON keeps your "
-            "master's formatting while recording every edit as a Word revision."
+            "message, and Export Word (keeps your formatting) keeps more "
+            "of your master's formatting."
         ),
         sections=(
             ReleaseSection(
@@ -404,24 +505,7 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 title="Word export",
                 items=(
                     ReleaseItem(
-                        title="Export Word - Tracked Changes ON",
-                        body=(
-                            "The primary Word export keeps your uploaded document's "
-                            "formatting and records every change since import as a "
-                            "native Word tracked change. Track Changes stays on for "
-                            "further edits in Word, and Open in Word uses the same "
-                            "export. Revisions and their associated comments show "
-                            "Abraham Borg as author, with AB as the comment initials. "
-                            "Accept All gives your edited content; Reject "
-                            "All restores the imported content. Earlier pending revisions "
-                            "are accepted in the exported copy to match the import view; "
-                            "your retained original stays unchanged. The app checks both "
-                            "before handing over the file. The two extracted-text "
-                            "redline options keep working as before."
-                        ),
-                    ),
-                    ReleaseItem(
-                        title="The formatted Word export keeps more of it",
+                        title="Export Word (keeps your formatting) keeps more of it",
                         body=(
                             "Provisions that get relettered when you add or "
                             "remove one above them keep their tab and any "
@@ -450,7 +534,7 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "original back — the app checks both before it hands "
                             "you the file — so you can review it, save it, and use "
                             "it to replace your master. It is in the Export menu "
-                            "beside Export Word - Tracked Changes ON, with an "
+                            "beside Export Word (keeps your formatting), with an "
                             "Open redline in Word beside it in the desktop app. If "
                             "your master already carries someone's tracked "
                             "changes, accept or reject them in Word and import it "
@@ -494,7 +578,7 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                         title="The redline on your original says why",
                         body=(
                             "Each change that rests on something carries a Word "
-                            "comment under your export author name: a provision written from a "
+                            "comment from Build-a-Spec: a provision written from a "
                             "research finding names the finding — its requirement, "
                             "authority and code reference — with links to the "
                             "sources it was verified against (or labels it a lead "
@@ -598,20 +682,6 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
             ReleaseSection(
                 title="Final QC",
                 items=(
-                    ReleaseItem(
-                        title="Choose how the reviewers report back",
-                        body=(
-                            "Before running or re-running Final QC, choose "
-                            "Batch the reviewers at half price, with a count "
-                            "of seats returned, or Stream the reviewers at "
-                            "full price, with each seat's live activity. "
-                            "The same choice is in Settings and is remembered "
-                            "on this computer, starting with Batch. An "
-                            "explicit environment override locks the choice. "
-                            "Changing it applies to the next review and "
-                            "makes a retained result read out of date."
-                        ),
-                    ),
                     ReleaseItem(
                         title="Final QC reasons on Opus 5.5's own scale",
                         body=(

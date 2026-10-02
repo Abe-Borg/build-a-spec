@@ -100,8 +100,8 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
             "siblings learned since it last looked. Facts the conversation "
             "settled but nobody wrote down can be found in one reviewed "
             "pass. Long drafting sessions re-send far less with every "
-            "message, and Export Word (keeps your formatting) keeps more "
-            "of your master's formatting."
+            "message, and Export Word - Tracked Changes ON keeps your "
+            "master's formatting while recording every edit as a Word revision."
         ),
         sections=(
             ReleaseSection(
@@ -404,7 +404,22 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 title="Word export",
                 items=(
                     ReleaseItem(
-                        title="Export Word (keeps your formatting) keeps more of it",
+                        title="Export Word - Tracked Changes ON",
+                        body=(
+                            "The primary Word export keeps your uploaded document's "
+                            "formatting and records every change since import as a "
+                            "native Word tracked change. Track Changes stays on for "
+                            "further edits in Word, and Open in Word uses the same "
+                            "export. Accept All gives your edited content; Reject "
+                            "All restores the imported content. Earlier pending revisions "
+                            "are accepted in the exported copy to match the import view; "
+                            "your retained original stays unchanged. The app checks both "
+                            "before handing over the file. The two extracted-text "
+                            "redline options keep working as before."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The formatted Word export keeps more of it",
                         body=(
                             "Provisions that get relettered when you add or "
                             "remove one above them keep their tab and any "
@@ -433,7 +448,7 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "original back — the app checks both before it hands "
                             "you the file — so you can review it, save it, and use "
                             "it to replace your master. It is in the Export menu "
-                            "beside Export Word (keeps your formatting), with an "
+                            "beside Export Word - Tracked Changes ON, with an "
                             "Open redline in Word beside it in the desktop app. If "
                             "your master already carries someone's tracked "
                             "changes, accept or reject them in Word and import it "

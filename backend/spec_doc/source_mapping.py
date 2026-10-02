@@ -1099,6 +1099,40 @@ def _revision_related_parts(
     return related, malformed
 
 
+def _revision_scan_parts(
+    archive: zipfile.ZipFile,
+    discovery: _OpcDiscovery,
+) -> tuple[list[zipfile.ZipInfo], bool]:
+    """Select WordprocessingML parts by OPC metadata, including opaque names."""
+    relationship_parts, malformed = _revision_related_parts(archive, discovery)
+    parts = [
+        info
+        for info in archive.infolist()
+        if not info.is_dir()
+        and (
+            info.filename in relationship_parts
+            or _is_wordprocessing_xml_content_type(
+                discovery.content_type_for(info.filename)
+            )
+        )
+    ]
+    return parts, malformed
+
+
+def revision_part_names(archive: zipfile.ZipFile) -> tuple[str, ...]:
+    """Parts scanned for pending revisions, with the same discovery safeguards.
+
+    Export preparation must resolve this entire set so a baseline cannot leave
+    revisions behind merely because a story has an unconventional part name.
+    """
+    parts, malformed = _revision_scan_parts(archive, _discover_opc(archive))
+    if malformed:
+        raise ValueError("Could not safely discover the Word revision parts.")
+    if sum(info.file_size for info in parts) > _MAX_REVISION_SCAN_BYTES:
+        raise ValueError("The Word revision parts exceed the scan size limit.")
+    return tuple(info.filename for info in parts)
+
+
 def _body_has_non_whitespace_character_data(root) -> bool:
     bodies = [
         element
@@ -1192,22 +1226,11 @@ def _revision_scan_blockers(
     # discovery itself failed, the package is already pass-through-only; the
     # conventional-path fallback still supplies the most useful diagnostic.
     if discovery is not None:
-        relationship_parts, malformed_relationship_part = (
-            _revision_related_parts(archive, discovery)
+        revision_parts, malformed_relationship_part = (
+            _revision_scan_parts(archive, discovery)
         )
         if malformed_relationship_part:
             blockers.append("unsafe_revision_scan")
-        revision_parts = [
-            info
-            for info in archive.infolist()
-            if not info.is_dir()
-            and (
-                info.filename in relationship_parts
-                or _is_wordprocessing_xml_content_type(
-                    discovery.content_type_for(info.filename)
-                )
-            )
-        ]
     else:
         revision_parts = [
             info

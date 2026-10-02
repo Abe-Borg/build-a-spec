@@ -728,7 +728,9 @@ class _CloseController:
             return self._save_result(False, error="This page cannot save.")
         return self._save_project_file(force_dialog=True)
 
-    def open_in_word(self, mode: str = "preserved", redline: str = "") -> dict[str, Any]:
+    def open_in_word(
+        self, mode: str = "preserved", redline: str = "", track_changes: bool = False,
+    ) -> dict[str, Any]:
         """Export the section and open the file with the system's Word.
 
         The app cannot render Word's layout in its own panel, and a user who
@@ -746,6 +748,10 @@ class _CloseController:
         self-check — come back in the server's words like any other. It pairs
         with ``mode="preserved"`` only: any other pairing is refused rather
         than quietly opening a different file than the one asked for.
+
+        ``track_changes=True`` requests the primary formatted export with
+        native revisions and future Word tracking enabled. Earlier revisions
+        are accepted on an export-only copy; the retained original is unchanged.
 
         Returns ``{"ok", "error", "path", "name"}``; a failure carries the
         server's own message.
@@ -772,6 +778,11 @@ class _CloseController:
                 "path": "",
                 "name": "",
             }
+        if not isinstance(track_changes, bool) or (track_changes and mode != "preserved"):
+            return {
+                "ok": False, "error": "Tracked changes require the original Word formatting.",
+                "path": "", "name": "",
+            }
         from backend import sessions
 
         workspace = sessions.get_workspace()
@@ -789,6 +800,8 @@ class _CloseController:
             if redline
             else f"/api/export/docx?mode={mode}"
         )
+        if track_changes:
+            path += "&track_changes=true"
         try:
             payload, name = _fetch_backend_bytes(self._backend, path)
             target = _write_open_in_word_file(name, payload)

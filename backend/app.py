@@ -248,6 +248,11 @@ from .spec_doc.source_mapping import (
     source_blocker_message,
 )
 from .spec_doc import source_patch as source_patch_module
+from .spec_doc.tracked_export import (
+    TrackingExportError,
+    accepted_revision_baseline,
+    enable_track_changes,
+)
 from .spec_doc.source_render import (
     REDLINE_NO_BASELINE,
     REDLINE_NO_ORIGINAL,
@@ -1058,6 +1063,9 @@ class _ExportInputs:
     #: ``selected_mode == "preserved"`` it is the redline on the original,
     #: ``redline_base`` holding the imported master it is measured from.
     redline: str = ""
+    #: The primary formatted export records future Word edits as well.
+    track_changes: bool = False
+    accept_existing_revisions: bool = False
     #: The upload's own name, captured with its bytes: the redline on the
     #: original is named after it, so replacing the master is a rename.
     source_filename: str = ""
@@ -1694,9 +1702,15 @@ def _preserved_redline_availability(session) -> tuple[bool, str]:
 
 
 def _preserved_redline_payload(session) -> dict[str, Any]:
-    """The doc payload's two keys for the redline on the original."""
+    """Availability and reasons for both original-format tracked exports."""
     available, reason = _preserved_redline_availability(session)
+    tracked_available, tracked_reason = _tracked_export_availability(session)
     return {
+        "tracked_export_available": tracked_available,
+        "tracked_export_reason": (
+            None if tracked_available
+            else {"code": tracked_reason, "message": redline_refusal_message(tracked_reason)}
+        ),
         "preserved_redline_available": available,
         "preserved_redline_reason": (
             None
@@ -1704,6 +1718,12 @@ def _preserved_redline_payload(session) -> dict[str, Any]:
             else {"code": reason, "message": redline_refusal_message(reason)}
         ),
     }
+
+
+def _tracked_export_availability(session) -> tuple[bool, str]:
+    """Primary export uses the accepted import view for revision-bearing masters."""
+    available, reason = _preserved_redline_availability(session)
+    return (True, "") if reason == REDLINE_PENDING_REVISIONS else (available, reason)
 
 
 def _revision_timestamp() -> str:
@@ -4951,6 +4971,7 @@ def create_app(
         base: int | None = None,
         mode: str | None = None,
         *,
+        track_changes: bool = False,
         refusal: dict | None = None,
     ) -> _ExportInputs | JSONResponse:
         """Validate the request and snapshot everything the render needs.
@@ -4964,6 +4985,14 @@ def create_app(
         ``export`` event.
         """
         store = session.doc
+        if track_changes:
+            if mode != "preserved" or redline not in (None, "master"):
+                return JSONResponse(
+                    {"ok": False, "error": "track_changes requires mode=preserved "
+                     "and compares against the imported master only."},
+                    status_code=400,
+                )
+            redline = "master"
         if mode not in (None, "source", "normalized", "preserved"):
             return JSONResponse(
                 {
@@ -5022,7 +5051,8 @@ def create_app(
         # Asked only when it could matter: the revision scan behind it reads
         # the whole package the first time (then it is cached per upload).
         redline_available, redline_reason = (
-            _preserved_redline_availability(session)
+            (_tracked_export_availability(session) if track_changes
+             else _preserved_redline_availability(session))
             if redline == "master" and mode in (None, "preserved")
             else (False, "")
         )
@@ -5071,6 +5101,10 @@ def create_app(
                 selected_mode="preserved",
                 current=current,
                 redline="master",
+                track_changes=track_changes,
+                accept_existing_revisions=(
+                    track_changes and _pending_revisions(session) == PENDING_REVISIONS
+                ),
                 redline_base=redline_base,
                 # Immutable by contract, like the byte-exact mode's inputs.
                 source_bytes=session.source_docx_bytes,
@@ -5191,9 +5225,14 @@ def create_app(
         element names only, never document text).
         """
         try:
+            source_bytes, format_map = inputs.source_bytes, inputs.format_map
+            if inputs.accept_existing_revisions:
+                source_bytes, format_map = accepted_revision_baseline(source_bytes, format_map)
+                if stats is not None:
+                    stats["existing_revisions_accepted"] = True
             payload = render_preserving_redline(
-                source_bytes=inputs.source_bytes,
-                format_map=inputs.format_map,
+                source_bytes=source_bytes,
+                format_map=format_map,
                 baseline=inputs.redline_base,
                 current=inputs.current,
                 author=settings.APP_NAME,
@@ -5217,6 +5256,8 @@ def create_app(
                     else None
                 ),
             )
+            if inputs.track_changes:
+                payload = enable_track_changes(payload)
         except SourceRedlineError as exc:
             if refusal is not None:
                 refusal["reason"] = exc.reason
@@ -5230,6 +5271,12 @@ def create_app(
             if refusal is not None:
                 refusal["reason"] = "render_error"
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        except TrackingExportError as exc:
+            if refusal is not None:
+                refusal["reason"] = exc.code
+            return JSONResponse(
+                {"ok": False, "error": str(exc), "code": exc.code}, status_code=409,
+            )
         return Response(
             content=payload,
             media_type=(
@@ -5237,7 +5284,8 @@ def create_app(
                 "wordprocessingml.document"
             ),
             headers=_attachment_headers(
-                upload_redline_filename(inputs.source_filename, inputs.current)
+                export_filename(inputs.current) if inputs.track_changes
+                else upload_redline_filename(inputs.source_filename, inputs.current)
             ),
         )
 
@@ -5331,6 +5379,7 @@ def create_app(
         redline: str | None = None,
         base: int | None = None,
         mode: str | None = None,
+        track_changes: bool = False,
     ) -> Response:
         session = sessions.get_session()
         # Capture one coherent snapshot under the guard, then render it
@@ -5341,7 +5390,7 @@ def create_app(
         refusal: dict = {}
         with session.session_state_guard():
             captured = _capture_export_inputs(
-                session, redline, base, mode, refusal=refusal
+                session, redline, base, mode, track_changes=track_changes, refusal=refusal
             )
         render_stats: dict = {}
         response = (
@@ -5361,6 +5410,7 @@ def create_app(
                 else mode or "normalized"
             ),
             redline=redline or "",
+            **({"track_changes": True} if track_changes else {}),
             ok=response.status_code == 200,
             **({"render": render_stats} if render_stats else {}),
             # Why a redline on the original was refused: the named reason,

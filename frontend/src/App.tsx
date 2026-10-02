@@ -297,6 +297,9 @@ export default function App() {
   // Whether the redline on your original can be exported, and the server's
   // own reason when it cannot (same derivation as the export route's
   // default and refusal). Drives that Export menu item and its Word opener.
+  const [trackedExportAvailable, setTrackedExportAvailable] = useState(false);
+  const [trackedExportReason, setTrackedExportReason] =
+    useState<PreservedRedlineReason | null>(null);
   const [preservedRedlineAvailable, setPreservedRedlineAvailable] =
     useState(false);
   const [preservedRedlineReason, setPreservedRedlineReason] =
@@ -673,6 +676,8 @@ export default function App() {
           payload.preserved_redline_available ?? false,
         );
         setPreservedRedlineReason(payload.preserved_redline_reason ?? null);
+        setTrackedExportAvailable(payload.tracked_export_available ?? false);
+        setTrackedExportReason(payload.tracked_export_reason ?? null);
         setSourceCapabilities(payload.source_capabilities ?? null);
         setTemplateOrigin(payload.template_origin ?? null);
         setFigures(payload.figures ?? []);
@@ -1232,6 +1237,7 @@ export default function App() {
     async (
       mode: "preserved" | "normalized",
       redline: "" | "master" = "",
+      trackChanges = false,
     ): Promise<OpenInWordResult> => {
       const api = window.pywebview?.api;
       if (!api?.open_in_word) {
@@ -1243,7 +1249,7 @@ export default function App() {
         };
       }
       try {
-        return await api.open_in_word(mode, redline);
+        return await api.open_in_word(mode, redline, trackChanges);
       } catch (e) {
         return {
           ok: false,
@@ -2174,6 +2180,8 @@ export default function App() {
     setPreservedExportAvailable(false);
     setPreservedRedlineAvailable(false);
     setPreservedRedlineReason(null);
+    setTrackedExportAvailable(false);
+    setTrackedExportReason(null);
     setSourceCapabilities(null);
     setTemplateOrigin(null);
     // Findings, quoted provision text and spend from the previous project.
@@ -2237,6 +2245,8 @@ export default function App() {
     preserved_export_available?: boolean;
     preserved_redline_available?: boolean;
     preserved_redline_reason?: PreservedRedlineReason | null;
+    tracked_export_available?: boolean;
+    tracked_export_reason?: PreservedRedlineReason | null;
     source_capabilities?: SourceCapabilitiesState | null;
     template_origin?: TemplateOrigin | null;
   }): boolean => {
@@ -2263,6 +2273,8 @@ export default function App() {
     setPreservedExportAvailable(payload.preserved_export_available ?? false);
     setPreservedRedlineAvailable(payload.preserved_redline_available ?? false);
     setPreservedRedlineReason(payload.preserved_redline_reason ?? null);
+    setTrackedExportAvailable(payload.tracked_export_available ?? false);
+    setTrackedExportReason(payload.tracked_export_reason ?? null);
     setSourceCapabilities(payload.source_capabilities ?? null);
     setTemplateOrigin(payload.template_origin ?? null);
     setFigures(payload.figures ?? []);
@@ -2325,6 +2337,8 @@ export default function App() {
         preserved_redline_available:
           merged.preserved_redline_available ?? false,
         preserved_redline_reason: merged.preserved_redline_reason ?? null,
+        tracked_export_available: merged.tracked_export_available ?? false,
+        tracked_export_reason: merged.tracked_export_reason ?? null,
         source_capabilities: merged.source_capabilities ?? null,
         template_origin: merged.template_origin ?? null,
       });
@@ -3502,6 +3516,8 @@ export default function App() {
           preservedExportAvailable={preservedExportAvailable}
           preservedRedlineAvailable={preservedRedlineAvailable}
           preservedRedlineReason={preservedRedlineReason}
+          trackedExportAvailable={trackedExportAvailable}
+          trackedExportReason={trackedExportReason}
           onOpenInWord={onOpenInWord}
           sourceCapabilities={sourceCapabilities}
           templateOrigin={templateOrigin}

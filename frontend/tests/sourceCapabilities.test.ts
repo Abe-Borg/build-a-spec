@@ -59,9 +59,11 @@ test("the redline on your original states its promise, its check, its refusal an
   const entry = SOURCE_OUTPUT_GUIDANCE.find((item) => item.id === "redline-original");
   assert.ok(entry, "the redline on your original has its own guidance entry");
   assert.equal(entry.label, "Redline on your original");
+  assert.match(entry.description, /Export Word - Tracked Changes ON/);
+  assert.match(entry.description, /switches Track Changes on for further Word edits/);
   assert.match(
     entry.description,
-    /Accept All gives exactly what Export Word \(keeps your formatting\) produces/,
+    /Accept All gives the current edited content with your original formatting/,
   );
   assert.match(entry.description, /Reject All gives your original back/);
   assert.match(entry.description, /checks both before it hands the file over/);

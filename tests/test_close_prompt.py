@@ -777,6 +777,11 @@ def _fake_backend():
     ("args", "route", "served_name"),
     [
         (("preserved",), "/api/export/docx?mode=preserved", "Section 21 05 00 - COMMON WORK.docx"),
+        (
+            ("preserved", "", True),
+            "/api/export/docx?mode=preserved&track_changes=true",
+            "Section 21 05 00 - COMMON WORK.docx",
+        ),
         # Open redline in Word (Redline on your original, Phase 1 UI): the
         # same route with the redline named, and its mode named too — the
         # redline on your original, never the server's bare-redline default.
@@ -916,6 +921,8 @@ def test_open_in_word_refuses_unknown_modes_and_a_browser_session(monkeypatch):
     # refused before a URL is built, rather than opening a different file.
     assert controller.open_in_word("preserved", "evil")["ok"] is False
     assert controller.open_in_word("preserved", "version")["ok"] is False
+    assert controller.open_in_word("normalized", "", True)["ok"] is False
+    assert controller.open_in_word("preserved", "", "true")["ok"] is False
     for mode in ("normalized", "source"):
         refused = controller.open_in_word(mode, "master")
         assert refused["ok"] is False

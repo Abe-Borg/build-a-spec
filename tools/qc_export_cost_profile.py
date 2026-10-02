@@ -3,7 +3,7 @@
 
 This was step 2 of the revision-2 review plan (retired, with its execution
 record; the decision rule that step set is the one ``_verdict`` applies, and
-CLAUDE.md "The revision-2 review plan, as executed" is the record). It
+docs/as-built.md "The revision-2 review plan, as executed" is the record). It
 answers one question the repository cannot answer for itself: does the
 batched verifier phase actually READ its shared cached prefix, or does it
 pay to write one per seat?
@@ -115,7 +115,7 @@ _WEB_FETCH = "web_fetch_requests"
 # of system and messages — so seats on a compliance finding sit in a
 # DIFFERENT cached prefix from every other seat. Counting them together
 # reads the cache share low for a structural reason rather than a defect.
-# (Erratum to the v1.8.0 note, recorded in CLAUDE.md.)
+# (Erratum to the v1.8.0 note, recorded in docs/as-built.md.)
 _LENS_WEB = _lens_web_flags()
 _WEB_LENSES = {lens_id for lens_id, web in _LENS_WEB.items() if web}
 _NON_WEB_LENSES = {lens_id for lens_id, web in _LENS_WEB.items() if not web}

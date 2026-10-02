@@ -12,7 +12,7 @@ edit lands, truncated at 160 characters per provision, and superseded on
 every later turn by the full, current document (every element id included)
 that PROJECT CONTEXT carries. Measured on a realistic 300-paragraph section,
 one full draft committed ~260k tokens of history, 85% of it these outlines;
-each later one-sentence edit committed ~17k (CLAUDE.md "Stale outlines stay
+each later one-sentence edit committed ~17k (docs/as-built.md "Stale outlines stay
 out of saved history").
 
 :func:`elide_stale_outlines` removes them from COMMITTED history — the same

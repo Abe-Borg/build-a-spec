@@ -19,7 +19,7 @@ PKG = REPO_ROOT / "packaging" / "windows"
 ICON = PKG / "assets" / "BuildASpec.ico"
 
 # The frozen Build-a-Spec AppId — must be stable across every release so an
-# install upgrades in place. NEVER change this (CLAUDE.md / installer.iss).
+# install upgrades in place. NEVER change this (docs/as-built.md / installer.iss).
 FROZEN_APP_ID = "{{89E58C42-A4F6-49F8-8FCB-1147CB0186DB}"
 
 
@@ -158,7 +158,7 @@ def test_every_surface_states_the_same_license():
 
     The eighth — the bundled copy in the PyInstaller output — is pinned by
     ``test_pyinstaller_spec_bundles_the_license`` above, so between the two
-    tests every surface CLAUDE.md lists is asserted. The installer's license
+    tests every surface docs/as-built.md lists is asserted. The installer's license
     page is the newest: its lead-in names the license here, and
     ``test_installer_requires_accepting_the_license`` pins that the terms it
     shows are LICENSE itself.

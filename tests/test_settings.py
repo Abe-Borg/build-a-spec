@@ -192,7 +192,7 @@ def test_a_one_seat_standard_panel_warns_at_settings_load(monkeypatch):
     ``panel_outcome`` cannot return ``disputed`` from a split at one seat,
     so a lone reviewer's refusal deletes a medium/low finding outright with
     no escalation. The floor deliberately stays at 1 — that is what
-    ``test_the_shipped_floors_hold_through_a_reload`` pins, and CLAUDE.md
+    ``test_the_shipped_floors_hold_through_a_reload`` pins, and docs/as-built.md
     records 2 -> 1 as a deferred cost lever — so the only thing between an
     operator and a silently weaker review is this warning. It goes through
     the startup buffer like every other settings correction, because

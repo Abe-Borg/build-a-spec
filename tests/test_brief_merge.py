@@ -2,7 +2,7 @@
 
 A section seeded from a project brief is a FORK — facts, rounds and
 references added in one section reach another only through the brief. The
-contract under test (the phase spec is retired; CLAUDE.md "The brief is a
+contract under test (the phase spec is retired; docs/as-built.md "The brief is a
 living file" is the record):
 
 - round identity: a round carries a uuid and its own membership, serialized

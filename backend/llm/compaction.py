@@ -1,6 +1,6 @@
 """Condense a long chat conversation, and read condensed turns back.
 
-Compaction plan Phase 3 (the plan is retired; CLAUDE.md "A long conversation
+Compaction plan Phase 3 (the plan is retired; docs/as-built.md "A long conversation
 is condensed, never deleted" is the record).
 Phases 1–2 keep machine payloads (stale outlines, fetched page text) out of
 committed history. What remains is conversation, and a long enough session

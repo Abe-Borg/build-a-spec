@@ -1,6 +1,6 @@
 """One-turn live canary: does the interview's reply land AFTER its last tool call?
 
-The 5.5 prompting upgrade, session P55-2 (its plan is retired; CLAUDE.md
+The 5.5 prompting upgrade, session P55-2 (its plan is retired; docs/as-built.md
 "The reply comes after the last tool call" is the record). On
 Claude Sonnet 5.5, a note longer than a sentence or two that the model
 writes BETWEEN tool calls comes back as a progress-update ``thinking``
@@ -495,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Progress-update canary passed: the reply came after the last "
             "tool call, as closing text that asks the questions, and no "
-            "progress note asked one. Record the result in CLAUDE.md under "
+            "progress note asked one. Record the result in docs/as-built.md under "
             "\"The reply comes after the last tool call\"."
         )
         return 0

@@ -20,6 +20,7 @@ from lxml import etree
 from .raw_zip import rewrite_raw_zip_members
 from .revisions import accept_all, has_revisions
 from .source_format import NO_ORIGIN, SourceFormatMap
+from .source_mapping import revision_part_names
 
 _REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -90,9 +91,7 @@ def _accepted_revision_baseline(
     origins: dict[int, int] | None = None
     accepted_child_count = format_map.body_child_count
     with zipfile.ZipFile(BytesIO(source_bytes)) as archive:
-        for name in archive.namelist():
-            if not (name.startswith("word/") and name.endswith(".xml")):
-                continue
+        for name in revision_part_names(archive):
             root = parse_xml(archive.read(name))
             if not has_revisions(root):
                 continue

@@ -68,8 +68,10 @@ only the settings part through the raw ZIP rewriter, adding a minimal registered
 settings part when needed. It never resaves the package through python-docx.
 Revision-bearing masters use `tracked_export.accepted_revision_baseline` on an
 export-only copy: resolve pre-existing revisions in all stories, remap body
-origins, and bind the new map to that copy. Reject All restores the accepted
-import view. Merged plain paragraphs use the normal tracked-insertion path;
+origins, and bind the new map to that copy. Revision parts use the scanner's
+shared OPC relationship/content-type discovery, including nonstandard names.
+Reject All restores the accepted import view. Merged plain paragraphs use the
+normal tracked-insertion path;
 removed opaque mapped blocks are refused. The retained original remains exact.
 The ordinary export filename is kept. The primary menu availability reads
 `tracked_export_available` and its server reason; it cannot silently fall back

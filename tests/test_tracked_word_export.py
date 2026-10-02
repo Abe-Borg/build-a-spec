@@ -172,6 +172,42 @@ def test_prior_header_and_footer_revisions_keep_their_accepted_appearance(client
     assert sessions.get_session().source_docx_bytes == source
 
 
+@pytest.mark.parametrize("header_part", [
+    "word/review-header.dat",
+    "client-data/review-header.xml",
+    "client-data/review-header.dat",
+])
+def test_relocated_revision_part_exports_with_tracking_and_preserves_formatting(client, header_part):
+    from tests.test_source_global_blockers import _with_relocated_revision_header
+
+    source = _with_relocated_revision_header(_master_bytes(), new_part=header_part)
+    imported = _import(client, source)
+    assert imported["tracked_export_available"] is True
+    _reword_first(client)
+    session = sessions.get_session()
+    original_map = session.source_format_map
+    result = _export(client)
+    assert result.status_code == 200, result.text
+    assert _tracking(result.content).get(qn("w:val")) == "true"
+    before, after = _members(source), _members(result.content)
+    expected_header = accept_all(etree.fromstring(before[header_part]))
+    exported_header = etree.fromstring(after[header_part])
+    assert first_difference(expected_header, exported_header) is None
+    assert not has_revisions(exported_header)
+    assert has_revisions(_body(result.content))
+    assert first_difference(reject_all(_body(result.content)), _body(source)) is None
+    clean = client.get("/api/export/docx", params={"mode": "preserved"})
+    assert clean.status_code == 200
+    assert first_difference(accept_all(_body(result.content)), _body(clean.content)) is None
+    assert before.keys() == after.keys()
+    assert {name for name in before if before[name] != after[name]} == {
+        header_part, "word/document.xml", "word/settings.xml",
+    }
+    assert session.source_docx_bytes == source
+    assert session.source_format_map is original_map
+    assert client.get("/api/import/original").content == source
+
+
 @pytest.mark.parametrize("params", [
     {"mode": "normalized"}, {"mode": "source"}, {"mode": None},
     {"redline": "version", "base": 0}, {"redline": "unknown"},

@@ -17116,6 +17116,86 @@ lenient reads, strict/atomic writes, independent files, environment locks,
 start precedence, manifest staleness and running-worker capture) and
 `frontend/tests/qcApi.test.ts` (chosen transport and preference requests).
 
+## The save gate opens above the window that asks for it — implemented notes
+
+Reported (Abraham, 2026-10-02): with unsaved work, Templates → Start, and
+New session → existing project brief → Start with the brief, opened the
+Save / Don't save / Cancel prompt BEHIND the template window, which took
+every click. The app looked stuck until the window was closed, which
+revealed the prompt. Frontend only: no route, SSE event, dependency, env
+knob, project-format change, capability or `TOUR_VERSION` change.
+
+- **The cause was layering, not wiring.** Both paths request the gate from
+  inside `NewSessionDialog`, a `ModalShell` at `z-[70]` that deliberately
+  stays open underneath (so Cancel returns to it as it was, brief and
+  discipline included). `CloseDialog` rendered at `z-[60]`. Both are fixed
+  siblings in App's root stacking context, so the z-index alone decides,
+  whatever the DOM order. The keyboard half already worked: the gate mounts
+  last, so the dialog stack made it the one dialog answering Escape and
+  Tab, and the hook focused its Save button — focus sat on a button the
+  mouse could not reach.
+- **The fix is one layer: `CloseDialog` is `z-[75]`**, above every ordinary
+  window (the `z-[70]` ModalShells and the Final QC dismiss dialog) and below
+  the `z-[80]` elevated confirmations, so "above the tour overlay" keeps its
+  meaning. Nothing between 70 and 80 was in use. Nothing in `App.tsx`
+  changed: the gate's three answers and the two request paths were already
+  right once the gate could be clicked.
+- **The window-close prompt is the same component, so it rose too.** Closing
+  the app window with unsaved work while any ModalShell was open hid that
+  prompt the same way (the shell had vetoed the close, so nothing visible
+  happened). That follows by construction; it was not exercised, since the
+  pywebview shell does not run here. A gate that opens while a tour step
+  is up (the header's Templates stays clickable there) now covers the step
+  card (`z-[65]`) too, which is right for a decision that blocks everything
+  else; the tour's Escape guard already yields to it as an `aria-modal`
+  dialog.
+- **Checked in a real browser before and after.** A scratch harness (not
+  committed) served the production build with the real backend and drove
+  headless Chromium against a session with unsaved work. Before: the
+  element under the gate's Cancel button was the template window on both
+  paths, and a real click timed out. After, on both paths: Cancel, a
+  backdrop click and Escape each closed only the gate, kept the section and
+  its unsaved state, left the template window open, and returned focus to
+  the Start button; Discard, Save (the browser fallback downloads the
+  `.baspec`) and a keyboard-only Tab-then-Enter each started the template
+  that was clicked — the second one too, not just the first — and the brief
+  path's new session carried `seeded_from: ["21 13 13"]`. Tab stayed inside
+  the gate (Cancel → discard → Save → Cancel).
+- **Harness trap, again**: its XDG folders were relative paths, so after the
+  script's `cd` they landed in the repo root as `state/`. Use absolute paths
+  in a harness that changes directory.
+- **Tests: `frontend/tests/saveGate.test.ts` (7)**, registered in
+  `package.json`. It reads every z-layer from the string literals of every
+  `.tsx` through the TypeScript parser (the `themeTokens.test.ts` approach,
+  so a comment naming a layer never counts) and requires that no ordinary
+  layer reaches the gate's and only the elevated confirmations sit above it.
+  It pins both entry paths (the window hands Start to the gated request,
+  neither request closes the window, the pending gate keeps the file,
+  discipline and template), the answers (Cancel only clears the gate;
+  Discard and a written Save route to the originally requested start; the
+  window closes only after the start applies, never on failure), and focus
+  (the shared hook, Save first, restoration to the element focused before).
+  Revert matrix, each change made in place and restored from the exact text
+  read: the gate back at `z-[60]` → 2 red; at `z-[70]` → 2; at `z-[90]` →
+  1; a ModalShell at `z-[76]` → 2; the template request closing the window
+  first → 1; either request bypassing the gate → 1 each; the brief gate
+  dropping the template → 1; Cancel also closing the window → 1; Save
+  proceeding when nothing was written → 1; `startBrief` dropping the
+  discipline → 1; the gate focusing its panel instead of Save → 1.
+- **Release-note draft** (v1.22.1 is published, so its entry is frozen; for
+  whichever release next ships from `master`, a "Templates" section):
+
+  > **Starting a template with unsaved work no longer looks stuck.** Choosing
+  > Start in the template studio, or Start with the brief for a new section,
+  > while the current section had unsaved work opened the "save first?"
+  > prompt behind the template window, where it could not be clicked. It now
+  > opens on top, and Save, Don't save and Cancel all work with the mouse
+  > and the keyboard.
+
+- **Erratum** (these notes are append-only): "Content persistence" calls
+  `CloseDialog` the shared three-way modal and says nothing of its layer; it
+  rendered at `z-[60]`, below the windows that request it, until this change.
+
 ## A template's delete confirmation belongs to that template — implemented notes
 
 Reported (Abraham, 2026-10-02): in the template studio, deleting a personal

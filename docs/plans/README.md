@@ -3,8 +3,9 @@
 Owner: Abraham.
 
 Nothing is in flight. Every program that was planned here has shipped, and
-its as-built record lives in `CLAUDE.md`, the file each plan named as the
-source of truth for conventions, invariants and frozen decisions. A future
+its as-built record lives in `docs/as-built.md`. `CLAUDE.md` is the file
+each plan named as the source of truth for conventions, invariants and
+frozen decisions. A future
 plan goes in this folder beside this index, and the index is where a session
 looks first.
 
@@ -15,7 +16,7 @@ looks first.
 Deleted on 2026-09-30, once every program below had closed and every
 user-visible item it still owed had been lifted into the unreleased 1.21.0
 entry of `backend/release_notes.py`. Each row's last column names the
-`CLAUDE.md` sections that hold its as-built record.
+`docs/as-built.md` sections that hold its as-built record.
 
 | Program | Files removed | Closed | As-built record |
 |---|---|---|---|
@@ -67,9 +68,9 @@ was for. The same reasoning retired the batch plans below.
 
 The batch plans for v0.7.0–v1.0.0 (Batches 2–5) and the batch kickoff prompt
 `AGENT_PROMPT.md` were deleted on 2026-07-29. All four batches shipped, and
-their as-built design record is restated in `CLAUDE.md`, the file those plans
-themselves named as the source of truth for conventions, invariants and frozen
-decisions. `AGENT_PROMPT.md` selected the next batch from `VERSION` (topping
+their as-built design record is restated in `docs/as-built.md`. `CLAUDE.md`
+is the file those plans themselves named as the source of truth for
+conventions, invariants and frozen decisions. `AGENT_PROMPT.md` selected the next batch from `VERSION` (topping
 out at 0.9.0 → Batch 5) and pointed at a `ROADMAP.md` deleted long before it,
 so it could not route work in this codebase any more.
 
@@ -77,7 +78,7 @@ Two things in those plans were **not** already covered elsewhere and were
 relocated before the files were removed, not dropped:
 
 - Batch 4's "audit-grade reporting amendment", the one plan section still
-  claiming to be a live maintenance contract → `CLAUDE.md` → *Audit-grade
+  claiming to be a live maintenance contract → `docs/as-built.md` → *Audit-grade
   Final QC report extension* → **The reporting contract**.
 - The manual QA that Batches 2, 3, 4 and 5 each recorded as **still owed**
   (real-Word redline round-trips, packaged-app QC report downloads, partial-QC

@@ -174,6 +174,12 @@ _ACTIVE_MEMBER_MARKERS = (
 _SOURCE_MAP_KIND = "buildaspec-source-map"
 _SOURCE_MAP_FORMAT = 1
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# Persisted spans may omit one typed SectionFormat label, never source words.
+# This grammar is independent of the importer's UID and nesting decisions;
+# an older importer may also have kept the label as part of the provision.
+_SOURCE_LABEL_PREFIX_RE = re.compile(
+    r"\s*(?:[A-Z]{1,2}\.|[a-z]{1,2}[.)]|\d{1,2}[.)])\s+"
+)
 _MALFORMED_PERCENT_ESCAPE_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _ENCODED_SEPARATOR_RE = re.compile(r"%(?:2[fF]|5[cC])")
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
@@ -548,20 +554,27 @@ def semantic_body_projection_sha256(section: SpecSection) -> str:
 
 
 def _unique_semantic_span(source_text: str, semantic_text: str) -> SourceTextSpan | None:
-    """Return a unique exact substring span, or ``None`` after normalization.
+    """Return a complete provision span, or ``None`` after normalization.
 
     The existing importer deliberately normalizes whitespace. Text edits only
     when the normalized semantic value still corresponds to one exact source
-    slice; guessing an offset would risk changing a literal label or formatted
-    content outside the provision.
+    slice. Outside that slice, only whitespace and a single canonical typed
+    label may remain. Accepting an arbitrary unique substring would let a
+    forged saved baseline hide words that a preserved edit silently retains.
     """
     start = source_text.find(semantic_text)
     if start < 0 or start != source_text.rfind(semantic_text):
         return None
+    end = start + len(semantic_text)
+    prefix = source_text[:start]
+    if (
+        prefix.strip() and _SOURCE_LABEL_PREFIX_RE.fullmatch(prefix) is None
+    ) or source_text[end:].strip():
+        return None
     return SourceTextSpan(
         text_node_ordinal=0,
         start=start,
-        end=start + len(semantic_text),
+        end=end,
         source_node_text=source_text,
     )
 

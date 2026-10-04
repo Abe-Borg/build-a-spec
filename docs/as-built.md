@@ -17011,3 +17011,27 @@ Local API checks run with the sandbox's network capability enabled (their
 clients remain hermetic); this avoids the earlier TestClient stall.
 Ruff, the release version consistency check, and 201 targeted research,
 retry, cancellation, preserved-thinking and refusal regressions pass.
+
+## Final QC verifier fetch ceiling — 2026-10-04
+
+- Verifier seats cap each fetched page at 5,000 content tokens. Four fetches
+  contribute at most 20,000 page tokens, down from 200,000;
+  batch continuations re-send those pages without a cache
+  tail. Streaming seats and warm leads use the same cap through their shared
+  call specification. Search/fetch counts, citations, and direct callers keep
+  their existing settings. Research, interview, and phase-1 QC fetches retain
+  the 50,000-token page ceiling.
+- The fetch-tool builder accepts an optional content ceiling; its default
+  remains 50,000. The verifier ceiling is included in the QC input manifest,
+  so a retained report from another evidence budget reads stale.
+- Hermetic regressions cover initial and paused verifier requests in both
+  transports, document-only seats, the unchanged lens ceiling, and changes
+  to the review fingerprint. The web-seat regressions failed at 50,000 before
+  the fix.
+- Validation: 204 targeted tests passed before the rebase. On current master,
+  the full backend run passed 3,515 tests and skipped 64. Its ten failures
+  required a writable application configuration directory; all ten passed on
+  rerun with `XDG_CONFIG_HOME` pointing into `/tmp`. The three template cases
+  also failed on unchanged master. Tests need the sandbox's network capability
+  for local TestClient communication. Ruff, release version consistency, and
+  diff checks passed; no paid API call was run.

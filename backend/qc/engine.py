@@ -6079,6 +6079,11 @@ def _run_consolidation_call(
 # Phase 2 — adversarial verification
 # ---------------------------------------------------------------------------
 
+# A seat checks one finding, so it needs a short source passage. Batch
+# continuations have no cache tail and re-bill every fetched page; four
+# fetches should contribute at most 20k page tokens instead of 200k.
+_VERIFIER_WEB_FETCH_MAX_CONTENT_TOKENS = 5_000
+
 
 def _seat_key(finding_index: int, reviewer_slot: int) -> str:
     """Stable batch custom_id for one seat. Run-local, never persisted."""
@@ -6126,7 +6131,10 @@ def _verifier_tools(lens: QCLens, model: str) -> list[dict]:
     # check facts; the rest reason from the document alone.
     if lens.web:
         tools.append(build_web_search_tool(max_uses=settings.QC_MAX_SEARCHES_LENS))
-        tools.append(build_web_fetch_tool(max_uses=settings.QC_MAX_FETCHES_LENS))
+        tools.append(build_web_fetch_tool(
+            max_uses=settings.QC_MAX_FETCHES_LENS,
+            max_content_tokens=_VERIFIER_WEB_FETCH_MAX_CONTENT_TOKENS,
+        ))
     tools.append(submit_qc_verdict_tool(model=model))
     return tools
 
@@ -8005,6 +8013,9 @@ def build_qc_input_manifest(
             "max_tokens": int(max_tokens),
             "verifiers_standard": max(1, settings.QC_VERIFIERS_STANDARD),
             "verifiers_critical": max(1, settings.QC_VERIFIERS_CRITICAL),
+            # Fetch truncation changes what evidence a seat can read, so a
+            # report produced under another page budget must read stale.
+            "verifier_max_fetch_content_tokens": _VERIFIER_WEB_FETCH_MAX_CONTENT_TOKENS,
             # Which regime produced the candidate roster. Hashed, so a report
             # can always state whether near-duplicate lens claims shared a
             # panel, and a retained report from the other regime reads stale

@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import anthropic
 import httpx
+import pytest
 from anthropic import BadRequestError
 
 from backend import settings
@@ -231,6 +232,50 @@ def test_a_batched_seat_sends_the_same_request_bytes_as_a_streamed_one():
         for key in ("model", "system", "tools", "thinking", "output_config"):
             assert sent_stream[key] == sent_batch[key], key
         assert sent_stream["messages"] == sent_batch["messages"]
+
+
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize("lens_id", ["code_compliance", "coordination_consistency"])
+def test_verifier_fetch_budget_is_small_on_every_request(batch, lens_id):
+    """A paused seat must not re-enter the research-sized page budget."""
+    title = "Bounded verifier pages"
+    web = lens_id == "code_compliance"
+    scripts = _scripts(**{
+        lens_id: [qc_findings_response(lens_id, findings=[_finding(title)])],
+    })
+    scripts[title] = (
+        [pause_response(searched_urls=["https://example.org/a"])] if web else []
+    ) + [qc_verdict_response(True), qc_verdict_response(True)]
+    client = SequencedFakeClient(scripts)
+    result = _run(client, batch=batch)
+
+    assert result.execution_status == "complete"
+    requests = [
+        request for request in client.requests
+        if "[[QC-VERIFY:" in str(request.get("messages"))
+    ]
+    assert len(requests) == (3 if web else 2)
+    if web:
+        assert any(len(request["messages"]) > 1 for request in requests)
+    for request in requests:
+        tools = {tool["name"]: tool for tool in request["tools"]}
+        if web:
+            fetch = tools["web_fetch"]
+            assert fetch["max_content_tokens"] == 5_000
+            assert fetch["max_uses"] == settings.QC_MAX_FETCHES_LENS
+            assert fetch["citations"] == {"enabled": True}
+            assert fetch["allowed_callers"] == ["direct"]
+        else:
+            assert "web_fetch" not in tools
+            assert "web_search" not in tools
+
+    # Broad fact discovery still has its original page allowance.
+    lens_request = next(
+        request for request in client.requests
+        if "[[QC-LENS:code_compliance]]" in str(request.get("messages"))
+    )
+    fetch = next(tool for tool in lens_request["tools"] if tool["name"] == "web_fetch")
+    assert fetch["max_content_tokens"] == 50_000
 
 
 def test_every_seat_rides_one_batch_under_its_own_custom_id():

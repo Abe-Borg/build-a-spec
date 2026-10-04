@@ -16914,3 +16914,25 @@ env knob, project-format change or version bump.
   no longer opens the imported copy one click from deletion; its delete
   confirmation starts fresh, and its Manage view shows its own name and
   description."
+
+## Saved projects survive importer tree changes — implemented notes
+
+- **Cause.** `_stage_project_load` compared the entire saved source map with
+  a fresh import, including paragraph UIDs and the semantic baseline hash.
+  Changing nesting or recognizing inherited Word numbering could therefore
+  make an intact `.baspec` refuse to open after an app update.
+- **Load contract.** Fresh-import comparison now covers only the source and
+  document XML hashes, body count, and byte-derived body inventory. The saved
+  bindings remain authoritative for the saved baseline and version history;
+  package parsing validates those bindings against the retained XML and
+  rebuilds the transient patch context under the current safety rules.
+  Attached projects still check every retained version for source-export
+  readiness. Detached projects retain their existing exemption and exact
+  original download. The portable package format is unchanged.
+- **Regression evidence.** Four cases in `tests/test_project_package.py` save
+  with the old four-level clamp or with style-chain numbering unavailable,
+  then reopen with the current importer, each attached and detached. All four
+  reproduced the original 400 and pass with the fix. They check chat and
+  document history, original bindings, redo, exact-original download, export,
+  and re-save/reopen. A fifth case forges an unbound paragraph's inventory ID
+  and confirms that the byte-derived comparison still rejects it atomically.

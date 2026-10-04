@@ -941,9 +941,10 @@ def _stage_project_load(
         except ValueError as exc:
             raise ProjectPackageError(str(exc)) from exc
 
-        # Rebuild anchors from the attached source instead of trusting
-        # serialized indices/hashes. The stored map is an integrity record;
-        # the recomputed map is the authority used by the live session.
+        # Package parsing has validated the saved bindings against the exact
+        # source XML and the saved semantic baseline. A current import can
+        # assign different UIDs or nesting after an importer improvement;
+        # compare only source-byte identity and inventory across imports.
         with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as handle:
             handle.write(parsed.source_docx_bytes)
             source_path = Path(handle.name)
@@ -959,12 +960,21 @@ def _stage_project_load(
             raise ProjectPackageError(
                 "The attached source DOCX cannot be remapped safely."
             )
-        if stored_map.to_dict() != reparsed.source_map.to_dict():
+        fresh_map = reparsed.source_map
+        if (
+            stored_map.source_sha256 != fresh_map.source_sha256
+            or stored_map.document_xml_sha256 != fresh_map.document_xml_sha256
+            or stored_map.body_child_count != fresh_map.body_child_count
+            or stored_map.body_blocks != fresh_map.body_blocks
+        ):
             raise ProjectPackageError(
                 "The project source map does not match a fresh parse "
                 "of the attached DOCX."
             )
-        typed_map = reparsed.source_map
+        # History and the transient context belong to the saved baseline,
+        # including its original UIDs. Replacing its map with the fresh one
+        # would misbind preserved edits or fail baseline identity checks.
+        typed_map = stored_map
         staged.source_docx_bytes = parsed.source_docx_bytes
         staged.source_docx_filename = parsed.source_docx_filename
         staged.source_docx_map = typed_map
@@ -991,11 +1001,11 @@ def _stage_project_load(
         # make every project the feature is for refuse to reopen — the user's
         # work saved into a file that cannot be loaded. What is still checked
         # above, and still matters, is the integrity of the retained
-        # artifacts themselves: the source re-parses, its map matches a fresh
-        # parse, and the imported baseline is present. Those are what the
-        # exact-original download and redline vs master rest on. The
-        # preservation boundary is a claim about EXPORT, and a detached
-        # project no longer makes it (`_source_readiness` returns None, and
+        # artifacts themselves: the source re-parses, its byte inventory
+        # matches, and its saved bindings agree with the imported baseline.
+        # Those are what the exact-original download and redline vs master
+        # rest on. The preservation boundary is a claim about EXPORT, and a
+        # detached project no longer makes it (`_source_readiness` returns None, and
         # `mode=source` 409s), so nothing downstream can act on a retained
         # version as though it were source-exportable.
         baseline_index = staged.doc.baseline_index

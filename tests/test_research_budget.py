@@ -7,6 +7,7 @@ import pytest
 
 from backend import settings
 from backend.research import engine
+from backend.research.budget import count_request_tokens, _SERVER_TOOL_OVERHEAD_TOKENS
 from backend.research.schema import RESEARCH_TOOL_NAME
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.fakes import (
@@ -27,6 +28,12 @@ class _CountedClient(SequencedFakeClient):
         self.count_requests = []
 
     def count_tokens(self, **request):
+        # Match the counter's supported contract; the stream still receives
+        # server tools and their replay blocks, but the counter must not.
+        assert all(tool.get("type") in (None, "custom") for tool in request["tools"])
+        assert all(message["role"] == "user" for message in request["messages"])
+        assert all(block["type"] in {"text", "document", "image"}
+                   for message in request["messages"] for block in message["content"])
         self.count_requests.append({**request, "messages": list(request["messages"])})
         value = self.counts.pop(0) if self.counts else 1_000
         if isinstance(value, Exception):
@@ -108,10 +115,85 @@ def test_fetch_batch_is_reduced_to_fit_reserved_context():
     fetch = request["tools"][1]
     assert fetch["max_uses"] == 4
     assert (
-        500_000 + request["max_tokens"] + engine._CONTEXT_MARGIN_TOKENS
+        500_000 + 2 * _SERVER_TOOL_OVERHEAD_TOKENS
+        + request["max_tokens"] + engine._CONTEXT_MARGIN_TOKENS
         + request["tools"][0]["max_uses"] * engine._SEARCH_RESULT_RESERVE_TOKENS
         + fetch["max_uses"] * fetch["max_content_tokens"]
     ) <= settings.RESEARCH_CONTEXT_WINDOW
+
+
+def test_counter_uses_supported_equivalent_and_reserves_server_tool_overhead():
+    from backend.research.schema import build_web_fetch_tool, build_web_search_tool
+    from backend.research.schema import requirements_research_tool
+
+    client = _CountedClient([], counts=[42])
+    tools = [build_web_search_tool(max_uses=3), build_web_fetch_tool(max_uses=2),
+             requirements_research_tool(model="claude-sonnet-5")]
+    blocks = fetch_blocks(_URL)
+    blocks[-1].content["content"] = {
+        "type": "document", "source": {
+            "type": "base64", "media_type": "application/pdf", "data": "PDF_BYTES",
+        },
+    }
+    messages = [{"role": "assistant", "content": blocks}]
+    request = {"model": "claude-sonnet-5", "tools": tools, "system": "Research brief"}
+
+    assert count_request_tokens(client, messages, request) == 42 + 2 * _SERVER_TOOL_OVERHEAD_TOKENS
+    counted = client.count_requests[0]
+    assert counted["tools"] == [tools[-1]]
+    assert counted["system"] == request["system"]
+    content = counted["messages"][0]["content"]
+    assert content[1] == blocks[-1].content["content"]
+    assert "PDF_BYTES" not in content[0]["text"]
+    assert _URL in content[0]["text"]
+    assert messages[0]["content"] is blocks
+    assert request["tools"] is tools
+
+
+def test_counter_contract_through_real_sdk_rejects_server_tool_declarations():
+    import json
+
+    import anthropic
+    import httpx2
+
+    from backend.research.schema import build_web_fetch_tool, build_web_search_tool
+    from backend.research.schema import requirements_research_tool
+
+    requests = []
+
+    def counter(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        assert request.url.path == "/v1/messages/count_tokens"
+        if any(tool.get("type") not in (None, "custom") for tool in payload["tools"]):
+            return httpx2.Response(400, json={
+                "type": "error", "error": {"type": "invalid_request_error",
+                "message": "Server tools are not supported by token counting."},
+            })
+        assert all(block["type"] == "text" for message in payload["messages"]
+                   for block in message["content"])
+        return httpx2.Response(200, json={"input_tokens": 123})
+
+    tools = [build_web_search_tool(max_uses=3), build_web_fetch_tool(max_uses=2),
+             requirements_research_tool(model="claude-sonnet-5")]
+    paused = pause_response(searched_urls=[_URL], pending_query="still searching")
+    with anthropic.Anthropic(
+        api_key="test-key-hermetic", max_retries=0,
+        http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(counter)),
+    ) as client:
+        tokens = count_request_tokens(client, [{"role": "assistant", "content": paused.content}],
+                                      {"model": "claude-sonnet-5", "tools": tools})
+
+    assert tokens == 123 + 2 * _SERVER_TOOL_OVERHEAD_TOKENS
+    assert len(requests) == 1
+    assert requests[0]["tools"] == [tools[-1]]
+
+
+@pytest.mark.parametrize("invalid", [None, True, -1, "100"])
+def test_counter_rejects_invalid_counts(invalid):
+    client = _CountedClient([], counts=[invalid])
+    with pytest.raises(ValueError, match="invalid input count"):
+        count_request_tokens(client, [], {"model": "claude-sonnet-5", "tools": []})
 
 
 def test_near_full_context_submits_instead_of_sending_another_web_request():

@@ -2403,7 +2403,8 @@ def _run_dimension(
     structured submission with web tools and thinking disabled. Its
     transport retries retain the conversation, even on the last attempt.
     No-payload/refusal/incomplete responses from that submission are terminal.
-    Each request is counted by the provider's free input-token endpoint;
+    Each request is estimated using a supported equivalent at the provider's
+    free input-token endpoint, plus server-tool framing reserves;
     output and tool-result reserves keep new fetches inside the context
     window. An oversized submission elides raw web results, retaining URLs,
     extracted findings and quoted passages; grounding and billing still

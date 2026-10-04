@@ -1,12 +1,15 @@
 """Research request preflight and copy-on-write context recovery.
 
-Token counting is the provider's unbilled endpoint, not billed usage (which
-can sum many server-tool iterations and includes cache reads). Only raw web
+Token counting uses a supported equivalent at the provider's unbilled
+endpoint, plus a reserve for server-tool overhead. It is a conservative
+estimate, not billed usage (which can sum many iterations/cache reads). Raw web
 results are elided for an oversized submission; extracted findings and the
 original responses used for grounding and accounting stay intact.
 """
 from __future__ import annotations
 
+import dataclasses
+import json
 from typing import Any
 
 from .grounding import (
@@ -14,9 +17,61 @@ from .grounding import (
     collect_search_evidence_detailed,
 )
 
+# The counter does not accept server-tool declarations. Their serialized
+# definitions are counted as text, with extra room for their hidden prompt
+# framing. This is an estimate, separate from the engine's growth margin.
+_SERVER_TOOL_OVERHEAD_TOKENS = 10_000
+
+
+def _plain_node(node: Any) -> Any:
+    dump = getattr(node, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json", exclude_none=True)
+    if dataclasses.is_dataclass(node) and not isinstance(node, type):
+        return dataclasses.asdict(node)
+    return vars(node)
+
+
+def _counting_messages(messages: list[dict]) -> list[dict]:
+    """Count replay content as text, with documents/images in native form.
+
+    Server calls/results and signed thinking cannot depend on server-tool
+    declarations at this endpoint. Serialize their full content into user
+    text, including citations/signatures, without altering the paid request.
+    Lift documents/images out of that text so base64 is counted as media,
+    rather than potentially millions of text tokens. This also avoids
+    dangling client calls or document citations in the counting-only view.
+    """
+    result = []
+    for message in messages:
+        plain = json.loads(json.dumps(message, default=_plain_node, ensure_ascii=False))
+        media = []
+
+        def lift(node: Any, lifted: list = media) -> Any:
+            if isinstance(node, dict):
+                if node.get("type") in {"document", "image"} and node.get("source"):
+                    lifted.append(node)
+                    return "[Media content counted separately]"
+                return {key: lift(value) for key, value in node.items()}
+            if isinstance(node, list):
+                return [lift(value) for value in node]
+            return node
+
+        serialized = json.dumps(lift(plain), ensure_ascii=False)
+        result.append({"role": "user", "content": [
+            {"type": "text", "text": serialized}, *media,
+        ]})
+    return result
+
 
 def count_request_tokens(client: Any, messages: list[dict], request: dict) -> int:
-    """Count the actual input, including the tools, system and cached prefix."""
+    """Estimate full input without sending unsupported server tools to count.
+
+    The system and custom output schema are counted natively. Server-tool
+    definitions and replay metadata are ordinary text in the counting-only
+    view; their provider framing gets an additional conservative reserve.
+    The stream's messages, tools, cache prefix and container are untouched.
+    """
     kwargs = {
         key: value
         for key, value in request.items()
@@ -25,11 +80,24 @@ def count_request_tokens(client: Any, messages: list[dict], request: dict) -> in
             "tool_choice", "cache_control", "extra_headers",
         }
     }
-    counted = client.messages.count_tokens(messages=messages, **kwargs)
+    server_tools = [tool for tool in request.get("tools", [])
+                    if tool.get("type") not in (None, "custom")]
+    kwargs["tools"] = [tool for tool in request.get("tools", []) if tool not in server_tools]
+    # No signed replay blocks remain in this equivalent input, so it does
+    # not need a thinking-prefix binding override either.
+    if "thinking" in kwargs:
+        kwargs["thinking"] = {key: value for key, value in kwargs["thinking"].items()
+                              if key != "block_binding"}
+    equivalent = _counting_messages(messages)
+    if server_tools:
+        equivalent.append({"role": "user", "content": [
+            {"type": "text", "text": json.dumps(server_tools, ensure_ascii=False)},
+        ]})
+    counted = client.messages.count_tokens(messages=equivalent, **kwargs)
     tokens = counted.input_tokens
     if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
         raise ValueError("Research token counter returned an invalid input count.")
-    return tokens
+    return tokens + len(server_tools) * _SERVER_TOOL_OVERHEAD_TOKENS
 
 
 def _field(node: Any, name: str) -> Any:

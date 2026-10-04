@@ -16969,7 +16969,8 @@ An allowance change also opts into preserved-thinking prefix recovery,
 since tool definitions are part of the prefix that signed thinking binds.
 
 Before each paid stream, research uses Anthropic's free token-counting
-endpoint on the input, including system, tool schema and cached context.
+endpoint on a supported equivalent of the input, including system, custom
+tool schema and conversation content, plus a server-tool framing reserve.
 It reserves the requested output, 50k tokens for framing/unexpected growth,
 5k tokens per allowed search (an estimate, since search has no result-token
 cap), and the full 50k-token cap per allowed fetch. Fetch batches shrink to
@@ -16988,7 +16989,25 @@ permits an unchecked stream. No new dependency, endpoint or saved schema.
 Hermetic regressions exercise each guard, cumulative allowances, context
 reserves, source elision, grounding/accounting, cancellation, and bounded
 submission transport retries. No paid canary was run.
-The engine/runner and research-specific compatibility checks passed (172
-tests), as did Ruff. API/chat integration checks are unverified in this
-environment: Starlette's TestClient stalls on both the patch and untouched
-HEAD, reproduced independently with a bounded baseline run.
+The initial engine/runner and research-specific compatibility checks passed
+(172 tests), as did Ruff. Broader validation is recorded below.
+
+### PR #262 review correction — supported token-count requests
+
+Server-tool declarations are excluded from the counter's `tools` argument;
+their full serialized definitions are counted as ordinary text, with a
+10k-token framing reserve per declaration. Replay content is serialized
+into counting-only user text so server calls/results, signatures and
+citations require no unsupported server-tool declaration or replay binding.
+Documents/images are lifted into native media blocks, so base64 is counted
+as media rather than potentially millions of text tokens. The result is a
+conservative estimate; the paid messages, tools and provider container are
+unchanged. An SDK/HTTP transport regression returns 400 for server-tool
+declarations, and the budget-test counter rejects unsupported replay shapes.
+
+CI's failed cancellation test had a blocking client missing `count_tokens`;
+it now implements the same counter interface as the other research fakes.
+Local API checks run with the sandbox's network capability enabled (their
+clients remain hermetic); this avoids the earlier TestClient stall.
+Ruff, the release version consistency check, and 201 targeted research,
+retry, cancellation, preserved-thinking and refusal regressions pass.

@@ -500,6 +500,8 @@ class _Blocking:
     """A client whose every streaming call blocks until released, then fails
     with a non-retryable error (fast, deterministic once unblocked)."""
 
+    count_tokens = SequencedFakeClient.count_tokens
+
     def __init__(self, release: threading.Event):
         self._release = release
         self.messages = self

@@ -1276,6 +1276,15 @@ class SequencedFakeClient:
         self.request_options.append(dict(options))
         return self
 
+    def count_tokens(self, **request):
+        """Hermetic stand-in for the unbilled input-token counter.
+
+        Budget boundary tests override this with exact scripted counts.
+        Ordinary lifecycle tests need only a small, deterministic input.
+        """
+        serialized = json.dumps(request, default=lambda value: vars(value))
+        return SimpleNamespace(input_tokens=max(1, len(serialized) // 3))
+
     def pop_turn(self, request: dict):
         """Resolve one request against the scripts. Raises a scripted error.
 

@@ -16947,3 +16947,48 @@ env knob, project-format change or version bump.
   acceptance and now reject atomically. Two additional compatibility cases
   save typed fifth-level labels with the pre-recognition importer, then load
   with today's: keeping or stripping a legitimate label remains supported.
+
+## Research guards request a final submission (2026-10-04)
+
+A dimension used to discard its research when it reached the 2× search
+ceiling, 16 continuations, or two missing-tool reminders. It now makes one
+additional submission-only request: web tools are removed, thinking is
+disabled, the structured output tool is forced, and output is capped at
+32k tokens (or the configured output allowance if smaller). A submission
+that still pauses, refuses, truncates, or omits the payload terminates.
+Transport retries resend that submission, including the final retry; they
+never restart its research. Cancellation is checked again after preflight.
+Original responses still ground citations and meter all billed usage.
+
+Fetch allowances now apply cumulatively to the conversation rather than
+renewing on each continuation. Search requests also declare only the
+remaining portion of their 2× ceiling. These tool-definition changes can
+rewrite the cached prefix when an allowance shrinks, a deliberate cost of
+enforcing the cumulative limit instead of renewing it invisibly.
+An allowance change also opts into preserved-thinking prefix recovery,
+since tool definitions are part of the prefix that signed thinking binds.
+
+Before each paid stream, research uses Anthropic's free token-counting
+endpoint on the input, including system, tool schema and cached context.
+It reserves the requested output, 50k tokens for framing/unexpected growth,
+5k tokens per allowed search (an estimate, since search has no result-token
+cap), and the full 50k-token cap per allowed fetch. Fetch batches shrink to
+fit; when no further batch fits, research submits the findings it has.
+`BUILD_A_SPEC_RESEARCH_CONTEXT_WINDOW` independently declares the research
+model's window, defaulting to the interview's window (1M).
+
+If even the submission input is oversized, fetched bodies are replaced
+with URL notes first, then search results with URL/title notes if needed.
+Extracted prose and readable thinking notes remain; citations into removed
+results become quoted passage/URL text instead of invalid wire pointers.
+All edits are copy-on-write. A request that still cannot fit is rejected
+locally with its billed usage preserved. The token counter failing never
+permits an unchecked stream. No new dependency, endpoint or saved schema.
+
+Hermetic regressions exercise each guard, cumulative allowances, context
+reserves, source elision, grounding/accounting, cancellation, and bounded
+submission transport retries. No paid canary was run.
+The engine/runner and research-specific compatibility checks passed (172
+tests), as did Ruff. API/chat integration checks are unverified in this
+environment: Starlette's TestClient stalls on both the patch and untouched
+HEAD, reproduced independently with a bounded baseline run.

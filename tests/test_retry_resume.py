@@ -370,17 +370,18 @@ def test_the_continuation_budget_spans_a_resume(harness):
     failed request and earns no second allowance."""
     budget = harness.max_continuations
     before = 10
+    extra_submission = int(harness.name == "research")
     turns = [
         *(_pause(_PAGE) for _ in range(before)),
         _RESET,
-        *(_pause(_PAGE) for _ in range(budget + 1 - before)),
+        *(_pause(_PAGE) for _ in range(budget + 1 - before + extra_submission)),
     ]
     call = harness.run(turns)
 
     assert call.status == "failed"
     assert "maximum continuation" in call.error
     # The opening request and ``budget`` continuations, plus the one resend.
-    assert len(call.requests) == budget + 2
+    assert len(call.requests) == budget + 2 + extra_submission
     assert _modes(call) == [RETRY_MODE_RESUME]
 
 

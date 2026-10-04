@@ -96,15 +96,15 @@ def _researched_session(client: TestClient, monkeypatch, *, fail: str = "") -> N
     ``fail`` names an area whose reply never calls the output tool, so the
     area fails — and, since that reply was billed, its usage is still
     recorded on its status. It is reminded twice first (the 5.5 prompting
-    upgrade, P55-4), and it ignores both reminders.
+    upgrade, P55-4), and it ignores both reminders and final submission.
     """
     _record_profile(client, monkeypatch)
     scripts: dict[str, list] = {}
     for dim_id, key in DIM_KEYS.items():
         if dim_id == fail:
             # A reply that never calls the output tool is reminded twice
-            # (P55-4) and ignores both, so the area fails without a retry.
-            # Every reply was billed; the two to the reminders carry no
+            # (P55-4) and ignores both and the final submission.
+            # Every reply was billed; the follow-up replies carry no
             # usage, so the area's row is exactly the first reply's.
             scripts[key] = [
                 research_response(
@@ -113,6 +113,7 @@ def _researched_session(client: TestClient, monkeypatch, *, fail: str = "") -> N
                     stop_reason="end_turn",
                     tokens=_TOKENS[dim_id],
                 ),
+                research_response(items=None, stop_reason="end_turn"),
                 research_response(items=None, stop_reason="end_turn"),
                 research_response(items=None, stop_reason="end_turn"),
             ]

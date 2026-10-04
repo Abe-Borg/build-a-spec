@@ -287,11 +287,12 @@ def test_a_text_only_end_of_turn_is_reminded_once_then_recorded(harness) -> None
 
 
 def test_two_reminders_then_the_familiar_failure_with_the_count(harness) -> None:
+    extra_submission = int(harness.name == "research")
     call = harness.run(
-        _client(harness, [_text_only(), _text_only(), _text_only()])
+        _client(harness, [_text_only() for _ in range(3 + extra_submission)])
     )
 
-    assert len(call.requests) == 3
+    assert len(call.requests) == 3 + extra_submission
     assert call.status == "failed"
     assert call.error.startswith(harness.no_payload)
     assert "reminders sent: 2" in call.error
@@ -349,8 +350,11 @@ def test_a_reminder_needs_budget_left_like_a_continuation(harness) -> None:
     failure, with a count of zero; one request short of it, the reminder
     goes out and its response is the last the budget allows."""
     budget = harness.max_continuations
-    spent = harness.run(_client(harness, [*[_pause()] * budget, _text_only()]))
-    assert len(spent.requests) == budget + 1
+    extra_submission = int(harness.name == "research")
+    spent = harness.run(_client(harness, [
+        *[_pause()] * budget, *[_text_only() for _ in range(1 + extra_submission)]
+    ]))
+    assert len(spent.requests) == budget + 1 + extra_submission
     assert spent.status == "failed"
     assert "reminders sent: 0" in spent.error
 

@@ -525,7 +525,9 @@ def build_web_search_tool(
     return tool
 
 
-def build_web_fetch_tool(*, max_uses: int) -> dict[str, Any]:
+def build_web_fetch_tool(
+    *, max_uses: int, max_content_tokens: int = WEB_FETCH_MAX_CONTENT_TOKENS
+) -> dict[str, Any]:
     """The ``web_fetch_20260209`` server-tool dict.
 
     Generally available — no ``anthropic-beta`` header (sending a retired
@@ -533,6 +535,8 @@ def build_web_fetch_tool(*, max_uses: int) -> dict[str, Any]:
     land in the grounding partition like search citations do.
     ``allowed_callers`` pins direct invocation
     (:data:`WEB_TOOL_ALLOWED_CALLERS`).
+    ``max_content_tokens`` defaults to the research-sized page ceiling;
+    focused callers can request a smaller page budget.
     """
     return {
         "type": "web_fetch_20260209",
@@ -541,5 +545,5 @@ def build_web_fetch_tool(*, max_uses: int) -> dict[str, Any]:
         "blocked_domains": list(WEB_BLOCKED_DOMAINS),
         "max_uses": max_uses,
         "citations": {"enabled": True},
-        "max_content_tokens": WEB_FETCH_MAX_CONTENT_TOKENS,
+        "max_content_tokens": max_content_tokens,
     }

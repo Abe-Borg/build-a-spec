@@ -7,6 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from backend import settings
+from backend.qc import engine
 from backend.qc.engine import (
     QCSourceGuard,
     _lens_request_suffix,
@@ -70,6 +71,17 @@ def _manifest(section: SpecSection, guard: QCSourceGuard) -> dict:
         model=settings.QC_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
     )
+
+
+def test_verifier_page_budget_is_part_of_review_identity(monkeypatch) -> None:
+    section = _section()
+    guard = _source_guard(section)
+    manifest = _manifest(section, guard)
+    assert manifest["configuration"]["verifier_max_fetch_content_tokens"] == 5_000
+
+    monkeypatch.setattr(engine, "_VERIFIER_WEB_FETCH_MAX_CONTENT_TOKENS", 10_000)
+    changed = _manifest(section, guard)
+    assert qc_input_fingerprint(changed) != qc_input_fingerprint(manifest)
 
 
 def test_each_source_preservation_constituent_changes_full_input_identity() -> None:

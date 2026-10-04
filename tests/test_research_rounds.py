@@ -586,6 +586,8 @@ def test_a_stopped_round_is_still_tagged_with_its_round_number():
     release = threading.Event()
 
     class _Blocking:
+        count_tokens = SequencedFakeClient.count_tokens
+
         def __init__(self) -> None:
             self.messages = self
 
@@ -801,6 +803,8 @@ def test_stopping_a_later_round_discards_only_that_round():
     release = threading.Event()
 
     class _Blocking:
+        count_tokens = SequencedFakeClient.count_tokens
+
         def __init__(self) -> None:
             self.messages = self
 
@@ -886,6 +890,8 @@ def test_a_superseded_runs_late_events_never_reach_the_next_rounds_log():
     )
 
     class _BlockedSuccess:
+        count_tokens = SequencedFakeClient.count_tokens
+
         def __init__(self) -> None:
             self.messages = self
 
@@ -988,6 +994,8 @@ class _ReleaseHook:
 
 class _BlockedClient:
     """Every streaming call waits for ``release``, then fails fast."""
+
+    count_tokens = SequencedFakeClient.count_tokens
 
     def __init__(self, release: threading.Event) -> None:
         self._release = release

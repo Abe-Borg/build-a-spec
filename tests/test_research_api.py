@@ -377,6 +377,8 @@ def test_session_reset_abandons_running_research(monkeypatch):
     class _BlockingClient:
         """Blocks every dimension until released, then fails."""
 
+        count_tokens = SequencedFakeClient.count_tokens
+
         def __init__(self):
             self.messages = self
 

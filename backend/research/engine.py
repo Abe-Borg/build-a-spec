@@ -19,9 +19,10 @@ What is preserved exactly, because it is the hard-won part:
 - One synchronous streaming call per module :class:`ResearchDimension`,
   fanned out on a small thread pool, each with the project's own
   ``user_location`` on the web_search tool.
-- The ``pause_turn`` continuation loop (re-send assistant content, no
-  synthetic user turn), the 2× search-budget runaway ceiling, and the
-  fetched-PDF elision guard (:mod:`.resend_sanitizer`) on every resume.
+- The ``pause_turn`` continuation loop (re-send assistant content), the
+  2× search ceiling, cumulative fetch allowance, and fetched-PDF elision
+  guard (:mod:`.resend_sanitizer`) on every resume. Exhausted guards request
+  one submission with no web tools instead of discarding the research.
 - Structured-tool-then-tagged-JSON parsing, newest response first.
 - Accepted-vs-cited URL grounding pooled across every response in the
   dimension. Grounding proves retrieval, not truth — ungrounded items are
@@ -60,6 +61,7 @@ from ..runtime_context import (
 )
 from ..spec_modules import ResearchDimension, SpecModule
 from ..usage_ledger import usage_to_dict
+from .budget import count_request_tokens, elide_web_results, without_thinking
 from .grounding import (
     REFUSAL_KIND,
     STOP_CLASS_COMPLETE,
@@ -79,6 +81,7 @@ from .resend_sanitizer import sanitize_messages_for_resend
 from .retry_policy import (
     DEFAULT_REALTIME_RETRY_POLICY,
     RETRY_MODE_RESTART,
+    RETRY_MODE_RESUME,
     FailureClass,
     classify_exception,
     compute_backoff_seconds,
@@ -88,6 +91,7 @@ from .retry_policy import (
 from .schema import (
     RESEARCH_ACTIONABILITY_VALUES,
     RESEARCH_TOOL_NAME,
+    WEB_FETCH_MAX_CONTENT_TOKENS,
     build_web_fetch_tool,
     build_web_search_tool,
     extract_tool_use_block,
@@ -144,9 +148,18 @@ _RESEARCH_MAX_WORKERS = 4
 
 # Cap on pause_turn continuations per dimension call. Research dimensions
 # carry web_search budgets of 16–40, and the server pauses long multi-search
-# turns; sized for the heaviest dimension (~one pause per 3 searches). The
-# 2× search-budget ceiling below is the real runaway guard.
+# turns; sized for the heaviest dimension (~one pause per 3 searches).
+# At exhaustion, one additional submission-only request closes the task.
 RESEARCH_MAX_CONTINUATIONS = 16
+
+# Reserve space for server-tool growth before opening a paid stream. Fetch
+# bodies have an explicit provider cap; search results have no such knob,
+# so their allowance is conservative and a separate margin covers framing.
+_SEARCH_RESULT_RESERVE_TOKENS = 5_000
+_CONTEXT_MARGIN_TOKENS = 50_000
+# One submission-only call after a guard trips. Thinking and web tools are
+# disabled, so this is an answer allowance rather than more exploration.
+_SUBMISSION_MAX_TOKENS = 32_000
 
 # A research area whose reply ends without the output tool (the Opus 5.5
 # prompting guide's early stop: "some of those updates end the turn with text
@@ -165,6 +178,15 @@ def _missing_tool_reminder() -> str:
         f"Your turn ended without a {RESEARCH_TOOL_NAME} call, so nothing "
         f"was recorded. Call {RESEARCH_TOOL_NAME} now with your findings. "
         "Do not repeat searches you have already run."
+    )
+
+
+def _submission_instruction(reason: str) -> str:
+    return (
+        f"Research must finish now ({reason}). No more searches or fetches "
+        f"are available. Call {RESEARCH_TOOL_NAME} now with the supported "
+        "findings you have already gathered, even if coverage is partial. "
+        "Mark uncertainties in notes; do not invent missing requirements."
     )
 
 
@@ -2377,18 +2399,28 @@ def _run_dimension(
     its continuation budget can send one more request, and never once a Stop
     has landed. The reminder's response is the conversation's like any
     other: billed once, pooled for grounding, counted against the budget.
-    When the reminders run out the area fails as it always did, with the
-    count in its message.
+    Search, fetch, continuation and reminder exhaustion request one final
+    structured submission with web tools and thinking disabled. Its
+    transport retries retain the conversation, even on the last attempt.
+    No-payload/refusal/incomplete responses from that submission are terminal.
+    Each request is estimated using a supported equivalent at the provider's
+    free input-token endpoint, plus server-tool framing reserves;
+    output and tool-result reserves keep new fetches inside the context
+    window. An oversized submission elides raw web results, retaining URLs,
+    extracted findings and quoted passages; grounding and billing still
+    read the untouched original responses.
 
     Once the resend sanitizer has EDITED the conversation (a fetched PDF
     over the page limit elided, an unpaired server-tool call dropped), every
-    later request of it carries ``thinking.block_binding`` ``drop_block``
+    later research request carries ``thinking.block_binding`` ``drop_block``
     and the preserved-thinking beta (the 5.5 prompting upgrade, P55-6;
     :func:`with_drop_block`): a thinking block produced before the edit is
     bound to the prefix it saw, and on an account created on or after
     2026-08-31 replaying it would be a 400. A conversation the sanitizer
     never edited sends exactly what it always did; a restart clears the
-    flag with the rest of the conversation.
+    flag with the rest of the conversation. Submission converts readable
+    thinking notes to text and omits their signatures, so it needs no binding
+    override while thinking is disabled.
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
@@ -2478,8 +2510,8 @@ def _run_dimension(
         "output_config": {"effort": settings.RESEARCH_EFFORT},
     }
 
-    # Runaway guard: at most 2× the per-dimension search budget across
-    # continuations before the dimension is cut off.
+    # Conversation-wide allowances, enforced on the next request's tools.
+    # Reaching a ceiling requests a submission instead of discarding work.
     search_budget_ceiling = max(1, max_searches * 2)
     policy = DEFAULT_REALTIME_RETRY_POLICY
     attempts_planned = max(1, policy.max_attempts)
@@ -2527,6 +2559,15 @@ def _run_dimension(
     # account gets the invalidated blocks dropped instead of a 400. A resume
     # keeps it; a restart is a new conversation and clears it.
     thinking_edited = False
+    conversation_tools = tools
+    submission_reason = ""
+    submission_prepared = False
+
+    def _sanitize(outgoing: list[dict]) -> list[dict]:
+        nonlocal thinking_edited
+        sanitized = sanitize_messages_for_resend(outgoing)
+        thinking_edited = thinking_edited or sanitized is not outgoing
+        return sanitized
 
     for attempt in range(attempts_planned):
         if should_stop():
@@ -2543,24 +2584,127 @@ def _run_dimension(
         # retry used to.
         in_request = False
         try:
-            completed = False
             # The continuation budget is the CONVERSATION's: the opening
             # request plus RESEARCH_MAX_CONTINUATIONS continuations, however
-            # many attempts carried it. A failed request adds no response, so
-            # sending it again spends none of the budget.
-            while len(all_responses) <= RESEARCH_MAX_CONTINUATIONS:
+            # many attempts carried it, then one submission-only request. A
+            # failed request adds no response, so a resend spends no budget.
+            while True:
                 if should_stop():
                     return _failed(
                         "Cancelled by user.",
                         kind=DIMENSION_ERROR_CANCELLED,
                         responses=[*billed_responses, *all_responses],
                     )
-                # Fresh copy per request: ``request_kwargs`` stays byte-
-                # identical for the whole dimension (it leads the cached
-                # prefix), and the container rides beside it as a top-level
-                # argument — never inside the system block, the tools, or
-                # any cacheable content.
+                searches_used = sum(web_search_count(r) for r in all_responses)
+                fetches_used = sum(web_fetch_count(r) for r in all_responses)
+                if not submission_reason:
+                    if searches_used >= search_budget_ceiling:
+                        submission_reason = "web_search budget ceiling reached"
+                    elif fetches_used >= max_fetches:
+                        submission_reason = "web_fetch budget ceiling reached"
+                    elif len(all_responses) > RESEARCH_MAX_CONTINUATIONS:
+                        submission_reason = "maximum continuation allowance reached"
+
+                # Fresh copies enforce the remaining allowance without
+                # mutating the opening request or another dimension's tools.
+                # Changing max_uses rewrites the tool cache prefix when work
+                # has consumed the allowance; avoiding that rewrite must not
+                # silently renew a dimension's fetch/search allowance.
                 stream_kwargs = dict(request_kwargs)
+                if not submission_reason:
+                    request_tools = [dict(tool) for tool in tools]
+                    request_tools[0]["max_uses"] = min(
+                        max_searches, search_budget_ceiling - searches_used
+                    )
+                    request_tools[1]["max_uses"] = max_fetches - fetches_used
+                    stream_kwargs["tools"] = request_tools
+                    # Tool definitions precede thinking in the bound prefix.
+                    # Shrinking an allowance invalidates that prefix just as
+                    # a source elision does; recover before counting/sending.
+                    if all_responses and request_tools != conversation_tools:
+                        thinking_edited = True
+                    if thinking_edited:
+                        stream_kwargs = with_drop_block(stream_kwargs)
+
+                    # Count before spending. A failed counter follows the
+                    # transport retry policy, just like a stream that did
+                    # not open; it must never send an unchecked request.
+                    in_request = True
+                    input_count = count_request_tokens(client, messages, stream_kwargs)
+                    headroom = (
+                        settings.RESEARCH_CONTEXT_WINDOW - input_count - max_tokens
+                        - _CONTEXT_MARGIN_TOKENS
+                        - request_tools[0]["max_uses"] * _SEARCH_RESULT_RESERVE_TOKENS
+                    )
+                    allowed_fetches = min(
+                        request_tools[1]["max_uses"],
+                        max(0, headroom // WEB_FETCH_MAX_CONTENT_TOKENS),
+                    )
+                    if allowed_fetches < 1:
+                        submission_reason = "context window reserve reached"
+                    elif allowed_fetches != request_tools[1]["max_uses"]:
+                        request_tools[1]["max_uses"] = allowed_fetches
+                        if all_responses and request_tools != conversation_tools:
+                            thinking_edited = True
+                            stream_kwargs = with_drop_block(stream_kwargs)
+                        # The changed tool definition is part of the input.
+                        input_count = count_request_tokens(client, messages, stream_kwargs)
+                        if (
+                            input_count + max_tokens + _CONTEXT_MARGIN_TOKENS
+                            + request_tools[0]["max_uses"] * _SEARCH_RESULT_RESERVE_TOKENS
+                            + allowed_fetches * WEB_FETCH_MAX_CONTENT_TOKENS
+                            > settings.RESEARCH_CONTEXT_WINDOW
+                        ):
+                            submission_reason = "context window reserve reached"
+
+                if submission_reason:
+                    if not submission_prepared:
+                        instruction = _submission_instruction(submission_reason)
+                        if messages[-1]["role"] == "assistant":
+                            reply = missing_output_tool_reply(
+                                all_responses[-1], reminder=instruction,
+                                wrong_tool=lambda _name, text=instruction: text,
+                            )
+                        else:
+                            reply = {"role": "user", "content": [
+                                {"type": "text", "text": instruction}
+                            ]}
+                        messages = _sanitize(without_thinking([*messages, reply]))
+                        submission_prepared = True
+                        _log.info(
+                            "Research area %s requesting final submission: %s.",
+                            dimension.dimension_id, submission_reason,
+                        )
+                    stream_kwargs["tools"] = [tools[-1]]
+                    stream_kwargs["max_tokens"] = min(max_tokens, _SUBMISSION_MAX_TOKENS)
+                    stream_kwargs["thinking"] = {"type": "disabled"}
+                    stream_kwargs.pop("extra_headers", None)
+                    stream_kwargs["tool_choice"] = {
+                        "type": "tool", "name": RESEARCH_TOOL_NAME,
+                        "disable_parallel_tool_use": True,
+                    }
+                    in_request = True
+                    input_count = count_request_tokens(client, messages, stream_kwargs)
+                    input_limit = (
+                        settings.RESEARCH_CONTEXT_WINDOW - stream_kwargs["max_tokens"]
+                        - _CONTEXT_MARGIN_TOKENS
+                    )
+                    for fetch_only in (True, False):
+                        if input_count <= input_limit:
+                            break
+                        trimmed = elide_web_results(messages, fetch_only=fetch_only)
+                        if trimmed is messages:
+                            continue
+                        thinking_edited = True
+                        messages = _sanitize(trimmed)
+                        input_count = count_request_tokens(client, messages, stream_kwargs)
+                    if input_count > input_limit:
+                        return _failed(
+                            "Research submission cannot fit the context window "
+                            "even after raw source content was omitted.",
+                            kind=DIMENSION_ERROR_BUDGET,
+                            responses=[*billed_responses, *all_responses],
+                        )
                 if container_id:
                     stream_kwargs["container"] = container_id
                 if (
@@ -2582,13 +2726,18 @@ def _run_dimension(
                     stream_kwargs["cache_control"] = dict(
                         _CONTINUATION_CACHE_CONTROL
                     )
-                if thinking_edited:
+                if thinking_edited and not submission_reason:
                     # A new ``thinking`` dict and the beta header, on this
                     # request's copy only — ``request_kwargs`` stays
                     # byte-identical, and a conversation the sanitizer never
                     # edited sends exactly what it always did.
                     stream_kwargs = with_drop_block(stream_kwargs)
                 in_request = True
+                if should_stop():
+                    return _failed(
+                        "Cancelled by user.", kind=DIMENSION_ERROR_CANCELLED,
+                        responses=[*billed_responses, *all_responses],
+                    )
                 with _open_stream(
                     client, messages=messages, stream_kwargs=stream_kwargs
                 ) as (stream, carried_tail):
@@ -2605,6 +2754,7 @@ def _run_dimension(
                     response = stream.get_final_message()
                 in_request = False
                 all_responses.append(response)
+                conversation_tools = stream_kwargs["tools"]
                 _log_input_transformations(response, dimension.dimension_id)
                 if carried_tail:
                     # The tail's value check (Tier 1 finish CT-2): what this
@@ -2628,8 +2778,15 @@ def _run_dimension(
                 if stop_class == STOP_CLASS_COMPLETE:
                     payload, parse_source = _parse_research_payload(all_responses)
                     if payload is not None:
-                        completed = True
                         break
+                    if submission_reason:
+                        return _failed(
+                            "Research produced no parseable payload after final "
+                            f"submission ({submission_reason}; reminders sent: "
+                            f"{reminders_sent}).",
+                            kind=DIMENSION_ERROR_NO_PAYLOAD,
+                            responses=[*billed_responses, *all_responses],
+                        )
                     # The turn ended without the output tool (P55-4): a
                     # report, not the end of the task. Remind — never after
                     # max_tokens or a refusal (their stop classes take their
@@ -2666,9 +2823,7 @@ def _run_dimension(
                                 wrong_tool=_wrong_tool_result,
                             )
                         )
-                        sanitized = sanitize_messages_for_resend(messages)
-                        thinking_edited = thinking_edited or sanitized is not messages
-                        messages = sanitized
+                        messages = _sanitize(messages)
                         reminders_sent += 1
                         _log.info(
                             "Research area %s ended its turn without %s; "
@@ -2679,23 +2834,19 @@ def _run_dimension(
                             _MISSING_TOOL_REMINDERS,
                         )
                         continue
-                    return _failed(
-                        "Research produced no parseable payload (no tool "
-                        "call, no tagged JSON; reminders sent: "
-                        f"{reminders_sent}).",
-                        kind=DIMENSION_ERROR_NO_PAYLOAD,
-                        responses=[*billed_responses, *all_responses],
+                    messages.append({"role": "assistant", "content": response.content})
+                    submission_reason = (
+                        "missing output tool reminder allowance reached"
+                        if reminders_sent >= _MISSING_TOOL_REMINDERS
+                        else "maximum continuation allowance reached"
                     )
+                    continue
                 if stop_class == STOP_CLASS_PAUSE:
-                    total_search_so_far = sum(
-                        web_search_count(r) for r in all_responses
-                    )
-                    if total_search_so_far > search_budget_ceiling:
+                    if submission_reason:
                         return _failed(
-                            "Research exceeded the per-dimension web_search "
-                            f"budget ceiling ({total_search_so_far} > "
-                            f"{search_budget_ceiling}) without completing.",
-                            kind=DIMENSION_ERROR_BUDGET,
+                            "Research final submission remained incomplete "
+                            f"({submission_reason}; stop_reason: pause_turn).",
+                            kind=DIMENSION_ERROR_INCOMPLETE,
                             responses=[*billed_responses, *all_responses],
                         )
                     # Resume per the pause_turn contract: re-send the
@@ -2709,9 +2860,7 @@ def _run_dimension(
                     messages.append(
                         {"role": "assistant", "content": response.content}
                     )
-                    sanitized = sanitize_messages_for_resend(messages)
-                    thinking_edited = thinking_edited or sanitized is not messages
-                    messages = sanitized
+                    messages = _sanitize(messages)
                     continue
                 if stop_class == STOP_CLASS_REFUSED:
                     # A safety classifier declined the brief. Terminal by
@@ -2741,14 +2890,6 @@ def _run_dimension(
                     kind=DIMENSION_ERROR_INCOMPLETE,
                     responses=[*billed_responses, *all_responses],
                 )
-            if not completed:
-                return _failed(
-                    "Research did not complete after maximum continuation "
-                    f"attempts (max_continuations={RESEARCH_MAX_CONTINUATIONS}).",
-                    kind=DIMENSION_ERROR_INCOMPLETE,
-                    responses=[*billed_responses, *all_responses],
-                )
-
             # ``payload`` was parsed at the completing response above; a
             # completed conversation always carries one.
             items = _items_from_payload(payload, dimension.dimension_id)
@@ -2837,6 +2978,10 @@ def _run_dimension(
                 next_attempt=attempt + 1,
                 attempts=attempts_planned,
             )
+            # Once research has ended, transport retries may resend only
+            # the submission. Restarting would re-buy the work we salvaged.
+            if submission_reason:
+                mode = RETRY_MODE_RESUME
             if mode == RETRY_MODE_RESTART:
                 # A new conversation. The abandoned one's spend stays
                 # billed; its messages and its container do not carry over.
@@ -2846,6 +2991,9 @@ def _run_dimension(
                 container_id = ""
                 reminders_sent = 0
                 thinking_edited = False
+                conversation_tools = tools
+                submission_reason = ""
+                submission_prepared = False
             backoff = compute_backoff_seconds(
                 policy, attempt=attempt, failure_class=failure_class
             )

@@ -253,14 +253,15 @@ def test_pause_turn_continuation_pools_grounding_across_responses():
     assert governing_requests[1]["messages"][1]["role"] == "assistant"
 
 
-def test_search_budget_ceiling_cuts_off_runaway_dimension():
+def test_search_budget_ceiling_requests_submission_from_runaway_dimension():
     # governing_codes budget is 40 → ceiling 80. Two pauses totalling 81
-    # searches trip the guard before a third call.
+    # searches trip the guard; a third, submission-only call saves the work.
     client = SequencedFakeClient(
         _scripts(
             governing_codes=[
                 pause_response(searched_urls=["https://a.gov"], searches=41),
                 pause_response(searched_urls=["https://b.gov"], searches=40),
+                research_response(items=[_item("Retained finding.", ["https://b.gov"])]),
             ]
         )
     )
@@ -268,8 +269,8 @@ def test_search_budget_ceiling_cuts_off_runaway_dimension():
     status = next(
         s for s in profile.dimension_statuses if s.dimension_id == "governing_codes"
     )
-    assert status.status == "failed"
-    assert "budget ceiling" in status.error
+    assert status.status == "completed"
+    assert next(i for i in profile.items if i.requirement == "Retained finding.").grounded
     assert status.web_search_requests == 81
 
 
@@ -281,9 +282,9 @@ def test_incomplete_stop_reason_and_missing_payload_fail_cleanly():
             ],
             client_standards=[
                 # Completes but never calls the tool nor tagged JSON — and
-                # does it again after each of its two reminders (P55-4).
+                # does it again after two reminders and final submission.
                 research_response(items=None, searched_urls=["https://x.gov"])
-                for _ in range(3)
+                for _ in range(4)
             ],
         )
     )
@@ -1375,8 +1376,8 @@ def test_a_failed_dimension_records_a_sanitized_kind_beside_its_message():
     client = SequencedFakeClient(
         _scripts(
             governing_codes=[research_response(items=[], stop_reason="max_tokens")],
-            # A text-only reply, again after each of its two reminders.
-            client_standards=[research_response(items=None) for _ in range(3)],
+            # Text only after two reminders and the final submission too.
+            client_standards=[research_response(items=None) for _ in range(4)],
             ahj_requirements=[RuntimeError("kaput")],
         )
     )

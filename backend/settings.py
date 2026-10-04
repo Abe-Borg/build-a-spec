@@ -377,6 +377,11 @@ RESEARCH_MODEL = (
     or MODEL_SONNET_55
 )
 RESEARCH_MAX_TOKENS = _int_env("BUILD_A_SPEC_RESEARCH_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
+# Research can use a different model from the interview. Reserve against its
+# window independently; override alongside a smaller-window research model.
+RESEARCH_CONTEXT_WINDOW = _int_env(
+    "BUILD_A_SPEC_RESEARCH_CONTEXT_WINDOW", MODEL_CONTEXT_WINDOW, minimum=1
+)
 RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
 
 # --- Final QC (the pre-issue review pass, on Opus 5.5) -----------------------

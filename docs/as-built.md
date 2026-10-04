@@ -16936,3 +16936,14 @@ env knob, project-format change or version bump.
   document history, original bindings, redo, exact-original download, export,
   and re-save/reopen. A fifth case forges an unbound paragraph's inventory ID
   and confirms that the byte-derived comparison still rejects it atomically.
+- **PR #261 review correction.** A unique substring was not enough to prove
+  a saved semantic span: a forged baseline could show `Approve` for source
+  `Do not Approve`, and a preserved replacement would silently retain the
+  hidden negation. `_unique_semantic_span` now permits only whitespace and
+  one recognized typed SectionFormat label outside the editable slice.
+  Package parsing rebuilds bindings with that importer-independent rule and
+  rejects forged partial spans. Six regression cases (hidden prefix,
+  label-plus-prefix, and suffix, each attached and detached) reproduced the
+  acceptance and now reject atomically. Two additional compatibility cases
+  save typed fifth-level labels with the pre-recognition importer, then load
+  with today's: keeping or stripping a legitimate label remains supported.

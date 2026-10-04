@@ -18,7 +18,8 @@ from fastapi.testclient import TestClient
 
 from backend import sessions
 from backend.spec_doc import importer as importer_module
-from backend.spec_doc.model import iter_paragraphs
+from backend.spec_doc.model import SpecSection, iter_paragraphs
+from backend.spec_doc.source_mapping import semantic_body_projection_sha256
 from tests.conftest import settle_capability_sweep
 from backend.app import create_app
 from backend.spec_doc.source_package import inspect_docx_package
@@ -35,7 +36,7 @@ from tests.docx_fidelity_helpers import (
     rewrite_zip_members,
     sha256,
 )
-from tests.test_fifth_paragraph_level import _style_master
+from tests.test_fifth_paragraph_level import _style_master, _typed_master
 from tests.test_import_office_master import _add_style
 from tests.test_importer import _define_numbering
 
@@ -331,20 +332,33 @@ def _style_chain_master() -> bytes:
 
 
 @pytest.mark.parametrize("detached", [False, True], ids=["attached", "detached"])
-@pytest.mark.parametrize("importer_change", ["fifth-level", "style-chain"])
+@pytest.mark.parametrize(
+    "importer_change", ["fifth-level", "typed-fifth-level", "style-chain"]
+)
 def test_project_reopens_after_importer_tree_changes(
     tmp_path, monkeypatch, detached, importer_change
 ):
     """An app update must not reinterpret a saved baseline or its history."""
     client = _client()
-    source = (
-        _style_master()
-        if importer_change == "fifth-level"
-        else _style_chain_master()
-    )
+    if importer_change == "fifth-level":
+        source = _style_master()
+    elif importer_change == "typed-fifth-level":
+        source = _typed_master(lines=(
+            "A. Sprinklers:",
+            "1. Quick-response, standard coverage:",
+            "a. Pendent:",
+            "1) Finish:",
+            "a) Chrome plated.",
+        ))
+    else:
+        source = _style_chain_master()
     with monkeypatch.context() as old_importer:
-        if importer_change == "fifth-level":
+        if importer_change in {"fifth-level", "typed-fifth-level"}:
             old_importer.setattr(importer_module, "MAX_PARAGRAPH_DEPTH", 4)
+            if importer_change == "typed-fifth-level":
+                old_importer.setattr(
+                    importer_module, "_LEVEL_RES", importer_module._LEVEL_RES[:4]
+                )
         else:
             old_importer.setattr(
                 importer_module, "_load_style_numbering", lambda _doc: {}
@@ -356,7 +370,7 @@ def test_project_reopens_after_importer_tree_changes(
         target_uid = next(
             paragraph.uid
             for _part, _article, paragraph, _depth, _ref in iter_paragraphs(baseline)
-            if paragraph.text == "Chrome plated."
+            if paragraph.text in {"Chrome plated.", "a) Chrome plated."}
         )
         edited = client.post(
             "/api/doc/edit",
@@ -717,6 +731,54 @@ def test_project_load_still_checks_unbound_source_body_inventory(tmp_path):
     tampered = _rebuild_consistent_outer(package, project=project)
     rejected = _assert_rejected_load_is_atomic(client, tampered, source)
     assert "source map does not match a fresh parse" in rejected.json()["error"]
+
+
+@pytest.mark.parametrize("detached", [False, True], ids=["attached", "detached"])
+@pytest.mark.parametrize("source_text", [
+    "Do not Approve",
+    "A. Do not Approve",
+    "Approve only after inspection",
+])
+def test_recomputed_hashes_cannot_hide_words_outside_the_saved_span(
+    detached, source_text
+):
+    """A unique substring is not necessarily the complete source provision."""
+    client = _client()
+    document = Document()
+    for line in (
+        "SECTION 21 13 13",
+        "WET-PIPE SPRINKLER SYSTEMS",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+        source_text,
+        "END OF SECTION",
+    ):
+        document.add_paragraph(line)
+    output = io.BytesIO()
+    document.save(output)
+    source = output.getvalue()
+    _import_master(client, source)
+    saved = client.get("/api/project/save")
+    assert saved.status_code == 200, saved.text
+    project = json.loads(_outer_parts(saved.content)[PROJECT_ENTRY])
+    project["doc"]["source_detached"] = detached
+
+    # Forge both the baseline and binding, then recompute every integrity
+    # hash. They remain self-consistent while hiding a qualifier or negation
+    # that a source-preserving edit would leave behind in the Word paragraph.
+    baseline_index = project["doc"]["baseline_index"]
+    baseline = project["doc"]["versions"][baseline_index]
+    baseline["parts"][0]["articles"][0]["paragraphs"][0]["text"] = "Approve"
+    binding = project["source_map"]["bindings"]["pt1.a1.p1"]
+    binding["baseline_text"] = "Approve"
+    span = binding["text_span"]
+    span["start"] = source_text.index("Approve")
+    span["end"] = span["start"] + len("Approve")
+    project["source_map"]["baseline_projection_sha256"] = (
+        semantic_body_projection_sha256(SpecSection.from_dict(baseline))
+    )
+    tampered = _rebuild_consistent_outer(saved.content, project=project)
+    _assert_rejected_load_is_atomic(client, tampered, source)
 
 
 def test_recomputed_hashes_do_not_bypass_inner_docx_safety(tmp_path):

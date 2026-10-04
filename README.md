@@ -59,7 +59,10 @@ Saved `.baspec` projects keep their imported tree and undo/redo history when
 reopened after importer changes to nesting or style recognition. Loading checks
 the retained Word bytes, body inventory, and saved paragraph bindings against
 the saved baseline; it does not require that baseline to equal a new import.
-The exact original remains downloadable, and attached projects still validate
+Editable spans must cover the whole source provision apart from a recognized
+typed paragraph label and surrounding whitespace, so a modified project cannot
+hide words that preserved export would silently retain. The exact original
+remains downloadable, and attached projects still validate
 every retained source-backed version before allowing preserved export.
 
 Full Strict OOXML semantic import is a current compatibility limitation. The

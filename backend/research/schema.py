@@ -13,12 +13,14 @@ Conventions preserved from the source:
 - ``strict: true`` is attached only for models known to support structured
   outputs (a misconfigured model override degrades to a lenient tool, never
   an API rejection).
-- Research sends NO ``tool_choice``. The system prompt instructs the model
-  to end its turn with the research tool; the tagged-JSON fallback stays
-  reachable for text detours. (Forcing one was impossible while the web
-  tools ran dynamic filtering, which rejects a forcing/parallel-disable
-  ``tool_choice``; ``WEB_TOOL_ALLOWED_CALLERS`` lifts that constraint, but
-  the behavior is deliberately unchanged — see below.)
+- Research's web-tooled requests send NO ``tool_choice``. The system prompt
+  instructs the model to end its turn with the research tool; the
+  tagged-JSON fallback stays reachable for text detours. (Forcing one was
+  impossible while the web tools ran dynamic filtering, which rejects a
+  forcing/parallel-disable ``tool_choice``; ``WEB_TOOL_ALLOWED_CALLERS``
+  lifts that constraint, but the behavior is deliberately unchanged — see
+  below.) Only the final submission, which declares the output tool alone,
+  forces it, and only on the models :func:`single_output_tool_kwargs` lists.
 
 Both web server tools declare ``allowed_callers: ["direct"]`` — see
 :data:`WEB_TOOL_ALLOWED_CALLERS` for why that is not the default and what
@@ -176,12 +178,51 @@ _FORCED_OUTPUT_TOOL_MODELS = frozenset(
 def single_output_tool_kwargs(*, model: str, tool_name: str) -> dict[str, Any]:
     """Claude API options for an adaptive-thinking call with one output tool.
 
-    Use only for single-shot extraction, never a multi-round tool workflow.
-    An unverified or incompatible model gets no extra request field.
+    Use only for single-shot extraction, or for a final request that
+    declares the output tool alone (research's submission, whose thinking
+    :func:`lowest_thinking` sets) — never for a request that also offers
+    other tools. An unverified or incompatible model gets no extra request
+    field: it runs on automatic choice, so its caller must check that the
+    call was made.
     """
     if model not in _FORCED_OUTPUT_TOOL_MODELS:
         return {}
     return {"tool_choice": {"type": "tool", "name": tool_name}}
+
+
+# The lowest thinking setting each model accepts, for a request that only
+# writes up work already done (research's final submission). Anthropic's
+# reference: Sonnet 5.5 rejects ``{"type": "disabled"}`` with a 400 and
+# offers ``{"type": "between_tools"}`` instead, at effort ``high`` or below
+# and with no other field inside ``thinking``; no other model accepts
+# ``between_tools``. Sonnet 5 and Opus 4.8 accept ``disabled``, Opus 5 only
+# at effort ``high`` or below. Opus 5.5 and Fable reject both, as does
+# anything unlisted here, which keeps the adaptive thinking the conversation
+# already ran on — the one setting the model is known to accept.
+_THINKING_OFF_EFFORTS = frozenset({"low", "medium", "high"})
+_BETWEEN_TOOLS_MODELS = frozenset({settings.MODEL_SONNET_55})
+_DISABLED_THINKING_MODELS = frozenset({settings.MODEL_SONNET_5, settings.MODEL_OPUS_48})
+_DISABLED_THINKING_AT_HIGH_OR_BELOW = frozenset({settings.MODEL_OPUS_5})
+
+
+def lowest_thinking(*, model: str, effort: str) -> dict[str, str]:
+    """The cheapest ``thinking`` value ``model`` accepts at ``effort``.
+
+    ``{"type": "between_tools"}`` on Sonnet 5.5, ``{"type": "disabled"}``
+    where the model still takes it, otherwise ``{"type": "adaptive"}``. A
+    new dict each call. ``adaptive`` means thinking stays on: the caller
+    must then send the conversation's thinking blocks back unchanged, and
+    ask for invalidated ones to be dropped (:func:`with_drop_block`) when it
+    changed the prefix. Neither of the other two may carry ``block_binding``.
+    """
+    if effort in _THINKING_OFF_EFFORTS and model in _BETWEEN_TOOLS_MODELS:
+        return {"type": "between_tools"}
+    if model in _DISABLED_THINKING_MODELS or (
+        effort in _THINKING_OFF_EFFORTS
+        and model in _DISABLED_THINKING_AT_HIGH_OR_BELOW
+    ):
+        return {"type": "disabled"}
+    return {"type": "adaptive"}
 
 
 def requirements_research_tool(*, model: str | None = None) -> dict[str, Any]:

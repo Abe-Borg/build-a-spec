@@ -107,9 +107,12 @@ def _field(node: Any, name: str) -> Any:
 def without_thinking(messages: list[dict]) -> list[dict]:
     """Convert visible research notes to text; omit signed/redacted blocks.
 
-    Submission disables thinking and changes the tools, so signed thinking
-    cannot be replayed under its original prefix. Keep its readable notes
-    as ordinary input rather than throwing away extracted research.
+    A submission that turns thinking off (``disabled``, or ``between_tools``
+    on Sonnet 5.5, which takes no ``block_binding``) also changes the tools,
+    so signed thinking cannot be replayed under its original prefix. Keep
+    its readable notes as ordinary input rather than throwing away extracted
+    research. A submission that must keep adaptive thinking never calls
+    this: it replays every block unchanged under ``drop_block``.
     """
     result = list(messages)
     edited = False
@@ -140,7 +143,9 @@ def elide_web_results(messages: list[dict], *, fetch_only: bool) -> list[dict]:
     """Replace raw web results with URL/title notes, preserving other blocks.
 
     The caller runs the resend sanitizer afterwards to drop server calls
-    whose results became notes. Submission has already converted thinking.
+    whose results became notes. Thinking blocks pass through untouched: a
+    submission that turned thinking off has already converted them, and one
+    that kept adaptive thinking carries ``drop_block`` for this edit.
     Originals are never mutated: grounding still reads their full evidence.
     """
     kinds = {"web_fetch_tool_result"}

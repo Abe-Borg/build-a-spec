@@ -41,10 +41,10 @@ class _CountedClient(SequencedFakeClient):
         return SimpleNamespace(input_tokens=value)
 
 
-def _run(client, *, max_tokens=4096, **kwargs):
+def _run(client, *, max_tokens=4096, model="claude-sonnet-5", **kwargs):
     return engine._run_dimension(
         client, module=HYPERSCALE_FIRE, profile=PROFILE, dimension=_DIMENSION,
-        model="claude-sonnet-5", max_tokens=max_tokens, **kwargs,
+        model=model, max_tokens=max_tokens, **kwargs,
     )
 
 
@@ -334,3 +334,254 @@ def test_a_submission_transport_failure_resumes_even_on_the_final_attempt(monkey
     assert len(client.requests) == 4
     for key in ("messages", "tools", "thinking", "tool_choice"):
         assert client.requests[1][key] == client.requests[2][key] == client.requests[3][key]
+
+
+# ---------------------------------------------------------------------------
+# The submission request is shaped per model (Sonnet 5.5 rejects disabled
+# thinking and a forced tool_choice with HTTP 400; the fakes now reject both).
+# ---------------------------------------------------------------------------
+
+_SONNET_55 = settings.MODEL_SONNET_55
+_OPUS_55 = settings.MODEL_OPUS_55
+
+
+def _guard_turns(guard):
+    """The responses that trip one guard and leave a submission to send."""
+    if guard == "search":
+        return [research_response(
+            items=None, searched_urls=[_URL], searches=80,
+            stop_reason="pause_turn", tokens={"input": 100, "output": 10},
+        )]
+    if guard == "fetch":
+        return [research_response(
+            items=None, extra_blocks=fetch_blocks(_URL), fetches=12,
+            stop_reason="pause_turn", tokens={"input": 100, "output": 10},
+        )]
+    return [research_response(
+        items=None, searched_urls=[_URL],
+        stop_reason="pause_turn" if guard == "continuation" else "end_turn",
+        tokens={"input": 100, "output": 10},
+    ) for _ in range(3)]
+
+
+def _signed_thinking(text="The authority adopted the 2021 code."):
+    return SimpleNamespace(type="thinking", thinking=text, signature="signed-sig")
+
+
+def _text_only(text="I have finished researching.", **kwargs):
+    return research_response(
+        items=None, extra_blocks=[text_block(text)], stop_reason="end_turn", **kwargs,
+    )
+
+
+def test_research_defaults_to_the_model_this_path_must_serve():
+    # The regression below is about the shipped default, not a fixture.
+    assert settings.RESEARCH_MODEL == _SONNET_55
+    assert settings.RESEARCH_EFFORT in {"low", "medium", "high"}
+
+
+@pytest.mark.parametrize("guard", ["search", "fetch", "continuation", "reminder"])
+def test_default_model_submission_is_a_request_sonnet_55_accepts(guard, monkeypatch):
+    monkeypatch.setattr(engine, "RESEARCH_MAX_CONTINUATIONS", 2)
+    turns = _guard_turns(guard)
+    client = _CountedClient([*turns, _final()])
+    result = _run(client, model=settings.RESEARCH_MODEL, continuation_cache=True)
+
+    assert result.status.status == "completed", result.status.error
+    assert result.items[0].grounded
+    assert result.status.input_tokens == 100 * len(turns) + 700
+    assert len(client.requests) == len(turns) + 1
+    submission = client.requests[-1]
+    assert [tool["name"] for tool in submission["tools"]] == [RESEARCH_TOOL_NAME]
+    # Neither 400 shape: the lowest thinking setting Sonnet 5.5 has, alone in
+    # its dict, and automatic tool choice (no tool_choice key at all).
+    assert submission["thinking"] == {"type": "between_tools"}
+    assert "tool_choice" not in submission
+    assert "extra_headers" not in submission
+    assert submission["max_tokens"] == 4096
+    assert "No more searches or fetches" in str(submission["messages"][-1])
+    # The token counter saw the same shape the stream did.
+    counted = client.count_requests[-1]
+    assert counted["thinking"] == {"type": "between_tools"}
+    assert "tool_choice" not in counted
+
+
+@pytest.mark.parametrize(("model", "thinking", "forced"), [
+    ("claude-sonnet-5", {"type": "disabled"}, True),
+    ("claude-opus-5", {"type": "disabled"}, True),
+    ("claude-opus-4-8", {"type": "disabled"}, False),
+    (_SONNET_55, {"type": "between_tools"}, False),
+])
+def test_submission_thinking_and_tool_choice_follow_the_model(model, thinking, forced):
+    client = _CountedClient([pause_response(searched_urls=[_URL], searches=80), _final()])
+    assert _run(client, model=model).status.status == "completed"
+    submission = client.requests[-1]
+    assert submission["thinking"] == thinking
+    if forced:
+        assert submission["tool_choice"] == {
+            "type": "tool", "name": RESEARCH_TOOL_NAME, "disable_parallel_tool_use": True,
+        }
+    else:
+        assert "tool_choice" not in submission
+
+
+def test_sonnet_55_submission_converts_thinking_to_notes_without_signatures():
+    paused = research_response(
+        items=None, searched_urls=[_URL], searches=80, stop_reason="pause_turn",
+        extra_blocks=[_signed_thinking()],
+    )
+    client = _CountedClient([paused, _final()])
+    assert _run(client, model=_SONNET_55).status.status == "completed"
+    outgoing = client.requests[-1]["messages"]
+    assert "The authority adopted the 2021 code." in str(outgoing)
+    assert "signed-sig" not in str(outgoing)
+    assert not any(
+        getattr(block, "type", None) == "thinking"
+        or (isinstance(block, dict) and block.get("type") == "thinking")
+        for message in outgoing if isinstance(message["content"], list)
+        for block in message["content"]
+    )
+
+
+@pytest.mark.parametrize(("model", "effort"), [(_OPUS_55, "medium"), (_SONNET_55, "xhigh")])
+def test_submission_that_cannot_turn_thinking_off_replays_blocks_under_drop_block(
+    model, effort, monkeypatch,
+):
+    # Opus 5.5 accepts neither disabled nor between_tools; Sonnet 5.5 rejects
+    # between_tools above high. Adaptive thinking stays on, every thinking
+    # block goes back unchanged, and drop_block covers the tool change.
+    from backend.research.schema import PRESERVED_THINKING_BETA
+
+    monkeypatch.setattr(settings, "RESEARCH_EFFORT", effort)
+    thinking = _signed_thinking()
+    paused = research_response(
+        items=None, searched_urls=[_URL], searches=80, stop_reason="pause_turn",
+        extra_blocks=[thinking],
+    )
+    client = _CountedClient([paused, _final()])
+    assert _run(client, model=model).status.status == "completed"
+    submission = client.requests[-1]
+    assert [tool["name"] for tool in submission["tools"]] == [RESEARCH_TOOL_NAME]
+    assert submission["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+    }
+    assert PRESERVED_THINKING_BETA in submission["extra_headers"]["anthropic-beta"]
+    assert "tool_choice" not in submission
+    assert submission["output_config"] == {"effort": effort}
+    replayed = [
+        block for message in submission["messages"]
+        if message["role"] == "assistant" for block in message["content"]
+    ]
+    assert any(block is thinking for block in replayed)
+    assert "[Earlier research notes]" not in str(submission["messages"])
+
+
+def test_unforced_submission_that_records_nothing_is_asked_once_more():
+    first_reply = research_response(
+        items=None, stop_reason="end_turn",
+        extra_blocks=[_signed_thinking("Progress note"), text_block("Done researching.")],
+        tokens={"input": 50},
+    )
+    client = _CountedClient([
+        pause_response(searched_urls=[_URL], searches=80), first_reply, _final(),
+    ])
+    result = _run(client, model=_SONNET_55)
+
+    assert result.status.status == "completed", result.status.error
+    assert result.items[0].grounded
+    assert len(client.requests) == 3
+    first, resend = client.requests[1], client.requests[2]
+    for key in ("tools", "thinking", "max_tokens", "system"):
+        assert resend[key] == first[key]
+    assert "tool_choice" not in resend
+    # Append-only: the first submission's messages, its reply, the request.
+    assert resend["messages"][: len(first["messages"])] == first["messages"]
+    assert resend["messages"][-2]["role"] == "assistant"
+    assert "Done researching." in str(resend["messages"][-2])
+    assert "No more searches or fetches" in str(resend["messages"][-1])
+    # Thinking stays off, so the reply's signed block becomes a note.
+    assert "Progress note" in str(resend["messages"])
+    assert "signed-sig" not in str(resend["messages"])
+
+
+def test_unforced_submission_answers_an_invented_tool_on_its_resend():
+    invented = research_response(
+        items=None, stop_reason="tool_use",
+        extra_blocks=[tool_use_block("wrong_id", "Submit_Research_Findings", {})],
+    )
+    client = _CountedClient([
+        pause_response(searched_urls=[_URL], searches=80), invented, _final(),
+    ])
+    assert _run(client, model=_SONNET_55).status.status == "completed"
+    reply = client.requests[-1]["messages"][-1]["content"]
+    assert len(reply) == 1
+    assert reply[0]["type"] == "tool_result" and reply[0]["is_error"]
+    assert reply[0]["tool_use_id"] == "wrong_id"
+    assert "No more searches or fetches" in reply[0]["content"]
+
+
+def test_unforced_submission_fails_after_its_one_resend_and_keeps_the_bill():
+    client = _CountedClient([
+        pause_response(searched_urls=[_URL], searches=80),
+        _text_only(tokens={"input": 321}),
+        _text_only(tokens={"input": 123}),
+        _final(),
+    ])
+    result = _run(client, model=_SONNET_55)
+    assert result.status.status == "failed"
+    assert result.status.error_kind == engine.DIMENSION_ERROR_NO_PAYLOAD
+    assert result.status.input_tokens == 321 + 123
+    assert len(client.requests) == 1 + 1 + engine._SUBMISSION_RESENDS
+
+
+def test_tagged_json_fallback_satisfies_an_unforced_submission_without_a_resend():
+    import json
+
+    payload = {"summary": "", "items": [_item("The adopted code governs.", [_URL])]}
+    tagged = f"<{engine._RESEARCH_JSON_TAG}>{json.dumps(payload)}</{engine._RESEARCH_JSON_TAG}>"
+    client = _CountedClient([
+        pause_response(searched_urls=[_URL], searches=80), _text_only(tagged), _final(),
+    ])
+    result = _run(client, model=_SONNET_55)
+    assert result.status.status == "completed", result.status.error
+    assert result.parse_source == "text_fallback"
+    assert len(client.requests) == 2
+
+
+@pytest.mark.parametrize("stop_reason", ["pause_turn", "max_tokens", "refusal"])
+def test_unforced_submission_stays_terminal_on_unfinished_replies(stop_reason):
+    client = _CountedClient([
+        pause_response(searched_urls=[_URL], searches=80),
+        research_response(items=None, stop_reason=stop_reason, tokens={"input": 321}),
+        _final(),
+    ])
+    result = _run(client, model=_SONNET_55)
+    assert result.status.status == "failed"
+    assert len(client.requests) == 2
+
+
+def test_forced_submission_gets_no_resend():
+    client = _CountedClient([
+        pause_response(searched_urls=[_URL], searches=80), _text_only(), _final(),
+    ])
+    result = _run(client, model="claude-sonnet-5")
+    assert result.status.error_kind == engine.DIMENSION_ERROR_NO_PAYLOAD
+    assert len(client.requests) == 2
+
+
+def test_a_resend_transport_failure_resumes_the_resend(monkeypatch):
+    import anthropic
+    import httpx
+
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+    reset = anthropic.APIConnectionError(
+        message="reset", request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    client = _CountedClient([
+        pause_response(searched_urls=[_URL], searches=80), _text_only(), reset, _final(),
+    ])
+    result = _run(client, model=_SONNET_55)
+    assert result.status.status == "completed", result.status.error
+    assert len(client.requests) == 4
+    assert client.requests[2]["messages"] == client.requests[3]["messages"]

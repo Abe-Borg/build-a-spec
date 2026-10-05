@@ -17321,3 +17321,147 @@ release note and CLAUDE.md now explicitly describe tour retention.
 Validation: `npm test` passed all 49 test files, including 15 harvest
 lifecycle checks; `npm run build`, Ruff, release version consistency and
 `git diff --check` passed. No paid API call or live canary was run.
+
+## Research's final submission is shaped per model — implemented notes (2026-10-05)
+
+"Research guards request a final submission (2026-10-04)" sends one
+submission-only request when a research area trips a guard (search ceiling,
+fetch allowance, continuation cap, context reserve, or two ignored
+reminders). That request hard-coded `thinking: {"type": "disabled"}` and
+`tool_choice: {"type": "tool", "name": "submit_requirements_research",
+"disable_parallel_tool_use": true}`. The research default is
+`claude-sonnet-5-5`, and Anthropic's current reference says Sonnet 5.5 (and
+Opus 5.5) answers both with HTTP 400 `invalid_request_error`:
+
+- `"thinking.type.disabled" is not supported for this model. Use
+  "thinking.type.between_tools" for the lowest thinking setting, or
+  "thinking.type.adaptive" and "output_config.effort" to control thinking
+  behavior.`
+- `tool_choice: type "tool" and "any" are not supported for this model.`
+
+A 400 is non-retryable, so on the default model every area that tripped a
+guard failed at the finish line after all of its searches, fetches and
+thinking were billed, and the round reported it as failed. The path landed
+after `v1.22.1` (published 2026-10-02) and before any later release, so no
+shipped build carried it. The suite missed it because the fakes accepted
+any request dict and `tests/test_research_budget.py` drove the path on
+`claude-sonnet-5` only. The other single-shot calls already knew both rules
+("Single-shot outputs finish before they are accepted"); the submission
+predated research's move to Sonnet 5.5 and never got the same treatment.
+
+**Thinking.** `research.schema.lowest_thinking(model, effort)` returns the
+lowest setting the model accepts, beside `single_output_tool_kwargs`:
+
+| Model | Effort | Submission `thinking` | Replayed thinking blocks |
+|---|---|---|---|
+| `claude-sonnet-5-5` | `low`–`high` (default `medium`) | `{"type": "between_tools"}` | converted to text notes; signatures omitted |
+| `claude-sonnet-5`, `claude-opus-4-8` | any | `{"type": "disabled"}` | converted, as before |
+| `claude-opus-5` | `low`–`high` | `{"type": "disabled"}` | converted, as before |
+| `claude-opus-5-5`, `claude-fable-5`, unknown overrides; Sonnet 5.5 or Opus 5 above `high` | any | `{"type": "adaptive"}` + `drop_block` | sent back unchanged |
+
+`between_tools` is Sonnet 5.5's documented lowest setting: no extended
+thinking, no beta header, accepted at effort `high` or below, and nothing
+else may sit inside `thinking` with it (`display`, `budget_tokens` or
+`block_binding` beside it is a 400). The beta-header removal therefore
+stays. Because `block_binding` works only with adaptive thinking, the
+thinking-off submissions keep `budget.without_thinking` (the migration
+guide's "strip the thinking blocks from the edited turn on"). Opus 5.5 has
+neither off setting, so its submission keeps adaptive thinking, passes the
+final assistant turn's thinking blocks back unchanged (an adaptive request
+continuing a turn that made tool calls needs them), and always carries
+`research.schema.with_drop_block`: removing the web tools edits the prefix
+every replayed block was bound to. An unknown override gets the same
+adaptive posture, the one setting every earlier request of its conversation
+already proved it accepts. Adaptive's effort stays the conversation's.
+
+**Tool choice.** The submission now calls `single_output_tool_kwargs`
+(forced only on `claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`) and
+keeps `disable_parallel_tool_use` only when forcing. Everywhere else the
+request carries no `tool_choice`: one strict output tool, automatic choice
+and the existing "Research must finish now … call
+submit_requirements_research now" instruction, as the fact harvest already
+works. Automatic choice does not guarantee a call, so a completed submission
+reply carrying neither the tool call nor the tagged-JSON fallback the parser
+already accepts gets `engine._SUBMISSION_RESENDS` (1) more submission
+request: the reply is appended unchanged, then the same instruction as a
+text turn (or one `is_error` result per call to any other name), the
+thinking-off path converting the reply's own progress-update thinking blocks
+to notes again. The top of the loop re-counts and re-elides before it is
+sent; a Stop is honoured there. If that also records nothing, the area
+fails exactly as before (`no_payload`). A pause, refusal or truncated reply
+stays terminal, a forced submission gets no resend, and a transport failure
+resumes the resend like any submission request.
+
+Everything else about the submission is unchanged: the single output tool,
+the 32k output cap, the context-fit loop that elides raw web results, the
+budget-ceiling failure, original responses grounding citations and metering
+usage, and transport retries never restarting the research.
+
+**The fakes now refuse what the provider refuses.** `tests/fakes.py`
+gains `request_shape_problems(request)`, a pure per-model oracle written
+from Anthropic's documentation with literal model ids (never the app's own
+capability tables, which would let a wrong table vouch for itself). It
+rejects: disabled thinking on Sonnet 5.5, Opus 5.5, Fable 5 and Fable 5.1,
+and on Opus 5 above effort `high`; a forced `tool_choice` (`tool`/`any`)
+on Sonnet 5.5, Opus 5.5 and Fable 5.1; `between_tools` on any other model,
+beside any other `thinking` field, or above effort `high`; a manual
+thinking budget (`type: "enabled"` or `budget_tokens`) anywhere; and
+`block_binding` on non-adaptive thinking or without the
+`thinking-binding-controls-2026-08-01` beta. Every request a fake receives
+runs through it: `FakeClient`, `SequencedFakeClient.stream`, `count_tokens`
+and `pop_turn` (so batches, where a refused seat becomes an
+`invalid_request_error` result line), and — through `__init_subclass__` —
+any subclass's own `stream`/`count_tokens`/`pop_turn` override. A refused
+shape raises the API's `BadRequestError` and is recorded; an autouse
+fixture in `tests/conftest.py` fails the test that sent it even when the
+code under test swallowed the 400, which research does by turning it into a
+failed area.
+
+Three existing tests had been driving the submission on Sonnet 5.5 all
+along (`test_prompt55_missing_tool_reminder.py`'s research harness and the
+failing-area fixture in `test_research_cost_profile.py`). They passed only
+because the fake accepted the refused request; their request counts now
+include the one resend.
+
+**Release-note draft for the next release** (with the research-effort
+draft in CLAUDE.md; `v1.22.1` is published and there is no newer entry, so
+nothing was added to `backend/release_notes.py` and the version stays
+`1.22.1`): "Research keeps what it found when it hits a limit. When a
+research area reaches its search, source or length limit, it now hands in
+the findings it has already gathered instead of discarding them, and it
+does so in a way Claude Sonnet 5.5 accepts."
+
+**Errata.**
+- "Research guards request a final submission (2026-10-04)" says the
+  submission disables thinking and forces the output tool. That is now true
+  only on the models in the table and list above.
+- "Single-shot outputs finish before they are accepted" says only the
+  harvest and template pass call `single_output_tool_kwargs` and that
+  research keeps its existing selection policy. Research's final submission
+  now calls it too; its web-tooled requests still send no `tool_choice`.
+- `backend/settings.py`'s adaptive-thinking comment still said research
+  defaults to `high`; it now says `medium` and points at `lowest_thinking`.
+
+**Not measured.** No paid request was made. Whether Sonnet 5.5 calls the
+tool on automatic choice as reliably as the forced Sonnet 5 submission did,
+and what `between_tools` saves against adaptive thinking here, are
+unmeasured. The request shapes are checked against the documented rules
+only, not a live provider.
+
+**Validation.** Untouched HEAD: 3576 passed, 64 skipped. With this change:
+3682 passed, 64 skipped (106 new: 21 submission regressions in
+`tests/test_research_budget.py`, 85 in the new
+`tests/test_fake_request_validator.py` covering the oracle's accepted and
+refused shapes, its wiring into every fake and a subclass override, a
+batch seat, and every submission shape production can build across all
+app models and effort levels). Ruff and `git diff --check` passed.
+
+Reversion evidence, each run against the two files above and restored:
+the original `engine.py` (17 failed, 16 more errored at teardown — including
+the unfinished-reply tests, whose own assertions passed because the refused
+400 also "failed" the area, the case the conftest check exists for); no
+resend (4 failed); no `drop_block` on the adaptive submission (2 failed);
+stripping thinking on the adaptive submission too (2 failed); a resend that
+keeps the reply's signed thinking (1 failed); `disable_parallel_tool_use`
+sent on automatic choice (12 failed). Before the engine fix, a Sonnet 5.5
+guard reproduction failed with `invalid_request` and both 400 messages.

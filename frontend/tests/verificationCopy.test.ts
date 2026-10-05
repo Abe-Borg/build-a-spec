@@ -45,6 +45,17 @@ const standard = panelDefault("QC_VERIFIERS_STANDARD");
 // JSX wraps prose across lines; compare on folded whitespace.
 const fold = (text: string) => text.replace(/\s+/g, " ");
 
+test("warm-lead copy states the shipped eight-seat minimum and scoped switch-off", () => {
+  const engine = readFileSync(new URL("../../backend/qc/engine.py", import.meta.url), "utf8");
+  const readme = fold(readFileSync(new URL("../../README.md", import.meta.url), "utf8"));
+  assert.match(engine, /^_WARM_LEAD_MIN_SEATS_WEB = 8$/m);
+  assert.match(engine, /^_WARM_LEAD_MIN_SEATS_NO_WEB = 8$/m);
+  assert.match(fold(dossier), /When eight or more seats read the same copy/);
+  assert.match(fold(dossier), /8–19 seats or 20 or more.*other groups keep their leads/);
+  assert.match(readme, /groups has at least 8 reviewers/);
+  assert.match(readme, /Other cohorts keep their leads/);
+});
+
 const SITES: Array<[string, string]> = [
   ["HelpModal", help],
   ["TrustDeepDiveModal", dossier],

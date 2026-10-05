@@ -31,7 +31,7 @@ request's exact saving or an upper bound on it, so the rule latches only on
 a proven loss.
 
 The third is the **warm lead's check** (session WL-1). The warm lead streams
-one seat of a large cache lineage of Final QC's batched verifier seats FIRST,
+one seat of an eligible cache lineage of Final QC's batched verifier seats FIRST,
 at list price, and submits the batch only after that seat's first output, so
 the batch can read the 1-hour entry the lead wrote instead of each seat
 writing its own (``settings.QC_BATCH_WARM_LEAD``). Whether a batch request
@@ -42,11 +42,13 @@ reported (the Chunk 3 plan's Appendix B): h₁, the share of the measured
 batched seats whose first iteration read the shared prefix; p, the prefix;
 C, what the lead cost; and h₀*, the break-even — the lead paid for itself if
 and only if the batch, without it, would have read less than h₀* of the
-prefix. Two rules can switch the lead off for the rest of the app session:
+prefix. Two rules can switch its model/tool/size cohort off until restart:
 ``not_read`` when h₁ is below one half (a lead the batch reads lifts h₁ close
 to 1, because every seat was submitted after the lead's entry was readable),
 and ``unprofitable`` when h₀* is at most zero (the lead cost more than it
 could have saved even if the batch alone would have read nothing).
+The cohorts are 8–19 and 20+ seats, separately for each model and tool kind;
+a losing small lineage must not disable leads on large lineages.
 
 There is deliberately **no rule on h₀* above zero.** h₀ — what the batch
 would have read without the lead — is never observed: every run that sends a
@@ -699,7 +701,9 @@ class WarmLeadLineage:
       earlier batched seat stored rather than the lead's;
     - ``warm`` — whether the batch went out after the lead's entry was
       readable: the lead's first output arrived before the wait ended and
-      none of its requests failed. When it did not, the batch had no copy of
+      none of its requests failed, and the opening response was answered
+      by the requested model.
+      When it did not, the batch had no proven copy of
       the lead's to read, and the lineage says nothing about the lead.
     """
 
@@ -713,9 +717,9 @@ class WarmLeadLineage:
 
 @dataclass
 class _WarmLeadState:
-    """The warm lead's latch, and the last check, for diagnostics."""
+    """Process-local latches by (model, tool kind, size cohort)."""
 
-    latch: _Latch = field(default_factory=_Latch)
+    latches: dict[tuple[str, str, str], _Latch] = field(default_factory=dict)
     last_check: dict[str, Any] | None = None
 
 
@@ -739,11 +743,20 @@ class _LineageJudgment:
 
 _warm_lead = _WarmLeadState()
 
+# Keep the newly eligible small lineages apart from the previously eligible
+# large ones. An expensive small lead cannot establish that a large one loses,
+# nor can a cache miss on one model/tool shape establish it for another.
+WARM_LEAD_LARGE_MIN_SEATS = 20
 
-def warm_lead_enabled() -> bool:
-    """False once a check has switched the warm lead off.
 
-    Read once per batched verifier phase, after the switch
+def _warm_lead_scope(model: str, kind: str, seats: int) -> tuple[str, str, str]:
+    return model, kind, "8-19" if seats < WARM_LEAD_LARGE_MIN_SEATS else "20+"
+
+
+def warm_lead_enabled(*, model: str, kind: str, seats: int) -> bool:
+    """False once a check has switched this lineage's cohort off.
+
+    Read once per candidate lineage in a batched verifier phase, after the switch
     (``settings.QC_BATCH_WARM_LEAD``, pinned per Final QC run): the switch
     decides whether a lead is wanted, and this can only take it away, from
     the next phase on. Never raises; if the check itself fails it answers
@@ -751,16 +764,19 @@ def warm_lead_enabled() -> bool:
     """
     try:
         with _lock:
-            return not _warm_lead.latch.reason
+            latch = _warm_lead.latches.get(_warm_lead_scope(model, kind, seats))
+            return latch is None or not latch.reason
     except Exception:  # noqa: BLE001 — a check never fails a request
         _log.debug("warm lead check failed", exc_info=True)
         return True
 
 
-def disable_warm_lead(*, reason: str, detail: str = "") -> None:
-    """Switch the warm lead off until the app restarts.
+def disable_warm_lead(
+    *, model: str, kind: str, seats: int, reason: str, detail: str = ""
+) -> None:
+    """Switch one model/tool/size cohort off until the app restarts.
 
-    ``reason`` is ``not_read`` or ``unprofitable``. The first latch wins: a
+    ``reason`` is ``not_read`` or ``unprofitable``. The first latch in a cohort wins: a
     later call changes nothing and logs nothing. ``detail`` is clipped to
     :data:`DETAIL_MAX_CHARS` and reaches diagnostics (which scrub it), never
     a record. Never raises: a malformed call is logged at DEBUG and ignored.
@@ -769,19 +785,22 @@ def disable_warm_lead(*, reason: str, detail: str = "") -> None:
         if reason not in _WARM_LEAD_REASONS:
             raise ValueError(f"not a warm-lead reason: {reason!r}")
         clipped = _clip(detail)
+        scope = _warm_lead_scope(model, kind, seats)
         with _lock:
-            latched = _set_locked(_warm_lead.latch, reason, clipped)
+            latch = _warm_lead.latches.setdefault(scope, _Latch())
+            latched = _set_locked(latch, reason, clipped)
         if latched:
-            _warn_warm_lead_latched(reason, clipped)
+            _warn_warm_lead_latched(scope, reason, clipped)
     except Exception:  # noqa: BLE001 — a check never fails a request
         _log.debug("could not switch the warm lead off", exc_info=True)
 
 
-def _warn_warm_lead_latched(reason: str, detail: str) -> None:
-    """The one WARNING the warm lead's latch writes, outside the lock."""
+def _warn_warm_lead_latched(scope: tuple[str, str, str], reason: str, detail: str) -> None:
+    """One WARNING per cohort's latch, outside the lock."""
     _log.warning(
-        "Cost self-check: the warm lead is switched off until the app "
+        "Cost self-check: the warm lead for %s %s %s seats is switched off until the app "
         "restarts (%s). %s",
+        *scope,
         reason,
         detail or "No detail.",
     )
@@ -965,9 +984,10 @@ def check_warm_leads(lineages: Sequence[WarmLeadLineage]) -> None:
     ended normally, after the leads were joined, with one entry per lineage
     whose lead sent a request. Each lineage is judged (:func:`_judge_lineage`)
     and logged in one INFO line; the phase's judgments replace the last
-    check in diagnostics; and the first lineage judged ``not_read`` or
-    ``unprofitable`` switches the lead off for the rest of the app session,
-    with one WARNING. Recording and latching are one lock acquisition, so a
+    check in diagnostics. Each ``not_read`` or ``unprofitable`` lineage switches
+    off its model/tool/size cohort (8–19 or 20+ seats) until restart, with one
+    WARNING per cohort. Every losing cohort is processed, even in one phase.
+    Recording and latching are one lock acquisition, so a
     reader never sees a check without the latch it earned.
 
     Reads the responses and never changes them; touches no request, record,
@@ -982,19 +1002,26 @@ def check_warm_leads(lineages: Sequence[WarmLeadLineage]) -> None:
             "at": time.time(),
             "lineages": [_lineage_record(judgment) for judgment in judged],
         }
-        losing = next(
-            (j for j in judged if j.verdict in _WARM_LEAD_REASONS), None
-        )
-        detail = _clip(_warm_lead_detail(losing)) if losing is not None else ""
+        losses = [
+            (
+                _warm_lead_scope(lineage.model, judgment.kind, judgment.seats),
+                judgment.verdict,
+                _clip(_warm_lead_detail(judgment)),
+            )
+            for lineage, judgment in zip(lineages, judged)
+            if judgment.verdict in _WARM_LEAD_REASONS
+        ]
+        warnings = []
         with _lock:
             _warm_lead.last_check = record
-            latched = losing is not None and _set_locked(
-                _warm_lead.latch, losing.verdict, detail
-            )
+            for scope, reason, detail in losses:
+                latch = _warm_lead.latches.setdefault(scope, _Latch())
+                if _set_locked(latch, reason, detail):
+                    warnings.append((scope, reason, detail))
         for judgment in judged:
             _log_judgment(judgment)
-        if latched:
-            _warn_warm_lead_latched(losing.verdict, detail)
+        for scope, reason, detail in warnings:
+            _warn_warm_lead_latched(scope, reason, detail)
     except Exception:  # noqa: BLE001 — a check never fails a request
         _log.debug("could not check the warm lead", exc_info=True)
 
@@ -1024,9 +1051,12 @@ def snapshot() -> dict[str, Any]:
     carrying the tail was last observed. Grouped by behavior, so a later
     check's block sits beside this one rather than among the engine names.
 
-    ``"warm_lead": {setting_on, enabled, reason, detail, since,
-    last_check}`` sits beside it (WL-1): the same five keys for the warm
-    lead's one latch, and ``last_check`` — ``None`` until a phase is
+    ``warm_lead.disabled_scopes`` lists scalar model/kind/size_band/reason/
+    detail/since records, one per disabled cohort. Legacy summary fields
+    remain: ``enabled`` means ALL cohorts are enabled; reason/detail/since
+    describe the first disabled cohort, never a process-wide gate. Selection
+    must call ``warm_lead_enabled`` with the lineage's scope. ``last_check``
+    is ``None`` until a phase is
     checked, then ``{at, lineages}``, one entry per lineage the last checked
     phase judged, each ``{kind, seats, measured, unmeasured, read_share,
     prefix_tokens, lead_cost_usd, break_even_read_share, verdict}``
@@ -1055,12 +1085,21 @@ def snapshot() -> dict[str, Any]:
                 }
                 for engine, latch in _tail_latches.items()
             }
+            first = next(iter(_warm_lead.latches.values()), _Latch())
             warm = {
                 "setting_on": warm_setting_on,
-                "enabled": not _warm_lead.latch.reason,
-                "reason": _warm_lead.latch.reason,
-                "detail": _warm_lead.latch.detail,
-                "since": _warm_lead.latch.since,
+                "enabled": not _warm_lead.latches,
+                "reason": first.reason,
+                "detail": first.detail,
+                "since": first.since,
+                "disabled_scopes": [
+                    {
+                        "model": model, "kind": kind, "size_band": band,
+                        "reason": latch.reason, "detail": latch.detail,
+                        "since": latch.since,
+                    }
+                    for (model, kind, band), latch in _warm_lead.latches.items()
+                ],
                 "last_check": _copy_check(_warm_lead.last_check),
             }
         return {"continuation_tail": tail, "warm_lead": warm}
@@ -1076,5 +1115,5 @@ def reset_for_tests() -> None:
         for engine in TAIL_ENGINES:
             _tail_latches[engine] = _Latch()
             _tail_values[engine] = _TailValue()
-        _warm_lead.latch = _Latch()
+        _warm_lead.latches.clear()
         _warm_lead.last_check = None

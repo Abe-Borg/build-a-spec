@@ -369,23 +369,31 @@ def test_one_lead_per_large_lineage_streams_before_the_batch_is_created(
 
 
 def test_a_lineage_below_the_minimum_has_no_lead(caplog) -> None:
-    """At the shipped minimums: 19 seats get no lead, 20 seats get one."""
-    web = [(title, "critical") for title in _titles("Web gap", 5)]
-    web += _medium(_titles("Web note", 2))  # 5 x 3 + 2 x 2 = 19 seats
-    doc = _medium(_titles("Doc gap", 10))  # 10 x 2 = 20 seats
-    assert engine._warm_lead_minimum(engine.LINEAGE_WEB_TOOLED) == 20
-    assert engine._warm_lead_minimum(engine.LINEAGE_NO_WEB) == 20
+    """At the shipped minimums: 7 seats get no lead, 8 seats get one."""
+    web = [("Web gap 01", "critical"), *_medium(_titles("Web note", 2))]
+    doc = _medium(_titles("Doc gap", 4))
+    assert engine._warm_lead_minimum(engine.LINEAGE_WEB_TOOLED) == 8
+    assert engine._warm_lead_minimum(engine.LINEAGE_NO_WEB) == 8
     client = _LeadClient(_lineage_scripts(web=web, doc=doc))
     with caplog.at_level(logging.INFO, logger="buildaspec.qc"):
         result = _run(client)
 
     assert client.streamed == ["Doc gap 01"]
     assert len(client.batches.created) == 1
-    assert len(_batched_ids(client)) == 19 + 20 - 1
+    assert len(_batched_ids(client)) == 7 + 8 - 1
     assert result.execution_status == "complete"
     records = _lead_records(caplog)
     assert len(records) == 1
-    assert "20 no-web seats" in records[0]
+    assert "8 no-web seats" in records[0]
+
+
+def test_both_kinds_pick_leads_at_the_shipped_floor_without_overrides() -> None:
+    web, doc = _titles("Web gap", 4), _titles("Doc gap", 4)
+    client = _LeadClient(_lineage_scripts(web=_medium(web), doc=_medium(doc)))
+    result = _run(client)
+    assert sorted(client.streamed) == sorted([web[0], doc[0]])
+    assert len(_batched_ids(client)) == 14
+    assert result.execution_status == "complete"
 
 
 def test_a_lead_that_fails_before_streaming_still_releases_the_batch(
@@ -963,10 +971,10 @@ def test_the_switch_off_is_todays_batch_exactly(monkeypatch) -> None:
         return client
 
     off = run(lead=False)
-    too_small = run(lead=True)  # 8 seats, below the shipped minimum of 20
-    # At the floor the same lineage qualifies, so only the zero wait keeps
-    # the switch inert here.
-    _minimums_at_the_floor(monkeypatch)
+    with monkeypatch.context() as patch:
+        patch.setattr(engine, "_WARM_LEAD_MIN_SEATS_NO_WEB", 9)
+        too_small = run(lead=True)  # configured above the shipped floor
+    # At the shipped floor this lineage qualifies; a zero wait makes it inert.
     inert = run(lead=True, warm=0)
     off_at_the_floor = run(lead=False)
     for client in (off, too_small, inert, off_at_the_floor):

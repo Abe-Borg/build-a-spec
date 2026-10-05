@@ -18,8 +18,8 @@ usage the batch already reported (the Chunk 3 plan's Appendix B):
   (the median prefix), C (what the lead cost at list) and the break-even
   h₀* = [(n − 1)·b·h₁·Δ·p − (1 − b)·C] / (n·b·Δ·p);
 - the rules, in order: ``not_read`` when h₁ < 0.5, ``unprofitable`` when
-  h₀* ≤ 0, else kept. Either switches the lead off for the rest of the app
-  session, and the next phase streams no lead.
+  h₀* ≤ 0, else kept. Either switches that model/tool/size cohort off until
+  restart; other cohorts keep their leads.
 
 What this file pins: the arithmetic, by hand, on Claude Opus 5.5; the latch;
 the check end to end on both lineage kinds; every path that must NOT measure;
@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -47,7 +48,13 @@ from backend.qc import engine
 from backend.qc.engine import run_final_qc
 from backend.spec_modules import DEFAULT_MODULE
 from backend.tracing.redaction import _SECRET_KEY_PATTERN, scrub_data
-from tests.fakes import pause_response, qc_verdict_response, search_result_block
+from tests.fakes import (
+    fallback_served,
+    pause_response,
+    qc_verdict_response,
+    search_result_block,
+    text_block,
+)
 from tests.test_cost_checks_tail_rejection import _CountingLock
 from tests.test_qc_batch_verification import _bad_request, _rate_limited, _store
 from tests.test_qc_batch_warm_lead import (
@@ -147,6 +154,14 @@ def _judge(lineage: cost_checks.WarmLeadLineage) -> dict[str, Any]:
 
 def _warm_block() -> dict[str, Any]:
     return cost_checks.snapshot()["warm_lead"]
+
+
+def _lead_enabled(*, model=_OPUS, kind="no-web", seats=10) -> bool:
+    return cost_checks.warm_lead_enabled(model=model, kind=kind, seats=seats)
+
+
+def _disable_lead(*, model=_OPUS, kind="no-web", seats=10, **kwargs) -> None:
+    cost_checks.disable_warm_lead(model=model, kind=kind, seats=seats, **kwargs)
 
 
 def _warnings(caplog) -> list[str]:
@@ -361,7 +376,7 @@ def test_a_failure_inside_the_check_records_nothing(monkeypatch, caplog) -> None
     monkeypatch.setattr(usage_ledger, "estimate_usage_cost", refuse)
     cost_checks.check_warm_leads([losing])
     assert _warm_block()["last_check"] is None
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
     assert _warnings(caplog) == []
     assert any("could not check the warm lead" in m for m in caplog.messages)
 
@@ -386,13 +401,13 @@ def test_the_rates_come_from_the_ledger(monkeypatch) -> None:
 
 def test_a_losing_lineage_latches_once_with_one_warning(caplog) -> None:
     caplog.set_level(logging.INFO, logger="buildaspec.cost_checks")
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
     before = _warm_block()
     assert (before["enabled"], before["reason"], before["since"]) == (True, "", None)
 
     cost_checks.check_warm_leads([_lineage([_seat(0, 40_000)] * 9)])
     block = _warm_block()
-    assert not cost_checks.warm_lead_enabled()
+    assert not _lead_enabled()
     assert (block["enabled"], block["reason"]) == (False, "not_read")
     assert block["detail"] == (
         "The batch read the shared prefix on 0 of 9 measured no-web seats (0%); "
@@ -400,7 +415,8 @@ def test_a_losing_lineage_latches_once_with_one_warning(caplog) -> None:
     )
     assert isinstance(block["since"], float)
     assert _warnings(caplog) == [
-        "Cost self-check: the warm lead is switched off until the app restarts "
+        "Cost self-check: the warm lead for claude-opus-5-5 no-web 8-19 seats "
+        "is switched off until the app restarts "
         f"(not_read). {block['detail']}"
     ]
 
@@ -460,18 +476,18 @@ def test_the_first_losing_lineage_sets_the_reason() -> None:
 
 def test_disable_takes_only_a_warm_lead_reason(caplog) -> None:
     caplog.set_level(logging.WARNING, logger="buildaspec.cost_checks")
-    cost_checks.disable_warm_lead(reason="rejected", detail="not ours")
-    assert cost_checks.warm_lead_enabled()
-    cost_checks.disable_warm_lead(reason="unprofitable", detail="line one\nline two")
+    _disable_lead(reason="rejected", detail="not ours")
+    assert _lead_enabled()
+    _disable_lead(reason="unprofitable", detail="line one\nline two")
     block = _warm_block()
     assert (block["reason"], block["detail"]) == ("unprofitable", "line one line two")
-    cost_checks.disable_warm_lead(reason="not_read")
+    _disable_lead(reason="not_read")
     assert _warm_block()["reason"] == "unprofitable"
     assert len(_warnings(caplog)) == 1
 
 
 def test_the_warm_lead_and_the_tails_latch_apart() -> None:
-    cost_checks.disable_warm_lead(reason="not_read")
+    _disable_lead(reason="not_read")
     assert all(
         cost_checks.continuation_tail_enabled(engine_name)
         for engine_name in cost_checks.TAIL_ENGINES
@@ -479,7 +495,7 @@ def test_the_warm_lead_and_the_tails_latch_apart() -> None:
     cost_checks.reset_for_tests()
     for engine_name in cost_checks.TAIL_ENGINES:
         cost_checks.disable_continuation_tail(engine_name, reason="rejected")
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
 
 
 def test_every_read_and_write_takes_the_one_lock_once(monkeypatch) -> None:
@@ -490,8 +506,8 @@ def test_every_read_and_write_takes_the_one_lock_once(monkeypatch) -> None:
     monkeypatch.setattr(cost_checks, "_lock", lock)
     losing = _lineage([_seat(0, 40_000)] * 9)
     for call in (
-        cost_checks.warm_lead_enabled,
-        lambda: cost_checks.disable_warm_lead(reason="not_read"),
+        _lead_enabled,
+        lambda: _disable_lead(reason="not_read"),
         lambda: cost_checks.check_warm_leads([losing]),
         lambda: cost_checks.check_warm_leads([_lineage([_seat(40_000, 0)] * 9)]),
         cost_checks.snapshot,
@@ -515,7 +531,7 @@ def test_many_threads_check_and_one_latches(caplog) -> None:
             start.wait()
             for _ in range(10):
                 cost_checks.check_warm_leads([losing])
-                cost_checks.warm_lead_enabled()
+                _lead_enabled()
         except BaseException as exc:  # noqa: BLE001 — collected, then asserted
             failures.append(exc)
 
@@ -537,14 +553,61 @@ def test_an_empty_check_records_nothing() -> None:
 def test_a_latch_left_set_on_purpose() -> None:
     """Paired with the next test, which must find the warm lead clear."""
     cost_checks.check_warm_leads([_lineage([_seat(0, 40_000)] * 9)])
-    assert not cost_checks.warm_lead_enabled()
+    assert not _lead_enabled()
 
 
 def test_the_next_test_starts_with_the_warm_lead_clear() -> None:
     block = _warm_block()
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
     assert (block["reason"], block["detail"], block["since"]) == ("", "", None)
     assert block["last_check"] is None
+
+
+@pytest.mark.parametrize("kind", ["no-web", "web-tooled"])
+@pytest.mark.parametrize("reason", ["not_read", "unprofitable"])
+def test_a_small_loss_only_disables_its_model_tool_and_size_cohort(kind, reason) -> None:
+    batched = [_seat(0 if reason == "not_read" else 40_000, 40_000 if reason == "not_read" else 0)] * 9
+    losing = _lineage(batched, kind=kind, lead={"output_tokens": 200_000})
+    cost_checks.check_warm_leads([losing])
+    for seats in (8, 10, 19):
+        assert not _lead_enabled(kind=kind, seats=seats)
+    for seats in (20, 40, 100):
+        assert _lead_enabled(kind=kind, seats=seats)
+    other = "web-tooled" if kind == "no-web" else "no-web"
+    assert _lead_enabled(kind=other)
+    assert _lead_enabled(model="claude-opus-5", kind=kind)
+    (scope,) = _warm_block()["disabled_scopes"]
+    assert (scope["model"], scope["kind"], scope["size_band"], scope["reason"]) == (
+        _OPUS, kind, "8-19", reason
+    )
+    # Later wins cannot re-arm a latch; only an app restart can.
+    cost_checks.check_warm_leads([_lineage([_seat(40_000, 0)] * 9, kind=kind)])
+    assert not _lead_enabled(kind=kind)
+    assert _warm_block()["disabled_scopes"] == [scope]
+    cost_checks.reset_for_tests()
+    assert _lead_enabled(kind=kind)
+    assert _warm_block()["disabled_scopes"] == []
+
+
+def test_all_losing_cohorts_in_one_phase_latch_independently(caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="buildaspec.cost_checks")
+    small = _lineage([_seat(0, 40_000)] * 9)
+    large = _lineage([_seat(0, 40_000)] * 19)
+    web = replace(small, kind="web-tooled")
+    other_model = replace(small, model="claude-opus-5")
+    cost_checks.check_warm_leads([small, large, web, other_model])
+    assert not _lead_enabled()
+    assert not _lead_enabled(seats=20)
+    assert not _lead_enabled(kind="web-tooled")
+    assert not _lead_enabled(model="claude-opus-5")
+    assert _lead_enabled(kind="web-tooled", seats=20)
+    assert len(_warm_block()["disabled_scopes"]) == len(_warnings(caplog)) == 4
+    cost_checks.check_warm_leads([small, large, web, other_model])
+    assert len(_warnings(caplog)) == 4
+    # Diagnostics callers cannot mutate the latches through their snapshot.
+    raw = _warm_block()
+    raw["disabled_scopes"][0]["reason"] = "edited"
+    assert _warm_block()["disabled_scopes"][0]["reason"] == "not_read"
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +728,93 @@ def test_a_batch_that_writes_the_prefix_switches_the_lead_off_for_the_next_run(
     assert _warm_block()["last_check"] == block["last_check"]
 
 
+def test_a_small_loss_keeps_large_and_other_tool_lineages_streaming() -> None:
+    titles, scripts = _doc_scripts([_WROTE] * 9)
+    first = _LeadClient(scripts)
+    _run(first)
+    assert first.streamed == [titles[0]]
+    assert not _lead_enabled(seats=10)
+
+    doc, web = _titles("Doc large", 10), _titles("Web small", 4)
+    client = _LeadClient(_lineage_scripts(doc=_medium(doc), web=_medium(web)))
+    result = _run(client)
+    assert sorted(client.streamed) == sorted([doc[0], web[0]])
+    assert len(_batched_ids(client)) == 20 + 8 - 2
+    assert result.execution_status == "complete"
+
+
+@pytest.mark.parametrize("block", [True, False])
+def test_a_fallback_served_lead_does_not_judge_the_primary_models_cache(block) -> None:
+    titles, scripts = _doc_scripts([_WROTE] * 9)
+    scripts[titles[0]][0] = fallback_served(
+        scripts[titles[0]][0], to_model="claude-opus-5", block=block, iteration=block
+    )
+    client = _LeadClient(scripts)
+    result = _run(client)
+    assert client.streamed == [titles[0]]
+    assert _verdicts(result)[(titles[0], 1)].served_by_model == "claude-opus-5"
+    (lineage,) = _warm_block()["last_check"]["lineages"]
+    assert lineage["read_share"] == 0
+    assert lineage["verdict"] == "not_warm"
+    assert _lead_enabled()
+    assert _warm_block()["disabled_scopes"] == []
+
+
+@pytest.mark.parametrize("block", [True, False])
+@pytest.mark.parametrize("opening_fallback", [False, True])
+@pytest.mark.parametrize("stop_reason", ["pause_turn", "end_turn"])
+def test_only_the_opening_responses_model_decides_whether_the_lead_warmed(
+    block, opening_fallback, stop_reason,
+) -> None:
+    titles, scripts = _doc_scripts([_WROTE] * 9)
+    opening = qc_verdict_response(True, tokens=_LEAD)
+    opening.content = [text_block("The review needs another request.")]
+    opening.stop_reason = stop_reason
+    opening.model = _OPUS
+    continuation = qc_verdict_response(True, tokens=_READ)
+    continuation.model = _OPUS
+    fallback_served(
+        opening if opening_fallback else continuation,
+        to_model="claude-opus-5", block=block, iteration=block,
+    )
+    scripts[titles[0]][:1] = [opening, continuation]
+
+    continuation_started = threading.Event()
+    batch_read = threading.Event()
+    streamed = 0
+
+    def before_first(_title):
+        nonlocal streamed
+        streamed += 1
+        if streamed == 2:
+            # Reserve the continuation's scripted response, then hold it
+            # until the batch reads: release came from the opening response.
+            continuation_started.set()
+            assert batch_read.wait(_BOUND)
+
+    def on_create(_requests):
+        # The same finding's batched seat must not take the continuation's
+        # response from the shared fake queue.
+        assert continuation_started.wait(_BOUND)
+
+    client = _LeadClient(
+        scripts, before_first=before_first, on_create=on_create,
+        on_results=lambda _batch_id: batch_read.set(),
+    )
+    result = _run(client)
+    assert result.execution_status == "complete"
+    assert client.streamed == [titles[0], titles[0]]
+    verdict = _verdicts(result)[(titles[0], 1)]
+    assert verdict.api_request_count == 2
+    # The report still discloses fallback usage anywhere in the call.
+    assert verdict.served_by_model == "claude-opus-5"
+    (lineage,) = _warm_block()["last_check"]["lineages"]
+    assert lineage["read_share"] == 0
+    assert lineage["verdict"] == ("not_warm" if opening_fallback else "not_read")
+    assert _lead_enabled() is opening_fallback
+    assert len(_warm_block()["disabled_scopes"]) == (0 if opening_fallback else 1)
+
+
 def test_an_expensive_lead_on_a_lightly_read_lineage_is_unprofitable(
     monkeypatch,
 ) -> None:
@@ -724,7 +874,7 @@ def test_a_web_tooled_lineage_that_searched_without_iterations_is_unmeasured(
     assert lineage["kind"] == "web-tooled"
     assert (lineage["measured"], lineage["unmeasured"]) == (0, 9)
     assert lineage["verdict"] == "too_few"
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
 
 
 def test_a_web_tooled_lineage_with_iterations_is_measured(monkeypatch) -> None:
@@ -855,7 +1005,7 @@ def test_a_retried_seat_is_measured_only_by_its_first_batch(monkeypatch, caplog)
     assert (lineage["seats"], lineage["measured"], lineage["unmeasured"]) == (18, 8, 9)
     assert lineage["read_share"] == 0.0
     assert lineage["verdict"] == "not_read"
-    assert not cost_checks.warm_lead_enabled()
+    assert not _lead_enabled()
     assert len(_warnings(caplog)) == 1
 
 
@@ -901,7 +1051,7 @@ def test_a_lead_whose_first_request_failed_is_not_judged(monkeypatch) -> None:
     (lineage,) = _warm_block()["last_check"]["lineages"]
     assert lineage["verdict"] == "not_warm"
     assert lineage["read_share"] == 0.0
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
 
 
 def test_a_lead_whose_wait_timed_out_is_not_judged(monkeypatch) -> None:
@@ -942,7 +1092,7 @@ def test_a_lead_whose_wait_timed_out_is_not_judged(monkeypatch) -> None:
     assert result.execution_status == "complete"
     (lineage,) = _warm_block()["last_check"]["lineages"]
     assert lineage["verdict"] == "not_warm"
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
 
 
 def test_the_check_reads_the_lead_only_after_it_is_joined(monkeypatch) -> None:
@@ -1043,7 +1193,7 @@ def test_a_phase_nobody_finished_is_never_measured(
     assert result.execution_status == "partial"
     assert check_calls == []
     assert _warm_block()["last_check"] is None
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
 
 
 def test_an_id_less_submission_is_never_measured(monkeypatch, check_calls) -> None:
@@ -1058,7 +1208,7 @@ def test_an_id_less_submission_is_never_measured(monkeypatch, check_calls) -> No
     assert client.streamed == [titles[0]]
     assert result.execution_status == "partial"
     assert check_calls == []
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
 
 
 def test_the_wall_clock_ceiling_is_never_measured(monkeypatch, check_calls) -> None:
@@ -1079,7 +1229,7 @@ def test_the_wall_clock_ceiling_is_never_measured(monkeypatch, check_calls) -> N
 
     assert sink.of("verification_batch")[-1]["status"] == "timeout"
     assert check_calls == []
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
 
 
 def test_a_stop_during_the_lead_wait_is_never_measured(monkeypatch, check_calls) -> None:
@@ -1128,7 +1278,7 @@ def test_a_lead_that_sent_nothing_is_not_measured_on_a_normal_end(
 
 def test_the_latch_stops_the_next_phase_picking_a_lead(monkeypatch) -> None:
     _minimums_at_the_floor(monkeypatch)
-    cost_checks.disable_warm_lead(reason="not_read")
+    _disable_lead(reason="not_read")
     _titles_used, scripts = _doc_scripts()
     client = _LeadClient(scripts)
     _run(client)
@@ -1149,7 +1299,7 @@ def test_gathering_for_the_check_never_fails_the_phase(monkeypatch, caplog) -> N
     result = _run(_LeadClient(scripts))
 
     assert result.execution_status == "complete"
-    assert cost_checks.warm_lead_enabled()
+    assert _lead_enabled()
     assert _warm_block()["last_check"] is None
     assert any("could not gather the warm lead check" in m for m in caplog.messages)
 
@@ -1210,7 +1360,7 @@ def test_the_check_changes_no_request_record_multiplier_meter_event_or_manifest(
             sink = _Sink()
             result = _run(client, store=store, sink=sink)
         runs.append((client, sink, result))
-        assert cost_checks.warm_lead_enabled() is (not real)
+        assert _lead_enabled() is (not real)
 
     (off_client, off_sink, off), (on_client, on_sink, on) = runs
     assert _canonical_requests(off_client) == _canonical_requests(on_client)
@@ -1257,6 +1407,7 @@ def test_diagnostics_report_the_last_check_and_survive_the_scrub(monkeypatch) ->
         "detail": "",
         "since": None,
         "last_check": None,
+        "disabled_scopes": [],
     }
 
     _minimums_at_the_floor(monkeypatch)

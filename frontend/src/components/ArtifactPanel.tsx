@@ -53,7 +53,7 @@ import type {
 } from "../types";
 import NextSectionDialog from "./NextSectionDialog";
 import HarvestDialog from "./HarvestDialog";
-import { harvestHint } from "../lib/harvest";
+import { harvestDoorHint, type HarvestActivity } from "../lib/harvestLifecycle";
 import { useDownloads } from "../lib/useDownloads";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
@@ -572,10 +572,11 @@ export default function ArtifactPanel({
   // stacks over whatever opened it, so closing it returns the user there.
   // Every door only OPENS it — the paid call runs when Run is pressed.
   const [harvestOpen, setHarvestOpen] = useState(false);
+  const [harvestActivity, setHarvestActivity] = useState<HarvestActivity>("idle");
   // Bumped when a harvest records something, so an open Next-section
   // dialog re-reads its receipt (the fact count it shows moved).
   const [harvestCommits, setHarvestCommits] = useState(0);
-  const pendingHarvest = tutorialActive ? "" : harvestHint(harvestStatus);
+  const pendingHarvest = tutorialActive ? "" : harvestDoorHint(harvestStatus, harvestActivity);
   const commitHarvest = async (input: HarvestCommitInput) => {
     const result = await onCommitHarvest(input);
     setHarvestCommits((value) => value + 1);
@@ -1979,6 +1980,7 @@ export default function ArtifactPanel({
               busy={busy}
               openNonce={drawerNonces?.projectFacts}
               harvest={harvestStatus}
+              harvestActivity={harvestActivity}
               harvestAvailable={!tutorialActive}
               onHarvest={() => setHarvestOpen(true)}
               onAdd={onAddProjectFact}
@@ -2012,14 +2014,17 @@ export default function ArtifactPanel({
       )}
       {/* Rendered after Next section so it stacks above it (both are
           z-[70] ModalShells); the dialog stack routes Escape to the top. */}
-      {harvestOpen && !tutorialActive && (
-        <HarvestDialog
-          pending={harvestStatus}
-          onRun={onRunHarvest}
-          onCommit={commitHarvest}
-          onClose={() => setHarvestOpen(false)}
-        />
-      )}
+      {/* Keep the state owner for this session, even while its shell is
+          closed or a tour swaps in a practice copy. App's panel-${sessionNonce}
+          key wipes it on reset/load; ending a tour restores the same owner. */}
+      <HarvestDialog
+        open={harvestOpen && !tutorialActive}
+        pending={harvestStatus}
+        onActivityChange={setHarvestActivity}
+        onRun={onRunHarvest}
+        onCommit={commitHarvest}
+        onClose={() => setHarvestOpen(false)}
+      />
     </aside>
   );
 }

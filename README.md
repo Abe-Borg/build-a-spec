@@ -570,6 +570,13 @@ facts, and makes every recorded fact name a source that exists.
   provision of the draft with its status, and the reasons you wrote for
   dismissing Final QC findings, plus the facts, project setup and standards
   already recorded so it proposes only what is new.
+- **Close it and come back.** Closing while the harvest runs keeps that call
+  running; reopening shows its progress or its finished review sheet without
+  starting another call. The existing doors say when it is running or ready.
+  Closing the sheet keeps your selections and edits; **Discard preview** sets
+  it aside without recording facts or marking replies read. A new session or
+  opening a project clears the sheet. Starting a guided tour hides the dialog
+  and keeps its work for your return to the original session.
 - **You review every proposal before anything is saved.** Each shows the fact,
   its scope and status, its source (a reply `turn:N`, a research finding, an
   attached document or a Final QC finding), and the line it rests on, quoted
@@ -596,7 +603,8 @@ facts, and makes every recorded fact name a source that exists.
   a provision in the draft, or a Final QC dismissal reason — not only one that
   already has facts, so an imported master edited by hand, with no
   conversation at all, can still be harvested. With nothing to read, **Harvest
-  facts…** is disabled and says why.
+  facts…** is disabled and says why, unless a harvest is running or ready to
+  review.
 - **A fact's source has to exist.** Recording a fact — by the assistant, in
   the panel, or from a harvest — now checks that its cited research finding,
   attached document, Final QC finding or reply is really there; one that

@@ -393,3 +393,34 @@ Errata for the historical sections now in `docs/as-built.md`:
 - "The two shelved savings are on, and watch themselves" describes one
   warm-lead latch that prevents all subsequent leads. Latches now affect
   only their model/tool/size cohort; its eight-measured-seat rule is retained.
+
+## Closing a fact harvest keeps its paid result — implemented notes (2026-10-05)
+
+`HarvestDialog` stays mounted inside App's session-keyed `ArtifactPanel`;
+its `open` prop controls only the `ModalShell`. Closing via X, Escape,
+backdrop or Close keeps the running phase, preview token, selections and
+edits. New session and project load remount the panel and discard that
+state; the mount guard rejects late responses belonging to its old owner.
+The synchronous phase ref and `lib/harvestLifecycle.beginHarvestRun` prevent
+a duplicate paid call before React renders. The three existing doors share
+running/ready hints; reopening retained work stays possible while chat is
+busy or no fresh material is harvestable. A completed commit resets on
+close; Discard preview is the explicit way to set an uncommitted sheet aside.
+
+Frontend-only behavior; `project.facts-harvest` and the opt-in paid-call rule
+stay intact. The API, lease middleware and preview expiry are unchanged.
+`frontend/tests/harvestLifecycle.test.ts` adds pure helper tests and source
+pins, registered in `frontend/package.json`. All 31 targeted reversions
+produced the expected assertion failures and were restored. `npm test` and
+`npm run build` passed; no paid API call was made. README and the current
+release's Projects notes describe the behavior. Full history and reversion
+evidence are in [docs/as-built.md](docs/as-built.md#closing-a-fact-harvest-keeps-its-paid-result--implemented-notes-2026-10-05).
+
+PR #266 review correction: the harvest owner also stays mounted through
+guided tours, which restore the original session without advancing
+`sessionNonce`. Only its shell is hidden with
+`open={harvestOpen && !tutorialActive}`. A tour must never key or reset the
+owner: its running call, preview token and edited rows belong to the original
+session. The tour regression failed before the fix; restoring conditional
+mounting, dropping the shell's tour gate or adding a tour-dependent key each
+made it fail again, and all three reversions were restored.

@@ -187,6 +187,16 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 title="Projects",
                 items=(
                     ReleaseItem(
+                        title="Close a fact harvest and come back to its result",
+                        body=(
+                            "Close the fact harvest while it runs and reopen "
+                            "it to check progress or review the finished sheet. "
+                            "Reopening reuses that harvest and keeps your "
+                            "selections and edits, even after a guided tour; "
+                            "a new session or opened project starts fresh."
+                        ),
+                    ),
+                    ReleaseItem(
                         title="The next-section receipt gets to the point",
                         body=(
                             "Starting a section from a project brief shows "

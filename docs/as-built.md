@@ -17465,3 +17465,211 @@ stripping thinking on the adaptive submission too (2 failed); a resend that
 keeps the reply's signed thinking (1 failed); `disable_parallel_tool_use`
 sent on automatic choice (12 failed). Before the engine fix, a Sonnet 5.5
 guard reproduction failed with `invalid_request` and both 400 messages.
+
+## Research web tools keep their bytes — implemented notes (2026-10-05)
+
+"Research guards request a final submission (2026-10-04)" (PR #262) made
+`research.engine._run_dimension` rebuild both web tools before every request
+with `max_uses` set to what was left: web_search `min(max_searches, 2 ×
+max_searches − searches_used)`, web_fetch `max_fetches − fetches_used`, then
+the context-window clip. Anthropic's prompt cache is a byte-exact prefix
+match in the order tools → system → messages, so a changed tool definition
+invalidates every cache entry of the conversation. After the first fetch
+(and once searches passed the declared budget) every `pause_turn`
+continuation re-sent the whole conversation — persona and protocol, the
+shared block with attached references (≤25k tokens) and project facts (≤8k),
+the task, and every earlier assistant turn with its search results and
+fetched pages (≤50k tokens each) — as a fresh 1.25× write instead of a 0.1×
+read. Two knock-ons: the continuation tail (`CONTINUATION_CACHE`, Tier 1
+Chunk 4) could not pay off after a fetch, because the prefix it would read no
+longer matched, and the CT-2 value check would have counted those losses
+against it; and each tool change set `thinking_edited`, so every later
+request carried `drop_block` and dropped thinking blocks that were otherwise
+valid. The code said so ("Changing max_uses rewrites the tool cache prefix
+when work has consumed the allowance") and accepted it to keep the allowance
+exact. Final QC builds its tools once per call and never had the problem.
+
+The shrinking allowance never shipped: `release/1.22.1` merged on 2026-10-01
+and `v1.22.1` was published on 2026-10-02; PR #262 merged on 2026-10-04.
+`v1.22.1` sent the full declared budget (`max_searches`/`max_fetches`) on
+every request, so its tool bytes were already stable. It renewed the fetch
+allowance on every request, and an area that passed the search ceiling failed
+instead of submitting.
+
+**Provider semantics** (Anthropic's web search and server-tools pages, read
+2026-10-05): `max_uses` caps searches *per request*; a call past it gets a
+`web_search_tool_result` error `max_uses_exceeded`, which is not billed
+("If an error occurs during web search, the web search will not be billed");
+a `pause_turn` continuation must include the same tools.
+
+**Choice: a fixed per-request allowance.** New engine constants
+`RESEARCH_SEARCHES_PER_REQUEST = 8` and `RESEARCH_FETCHES_PER_REQUEST = 4`;
+an area sends `min(declared, constant)`, so a module that declares less keeps
+its own number. Every request of a conversation declares the same tools:
+the opening, every continuation, every missing-tool reminder, a request
+resumed after a transport failure, and a restart's new opening. The
+cumulative ceilings are unchanged and still end the conversation. Before
+each request, `searches_used ≥ 2 × max_searches`, `fetches_used ≥
+max_fetches` or more than 16 continuations requests the final submission
+(R0's per-model shape, unchanged).
+
+The alternative was the full declared budget on every request, QC's shape and
+`v1.22.1`'s. It was rejected for two reasons:
+
+1. Its overshoot bound is a whole declared budget. Governing codes could
+   reach 119 searches against an 80 ceiling and 23 fetches against 12.
+2. The context reserve has to cover what one request may add. Governing
+   codes would need 12 × 50k + 40 × 5k = 800k tokens, so at the default 128k
+   output ceiling the window clip would trip from the first continuation and
+   edit the tools anyway.
+
+The numbers 8 and 4 come from three sources:
+
+- They are the interview's per-round defaults (`CHAT_MAX_SEARCHES`,
+  `CHAT_MAX_FETCHES`).
+- They sit above what one research request was sized to use: about 3
+  searches per pause, per `RESEARCH_MAX_CONTINUATIONS`' sizing, and under one
+  fetch per request (12 fetches over at most 17 requests).
+- Their reserve, 8 × 5k + 4 × 50k = 240k, leaves the clip idle until about
+  580k tokens of input at the default output ceiling.
+
+They are module constants, not settings: equal allowances are what give the
+four areas identical tool bytes.
+
+**Bounded overshoot (documented trade).** The ceilings are checked between
+requests. The request that crosses one may run its whole allowance, so an area
+can finish up to the allowance less one past it:
+
+- up to 7 searches past the 2× ceiling (87 for governing codes);
+- up to 3 fetches past the fetch budget (15 for governing codes, 11 for an
+  8-fetch area).
+
+Every one is metered (`web_search_requests` / `web_fetch_requests` come from
+the responses' usage), and grounding counts their sources as it always did.
+At the worst case, 7 searches cost $0.07 at $10 per 1,000 plus their result
+tokens. 3 fetches add up to 150k tokens of page content, which the next and
+last request (the submission, which rewrites once anyway because it drops the
+web tools) reads.
+
+**The context-window clip, made one-way.** `_reserve_fits` checks:
+
+    input + max_tokens + 50k margin + searches × 5k + fetches × 50k ≤ RESEARCH_CONTEXT_WINDOW
+
+When a request cannot reserve the full allowance but can reserve one fetch,
+the conversation switches to `near_window_tools`: identical except
+web_fetch `max_uses: 1`. It switches once and never back, even if a later
+request's context shrinks (a sanitizer elision). A request that cannot
+reserve even one fetch submits ("context window reserve reached"). A resume
+keeps the switch; a restart opens with the full tools again. The end point is
+the old engine's, which submitted when no whole fetch fit. The old engine
+stepped down one fetch at a time and rewrote the prefix at every step; now
+there is at most one switch per conversation, and only past roughly 580k
+tokens. Switched after a response, it is a real edit of the prefix that
+replayed thinking is bound to, so it sets `thinking_edited` (as a sanitizer
+edit does). Switched on the opening request, it edits nothing.
+
+**`thinking_edited`.** Spending the allowance no longer sets it, because the
+tools do not change. The resend sanitizer's edits and the one clip switch
+still do. A conversation neither edited sends no `block_binding` and no beta
+header on any request.
+
+**Across areas (the optional item).** Both shipped modules declare at least
+16 searches and 8 fetches per area, so all four areas send identical tool
+bytes. The system prompt is module-level and the shared block (date, project
+header, attached references, project facts) is project-level, so the four
+opening requests are byte-identical up to the shared block's breakpoint;
+only the task block differs. The launch is still parallel, so concurrent
+openings cannot yet read one another's entries. Staggering it the way Final
+QC staggers its lenses (`QC_WARM_WAIT_SECONDS`) is left for later.
+
+**Unchanged:** the declared budgets and `dimension_started`'s
+`max_searches`/`max_fetches` (still the declared budgets); the four-area
+parallel launch; the resend sanitizer; grounding; the output schema and
+tool; the profile merge; the final submission; the retry policy; the
+research prompt.
+
+**Not measured; risk stated.** No paid request was made. One request now
+offers 8 searches and 4 fetches where the opening used to offer the whole
+declared budget. A model that would run more inside one request gets the
+unbilled `max_uses_exceeded` result and carries on in its next step. If it
+instead ends its turn early, the missing-tool reminders and the submission
+still salvage its findings. How often that happens is unmeasured. The owner's
+check is `tools/research_cost_profile.py`: its headline uncached share should
+fall on rounds made with this change, compared with rounds made on master
+between PR #262 and this change, mostly on areas that fetched. Compared with
+`v1.22.1` rounds, whose tools were already stable, expect little difference
+from this change itself.
+
+**Tests.** `tests/test_research_budget.py` drops
+`test_tool_allowances_shrink_across_continuations` and
+`test_fetch_batch_is_reduced_to_fit_reserved_context`. It adds:
+
+- byte-identical tool bytes captured at send time across opening, two
+  pauses and a reminder (Sonnet 5 and Sonnet 5.5), with no binding and the
+  tail on both resumes;
+- a resume and a restart that send the opening bytes;
+- both cumulative ceilings ending the conversation with constant tools;
+- the bounded overshoot;
+- the one-way near-window switch (Sonnet 5 and Sonnet 5.5), including no
+  switch back;
+- an opening-request clip that edits nothing;
+- a resume that keeps the clip, then a restart that reopens with the full
+  allowance;
+- every registered module's budgets covering the per-request allowance.
+
+Three context-reserve tests now script 900k instead of 800k (past the
+one-fetch reserve, so they still exercise submission).
+`tests/test_research_engine.py` pins the tool dicts' `max_uses` to the
+constants and adds a four-area shared-prefix test.
+`frontend/tests/verificationCopy.test.ts` pins the dossier's and README's
+numbers to the engine constants. The `tests/fakes.py` request validator
+(R0) checks every request, including the clipped ones.
+
+**Reversion evidence**, each run against the five research test files and
+restored:
+
+| Reversion | Failed |
+|---|---|
+| The old engine (declared budget, shrunk to what remains, binding on change) | 12 |
+| Declared budget per request | 11 |
+| Shrink only near a ceiling | 1 |
+| The clip switching back | 3 |
+| The clip setting no binding | 3 |
+| A restart keeping the clip | 1 |
+| No clip, submit instead | 4 |
+| A binding on every continuation | 7 |
+| A binding for an opening clip | 1 |
+
+Changing `RESEARCH_FETCHES_PER_REQUEST` without the copy failed the frontend
+copy test.
+
+**Validation.** Untouched HEAD: 3682 passed, 64 skipped. With this change: 3693
+passed, 64 skipped. Ruff, `npm test` (510 passed) and `npm run build`
+passed.
+
+**Release-note draft for the next release** (beside the research-effort and
+final-submission drafts; `v1.22.1` is published and there is no newer entry,
+so nothing was added to `backend/release_notes.py` and the version stays
+`1.22.1`): "Research budgets are checked between steps. Each step of a
+research area may run up to 8 searches and 4 page reads, the same on every
+step, so a paused area keeps reading its own conversation from the prompt
+cache. An area's search and page budgets count across its whole
+conversation, and the step that reaches one can finish a few past it before
+the area hands in what it found."
+
+**Errata.** "Research guards request a final submission (2026-10-04)"
+says:
+
+- "Fetch allowances now apply cumulatively to the conversation rather than
+  renewing on each continuation";
+- "Search requests also declare only the remaining portion of their 2×
+  ceiling";
+- "These tool-definition changes can rewrite the cached prefix when an
+  allowance shrinks";
+- "An allowance change also opts into preserved-thinking prefix recovery";
+- "Fetch batches shrink to fit".
+
+The limits are still cumulative, but they are enforced between requests.
+Every request declares the fixed per-request allowance, and the window clip
+switches at most once, to one fetch per request; when even that cannot fit,
+the area submits.

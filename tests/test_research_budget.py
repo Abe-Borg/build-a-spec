@@ -1,6 +1,7 @@
 """Guard exhaustion salvages grounded research without buying another loop."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from backend import settings
 from backend.research import engine
 from backend.research.budget import count_request_tokens, _SERVER_TOOL_OVERHEAD_TOKENS
 from backend.research.schema import RESEARCH_TOOL_NAME
+from backend.spec_modules import AVAILABLE_MODULES
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.fakes import (
     SequencedFakeClient, bad_request, fetch_blocks, pause_response,
@@ -92,34 +94,244 @@ def test_each_guard_requests_one_submission_and_retains_grounding_and_usage(guar
     assert "No more searches or fetches" in str(submission["messages"][-1])
 
 
-def test_tool_allowances_shrink_across_continuations():
-    client = _CountedClient([
-        research_response(items=None, stop_reason="pause_turn", searches=40, fetches=2),
-        research_response(items=None, stop_reason="pause_turn", searches=20, fetches=3),
+# ---------------------------------------------------------------------------
+# The web tools never change within a conversation. The prompt cache is a
+# byte-exact prefix with the tools first, so every request of an area's
+# conversation — opening, continuations, reminders, a resumed request, and a
+# restart's new opening — sends the same tool bytes: a fixed per-request
+# allowance, with the declared budgets enforced between requests by the
+# cumulative ceilings. The one exception is the context-window clip, which
+# switches once, near the window, and never back.
+# ---------------------------------------------------------------------------
+
+_SEARCHES = engine.RESEARCH_SEARCHES_PER_REQUEST
+_FETCHES = engine.RESEARCH_FETCHES_PER_REQUEST
+
+
+class _ToolBytesClient(_CountedClient):
+    """Records each streamed request's tools as the bytes it sent, at send
+    time — so a shared list mutated after the fact could not make two
+    requests look alike."""
+
+    def __init__(self, turns, counts=()):
+        super().__init__(turns, counts)
+        self.tool_bytes: list[str] = []
+
+    def stream(self, **request):
+        self.tool_bytes.append(json.dumps(request["tools"]))
+        return super().stream(**request)
+
+
+def _web_allowance(request) -> tuple[int, int]:
+    search, fetch = request["tools"][:2]
+    assert (search["name"], fetch["name"]) == ("web_search", "web_fetch")
+    return search["max_uses"], fetch["max_uses"]
+
+
+def _carries_binding(request) -> bool:
+    return "block_binding" in (request.get("thinking") or {})
+
+
+def _reset():
+    import anthropic
+    import httpx
+
+    return anthropic.APIConnectionError(
+        message="reset", request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+
+
+@pytest.mark.parametrize("module", list(AVAILABLE_MODULES.values()), ids=lambda m: m.module_id)
+def test_every_declared_budget_covers_the_per_request_allowance(module):
+    # So every area of a shipped module sends the same tool bytes, and no
+    # area's single request may spend more than the area declared.
+    assert 1 < _FETCHES < _SEARCHES
+    for dimension in module.research_dimensions:
+        searches = dimension.max_searches or engine.RESEARCH_DEFAULT_MAX_SEARCHES
+        fetches = dimension.max_fetches or engine.RESEARCH_DEFAULT_MAX_FETCHES
+        assert searches >= _SEARCHES and fetches >= _FETCHES
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5", settings.RESEARCH_MODEL])
+def test_every_request_of_a_conversation_sends_the_opening_tool_bytes(model):
+    """Searches and fetches spent, two pauses and a reminder: every request
+    carries the opening request's tool bytes (the old engine shrank the
+    fetch allowance 12 → 8 → 6 here, rewriting the cached prefix each time),
+    and spending the allowance edits nothing, so no request carries a
+    thinking binding. The cached prefix behind the tools is unchanged too,
+    and the continuations carry the tail that can read the rest."""
+    client = _ToolBytesClient([
+        research_response(
+            items=None, searched_urls=[_URL], extra_blocks=fetch_blocks(_URL),
+            searches=_SEARCHES, fetches=_FETCHES, stop_reason="pause_turn",
+        ),
+        research_response(
+            items=None, extra_blocks=fetch_blocks(_URL + "/2"),
+            searches=5, fetches=2, stop_reason="pause_turn",
+        ),
+        _text_only(),
         _final(),
     ])
-    assert _run(client).status.status == "completed"
-    allowances = [tuple(tool["max_uses"] for tool in request["tools"][:2])
-                  for request in client.requests]
-    assert allowances == [(40, 12), (40, 10), (20, 7)]
-    for request in client.requests[1:]:
-        assert request["thinking"]["block_binding"] == {
-            "prefix_mismatch_behavior": "drop_block"
-        }
+    result = _run(client, model=model, continuation_cache=True)
+
+    assert result.status.status == "completed", result.status.error
+    assert result.items[0].grounded
+    assert len(client.requests) == 4
+    assert len(set(client.tool_bytes)) == 1
+    opening = client.requests[0]
+    for request in client.requests:
+        assert _web_allowance(request) == (_SEARCHES, _FETCHES)
+        assert not _carries_binding(request)
+        assert "extra_headers" not in request
+        assert request["system"] == opening["system"]
+        assert request["messages"][0] == opening["messages"][0]
+    # The two resumes carry the tail; the opening ends on the brief and the
+    # reminder on its own user turn, so neither does.
+    assert ["cache_control" in request for request in client.requests] == [
+        False, True, True, False,
+    ]
+    assert client.requests[3]["messages"][-1]["role"] == "user"
 
 
-def test_fetch_batch_is_reduced_to_fit_reserved_context():
-    client = _CountedClient([_final()], counts=[500_000, 500_000])
-    assert _run(client).status.status == "completed"
-    request = client.requests[0]
-    fetch = request["tools"][1]
-    assert fetch["max_uses"] == 4
+def test_a_resume_and_a_restart_send_the_opening_tool_bytes(monkeypatch):
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+    events = []
+    client = _ToolBytesClient([
+        research_response(
+            items=None, searched_urls=[_URL], extra_blocks=fetch_blocks(_URL),
+            searches=_SEARCHES, fetches=_FETCHES, stop_reason="pause_turn",
+        ),
+        _reset(), _reset(), _final(),
+    ])
+    result = _run(client, event_sink=events.append)
+
+    assert result.status.status == "completed", result.status.error
+    assert [e["mode"] for e in events if e["type"] == "dimension_retry"] == [
+        "resume", "restart",
+    ]
+    opening, failed, resumed, restarted = client.requests
+    assert resumed["messages"] == failed["messages"]
+    assert restarted["messages"] == opening["messages"]
+    assert len(set(client.tool_bytes)) == 1
+    assert not any(_carries_binding(request) for request in client.requests)
+
+
+@pytest.mark.parametrize(("guard", "spent", "reason"), [
+    ("search", {"searches": _SEARCHES}, "web_search budget ceiling reached"),
+    ("fetch", {"fetches": _FETCHES}, "web_fetch budget ceiling reached"),
+])
+def test_the_cumulative_ceilings_still_end_the_conversation(guard, spent, reason):
+    """Each pause spends one request's whole allowance; the tools never
+    shrink, and the request after the ceiling is the submission."""
+    ceiling = 2 * _DIMENSION.max_searches if guard == "search" else _DIMENSION.max_fetches
+    per_pause = next(iter(spent.values()))
+    pauses = ceiling // per_pause
+    assert pauses * per_pause == ceiling and pauses <= engine.RESEARCH_MAX_CONTINUATIONS
+    client = _ToolBytesClient([
+        *[research_response(
+            items=None, searched_urls=[_URL], stop_reason="pause_turn", **spent,
+        ) for _ in range(pauses)],
+        _final(),
+    ])
+    result = _run(client)
+
+    assert result.status.status == "completed", result.status.error
+    assert result.items[0].grounded
+    *web, submission = client.requests
+    assert len(web) == pauses
+    assert len(set(client.tool_bytes[:-1])) == 1
+    assert all(_web_allowance(request) == (_SEARCHES, _FETCHES) for request in web)
+    assert [tool["name"] for tool in submission["tools"]] == [RESEARCH_TOOL_NAME]
+    assert reason in str(submission["messages"][-1])
+    counted = (
+        result.status.web_search_requests if guard == "search"
+        else result.status.web_fetch_requests
+    )
+    assert counted == ceiling
+
+
+def test_the_request_that_crosses_a_ceiling_overshoots_by_at_most_its_allowance():
+    """One fetch short of the budget, the next request still offers the full
+    per-request allowance — the bytes do not change — so the conversation can
+    finish up to that allowance less one past its budget. The meter reports
+    every fetch, and the next request is the submission."""
+    budget = _DIMENSION.max_fetches
+    spent = [_FETCHES] * ((budget - 1) // _FETCHES) + [(budget - 1) % _FETCHES]
+    spent = [n for n in spent if n]
+    assert sum(spent) == budget - 1
+    client = _ToolBytesClient([
+        *[research_response(
+            items=None, searched_urls=[_URL], fetches=n, stop_reason="pause_turn",
+        ) for n in spent],
+        research_response(items=None, fetches=_FETCHES, stop_reason="pause_turn"),
+        _final(),
+    ])
+    result = _run(client)
+
+    assert result.status.status == "completed", result.status.error
+    *web, submission = client.requests
+    assert _web_allowance(web[-1]) == (_SEARCHES, _FETCHES)
+    assert len(set(client.tool_bytes[:-1])) == 1
+    assert "web_fetch budget ceiling reached" in str(submission["messages"][-1])
+    assert result.status.web_fetch_requests == budget - 1 + _FETCHES
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5", settings.RESEARCH_MODEL])
+def test_near_the_window_the_conversation_switches_once_to_one_fetch(model):
+    """The first continuation cannot reserve room for the full allowance's
+    fetches but can for one: the conversation switches to one fetch per
+    request — after a response, an edit of the prefix replayed thinking is
+    bound to, so it carries drop_block — and never switches back, even when
+    a later request (its context shrunk) would fit the full allowance."""
+    client = _ToolBytesClient(
+        [pause_response(searched_urls=[_URL]), pause_response(searched_urls=[_URL]), _final()],
+        counts=[1_000, 800_000, 800_000, 1_000],
+    )
+    result = _run(client, model=model)
+
+    assert result.status.status == "completed", result.status.error
+    assert len(client.count_requests) == 4
+    opening, clipped, later = client.requests
+    assert _web_allowance(opening) == (_SEARCHES, _FETCHES)
+    assert _web_allowance(clipped) == _web_allowance(later) == (_SEARCHES, 1)
+    assert client.tool_bytes[1] == client.tool_bytes[2] != client.tool_bytes[0]
+    assert clipped["tools"][0] == opening["tools"][0]
+    assert clipped["tools"][2] == opening["tools"][2]
+    assert not _carries_binding(opening)
+    assert _carries_binding(clipped) and _carries_binding(later)
     assert (
-        500_000 + 2 * _SERVER_TOOL_OVERHEAD_TOKENS
-        + request["max_tokens"] + engine._CONTEXT_MARGIN_TOKENS
-        + request["tools"][0]["max_uses"] * engine._SEARCH_RESULT_RESERVE_TOKENS
-        + fetch["max_uses"] * fetch["max_content_tokens"]
+        800_000 + 2 * _SERVER_TOOL_OVERHEAD_TOKENS
+        + clipped["max_tokens"] + engine._CONTEXT_MARGIN_TOKENS
+        + _SEARCHES * engine._SEARCH_RESULT_RESERVE_TOKENS
+        + 1 * engine.WEB_FETCH_MAX_CONTENT_TOKENS
     ) <= settings.RESEARCH_CONTEXT_WINDOW
+
+
+def test_a_clip_at_the_opening_request_edits_nothing():
+    client = _ToolBytesClient(
+        [pause_response(searched_urls=[_URL]), _final()],
+        counts=[800_000, 800_000, 800_000],
+    )
+    assert _run(client).status.status == "completed"
+    opening, continuation = client.requests
+    assert _web_allowance(opening) == (_SEARCHES, 1)
+    assert client.tool_bytes[0] == client.tool_bytes[1]
+    assert not _carries_binding(opening) and not _carries_binding(continuation)
+
+
+def test_a_resume_keeps_the_clip_and_a_restart_reopens_with_the_full_allowance(monkeypatch):
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+    client = _ToolBytesClient(
+        [pause_response(searched_urls=[_URL]), _reset(), _reset(), _final()],
+        counts=[1_000, 800_000, 800_000],
+    )
+    assert _run(client).status.status == "completed"
+    opening, clipped, resumed, restarted = client.requests
+    assert resumed["messages"] == clipped["messages"]
+    assert client.tool_bytes[1] == client.tool_bytes[2] != client.tool_bytes[0]
+    assert client.tool_bytes[3] == client.tool_bytes[0]
+    assert _carries_binding(clipped) and _carries_binding(resumed)
+    assert not _carries_binding(restarted)
 
 
 def test_counter_uses_supported_equivalent_and_reserves_server_tool_overhead():
@@ -197,9 +409,10 @@ def test_counter_rejects_invalid_counts(invalid):
 
 
 def test_near_full_context_submits_instead_of_sending_another_web_request():
+    # Past even the one-fetch reserve, so the clip has nothing to switch to.
     client = _CountedClient([
         pause_response(searched_urls=[_URL]), _final(),
-    ], counts=[1_000, 800_000, 800_000])
+    ], counts=[1_000, 900_000, 900_000])
     result = _run(client)
     assert result.status.status == "completed"
     assert result.items[0].grounded
@@ -225,7 +438,7 @@ def test_oversized_submission_elides_raw_fetch_content_without_mutating_evidence
         items=None, extra_blocks=[*blocks, cited],
         stop_reason="pause_turn", fetches=1,
     )
-    client = _CountedClient([paused, _final()], counts=[1_000, 800_000, 970_000, 1_000])
+    client = _CountedClient([paused, _final()], counts=[1_000, 900_000, 970_000, 1_000])
     result = _run(client)
     assert result.status.status == "completed", result.status.error
     assert result.items[0].grounded
@@ -248,7 +461,7 @@ def test_search_result_elision_retains_urls_and_readable_research_notes():
         )], stop_reason="pause_turn",
     )
     paused.content[1].content[0].encrypted_content = "RAW_SEARCH_BODY"
-    client = _CountedClient([paused, _final()], counts=[1_000, 800_000, 970_000, 1_000])
+    client = _CountedClient([paused, _final()], counts=[1_000, 900_000, 970_000, 1_000])
     result = _run(client)
     assert result.status.status == "completed"
     assert result.items[0].grounded

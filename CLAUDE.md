@@ -438,6 +438,39 @@ missed it because the fakes accepted any dict and every test ran Sonnet 5.
 The full record, release-note draft and reversion evidence are in
 `docs/as-built.md` under the same heading. No paid API call was made.
 
+## Research web tools keep their bytes — implemented notes (2026-10-05)
+
+PR #262 (after `v1.22.1`, never shipped) rebuilt research's web tools before
+every request with `max_uses` set to the remaining allowance. Tools lead the
+cached prefix, so after an area's first fetch every continuation rewrote the
+whole conversation at 1.25× instead of reading it at 0.1×. The continuation
+tail could not pay off, and each change set `thinking_edited`.
+
+- Every request of an area's conversation now declares the same tools:
+  `RESEARCH_SEARCHES_PER_REQUEST = 8`, `RESEARCH_FETCHES_PER_REQUEST = 4`
+  (`min` with the declared budget). That covers the opening, continuations,
+  reminders, a resumed request and a restart's opening. The cumulative
+  ceilings (2× searches, the declared fetches, 16 continuations) are checked
+  between requests and request the submission. The crossing request may
+  overshoot by its allowance less one; that is the documented trade.
+- The context clip is one-way. When the full allowance no longer fits, the
+  conversation switches once to `near_window_tools` (fetch `max_uses: 1`)
+  and never back; when one fetch no longer fits, it submits. Only that
+  switch, made after a response, and sanitizer edits set `thinking_edited`.
+  Spending the allowance never does.
+- All four areas share identical tool bytes and are byte-identical up to the
+  shared block. The launch is still parallel; staggering it is a later
+  change.
+- The full declared budget per request was rejected: it overshoots by a whole
+  budget, and its 800k context reserve would trip the clip at once.
+
+Never make a research request's tool bytes depend on what the conversation
+has spent. `tests/test_research_budget.py` captures tool bytes at send time
+and pins them; `frontend/tests/verificationCopy.test.ts` pins the dossier's
+and README's numbers to the constants. Full record, reversion evidence and
+the release-note draft are in `docs/as-built.md` under the same heading. No
+paid API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

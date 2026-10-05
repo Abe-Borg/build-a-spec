@@ -3,6 +3,7 @@ hermetic against the sequenced fake client."""
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -16,6 +17,8 @@ from backend.research import (
 from backend.research.engine import (
     DIMENSION_ERROR_KINDS,
     ESTABLISHED_FACTS_MAX_TOKENS,
+    RESEARCH_FETCHES_PER_REQUEST,
+    RESEARCH_SEARCHES_PER_REQUEST,
     DimensionStatus,
     ResearchItem,
     _estimate_tokens,
@@ -191,7 +194,7 @@ def test_web_tools_declare_direct_callers_on_every_research_request():
             "name": "web_search",
             "allowed_callers": ["direct"],
             "blocked_domains": list(WEB_BLOCKED_DOMAINS),
-            "max_uses": by_name["web_search"]["max_uses"],
+            "max_uses": RESEARCH_SEARCHES_PER_REQUEST,
             "user_location": PROFILE.web_search_user_location(),
         }
         assert by_name["web_fetch"] == {
@@ -199,7 +202,7 @@ def test_web_tools_declare_direct_callers_on_every_research_request():
             "name": "web_fetch",
             "allowed_callers": ["direct"],
             "blocked_domains": list(WEB_BLOCKED_DOMAINS),
-            "max_uses": by_name["web_fetch"]["max_uses"],
+            "max_uses": RESEARCH_FETCHES_PER_REQUEST,
             "citations": {"enabled": True},
             "max_content_tokens": WEB_FETCH_MAX_CONTENT_TOKENS,
         }
@@ -208,6 +211,27 @@ def test_web_tools_declare_direct_callers_on_every_research_request():
         assert "cache_control" not in by_name["web_search"]
         assert "cache_control" not in by_name["web_fetch"]
         assert request["tools"][-1]["name"] == RESEARCH_TOOL_NAME
+
+
+def test_the_four_areas_open_with_one_shared_cached_prefix():
+    """Equal per-request allowances give every area the same tool bytes, and
+    the system prompt and shared block are project-level, so the four
+    opening requests are byte-identical up to the shared block's breakpoint
+    — an entry one area writes is one the others could read, once the launch
+    is staggered (it is still parallel). Only the task block differs."""
+    client = SequencedFakeClient(_scripts())
+    _run(client)
+
+    assert len(client.requests) == 4
+    prefixes = {
+        json.dumps(
+            [request["tools"], request["system"], request["messages"][0]["content"][0]]
+        )
+        for request in client.requests
+    }
+    assert len(prefixes) == 1
+    tasks = {request["messages"][0]["content"][1]["text"] for request in client.requests}
+    assert len(tasks) == 4
 
 
 def test_builders_are_the_only_source_of_the_web_tool_shape():

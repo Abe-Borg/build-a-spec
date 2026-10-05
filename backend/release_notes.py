@@ -192,8 +192,8 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "Close the fact harvest while it runs and reopen "
                             "it to check progress or review the finished sheet. "
                             "Reopening reuses that harvest and keeps your "
-                            "selections and edits; a new session or opened "
-                            "project starts fresh."
+                            "selections and edits, even after a guided tour; "
+                            "a new session or opened project starts fresh."
                         ),
                     ),
                     ReleaseItem(

@@ -269,8 +269,8 @@ export default function HarvestDialog({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [commitError, setCommitError] = useState("");
   const [committing, setCommitting] = useState(false);
-  // Closing doesn't unmount us. A true unmount means the session was
-  // replaced (or entered a tour); its late success/error must stay there.
+  // Closing or entering a tour doesn't unmount us. A true unmount means
+  // the session was replaced; its late success/error must stay there.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;

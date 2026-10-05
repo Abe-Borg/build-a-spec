@@ -97,8 +97,8 @@ test("retained work can be reopened when no new material is harvestable", () => 
 });
 
 test("closing removes only the shell; the session's state owner stays mounted", () => {
-  assert.match(artifact, /\{!tutorialActive && \(\s*<HarvestDialog\s+open=\{harvestOpen\}/);
-  assert.doesNotMatch(artifact, /harvestOpen && !tutorialActive/);
+  assert.match(artifact, /<HarvestDialog\s+open=\{harvestOpen && !tutorialActive\}/);
+  assert.doesNotMatch(artifact, /\{(?:harvestOpen|!?tutorialActive)\s*&&\s*\(\s*<HarvestDialog/);
   assert.match(artifact, /onClose=\{\(\) => setHarvestOpen\(false\)\}/);
   assert.match(dialog, /if \(!open\) return null;\s*return \(\s*<ModalShell/);
   // Retain edited rows/selections/errors as well as the token. There is no
@@ -109,6 +109,24 @@ test("closing removes only the shell; the session's state owner stays mounted", 
   for (const effect of effects) {
     assert.doesNotMatch(effect, /setPhase|setAccepted|setDrafts|setEditing|setRowErrors|setCommitError|\bopen\b/);
   }
+});
+
+test("a tour hides only the shell and keeps the original session's paid owner", () => {
+  const start = artifact.indexOf("{/* Rendered after Next section");
+  assert.ok(start >= 0);
+  const owner = artifact.slice(start, artifact.indexOf("</aside>", start));
+  // The owner is an unconditional sibling, with no tour/visibility key.
+  // Ready tokens, selections and edits stay in this same mounted instance;
+  // a still-running call can also finish while its shell is hidden.
+  assert.match(owner, /\*\/\}\s*<HarvestDialog\s+open=\{harvestOpen && !tutorialActive\}/);
+  assert.doesNotMatch(owner, /\bkey=/);
+  const bundleStart = app.indexOf("const applySessionBundle =");
+  assert.ok(bundleStart >= 0);
+  const bundleEnd = app.indexOf("return true;", bundleStart);
+  assert.ok(bundleEnd > bundleStart);
+  const bundle = app.slice(bundleStart, bundleEnd);
+  assert.doesNotMatch(bundle, /discardPaneState|setSessionNonce/);
+  assert.match(app, /applySession: applySessionBundle/);
 });
 
 test("Run stores its guard synchronously before awaiting the paid handler", () => {

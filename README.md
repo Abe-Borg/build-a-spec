@@ -575,7 +575,8 @@ facts, and makes every recorded fact name a source that exists.
   starting another call. The existing doors say when it is running or ready.
   Closing the sheet keeps your selections and edits; **Discard preview** sets
   it aside without recording facts or marking replies read. A new session or
-  opening a project clears the sheet.
+  opening a project clears the sheet. Starting a guided tour hides the dialog
+  and keeps its work for your return to the original session.
 - **You review every proposal before anything is saved.** Each shows the fact,
   its scope and status, its source (a reply `turn:N`, a research finding, an
   attached document or a Final QC finding), and the line it rests on, quoted

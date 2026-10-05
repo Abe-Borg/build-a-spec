@@ -2015,17 +2015,16 @@ export default function ArtifactPanel({
       {/* Rendered after Next section so it stacks above it (both are
           z-[70] ModalShells); the dialog stack routes Escape to the top. */}
       {/* Keep the state owner for this session, even while its shell is
-          closed. App's panel-${sessionNonce} key wipes it on reset/load. */}
-      {!tutorialActive && (
-        <HarvestDialog
-          open={harvestOpen}
-          pending={harvestStatus}
-          onActivityChange={setHarvestActivity}
-          onRun={onRunHarvest}
-          onCommit={commitHarvest}
-          onClose={() => setHarvestOpen(false)}
-        />
-      )}
+          closed or a tour swaps in a practice copy. App's panel-${sessionNonce}
+          key wipes it on reset/load; ending a tour restores the same owner. */}
+      <HarvestDialog
+        open={harvestOpen && !tutorialActive}
+        pending={harvestStatus}
+        onActivityChange={setHarvestActivity}
+        onRun={onRunHarvest}
+        onCommit={commitHarvest}
+        onClose={() => setHarvestOpen(false)}
+      />
     </aside>
   );
 }

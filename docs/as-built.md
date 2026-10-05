@@ -17290,3 +17290,34 @@ restored. They covered:
   button, removing the explicit discard action, and omitting test registration.
 
 The restored lifecycle suite passed after all reversions.
+
+## Fact harvests survive a guided tour — PR #266 review correction
+
+The first fix kept HarvestDialog mounted while closed but still unmounted
+it whenever `tutorialActive` became true. Tours temporarily replace the
+workspace with a practice copy and restore the original session without
+advancing App's `sessionNonce`. A ready preview therefore lost its paid
+token, selections and edits on a tour round trip; a hidden running call
+also lost its owner. The review correctly identified that visibility rule
+as another discard path.
+
+ArtifactPanel now renders the harvest owner unconditionally, with
+`open={harvestOpen && !tutorialActive}` controlling only ModalShell. Its
+state, callbacks and identity stay in place through a tour; its shell,
+focus trap and harvest entry hints remain hidden during practice. Returning
+to the original session restores the requested visibility and the retained
+phase. Whole-session replacements still remount the keyed panel and reject
+late responses from the outgoing owner.
+
+The new source regression pins unconditional sibling rendering, the shell's
+tour gate, the absence of a tour-dependent key, and the tutorial bundle's
+existing path that leaves `sessionNonce` alone. It failed on the original
+code. Restoring the conditional mount, removing the shell's tour gate, or
+adding a tour-dependent key each produced assertion failures; all three
+reversions were restored. The existing pure lifecycle and wiring checks
+still cover running/ready retention and session replacement. README, the
+release note and CLAUDE.md now explicitly describe tour retention.
+
+Validation: `npm test` passed all 49 test files, including 15 harvest
+lifecycle checks; `npm run build`, Ruff, release version consistency and
+`git diff --check` passed. No paid API call or live canary was run.

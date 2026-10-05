@@ -321,8 +321,8 @@ test("every door OPENS the dialog; none of them runs the pass", () => {
     artifact,
     /setExportMenuOpen\(false\);\s*setHarvestOpen\(true\);[\s\S]{0,400}data-capability="project\.facts-harvest"/,
   );
-  // Not in a tour: the practice copy is not the user's session.
+  // Hide the shell in a tour; keep the original session's paid state owner.
   assert.match(artifact, /harvestAvailable=\{!tutorialActive\}/);
-  assert.match(artifact, /\{!tutorialActive && \(\s*<HarvestDialog\s+open=\{harvestOpen\}/);
+  assert.match(artifact, /<HarvestDialog\s+open=\{harvestOpen && !tutorialActive\}/);
   assert.doesNotMatch(artifact, /\{harvestOpen && !tutorialActive && \(/);
 });

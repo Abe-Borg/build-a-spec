@@ -415,3 +415,12 @@ produced the expected assertion failures and were restored. `npm test` and
 `npm run build` passed; no paid API call was made. README and the current
 release's Projects notes describe the behavior. Full history and reversion
 evidence are in [docs/as-built.md](docs/as-built.md#closing-a-fact-harvest-keeps-its-paid-result--implemented-notes-2026-10-05).
+
+PR #266 review correction: the harvest owner also stays mounted through
+guided tours, which restore the original session without advancing
+`sessionNonce`. Only its shell is hidden with
+`open={harvestOpen && !tutorialActive}`. A tour must never key or reset the
+owner: its running call, preview token and edited rows belong to the original
+session. The tour regression failed before the fix; restoring conditional
+mounting, dropping the shell's tour gate or adding a tour-dependent key each
+made it fail again, and all three reversions were restored.

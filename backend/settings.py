@@ -6,9 +6,9 @@ Every value is env-overridable with the same degrade-gracefully posture as
 Spec Critic — a bad value falls back to the default rather than crashing.
 
 Token posture (project decision, 2026-07-21): the app imposes NO quality
-limits of its own. ``max_tokens`` defaults sit at the model's output
-ceiling; the only caps that remain are runaway circuit breakers (tool-round
-and search-budget ceilings) sized so no legitimate turn ever meets them.
+limits of its own. Open-ended drafting defaults to the model's output
+ceiling; bounded structured work (harvest and QC) has lower output/thinking
+ceilings as runaway circuit breakers, alongside tool-round/search budgets.
 """
 from __future__ import annotations
 
@@ -404,6 +404,25 @@ RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
 # made at "high" reads stale once after this change (release-noted).
 QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_OPUS_55
 QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
+
+# Output includes adaptive thinking. A lens reviews the entire section;
+# grouping and a verifier seat answer bounded questions. These ceilings
+# bound one runaway request, not the quality of a normal verdict. Each phase
+# has its own knob, but the existing global QC ceiling remains a hard cap.
+# The engine also clamps to a direct caller's max_tokens and pins the resolved
+# values once per run for both transports, continuations and the audit record.
+QC_LENS_MAX_TOKENS = min(
+    QC_MAX_TOKENS,
+    _int_env("BUILD_A_SPEC_QC_LENS_MAX_TOKENS", 64_000, minimum=1),
+)
+QC_CONSOLIDATION_MAX_TOKENS = min(
+    QC_MAX_TOKENS,
+    _int_env("BUILD_A_SPEC_QC_CONSOLIDATION_MAX_TOKENS", 32_000, minimum=1),
+)
+QC_VERIFIER_MAX_TOKENS = min(
+    QC_MAX_TOKENS,
+    _int_env("BUILD_A_SPEC_QC_VERIFIER_MAX_TOKENS", 32_000, minimum=1),
+)
 QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "medium")
 
 # Effort is now set PER PHASE, because the two phases are not the same kind of

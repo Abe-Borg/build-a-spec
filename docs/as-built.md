@@ -17035,3 +17035,27 @@ retry, cancellation, preserved-thinking and refusal regressions pass.
   also failed on unchanged master. Tests need the sandbox's network capability
   for local TestClient communication. Ruff, release version consistency, and
   diff checks passed; no paid API call was run.
+
+## Final QC phase output ceilings — 2026-10-05
+
+QC requests now cap output and adaptive thinking at 64,000 tokens for lenses
+and 32,000 for candidate grouping and verifier seats. The same verifier cap
+reaches streamed seats, batched seats, streamed warm leads and every
+continuation. These are per-request runaway ceilings, not a run-wide budget.
+Existing cutoff handling rejects incomplete responses rather than accepting
+their payload as a verdict; failed grouping falls back to singleton panels.
+
+`BUILD_A_SPEC_QC_LENS_MAX_TOKENS`,
+`BUILD_A_SPEC_QC_CONSOLIDATION_MAX_TOKENS`, and
+`BUILD_A_SPEC_QC_VERIFIER_MAX_TOKENS` override each phase's default.
+`BUILD_A_SPEC_QC_MAX_TOKENS` remains a hard cap on all phases, including
+explicit overrides, and a lower direct-call ceiling also binds. Resolved
+values are pinned once per run, hashed in the input manifest and shown in
+the audit viewer and Word report. Earlier reports remain readable and become
+stale once; prompt-cache lineages exclude these limits and retain their reuse.
+
+Validation: 618 targeted backend tests passed across the focused runs,
+including 34 new ceiling regressions and the QC report, transport, runner,
+freshness, remediation, settings and usage checks. The frontend suite and
+production build, Ruff, release version consistency and diff checks passed.
+No paid API call was made.

@@ -2176,6 +2176,23 @@ class QCResult:
         # reconciles. Present-and-different is still tampering.
         manifest_verifier_effort = configuration.get("verifier_effort", "")
         manifest_max_tokens = configuration.get("max_tokens")
+        # Absent on pre-ceiling reports, which remain readable but no longer
+        # match current inputs. Present limits must describe all three phases
+        # and cannot exceed the report's global output ceiling.
+        phase_max_tokens = configuration.get("phase_max_tokens")
+        if "phase_max_tokens" in configuration and (
+            not isinstance(phase_max_tokens, dict)
+            or set(phase_max_tokens) != {"lens", "consolidation", "verifier"}
+            or any(
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 1
+                or not isinstance(manifest_max_tokens, int)
+                or value > manifest_max_tokens
+                for value in phase_max_tokens.values()
+            )
+        ):
+            return False
         manifest_research_present = research.get("present")
         if (
             not isinstance(manifest_version, int)
@@ -7860,6 +7877,15 @@ def _majority_rule_prose(standard: int, critical: int) -> str:
     )
 
 
+def _qc_phase_max_tokens(max_tokens: int) -> dict[str, int]:
+    """Resolve phase ceilings under the run's global cap, once per run."""
+    return {
+        "lens": min(max_tokens, settings.QC_LENS_MAX_TOKENS),
+        "consolidation": min(max_tokens, settings.QC_CONSOLIDATION_MAX_TOKENS),
+        "verifier": min(max_tokens, settings.QC_VERIFIER_MAX_TOKENS),
+    }
+
+
 def build_qc_input_manifest(
     section: SpecSection,
     profile: RequirementsProfile | None,
@@ -7870,6 +7896,7 @@ def build_qc_input_manifest(
     source_guard: QCSourceGuard | None = None,
     model: str,
     max_tokens: int,
+    phase_max_tokens: dict[str, int] | None = None,
     effort: str = "",
     verifier_effort: str = "",
     consolidation_enabled: bool = False,
@@ -8011,6 +8038,14 @@ def build_qc_input_manifest(
                 else bool(batch_verification)
             ),
             "max_tokens": int(max_tokens),
+            # Prompt caching excludes max_tokens, but report freshness must
+            # describe the actual ceilings used by each phase. A run passes
+            # its pinned values; current-input checks resolve today's values.
+            "phase_max_tokens": dict(
+                _qc_phase_max_tokens(max_tokens)
+                if phase_max_tokens is None
+                else phase_max_tokens
+            ),
             "verifiers_standard": max(1, settings.QC_VERIFIERS_STANDARD),
             "verifiers_critical": max(1, settings.QC_VERIFIERS_CRITICAL),
             # Fetch truncation changes what evidence a seat can read, so a
@@ -8262,6 +8297,7 @@ def run_final_qc(
     # what a caller passing one effort meant.
     lens_effort = lens_effort or effort or settings.QC_LENS_EFFORT
     verifier_effort = verifier_effort or effort or settings.QC_VERIFIER_EFFORT
+    phase_max_tokens = _qc_phase_max_tokens(max_tokens)
     # Pinned per run for the same reason as the efforts: the audit record has
     # to describe the transport this run actually used, not whatever the
     # environment says when a later line reads it.
@@ -8366,6 +8402,7 @@ def run_final_qc(
         project_facts=project_facts,
         model=model,
         max_tokens=max_tokens,
+        phase_max_tokens=phase_max_tokens,
         effort=lens_effort,
         verifier_effort=verifier_effort,
         consolidation_enabled=consolidation_enabled,
@@ -8416,7 +8453,7 @@ def run_final_qc(
                 lens=lens,
                 pieces=lens_pieces[lens.lens_id],
                 model=model,
-                max_tokens=max_tokens,
+                max_tokens=phase_max_tokens["lens"],
                 effort=lens_effort,
                 event_sink=event_sink,
                 should_stop=should_stop,
@@ -8571,7 +8608,7 @@ def run_final_qc(
         section_render=section_render,
         module=module,
         model=model,
-        max_tokens=max_tokens,
+        max_tokens=phase_max_tokens["consolidation"],
         # Grouping is phase-1 judgement (and one call per bucket), so it runs
         # at the lens depth, not the seat depth.
         effort=lens_effort,
@@ -8752,7 +8789,7 @@ def run_final_qc(
                     section_render=section_render,
                     module=module,
                     model=model,
-                    max_tokens=max_tokens,
+                    max_tokens=phase_max_tokens["verifier"],
                     effort=verifier_effort,
                     today=today,
                     reference_documents=reference_block,
@@ -8841,7 +8878,7 @@ def run_final_qc(
                             section_render=section_render,
                             module=module,
                             model=model,
-                            max_tokens=max_tokens,
+                            max_tokens=phase_max_tokens["verifier"],
                             effort=verifier_effort,
                             candidate_id=candidate_ids[i],
                             reviewer_index=j + 1,

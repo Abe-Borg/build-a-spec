@@ -626,7 +626,7 @@ function Dossier() {
               <>
                 Claude Sonnet 5.5 <Mono>(claude-sonnet-5-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “high” for research. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
+              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “medium” for research by default, following Sonnet 5.5's recalibrated effort scale. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
             ],
             [
               "Final QC only",
@@ -908,8 +908,10 @@ function Dossier() {
           }
           model={
             <>
-              Claude Sonnet 5.5, effort “high” — four concurrent long-running
-              conversations. When the API pauses one, the next step asks it to
+              Claude Sonnet 5.5, effort “medium” by default — four concurrent
+              long-running conversations, following Anthropic's migration
+              guidance for multistep tool use. Thinking bills as output on
+              each request. When the API pauses one, the next step asks it to
               read what the conversation re-sends from its cache instead of
               paying full price for it again. If the service ever refuses
               that, the step is sent once more without it; after a refusal, or

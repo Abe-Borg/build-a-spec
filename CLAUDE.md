@@ -307,10 +307,10 @@ already resolved and does nothing). 409 when nothing is running.
   blocks (search results, citations) stay.
 - **Adaptive thinking** is stated explicitly (`thinking: {type:
   "adaptive"}` + `output_config: {effort: settings.INTERVIEW_EFFORT}`,
-  default `high`; research runs `RESEARCH_EFFORT`, default `high` —
-  dialed back from `xhigh` on 2026-07-28: research fans out 4 concurrent
-  dimension calls, so `xhigh`'s reasoning depth multiplied across all of
-  them was the single biggest driver of research cost).
+  default `medium`; research runs `RESEARCH_EFFORT`, default `medium`.
+  Sonnet 5.5 recalibrated its effort scale; Anthropic's migration guidance
+  starts multistep tool use at `medium`. Whole-section drafting/adaptation
+  still uses `DRAFT_PASS_EFFORT`, default `high`.
   Thinking blocks are preserved **verbatim** across continuation rounds —
   the API requires them during tool use; `_serialize` round-trips every
   block type exactly (SDK `model_dump`, `vars()` for test fakes).
@@ -359,6 +359,45 @@ per line with no `^` continuation and no `&&`, and show
 `$env:NAME = "value"` beside `set NAME=value`.
 `tests/test_docs_consistency.py::test_the_docs_windows_commands_run_in_powershell`
 pins the `.\` and `^` rules.
+
+## Research effort on Sonnet 5.5 — implemented notes (2026-10-05)
+
+`RESEARCH_EFFORT` now defaults to `medium`, following Sonnet 5.5's
+recalibrated scale and Anthropic's migration guidance to start multistep
+tool use at `medium`. The old `high` default was chosen for Sonnet 5.
+Research fans out four dimension conversations, each with up to 16
+continuations after its opening request; thinking bills as output at
+Sonnet 5.5's $10/M rate on every request. Set
+`BUILD_A_SPEC_RESEARCH_EFFORT=high` before starting the app to restore
+the previous behavior.
+
+The engine consumes the setting only in `output_config.effort`. The QC
+input manifest records research findings and QC's own effort settings;
+it does not record research effort. `cost_checks` uses reported usage,
+pricing and cache switches, never this setting. Research's system/tool/shared
+brief breakpoints and automatic five-minute continuation tail keep the same
+layout. Changing effort can invalidate the provider's messages cache; an
+unchanged layout does not promise unchanged cache hits. The settings pin
+still reads defaults from source with `ast`, independent of local overrides.
+
+**Adaptive thinking erratum.** The earlier conversation-engine invariant
+said interview and research both defaulted to `high`. The interview has
+defaulted to `medium` since 2026-09-29; research now does too. Final QC
+also defaults to `medium`; the two whole-section drafting/adaptation
+passes keep `DRAFT_PASS_EFFORT=high`. The invariant above is corrected.
+
+No paid API calls or live quality/cost comparison were run. The owner can
+run `tools/research_cost_profile.py` on saved projects before and after
+the change to compare billed output, total cost and cache usage. Thinking
+is included in billed output; actual savings remain unmeasured.
+
+**Release-note draft for the next release:** “Research thinks at medium
+effort by default, following Claude Sonnet 5.5's updated effort scale.
+Set `BUILD_A_SPEC_RESEARCH_EFFORT=high` before starting the app to restore
+the previous thinking depth.” On 2026-10-05 the GitHub Releases API
+confirmed `v1.22.1` is already published; its entry is frozen. There is
+no newer entry in this checkout. Keep this draft for the later release;
+the app version remains `1.22.1`.
 
 ## As-built history
 

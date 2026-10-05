@@ -7,11 +7,12 @@ into the conversation's dynamic system context instead, trimmed by
 :func:`research_context_block`), and progress flows through a single
 ``event_sink`` callable (the runner turns events into the SSE stream).
 Deviations from the source: research requests state adaptive thinking
-explicitly with the ``settings.RESEARCH_EFFORT`` level (default ``high``
-as of 2026-07-28, dialed back from ``xhigh`` — research runs 4 dimensions
-in parallel, each its own conversation with its own web-tool budget, so
-``xhigh``'s reasoning depth compounded expensively across the fan-out),
-and every ceiling is sized as a runaway guard rather than a budget (the
+explicitly with the ``settings.RESEARCH_EFFORT`` level (default ``medium``
+for Sonnet 5.5's recalibrated scale and migration guidance for multistep
+tool use; ``BUILD_A_SPEC_RESEARCH_EFFORT=high`` restores the old default).
+Research runs 4 dimensions in parallel, each its own conversation with its
+own web-tool budget, so thinking billed as output compounds across the fan-out.
+Every ceiling is sized as a runaway guard rather than a budget (the
 2026-07-21 no-quality-limits decision).
 
 What is preserved exactly, because it is the hard-won part:
@@ -2503,9 +2504,8 @@ def _run_dimension(
             }
         ],
         "tools": tools,
-        # Background quality pass: adaptive thinking stated explicitly at
-        # the research effort level (default high — latency is free here,
-        # but this runs 4x concurrently, so xhigh's depth got expensive).
+        # Adaptive thinking at the research effort level (default medium
+        # for Sonnet 5.5's recalibrated scale; the env override restores high).
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": settings.RESEARCH_EFFORT},
     }

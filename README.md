@@ -2639,11 +2639,11 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   thinking block, which the chat collapses and commit drops, so the reply's
   substance belongs after the last tool call, where it stays text.
 - **Research budgets doubled** (per-dimension searches now 16–40, fetches
-  8–12, continuation ceiling 16) and research runs at `high` effort —
-  background work where latency is free and quality is the point.
-  (Dialed back from `xhigh` on 2026-07-28: research fans out 4 concurrent
-  per-dimension calls, so `xhigh`'s extra reasoning depth was compounding
-  across all of them and driving up cost — see the config table below.)
+  8–12, continuation ceiling 16). Research thinks at `medium` effort by
+  default, following Sonnet 5.5's recalibrated effort scale and Anthropic's
+  migration guidance for multistep tool use. Thinking bills as output across
+  all four concurrent dimensions and their continuations; set
+  `BUILD_A_SPEC_RESEARCH_EFFORT=high` to restore the previous depth.
 - **Usage telemetry groundwork.** Every turn aggregates its billed usage
   (input/output/cache/thinking tokens, web-tool requests) across all
   rounds into `turn_complete.usage` and the session trace — the raw
@@ -3113,7 +3113,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_CONTEXT_WINDOW` | `BUILD_A_SPEC_CONTEXT_WINDOW` (`1000000`) | Research model's context window. Each request is estimated with a supported equivalent at the free provider token counter, plus server-tool overhead, output and web-result reserves; pair this override with a research model whose window differs. |
-| `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
+| `BUILD_A_SPEC_RESEARCH_EFFORT` | `medium` | Adaptive-thinking effort for research dimensions, following Sonnet 5.5's recalibrated scale and migration guidance for multistep tool use. Set `BUILD_A_SPEC_RESEARCH_EFFORT=high` to restore the previous default. In PowerShell: `$env:BUILD_A_SPEC_RESEARCH_EFFORT = "high"`; in Command Prompt: `set BUILD_A_SPEC_RESEARCH_EFFORT=high`. |
 | `BUILD_A_SPEC_CONTINUATION_CACHE` | `1` | Continuation caching (Chunk 4 of the cost program, on by default since the Tier 1 finish program's session CT-3): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. Watched by the cost self-checks: a resume the provider refuses because of the breakpoint is sent once more without it, and the breakpoint switches off for that engine (research or Final QC) until the app restarts; six or more measured resumes that together cost more than they saved switch it off the same way (Settings → Developer tools → Cost self-checks). `0` switches it off: no request carries it. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`. |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Global QC output/thinking ceiling. Caps every phase, including explicit phase overrides. |

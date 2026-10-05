@@ -382,7 +382,11 @@ RESEARCH_MAX_TOKENS = _int_env("BUILD_A_SPEC_RESEARCH_MAX_TOKENS", MODEL_MAX_OUT
 RESEARCH_CONTEXT_WINDOW = _int_env(
     "BUILD_A_SPEC_RESEARCH_CONTEXT_WINDOW", MODEL_CONTEXT_WINDOW, minimum=1
 )
-RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
+# Sonnet 5.5 recalibrated effort from Sonnet 5; Anthropic's migration guide
+# starts multistep tool use at medium. Research fans out four conversations,
+# so thinking billed as output compounds across their continuation requests.
+# BUILD_A_SPEC_RESEARCH_EFFORT=high restores the previous default.
+RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "medium")
 
 # --- Final QC (the pre-issue review pass, on Opus 5.5) -----------------------
 

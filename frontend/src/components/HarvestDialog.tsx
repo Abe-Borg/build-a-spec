@@ -17,7 +17,10 @@
  *
  * Opened from the Project facts panel, from Next section's "Harvest first"
  * and from the Export menu's hint — it stacks over whatever opened it, so
- * closing it returns the user there. It never runs itself.
+ * closing it returns the user there. The component stays mounted for the
+ * session; only its ModalShell comes and goes, so paid work and edited rows
+ * survive closing. App's keyed panel discards it on session replacement.
+ * It never runs itself.
  */
 import { useEffect, useRef, useState } from "react";
 
@@ -38,14 +41,14 @@ import type {
   HarvestProposal,
   HarvestStatus,
 } from "../types";
+import {
+  beginHarvestRun,
+  closeHarvestPhase,
+  harvestActivity,
+  type HarvestActivity,
+  type HarvestPhase,
+} from "../lib/harvestLifecycle";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
-
-type Phase =
-  | { kind: "intro" }
-  | { kind: "running" }
-  | { kind: "review"; preview: HarvestPreview }
-  | { kind: "failed"; message: string; code: string }
-  | { kind: "done"; result: HarvestCommitResult; accepted: number };
 
 const fieldClass =
   "w-full rounded border border-edge bg-bg px-1.5 py-1 text-[11px] text-ink outline-none focus:border-accent";
@@ -234,13 +237,19 @@ function ProposalRow({
 }
 
 export default function HarvestDialog({
+  open,
   pending,
+  onActivityChange,
   onRun,
   onCommit,
   onClose,
 }: {
+  /** Visibility only: this component remains mounted while closed. */
+  open: boolean;
   /** Replies since the last committed harvest — the intro's numbers. */
   pending: HarvestStatus | null;
+  /** Let the existing doors announce running/ready work while closed. */
+  onActivityChange: (activity: HarvestActivity) => void;
   /** App's handler: the one paid call. Rejects with a HarvestRequestError. */
   onRun: () => Promise<HarvestPreview>;
   /** App's handler: records the accepted proposals and refreshes the facts,
@@ -248,15 +257,20 @@ export default function HarvestDialog({
   onCommit: (input: HarvestCommitInput) => Promise<HarvestCommitResult>;
   onClose: () => void;
 }) {
-  const [phase, setPhase] = useState<Phase>({ kind: "intro" });
+  const [phase, renderPhase] = useState<HarvestPhase>({ kind: "intro" });
+  const phaseRef = useRef<HarvestPhase>(phase);
+  const setPhase = (next: HarvestPhase) => {
+    phaseRef.current = next;
+    renderPhase(next);
+  };
   const [accepted, setAccepted] = useState<Set<number>>(new Set());
   const [drafts, setDrafts] = useState<Map<number, HarvestDraft>>(new Map());
   const [editing, setEditing] = useState<Set<number>>(new Set());
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [commitError, setCommitError] = useState("");
   const [committing, setCommitting] = useState(false);
-  // The call keeps running server-side (and is billed) if the dialog closes
-  // meanwhile; a late answer must not set state on a closed dialog.
+  // Closing doesn't unmount us. A true unmount means the session was
+  // replaced (or entered a tour); its late success/error must stay there.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -265,8 +279,19 @@ export default function HarvestDialog({
     };
   }, []);
 
+  useEffect(() => {
+    onActivityChange(harvestActivity(phase));
+  }, [phase, onActivityChange]);
+
+  const close = () => {
+    setPhase(closeHarvestPhase(phaseRef.current));
+    onClose();
+  };
+
   const run = async () => {
-    setPhase({ kind: "running" });
+    const running = beginHarvestRun(phaseRef.current);
+    if (!running) return;
+    setPhase(running);
     setCommitError("");
     setRowErrors({});
     try {
@@ -324,8 +349,12 @@ export default function HarvestDialog({
 
   const replies = pending?.replies_since ?? 0;
 
+  // Unmount the shell, not this state owner: no hidden focus trap, Escape
+  // listener, or backdrop remains; its normal focus restoration still runs.
+  if (!open) return null;
+
   return (
-    <ModalShell title="Harvest project facts" onClose={onClose} xwide>
+    <ModalShell title="Harvest project facts" onClose={close} xwide>
       <div data-capability="project.facts-harvest">
         {phase.kind === "intro" && (
           <>
@@ -367,7 +396,7 @@ export default function HarvestDialog({
               >
                 Run the harvest
               </button>
-              <button type="button" className={quietBtn} onClick={onClose}>
+              <button type="button" className={quietBtn} onClick={close}>
                 Cancel
               </button>
             </div>
@@ -375,17 +404,26 @@ export default function HarvestDialog({
         )}
 
         {phase.kind === "running" && (
-          <div className="flex items-center gap-2 py-3 text-sm text-ink-dim" aria-live="polite">
-            <span className="status-dots" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </span>
-            <span className="status-shimmer">
-              Reading {replies > 0 ? `${replies} ${replies === 1 ? "reply" : "replies"} and ` : ""}
-              the draft…
-            </span>
-          </div>
+          <>
+            <div className="flex items-center gap-2 py-3 text-sm text-ink-dim" aria-live="polite">
+              <span className="status-dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+              <span className="status-shimmer">
+                Reading {replies > 0 ? `${replies} ${replies === 1 ? "reply" : "replies"} and ` : ""}
+                the draft…
+              </span>
+            </div>
+            <p className="text-xs text-ink-faint">
+              You can close this while it runs. Reopen Harvest facts to check its
+              progress or review the result when it is ready.
+            </p>
+            <button type="button" className={quietBtn + " mt-3"} onClick={close}>
+              Close
+            </button>
+          </>
         )}
 
         {phase.kind === "failed" && (
@@ -404,7 +442,7 @@ export default function HarvestDialog({
                   Run it again
                 </button>
               )}
-              <button type="button" className={quietBtn} onClick={onClose}>
+              <button type="button" className={quietBtn} onClick={close}>
                 Close
               </button>
             </div>
@@ -475,8 +513,18 @@ export default function HarvestDialog({
               >
                 {committing ? "Recording…" : commitLabel(accepted.size)}
               </button>
-              <button type="button" className={quietBtn} onClick={onClose} disabled={committing}>
-                Cancel
+              <button type="button" className={quietBtn} onClick={close} disabled={committing}>
+                Close
+              </button>
+              <button
+                type="button"
+                className={quietBtn}
+                disabled={committing}
+                onClick={() => setPhase({ kind: "intro" })}
+                title="Discard this sheet without recording facts or marking replies read"
+                data-capability="project.facts-harvest"
+              >
+                Discard preview
               </button>
               {phase.preview.proposals.length > 0 && (
                 <span className="text-[11px] text-ink-faint">
@@ -501,7 +549,7 @@ export default function HarvestDialog({
                   }. They are in the Project facts panel, and the next section of this project starts knowing them.`}
             </p>
             <div className="mt-4 flex gap-2">
-              <button type="button" className={primaryBtn} onClick={onClose}>
+              <button type="button" className={primaryBtn} onClick={close}>
                 Close
               </button>
             </div>

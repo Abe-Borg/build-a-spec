@@ -143,10 +143,10 @@ test("the door follows what the harvest can read, not the reply hint", () => {
   // The panel renders, and its button is enabled, on that flag — never on
   // the hint alone, which would hide the only unconditional door.
   const panel = read("../src/components/ProjectFactsPanel.tsx");
-  assert.match(panel, /const harvestable = harvestAvailable && canHarvest\(harvest\);/);
+  assert.match(panel, /const harvestable = harvestAvailable && canOpenHarvest\(harvest, harvestActivity\);/);
   assert.match(panel, /if \(items\.length === 0 && link === null && !harvestable\) return null;/);
   assert.doesNotMatch(panel, /&& !hint\) return null/);
-  assert.match(panel, /disabled=\{busy \|\| !harvestable\}\s*onClick=\{onHarvest\}/);
+  assert.match(panel, /disabled=\{\(busy && harvestActivity === "idle"\) \|\| !harvestable\}\s*onClick=\{onHarvest\}/);
 });
 
 test("the sheet's header says what was read, and what was left out", () => {
@@ -323,5 +323,6 @@ test("every door OPENS the dialog; none of them runs the pass", () => {
   );
   // Not in a tour: the practice copy is not the user's session.
   assert.match(artifact, /harvestAvailable=\{!tutorialActive\}/);
-  assert.match(artifact, /\{harvestOpen && !tutorialActive && \(/);
+  assert.match(artifact, /\{!tutorialActive && \(\s*<HarvestDialog\s+open=\{harvestOpen\}/);
+  assert.doesNotMatch(artifact, /\{harvestOpen && !tutorialActive && \(/);
 });

@@ -17225,3 +17225,68 @@ Final validation (2026-10-05): the full backend suite passed **3,576 tests,
 files), `npm run build`, release version consistency (1.22.1) and diff
 checks passed. Tests used fake clients and a placeholder API key; no paid
 API call was made.
+
+## Closing a fact harvest keeps its paid result — implemented notes (2026-10-05)
+
+The harvest could be closed during its billed call, unmounting the dialog;
+its mount guard then threw away the preview token with the late reply.
+Reopening offered a new Run, first colliding with the server's active lease
+and then allowing another paid pass. Closing now retains the state owner
+inside App's existing session-keyed ArtifactPanel. Only ModalShell unmounts,
+so normal focus restoration and Escape-stack cleanup still run. Reopening
+shows the running phase or the finished preview, including a zero-proposal
+sheet; closing a sheet also keeps its selected rows, edited text and errors.
+
+`lib/harvestLifecycle` holds the pure phase/door rules. `beginHarvestRun`
+allows only the intro or a retryable failure; HarvestDialog stores its new
+phase in a ref synchronously before calling App's paid handler, so a second
+click before React renders is refused. Close preserves running, review and
+failed phases. Closing done resets to intro because commit consumed the
+token. Discard preview explicitly resets an uncommitted sheet without a
+request, recorded fact or marker change. A stale/expired token still follows
+the existing server-error path and offers a deliberate paid retry.
+
+The dialog publishes idle/running/ready activity to ArtifactPanel. Project
+facts, Next section's Harvest first and the Export menu prioritize the
+running/ready hint over unread-reply counts. The facts panel remains visible
+and its door stays usable for retained work even if the current payload has
+no harvestable material or chat is busy. Each door only opens the dialog.
+Tours still hide it. Reset and project load call App's existing
+`discardPaneState`, remounting the keyed panel and the dialog; its old mount
+guard rejects late success and failure. Retained state is component-local,
+never written into browser storage or a saved project.
+
+No backend behavior, capability id, dependency, environment knob, saved
+format or version change. The user-facing note was added to the current
+release's Projects section in `backend/release_notes.py`, with README copy.
+The requested implemented-notes section is also in CLAUDE.md; detailed
+history stays here under its existing convention.
+
+Validation: the frontend suite (49 test files, including the 14 new lifecycle
+regressions) and the TypeScript/Vite production build passed. The existing
+harvest API tests use stubbed fetch, and the new tests call pure helpers or
+read source. The data/rendering release-note and docs-consistency checks
+passed (36 tests; five unchanged REST endpoint tests deselected), as did
+Ruff, release version consistency and `git diff --check`. No paid API call
+or canary was run.
+
+Reversion evidence: 31 temporary changes were applied one at a time, each
+producing a named assertion failure in `harvestLifecycle.test.ts`, then
+restored. They covered:
+
+- Conditional mounting of the owner, leaving its shell mounted while closed,
+  and refusing a successful response merely because the dialog was hidden.
+- Removing the synchronous phase-ref update, removing the click guard, and
+  allowing Run from the running phase.
+- Resetting running or review on close, and keeping done after a consumed
+  commit instead of resetting it.
+- Removing the session key, failing to advance it, or skipping the owner wipe
+  on New session or project load; dropping the late-success/late-failure
+  guards or failing to mark the old owner unmounted.
+- Suppressing running/ready activity or either hint, removing retained-work
+  availability, disconnecting activity publication/callback/prop wiring,
+  using idle hints in either panel, and blocking reopening while chat is busy.
+- Blocking the shell's close during running, disabling the running Close
+  button, removing the explicit discard action, and omitting test registration.
+
+The restored lifecycle suite passed after all reversions.

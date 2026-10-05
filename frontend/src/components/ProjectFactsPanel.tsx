@@ -25,7 +25,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { ProjectFactInput } from "../lib/api";
-import { canHarvest, harvestHint } from "../lib/harvest";
+import { canOpenHarvest, harvestDoorHint, type HarvestActivity } from "../lib/harvestLifecycle";
 import {
   factCounts,
   factProvenance,
@@ -201,6 +201,7 @@ export default function ProjectFactsPanel({
   busy,
   openNonce,
   harvest,
+  harvestActivity,
   harvestAvailable,
   onHarvest,
   onAdd,
@@ -219,6 +220,7 @@ export default function ProjectFactsPanel({
   /** Replies since the last committed harvest, and whether there is
    *  anything to harvest at all; null before the first payload. */
   harvest: HarvestStatus | null;
+  harvestActivity: HarvestActivity;
   /** False in a tour: the practice copy is not the user's session, and the
    *  server refuses the call there anyway. */
   harvestAvailable: boolean;
@@ -287,10 +289,10 @@ export default function ProjectFactsPanel({
     if (openNonce) setExpanded(true);
   }, [openNonce]);
 
-  const hint = harvestAvailable ? harvestHint(harvest) : "";
-  // The door follows what the harvest can read, not the reply hint: a draft
-  // with no reply to read is still worth harvesting (Codex, PR #185).
-  const harvestable = harvestAvailable && canHarvest(harvest);
+  const hint = harvestAvailable ? harvestDoorHint(harvest, harvestActivity) : "";
+  // A draft with no reply is still harvestable (Codex, PR #185). Retained
+  // running/ready work also keeps its door open, even if material changed.
+  const harvestable = harvestAvailable && canOpenHarvest(harvest, harvestActivity);
   if (items.length === 0 && link === null && !harvestable) return null;
 
   const summary =
@@ -563,11 +565,11 @@ export default function ProjectFactsPanel({
             <div className="mt-1 flex flex-wrap items-baseline gap-x-2 px-1 text-[10px]">
               <button
                 className={smallBtn}
-                disabled={busy || !harvestable}
+                disabled={(busy && harvestActivity === "idle") || !harvestable}
                 onClick={onHarvest}
                 data-capability="project.facts-harvest"
                 title={
-                  busy
+                  busy && harvestActivity === "idle"
                     ? "The assistant is replying — try again in a moment"
                     : !harvestable
                       ? "Nothing to harvest yet: no reply since the last harvest, no provision in the draft, and no Final QC dismissal reason"

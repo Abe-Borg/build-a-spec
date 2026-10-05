@@ -241,6 +241,30 @@ test("the warm lead on, before any phase was checked", () => {
   assert.equal(warmLine(), "Warm lead (Final QC): on · nothing checked yet");
 });
 
+test("a scoped loss says which groups are off while others keep their leads", () => {
+  assert.equal(warmLine({
+    enabled: false, reason: "unprofitable", since: 1,
+    disabled_scopes: [
+      { model: "claude-opus-5-5", kind: "web-tooled", size_band: "8-19",
+        reason: "unprofitable", detail: "A small loss", since: 1 },
+      { model: "claude-opus-5", kind: "no-web", size_band: "20+",
+        reason: "not_read", detail: "No reads", since: 2 },
+    ],
+  }), "Warm lead (Final QC): on for other groups · off until restart: " +
+      "claude-opus-5-5, web-tooled, 8-19 seats — it had cost more than it saved · " +
+      "claude-opus-5, no-web, 20+ seats — the batch did not read the lead's copy");
+});
+
+test("malformed scoped diagnostics remain readable and settings still win", () => {
+  const malformed = [{ kind: "no-web" }, null] as unknown as NonNullable<WarmLeadCheck["disabled_scopes"]>;
+  assert.equal(warmLine({ disabled_scopes: malformed }),
+    "Warm lead (Final QC): on for other groups · off until restart: not reported · not reported");
+  assert.equal(warmLine({ setting_on: false, disabled_scopes: malformed }),
+    "Warm lead: switched off in settings");
+  assert.equal(warmLine({ disabled_scopes: [] }),
+    "Warm lead (Final QC): on · nothing checked yet");
+});
+
 test("the warm lead on, with the last check's numbers in plain words", () => {
   assert.equal(
     warmLine({ last_check: { at: 1, lineages: [lineage()] } }),

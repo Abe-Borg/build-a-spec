@@ -6751,8 +6751,9 @@ def _sleep_interruptibly(
 # ends normally and sent a lead, ``check_leads`` hands each such lineage's
 # usage to ``cost_checks.check_warm_leads``, which switches the lead off for
 # the rest of the app session when the batch did not read its copy or it cost
-# more than it could have saved, and ``_run_batch_calls`` picks no lead once
-# it has. What the check cannot see is bounded: a lead that is read but was
+# more than it could have saved. The latch applies only to that model, tool
+# kind and size cohort (8–19 or 20+ seats); other cohorts keep their leads.
+# What the check cannot see is bounded: a lead that is read but was
 # not needed costs about its own batch discount, a failed lead is an ordinary
 # failed seat, and the batch waits at most ``QC_WARM_WAIT_SECONDS`` for the
 # lead's first output. BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0 switches it off.
@@ -6761,14 +6762,11 @@ LINEAGE_WEB_TOOLED = "web-tooled"
 LINEAGE_NO_WEB = "no-web"
 _WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
 
-# The fewest seats one lineage must carry before its lead is streamed. Set by
-# the plan's Chunk 3 gate from M2 (the QC profiler on a real batched export):
-# with no M2 recorded, both sit at the gate's fallback of 20, where a lead
-# still pays while the batch already reads up to 88% of the prefix (the
-# plan's §10.3, at p = 40k and o = 5k). The web-tooled seats' continuations
-# re-read the prefix, which only makes that lineage's minimum conservative.
-_WARM_LEAD_MIN_SEATS_WEB = 20
-_WARM_LEAD_MIN_SEATS_NO_WEB = 20
+# The original unmeasured fallback of 20 left small lineages paying repeated
+# 1-hour writes. Admit both kinds down to the floor; the usage-based self-check
+# can remove a losing cohort without taking away large lineages' saving.
+_WARM_LEAD_MIN_SEATS_WEB = 8
+_WARM_LEAD_MIN_SEATS_NO_WEB = 8
 # Never fewer: below 8 seats one list-price seat is a large share of the
 # phase, and a misestimated prefix or output size outweighs the saving.
 # Enforced here as well as pinned by a test, so a lowered constant cannot
@@ -6929,14 +6927,17 @@ def _run_batch_calls(
     if not states:
         return _BatchPhaseOutcome({})
     # The warm lead's self-check (Tier 1 finish, WL-1) can only take the lead
-    # away: once a phase proved the batch does not read the lead's copy, or
-    # that the lead cost more than it could have saved, no later phase in
-    # this app session picks one. Read once per phase, after the switch.
+    # away from its model/tool/size cohort. Filter each candidate after the
+    # switch and wait gate; one losing small lineage must not gate the phase.
     leads = (
-        _pick_warm_leads(specs)
+        [
+            lead for lead in _pick_warm_leads(specs)
+            if cost_checks.warm_lead_enabled(
+                model=specs[lead.key].model, kind=lead.kind, seats=lead.lineage_size
+            )
+        ]
         if warm_leads
         and warm_wait_seconds > 0
-        and cost_checks.warm_lead_enabled()
         else []
     )
     lead_keys = frozenset(lead.key for lead in leads)
@@ -7210,6 +7211,10 @@ def _run_batch_calls(
                         warm=(
                             release_outcomes.get(lead.key) == WARM_OUTCOME_WARM
                             and result.api_request_count == len(result.billed)
+                            # Fallbacks are retained on leads: no documented
+                            # opt-in cache fork. An actual model switch does
+                            # write another model's cache and cannot judge this one.
+                            and not result.served_by_model
                         ),
                     )
                 )

@@ -118,6 +118,17 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "result read out of date."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Smaller reviews share a warmed copy too",
+                        body=(
+                            "Batched Final QC now sends a reviewer first when "
+                            "eight or more seats share the same copy, so the "
+                            "rest can read its cached copy. If that costs more "
+                            "than it saves, the app pauses it for that model, "
+                            "tool kind and group size until restart; larger "
+                            "groups keep their leads after a small group loses."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(

@@ -2388,11 +2388,21 @@ export interface WarmLeadLineageCheck {
 /** The warm lead's latch and last check (Tier 1 finish, WL-1). */
 export interface WarmLeadCheck {
   setting_on: boolean;
+  /** All model/tool/size cohorts are enabled. Not a global selection gate. */
   enabled: boolean;
-  /** Why the check switched it off ("" while it has not). */
+  /** Legacy summary: the first disabled cohort ("" while there is none). */
   reason: string;
   detail: string;
   since: number | null;
+  /** Absent on older backends with one global latch. */
+  disabled_scopes?: Array<{
+    model: string;
+    kind: string;
+    size_band: string;
+    reason: string;
+    detail: string;
+    since: number | null;
+  }>;
   /** The last batched phase the check judged, or null before the first. */
   last_check: { at: number; lineages: WarmLeadLineageCheck[] } | null;
 }

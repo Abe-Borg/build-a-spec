@@ -363,3 +363,30 @@ pins the `.\` and `^` rules.
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.
+
+### Warm leads at the eight-seat floor — implemented notes
+
+Both Final QC batch lineage minimums are 8. The cost check's OFF-only,
+process-local latches are keyed by model, tool kind and size cohort (8–19
+or 20+); `_run_batch_calls` filters each picked lead through its own scope.
+A small loss never disables large lineages. All losing cohorts in a phase
+are latched atomically; restart re-arms them. Diagnostics lists
+`warm_lead.disabled_scopes`; the legacy summary's `enabled` means all
+cohorts are enabled and must never be used as a process-wide selection gate.
+
+The streamed lead retains `extra_body.fallbacks` and the
+`server-side-fallback-2026-07-01` beta: Anthropic's pinned caching and
+fallback references do not document the opt-in as a cache-key invalidator.
+An actual fallback changes models, whose caches are separate, so a
+fallback-served lead is `not_warm` for this check. Batch params still carry
+neither fallback field nor beta. The check still requires eight measured
+batched seats; at the eight-seat floor its seven batched seats are `too_few`.
+The full design, evidence links and revert matrix are appended to
+`docs/as-built.md` under the same heading. No paid probe is authorized.
+
+Errata for the historical sections now in `docs/as-built.md`:
+- "Final QC's batched phase can stream a lead seat first" records the
+  unmeasured minimum of 20; both minimums are now the enforced floor of 8.
+- "The two shelved savings are on, and watch themselves" describes one
+  warm-lead latch that prevents all subsequent leads. Latches now affect
+  only their model/tool/size cohort; its eight-measured-seat rule is retained.

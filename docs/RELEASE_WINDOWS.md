@@ -330,7 +330,7 @@ invisible to CI and expensive to the user.
       ending `(stopped)`.
 - [ ] **Streamed lead seat** (cost Tier 1, Chunk 3 — **on by default** since
       the Tier 1 finish program's WL-2). Run Final QC on a section big enough
-      that one kind of finding faces at least 20 verifier seats (ten or more
+      that one kind of finding faces at least 8 verifier seats (four or more
       medium findings from lenses without web tools, say). In the Review
       Room, one seat of that group shows live activity while the rest wait
       on the batch, which goes out once that seat begins answering (at most
@@ -340,18 +340,20 @@ invisible to CI and expensive to the user.
       lists **Streamed lead seat**, and
       `.\.venv\Scripts\python tools\qc_export_cost_profile.py "<the JSON export>"`
       shows a `seat:list-price:<group>` row. On a section too small for any
-      group to reach 20 seats, no seat streams ahead of the batch and the
+      group to reach 8 seats, no seat streams ahead of the batch and the
       methodology does not mention a lead.
 - [ ] **The warm lead's Cost self-checks line.** Before any Final QC has
       sent a lead, Settings → Developer tools → Environment → **Cost
       self-checks** ends with `Warm lead (Final QC): on · nothing checked
       yet`. After the Final QC above it reads `Warm lead (Final QC): on ·
       last check: …`, with how many of that group's batched seats read the
-      lead's copy. It reads `off for this session` only when the activity
-      log also holds the `Cost self-check: the warm lead is switched off`
-      WARNING, and then the next Final QC streams no lead: every seat rides
-      the batch at the batch rate, and the methodology does not mention a
-      lead. Restarting the app switches it back on.
+      lead's copy (an eight-seat group has only seven batched seats and is
+      too small to judge). A measured loss lists the disabled model, tool
+      kind and size cohort under `on for other groups · off until restart`,
+      with a matching `Cost self-check: the warm lead for … is switched off`
+      WARNING. Only that cohort loses its leads: after a small cohort
+      loses, a 20-seat group of the same kind still streams its lead.
+      Restarting the app re-arms every cohort.
 - [ ] **Switching the warm lead off.** Set
       `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"` (Command Prompt:
       `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`) before you start the app, and

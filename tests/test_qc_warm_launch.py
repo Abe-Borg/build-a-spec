@@ -223,6 +223,11 @@ def _run(client, *, warm: float | None, store=None, sink=None, should_stop=lambd
         started_at="2026-09-23T10:00:00-07:00",
         finished_at="2026-09-23T10:01:00-07:00",
         run_id="qc-warm-test",
+        # This file compares staggering with simultaneous launch. Keep warm
+        # leads off: at the shipped floor, a 45-second wait would otherwise
+        # select a streamed lead while a zero wait leaves every seat batched.
+        # The lead's separate contract lives in test_qc_batch_warm_lead.py.
+        batch_warm_lead=False,
         warm_wait_seconds=warm,
         event_sink=sink or (lambda _event: None),
         should_stop=should_stop,

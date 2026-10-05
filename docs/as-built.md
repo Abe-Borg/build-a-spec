@@ -17059,3 +17059,133 @@ including 34 new ceiling regressions and the QC report, transport, runner,
 freshness, remediation, settings and usage checks. The frontend suite and
 production build, Ruff, release version consistency and diff checks passed.
 No paid API call was made.
+
+## Warm leads at the eight-seat floor — implemented notes
+
+The two lineage minimums in `backend/qc/engine.py` now equal the enforced
+floor of 8. The previous 20-seat values were an unmeasured fallback, so
+8–19-seat groups paid for potentially repeated one-hour cache writes without
+a lead. This change admits them and keeps the usage-based runtime check.
+No paid API calls or cache measurements were made. No dependency, knob,
+route, SSE event, project-format, QC schema/protocol or version change.
+The newest unreleased entry, 1.22.1, gains "Smaller reviews share a warmed
+copy too" under Final QC.
+
+- **Scoped OFF-only latches.** The key is `(model, tool kind, size cohort)`,
+  with tool kinds `web-tooled` / `no-web` and cohorts `8-19` / `20+`.
+  These fixed cohorts separate the newly admitted small lineages from the
+  previously eligible large ones. They reuse observations across documents
+  without retaining document hashes or growing one latch per document.
+  An expensive small lead does not establish that a large lead loses, and
+  a miss on one model or tool shape cannot establish it for another.
+  Both `not_read` and `unprofitable` latch only that scope, until restart.
+  This is deliberately coarse: a loss disables every size within its
+  cohort, including sizes that might pay, but never the other cohort.
+  The check's arithmetic, eight-measured-seat threshold, first-batch-only
+  observations and incomplete-phase exclusions are unchanged.
+- **Read the scope of each candidate.** `_run_batch_calls` first applies
+  the settings/wait gates, then filters each picked lead with
+  `warm_lead_enabled(model=..., kind=..., seats=...)`. There is no
+  phase-wide latch gate. A latch affects subsequent phases; already-started
+  leads finish, retain their usage and verdict records, and remain priced
+  at list. Every losing cohort in one phase is latched in the same lock
+  acquisition as its diagnostics record. Each cohort's first latch wins
+  and logs one warning; later checks still replace `last_check`.
+- **Diagnostics say which groups are off.** `warm_lead.disabled_scopes`
+  lists scalar `model`, `kind`, `size_band`, `reason`, `detail`, `since`
+  records, which survive the support bundle's depth/redaction limits.
+  Snapshots copy those records. Legacy summary fields remain: `enabled`
+  means ALL cohorts are enabled, and reason/detail/since summarize the
+  first disabled cohort; they are never a process-wide selection gate.
+  Developer tools renders disabled scopes as "on for other groups · off
+  until restart: …". Older snapshots with a global latch still render,
+  malformed scope entries are "not reported", and the settings switch
+  takes precedence. `reset_for_tests` clears every scope and last check.
+- **Cache-key documentation check (2026-10-05).** Reviewed Anthropic's
+  pinned [prompt-caching reference](https://github.com/anthropics/skills/blob/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/claude-api/shared/prompt-caching.md)
+  ("The one invariant", "Invalidation hierarchy", "Don't change tools or
+  model mid-conversation") and [fallback semantics](https://github.com/anthropics/skills/blob/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/claude-api/shared/model-migration.md#L1415-L1420),
+  the same revision already cited by this repo. The caching reference says
+  the key derives from the rendered prefix bytes and caches are
+  model-scoped. Neither reference documents `fallbacks: "default"` or
+  `server-side-fallback-2026-07-01` as an opt-in cache-key invalidator.
+  Therefore the lead retains `extra_body.fallbacks` and the beta header;
+  batch params retain neither (the fallback reference says Batches rejects
+  the parameter). This is not evidence that streaming and Batches share
+  a cache: the runtime read check remains the safety net.
+- **An actual fallback is another model's cache.** Fallback semantics
+  document model switches and sticky fallback routing. A lead whose
+  `_CallResult.served_by_model` is set cannot establish that it warmed the
+  requested model's prefix, so the lineage is `not_warm` and cannot latch.
+  The test covers both an explicit fallback block and a sticky response
+  without that block. Its verdict, answering-model disclosure and billed
+  record still reach the report normally.
+- **The floor's measurement limit is explicit.** Eight seats leave seven
+  batched seats, below the unchanged eight-measured-seat requirement;
+  such a lineage is `too_few` and cannot disable its cohort. Web-tool
+  responses without first-iteration usage also remain unmeasured. A lead
+  that was read but unnecessary cannot be distinguished from one that
+  paid: the unobserved no-lead read share remains unguessed.
+- **Regression tests and reverts.** Updated both old 20-seat pins, added
+  a shipped-default run with eight web and eight no-web seats, and tested
+  both losing verdicts across size, tool and model scopes. A real two-run
+  fake-client test loses on a small group, then still streams leads on a
+  large group of the same kind and a small group of the other kind.
+  Multiple losing scopes, immutable snapshots, restart reset, fallback
+  exclusion and scoped UI wording are covered. Every row below was
+  reverted alone, tested red, then restored from the exact text read:
+
+  | Mechanism reverted | Tests red |
+  |---|---|
+  | Web minimum back to 20 | 1 |
+  | No-web minimum back to 20 | 1 |
+  | Runtime floor removed | 1 |
+  | Size cohorts collapsed | 4 |
+  | Tool cohorts collapsed | 4 |
+  | Model cohorts collapsed | 4 |
+  | Phase-wide gate restored | 1 |
+  | Scoped latch never read | 1 |
+  | Only the first losing cohort latched | 1 |
+  | Scoped latches not reset | 4 |
+  | Scoped diagnostics omitted | 1 |
+  | Fallback-served lead judged as the primary model | 2 |
+  | Fallback opt-in removed from the lead | 1 |
+  | Scoped UI formatter removed | 2 |
+  | Modal minimum back to twenty | 1 |
+  | README minimum back to twenty | 1 |
+  | Warm-launch helper no longer pins leads off | 1 |
+
+  The full suite found one more helper that depended on the old minimum:
+  `tests/test_qc_warm_launch.py::_run` now passes `batch_warm_lead=False`.
+  Its request-equality comparison changes only staggering; otherwise its
+  eight-seat group would select a lead with a 45-second wait and none with
+  zero wait. The shipped-default lead tests exercise that difference.
+  Run the frontend build before the full backend suite, not concurrently:
+  Vite removes `dist/assets` while rebuilding, and `create_app` can then
+  fail mounting static files. The first broad run hit that race in six
+  compaction tests; their isolated suite passed after the build finished.
+
+- **Errata** (historical sections remain append-only):
+  1. "Final QC's batched phase can stream a lead seat first" records the
+     fallback minimum of 20. Both minimums are now 8; seven seats still
+     cannot select a lead. The fallback-off helper continues to pin exact
+     request equality; production leads also carry the refusal fallback.
+  2. "The two shelved savings are on, and watch themselves" describes one
+     process-wide warm-lead latch and says the next phase picks no lead
+     after any losing lineage. Only the losing model/tool/size cohort is
+     now disabled. Its floor-8 runs no longer require excluding the old
+     20-seat pins; those tests now assert the shipped minimum of 8.
+     Its eight-measured-seat rule and the `too_few` floor limit still hold.
+  3. "A declined Final QC call is answered, and the report says by whom" describes the
+     fallback on every streamed call, including leads; that still holds.
+     The warm-lead check now excludes an actually fallback-served lead,
+     as CT-2 already excluded another model's cache observations.
+
+- **Final validation (2026-10-05).** With every mutation restored, the
+  complete backend suite (base `0d20b83`) passed **3,568 tests, 64 skipped**. Ruff,
+  `npm test`, `npm run build`, release version consistency (1.22.1) and
+  `git diff --check` passed. All **17** individual mechanism reverts
+  produced assertion failures. The backend run used a placeholder API key,
+  a writable `/tmp` configuration directory and the sandbox network
+  capability required for local TestClient communication. No paid API
+  call, live canary, provider cache trial or full live QC was run.

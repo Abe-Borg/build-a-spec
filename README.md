@@ -1280,7 +1280,7 @@ reviewer checking a finding from a lens without web tools reads one copy,
 and every reviewer checking a code-compliance finding (they carry web search
 and fetch) reads another. Inside a batch, how many of them read a stored
 copy and how many pay to store their own is up to how the provider
-schedules the batch. When one of those groups has at least 20 reviewers,
+schedules the batch. When one of those groups has at least 8 reviewers,
 one of them is sent first, on its own and at full price, and the batch goes
 out only once it has started answering, so the rest can read the copy it
 stored.
@@ -1292,15 +1292,20 @@ stored.
   (session WL-2) with a self-check in place of the run. After each Final QC
   that sent a lead, the app reads how many of the batched reviewers read the
   lead's copy. If fewer than half did, or the lead cost more than it could
-  have saved, the lead switches off until the app restarts, and the next
-  Final QC sends none
+  have saved, leads switch off until restart for that model, tool kind and
+  size cohort (8–19 seats or 20+). Other cohorts keep their leads, so one
+  marginal small group cannot disable large groups
   ([the cost self-checks](#the-cost-self-checks-watch-both-savings-tier-1-finish),
   below). `BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0` switches it off for good. In
   PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`; in Command
   Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`.
-- **What changes:** only how one reviewer per large group is
-  sent. Its request is byte for byte what it would have been inside the
-  batch, and its verdict counts exactly like any other seat's, so the
+- **What changes:** how one reviewer per eligible group is
+  sent. Its cached prefix and verdict rules match the batched seats.
+  The streamed request also carries the refusal fallback; its opt-in is
+  not a documented cache-key invalidator (see the implemented notes in
+  `docs/as-built.md`). A lead answered by another model is not judged by
+  the warm-cache check because caches are model-scoped. Its verdict counts
+  exactly like any other seat's, so the
   review, its findings and a Final QC result you already have (it stays
   current) are unchanged. In the Review Room that reviewer's card shows its
   live activity while the rest wait on the batch. The report prices its
@@ -1318,9 +1323,11 @@ stored.
   it saves depends on how much of that copy the batch already reads without
   it: a net $1.80 or so on a 20-reviewer group that reads 30% of it today,
   and less than it costs on a small group that already reads nearly all of
-  it. That is why only groups of 20 or more qualify (the plan's fallback,
-  used because no measurement of a real batch was recorded); the app never
-  lets that minimum fall below 8.
+  it. Both tool kinds now qualify at the floor of 8, replacing the
+  unmeasured placeholder of 20. The runtime check watches actual usage and
+  isolates a small group's loss from large groups. The check still needs
+  8 measured batched seats: an 8-seat group has only 7 and remains
+  `too_few`, so its saving cannot be judged.
 - **Measured, not modelled:** on a Final QC that sent a lead,
   `tools\qc_export_cost_profile.py` shows the lead as its own
   `seat:list-price:<group>` row, and the batched row beside it should read
@@ -1474,15 +1481,17 @@ provider.**
   having the switch off.
 - **Whether the batch reads the warm lead (Chunk 3).** After every Final QC
   whose batched verification sent a lead and finished normally — not
-  stopped, timed out or refused — the app reads, for each large group,
+  stopped, timed out or refused — the app reads, for each eligible group,
   whether each batched reviewer's first reply read the shared copy of your
   section (at least 95% of it) or stored its own. With at least 8 reviewers
   measured: if fewer than half read it, the batch is not reading the lead's
   copy; if the lead cost more than it could have saved even had the batch
-  alone read nothing, it lost money. Either way the lead switches off for
-  the rest of the session, and the next Final QC sends none. A lead whose
+  alone read nothing, it lost money. Either way leads switch off until
+  restart for that model, tool kind and size cohort (8–19 seats or 20+);
+  other cohorts keep theirs. A lead whose
   batch went out before its copy was ready (its wait timed out, or its
-  first request failed) is not judged. A lead that is read but turns out
+  first request failed), or that was answered by a fallback model, is not
+  judged. A lead that is read but turns out
   not to have been needed (the batch would have read the copy anyway) cannot
   be told apart from one that was, and is kept: that costs about the lead's
   own batch discount, $0.20–0.35 per large group per run.
@@ -1496,8 +1505,9 @@ provider.**
 - **Where to see it:** Settings → Developer tools → **Cost self-checks**
   shows one line per engine for the resume breakpoint (on, what was
   measured and its estimated saving or loss, or "off for this session" and
-  why) and one line for the warm lead (the last check's numbers, or why it
-  is off). The first time a check switches a saving off it writes one
+  why) and one line for the warm lead (the last check's numbers, or the
+  disabled model/tool/size cohorts). The first time a check switches a saving
+  off in a cohort it writes one
   WARNING to the activity log (`Cost self-check: … switched off … until the
   app restarts`); the warm lead's check also writes one `Warm lead check:`
   line per group it judges, numbers only. The support bundle's snapshot
@@ -3107,7 +3117,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |
 | `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | unset (GUI defaults to Batch) | When unset, Final QC phase 2 uses the Batch / Stream choice in its start confirmation or Settings, remembered on this computer in `qc_preferences.json` beside `onboarding_state.json`. Batch is half price with a count of seats returned; Stream is full price with live seat activity. Setting this variable locks both controls: `0`, `false`, `no`, `off` select Stream; other values select Batch. The choice is snapshotted for each run, never stored in a `.baspec` or the panel layout; switching it makes retained results stale through the existing input manifest. |
 | `BUILD_A_SPEC_QC_REFUSAL_FALLBACK` | `1` | Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7): every streamed Final QC request — the lenses, the grouping calls, streamed verifier seats and warm leads — carries `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a request the QC model's safety classifiers decline is retried by the API on the fallback model it chooses, and that model's answer is used. The record that call produced names the answering model, and the report states it on that record and under Limitations, with the cost of those calls estimated at the configured QC model's rates. Batched verifier seats never carry it (the Batches API rejects the parameter). A request the provider refuses because of the parameter is sent once more without it, and the fallback then switches off until the app restarts. Not a review input: a retained Final QC result stays current either way. `0` switches it off: a declined call fails as it did before. In PowerShell: `$env:BUILD_A_SPEC_QC_REFUSAL_FALLBACK = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0`. |
-| `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` | `1` | Streamed lead seat (Chunk 3 of the cost program, on by default since the Tier 1 finish program's session WL-2): when one cache group in the batched phase has at least 20 verifier seats (never fewer than 8), one of them is sent first, on its own at list price, and the batch goes out only after it starts answering (at most `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` later), so the rest can read the copy it stored. Same request bytes and verdict rules; the report prices that seat at list and says so in its methodology; a retained Final QC result stays current either way. Watched by a cost self-check: after each Final QC that sent a lead, the app reads how many batched seats read its copy, and if fewer than half did, or the lead cost more than it could have saved, the lead switches off until the app restarts (Settings → Developer tools → Cost self-checks). `0` switches it off: every seat rides the batch. In PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`. Inert when `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` is `0`. |
+| `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` | `1` | Streamed lead seat (Chunk 3 of the cost program, on by default since the Tier 1 finish program's session WL-2): when one cache group in the batched phase has at least 8 verifier seats (the enforced floor), one of them is sent first, on its own at list price, and the batch goes out only after it starts answering (at most `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` later), so the rest can read the copy it stored. Same cached prefix and verdict rules; the streamed lead also carries the refusal fallback, whose opt-in is not documented to fork the cache key; the report prices that seat at list and says so in its methodology; a retained Final QC result stays current either way. Watched by a cost self-check: after each Final QC that sent a lead, the app reads how many batched seats read its copy, and if fewer than half did, or the lead cost more than it could have saved, leads switch off until restart for that model, tool kind and size cohort (8–19 or 20+ seats); other cohorts keep their leads (Settings → Developer tools → Cost self-checks). `0` switches it off: every seat rides the batch. In PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`. Inert when `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` is `0`. |
 | `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |
 | `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` | `7200` | Wall-clock ceiling on the batched phase (floor 60). A runaway guard, not a target: unsettled seats fail and the run reads partial. |
 | `BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS` | `20` | Ceiling on batch rounds (each carries the seats that still need a continuation or a retry). |

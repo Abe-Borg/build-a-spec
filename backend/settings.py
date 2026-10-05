@@ -592,7 +592,8 @@ QC_WARM_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_WARM_WAIT_SECONDS", 45, minimum
 # until the app restarts. After every batched phase that ends normally and
 # sent a lead, it reads the usage the batch already reported (nothing is sent
 # to test the provider) and, once at least 8 batched seats are measured,
-# switches the lead off when fewer than half of them read the lead's copy, or
+# switches that model/tool/size cohort (8–19 or 20+ seats) off when fewer
+# than half of them read the lead's copy, or
 # when the lead cost more than it could have saved even if the batch alone
 # would have read nothing. What it cannot see is bounded: a lead the batch
 # reads but did not need, or one on a lineage it cannot measure, costs about

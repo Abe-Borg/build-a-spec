@@ -13,7 +13,7 @@
  * verifier seats first, so the batch can read the cache entry it wrote
  * (BUILD_A_SPEC_QC_BATCH_WARM_LEAD). After a batched phase that sent one, the
  * backend reads how many of the batched seats read the shared prefix, and
- * switches the lead off for the rest of the app session when the batch did
+ * switches its model/tool/size cohort off until restart when the batch did
  * not read its copy or it cost more than it could have saved (WL-1).
  *
  * The reasons, the engines and the warm lead's verdicts are pinned against
@@ -158,6 +158,16 @@ function warmLeadLines(checks: Record<string, unknown>): string[] {
   if (!isRecord(entry)) return ["Warm lead: not reported"];
   if (entry.setting_on === false) return ["Warm lead: switched off in settings"];
   const head = "Warm lead (Final QC)";
+  if (Array.isArray(entry.disabled_scopes) && entry.disabled_scopes.length) {
+    const scopes = entry.disabled_scopes.map((scope: unknown) => {
+      if (!isRecord(scope) || typeof scope.model !== "string" ||
+          typeof scope.kind !== "string" || typeof scope.size_band !== "string" ||
+          typeof scope.reason !== "string") return NOT_REPORTED;
+      const why = CHECK_REASON_TEXT[scope.reason] ?? `switched off (${scope.reason})`;
+      return `${scope.model}, ${scope.kind}, ${scope.size_band} seats — ${why}`;
+    });
+    return [`${head}: on for other groups · off until restart: ${scopes.join(" · ")}`];
+  }
   const reason = typeof entry.reason === "string" ? entry.reason : "";
   if (reason || entry.enabled === false) {
     const why = reason
@@ -215,4 +225,3 @@ function continuationTailLines(tail: unknown): string[] | null {
   }
   return engines.map(([label, entry]) => engineLine(label, entry));
 }
-

@@ -7183,8 +7183,9 @@ def _run_batch_calls(
         none: its retry ran in a later round, where it could read a copy an
         earlier batched seat stored rather than the lead's, so it is
         unmeasured (Codex, PR #227). The lineage is ``warm`` only when
-        the lead's wait ended on its first output and none of its requests
-        failed: a lead that timed out, or whose first request failed fast
+        the lead's wait ended on its first output, its opening response was
+        answered by the requested model, and none of its requests failed:
+        a lead that timed out, or whose first request failed fast
         (its ``finally`` releases the wait too), had no copy the batch could
         read. Arithmetic on objects the phase already holds, read-only; the
         check never raises, and nor does gathering for it.
@@ -7211,10 +7212,15 @@ def _run_batch_calls(
                         warm=(
                             release_outcomes.get(lead.key) == WARM_OUTCOME_WARM
                             and result.api_request_count == len(result.billed)
-                            # Fallbacks are retained on leads: no documented
-                            # opt-in cache fork. An actual model switch does
-                            # write another model's cache and cannot judge this one.
-                            and not result.served_by_model
+                            # With every request accounted for, billed[0]
+                            # is the opening response that released the batch.
+                            # A later fallback cannot revoke its cache entry;
+                            # served_by_model discloses the whole call.
+                            and not _fallback_served_model(
+                                result.billed[0],
+                                requested=states[lead.key].spec.model,
+                                carried=refusal_fallback,
+                            )
                         ),
                     )
                 )

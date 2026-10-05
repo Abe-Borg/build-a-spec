@@ -48,7 +48,13 @@ from backend.qc import engine
 from backend.qc.engine import run_final_qc
 from backend.spec_modules import DEFAULT_MODULE
 from backend.tracing.redaction import _SECRET_KEY_PATTERN, scrub_data
-from tests.fakes import fallback_served, pause_response, qc_verdict_response, search_result_block
+from tests.fakes import (
+    fallback_served,
+    pause_response,
+    qc_verdict_response,
+    search_result_block,
+    text_block,
+)
 from tests.test_cost_checks_tail_rejection import _CountingLock
 from tests.test_qc_batch_verification import _bad_request, _rate_limited, _store
 from tests.test_qc_batch_warm_lead import (
@@ -741,7 +747,7 @@ def test_a_small_loss_keeps_large_and_other_tool_lineages_streaming() -> None:
 def test_a_fallback_served_lead_does_not_judge_the_primary_models_cache(block) -> None:
     titles, scripts = _doc_scripts([_WROTE] * 9)
     scripts[titles[0]][0] = fallback_served(
-        scripts[titles[0]][0], to_model="claude-opus-5", block=block
+        scripts[titles[0]][0], to_model="claude-opus-5", block=block, iteration=block
     )
     client = _LeadClient(scripts)
     result = _run(client)
@@ -752,6 +758,61 @@ def test_a_fallback_served_lead_does_not_judge_the_primary_models_cache(block) -
     assert lineage["verdict"] == "not_warm"
     assert _lead_enabled()
     assert _warm_block()["disabled_scopes"] == []
+
+
+@pytest.mark.parametrize("block", [True, False])
+@pytest.mark.parametrize("opening_fallback", [False, True])
+@pytest.mark.parametrize("stop_reason", ["pause_turn", "end_turn"])
+def test_only_the_opening_responses_model_decides_whether_the_lead_warmed(
+    block, opening_fallback, stop_reason,
+) -> None:
+    titles, scripts = _doc_scripts([_WROTE] * 9)
+    opening = qc_verdict_response(True, tokens=_LEAD)
+    opening.content = [text_block("The review needs another request.")]
+    opening.stop_reason = stop_reason
+    opening.model = _OPUS
+    continuation = qc_verdict_response(True, tokens=_READ)
+    continuation.model = _OPUS
+    fallback_served(
+        opening if opening_fallback else continuation,
+        to_model="claude-opus-5", block=block, iteration=block,
+    )
+    scripts[titles[0]][:1] = [opening, continuation]
+
+    continuation_started = threading.Event()
+    batch_read = threading.Event()
+    streamed = 0
+
+    def before_first(_title):
+        nonlocal streamed
+        streamed += 1
+        if streamed == 2:
+            # Reserve the continuation's scripted response, then hold it
+            # until the batch reads: release came from the opening response.
+            continuation_started.set()
+            assert batch_read.wait(_BOUND)
+
+    def on_create(_requests):
+        # The same finding's batched seat must not take the continuation's
+        # response from the shared fake queue.
+        assert continuation_started.wait(_BOUND)
+
+    client = _LeadClient(
+        scripts, before_first=before_first, on_create=on_create,
+        on_results=lambda _batch_id: batch_read.set(),
+    )
+    result = _run(client)
+    assert result.execution_status == "complete"
+    assert client.streamed == [titles[0], titles[0]]
+    verdict = _verdicts(result)[(titles[0], 1)]
+    assert verdict.api_request_count == 2
+    # The report still discloses fallback usage anywhere in the call.
+    assert verdict.served_by_model == "claude-opus-5"
+    (lineage,) = _warm_block()["last_check"]["lineages"]
+    assert lineage["read_share"] == 0
+    assert lineage["verdict"] == ("not_warm" if opening_fallback else "not_read")
+    assert _lead_enabled() is opening_fallback
+    assert len(_warm_block()["disabled_scopes"]) == (0 if opening_fallback else 1)
 
 
 def test_an_expensive_lead_on_a_lightly_read_lineage_is_unprofitable(

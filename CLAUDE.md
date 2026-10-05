@@ -377,10 +377,13 @@ cohorts are enabled and must never be used as a process-wide selection gate.
 The streamed lead retains `extra_body.fallbacks` and the
 `server-side-fallback-2026-07-01` beta: Anthropic's pinned caching and
 fallback references do not document the opt-in as a cache-key invalidator.
-An actual fallback changes models, whose caches are separate, so a
-fallback-served lead is `not_warm` for this check. Batch params still carry
-neither fallback field nor beta. The check still requires eight measured
-batched seats; at the eight-seat floor its seven batched seats are `too_few`.
+An actual fallback changes models, whose caches are separate, so a lead
+whose opening response fell back is `not_warm` for this check. A fallback
+on a later pause/reminder continuation does not undo the opening response's
+cache entry; the report still discloses fallbacks anywhere in the call.
+Batch params still carry neither fallback field nor beta. The check still
+requires eight measured batched seats; at the eight-seat floor its seven
+batched seats are `too_few`.
 The full design, evidence links and revert matrix are appended to
 `docs/as-built.md` under the same heading. No paid probe is authorized.
 

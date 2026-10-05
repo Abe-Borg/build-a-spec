@@ -17189,3 +17189,39 @@ copy too" under Final QC.
   a writable `/tmp` configuration directory and the sandbox network
   capability required for local TestClient communication. No paid API
   call, live canary, provider cache trial or full live QC was run.
+
+## Warm-lead cache checks follow the opening response — review follow-up
+
+PR #265's review found that the call-wide `served_by_model` disclosure also
+includes pause/reminder continuations. A lead whose opening response warmed
+the requested model's cache, but whose later continuation fell back, was
+therefore excluded from the runtime check. Even a batch with zero reads
+could not disable that losing cohort.
+
+The check now uses `_fallback_served_model` on the first billed response,
+with the requested model and the run's fallback switch. Its existing
+request-count equality gate excludes failed requests and parameter resends,
+so that first response is the opening request that released the batch.
+An opening fallback remains `not_warm`; a later fallback does not revoke
+the opening response's cache entry. The whole-call disclosure, billed usage,
+verdict and list-price lead cost are unchanged.
+
+Eight event-bounded regression cases cover pauses and output-tool reminders,
+fallbacks on the opening or continuation, and explicit versus model-only
+fallback signals. They hold the continuation until the batch has returned,
+then verify the scoped `not_read` latch and the report's fallback disclosure.
+Four cases failed on the original gate. With the fix in place, 176 focused
+warm-lead, fallback and token-ceiling tests passed. Restoring the call-wide
+gate produced four assertion failures; selecting the final billed response
+instead of the opening produced eight. Both mutations were restored exactly.
+
+Erratum to the preceding implemented notes: "an actual fallback" excludes
+the lineage only when it answered the opening response that released the
+batch. A fallback anywhere in the call still appears in the report, but is
+not sufficient by itself to mark the lineage `not_warm`.
+
+Final validation (2026-10-05): the full backend suite passed **3,576 tests,
+64 skipped** after both mutations were restored. Ruff, `npm test` (48 test
+files), `npm run build`, release version consistency (1.22.1) and diff
+checks passed. Tests used fake clients and a placeholder API key; no paid
+API call was made.

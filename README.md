@@ -1303,8 +1303,10 @@ stored.
   sent. Its cached prefix and verdict rules match the batched seats.
   The streamed request also carries the refusal fallback; its opt-in is
   not a documented cache-key invalidator (see the implemented notes in
-  `docs/as-built.md`). A lead answered by another model is not judged by
-  the warm-cache check because caches are model-scoped. Its verdict counts
+  `docs/as-built.md`). A lead whose opening response was answered by
+  another model is not judged by the warm-cache check because caches are
+  model-scoped. A fallback on a later continuation does not undo the
+  opening response's cache entry. Its verdict counts
   exactly like any other seat's, so the
   review, its findings and a Final QC result you already have (it stays
   current) are unchanged. In the Review Room that reviewer's card shows its
@@ -1490,8 +1492,9 @@ provider.**
   restart for that model, tool kind and size cohort (8–19 seats or 20+);
   other cohorts keep theirs. A lead whose
   batch went out before its copy was ready (its wait timed out, or its
-  first request failed), or that was answered by a fallback model, is not
-  judged. A lead that is read but turns out
+  first request failed), or whose opening response was answered by a
+  fallback model, is not judged. A later continuation's fallback does not
+  prevent this check. A lead that is read but turns out
   not to have been needed (the batch would have read the copy anyway) cannot
   be told apart from one that was, and is kept: that costs about the lead's
   own batch discount, $0.20–0.35 per large group per run.

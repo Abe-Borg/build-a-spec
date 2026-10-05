@@ -701,7 +701,8 @@ class WarmLeadLineage:
       earlier batched seat stored rather than the lead's;
     - ``warm`` — whether the batch went out after the lead's entry was
       readable: the lead's first output arrived before the wait ended and
-      none of its requests failed or was answered by a fallback model.
+      none of its requests failed, and the opening response was answered
+      by the requested model.
       When it did not, the batch had no proven copy of
       the lead's to read, and the lineage says nothing about the lead.
     """

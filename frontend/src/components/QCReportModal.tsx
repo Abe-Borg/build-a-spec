@@ -40,6 +40,7 @@ import {
   qcLensCoverage,
   qcOperationEvaluation,
   qcPanelSizePhrase,
+  qcPhaseTokenCeilings,
   qcPrimaryReport,
   qcPreRemediationState,
   qcReportLimitations,
@@ -941,6 +942,7 @@ export default function QCReportModal({
   if (!open || !selectedReport) return null;
 
   const report = selectedReport as QcReportResult;
+  const phaseTokenCeilings = qcPhaseTokenCeilings(report);
   const retainedRunId = snapshot?.result?.run_id;
   const reportDiffersFromRetained = Boolean(
     retainedRunId && retainedRunId !== report.run_id,
@@ -1134,7 +1136,10 @@ export default function QCReportModal({
                 {recorded(report.verifier_effort)}
               </DataField>
               <DataField label="Current date supplied to reviewers">{recorded(report.context_date)}</DataField>
-              <DataField label="Maximum output tokens">{formatInteger(report.max_tokens)}</DataField>
+              <DataField label="Maximum output tokens (global cap)">{formatInteger(report.max_tokens)}</DataField>
+              <DataField label="Maximum output tokens (lens review)">{formatInteger(phaseTokenCeilings.lens)}</DataField>
+              <DataField label="Maximum output tokens (candidate grouping)">{formatInteger(phaseTokenCeilings.consolidation)}</DataField>
+              <DataField label="Maximum output tokens (verifier seats)">{formatInteger(phaseTokenCeilings.verifier)}</DataField>
               <DataField label="Recorded duration">{formatDuration(duration)}</DataField>
               <DataField label="Started at">{formatTimestamp(report.started_at)}</DataField>
               <DataField label="Finished at">{formatTimestamp(report.finished_at)}</DataField>

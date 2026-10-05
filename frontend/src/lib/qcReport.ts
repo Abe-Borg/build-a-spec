@@ -1456,6 +1456,17 @@ function manifestCount(record: Record<string, unknown>, key: string): number | n
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/** Persisted limits only: older reports must not inherit today's defaults. */
+export function qcPhaseTokenCeilings(result: QcReportResult): Record<"lens" | "consolidation" | "verifier", number | null> {
+  const configuration = manifestRecord(result.input_manifest, "configuration");
+  const limits = manifestRecord(configuration, "phase_max_tokens");
+  const ceiling = (phase: string): number | null => {
+    const value = limits[phase];
+    return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+  };
+  return { lens: ceiling("lens"), consolidation: ceiling("consolidation"), verifier: ceiling("verifier") };
+}
+
 function researchNames(
   record: Record<string, unknown>,
   ids: string[],

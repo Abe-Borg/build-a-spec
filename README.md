@@ -2589,9 +2589,10 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   for Opus 5.5), and
   thinking blocks are preserved verbatim
   across tool-use continuation rounds as the API requires — the previous
-  code dropped them, a latent 400 on real drafting turns. Output ceilings
+  code dropped them, a latent 400 on real drafting turns. Drafting output ceilings
   sit at the model max (128k tokens), so nothing the app controls
-  truncates a draft.
+  truncates a draft. Bounded QC requests use runaway ceilings of 64k for
+  lenses and 32k for grouping and verifier seats, including thinking.
 - **Live web lookups in the interview.** The drafting model carries
   `web_search`/`web_fetch` (same authoritative-domains blocklist as the
   research phase) for mid-interview verification — a UL category, a
@@ -3094,7 +3095,10 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
 | `BUILD_A_SPEC_CONTINUATION_CACHE` | `1` | Continuation caching (Chunk 4 of the cost program, on by default since the Tier 1 finish program's session CT-3): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. Watched by the cost self-checks: a resume the provider refuses because of the breakpoint is sent once more without it, and the breakpoint switches off for that engine (research or Final QC) until the app restarts; six or more measured resumes that together cost more than they saved switch it off the same way (Settings → Developer tools → Cost self-checks). `0` switches it off: no request carries it. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`. |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass (the one non-Sonnet surface). |
-| `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
+| `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Global QC output/thinking ceiling. Caps every phase, including explicit phase overrides. |
+| `BUILD_A_SPEC_QC_LENS_MAX_TOKENS` | `64000` (or global QC ceiling, if lower) | Per-request ceiling for the five review lenses, including continuations. |
+| `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_TOKENS` | `32000` (or global QC ceiling, if lower) | Per-request ceiling for candidate grouping. |
+| `BUILD_A_SPEC_QC_VERIFIER_MAX_TOKENS` | `32000` (or global QC ceiling, if lower) | Per-request ceiling for verifier seats in both transports, streamed warm leads, and continuations. Phase ceilings bound runaway thinking/output; reaching a ceiling leaves incomplete coverage. Resolved limits are hashed in the audit manifest, so earlier reports become stale once. Prompt-cache reuse is unchanged. |
 | `BUILD_A_SPEC_QC_EFFORT` | `medium` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback that sets both phases. `medium` since the 5.5 prompting upgrade (P55-3): `high` was chosen for Opus 5, and the Opus 5.5 guide says its `medium` matches or exceeds Opus 5's `high`. Effort is part of a review's recorded inputs, so a Final QC result made at the old default reads stale once after the update — re-run Final QC before applying its fixes. `high` restores the old depth (and, set explicitly, moves the verifier seats with it). |
 | `BUILD_A_SPEC_QC_LENS_EFFORT` | = `QC_EFFORT` (`medium`) | Effort for phase 1 (the five lenses and the consolidation call). `BUILD_A_SPEC_QC_LENS_EFFORT=high` puts the lenses back at the pre-P55-3 depth while the verifier seats stay at `medium`. |
 | `BUILD_A_SPEC_QC_VERIFIER_EFFORT` | `medium` | Effort for phase 2 (the verifier seats — ~90% of a run's calls, answering a bounded question each). Falls back to `QC_EFFORT` instead of `medium` when that is explicitly set, so a global `low` is never silently overridden upward. |

@@ -2880,6 +2880,21 @@ def _qc_render_manifest_pointer(document, manifest: object) -> None:
     )
 
 
+def _qc_phase_output_ceiling_rows(qc_result: dict) -> list[tuple[str, object]]:
+    """Read persisted phase ceilings; never infer old runs from live settings."""
+    manifest = _qc_dict(qc_result.get("input_manifest"))
+    configuration = _qc_dict(manifest.get("configuration"))
+    ceilings = _qc_dict(configuration.get("phase_max_tokens"))
+    return [
+        (f"Maximum output tokens ({label})", ceilings.get(phase, "Not recorded"))
+        for phase, label in (
+            ("lens", "lens review"),
+            ("consolidation", "candidate grouping"),
+            ("verifier", "verifier seats"),
+        )
+    ]
+
+
 def _qc_render_identity(
     document,
     qc_result: dict,
@@ -2948,7 +2963,7 @@ def _qc_render_identity(
             ),
         ),
         (
-            "Maximum output tokens",
+            "Maximum output tokens (global cap)",
             (
                 "Not recorded"
                 if legacy
@@ -2971,6 +2986,8 @@ def _qc_render_identity(
     ]
     for label, value in identities:
         _qc_add_label(document, label, value)
+    for label, value in _qc_phase_output_ceiling_rows(qc_result):
+        _qc_add_label(document, label, "Not recorded" if legacy else value)
     _qc_render_manifest_pointer(document, qc_result.get("input_manifest"))
 
 
@@ -5185,13 +5202,13 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
                 population_note,
             ],
             [
-                "Maximum output tokens",
+                "Maximum output tokens (global cap)",
                 (
                     "Not recorded"
                     if legacy
                     else _qc_text(qc_result.get("max_tokens"), "Not recorded")
                 ),
-                "Configured ceiling",
+                "Global ceiling; each phase may use a lower ceiling",
             ],
             [
                 "Recorded duration (ms)",
@@ -5208,6 +5225,10 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
                 "Deduplicated structured source fields",
             ],
         ]
+    )
+    rows.extend(
+        [label, "Not recorded" if legacy else value, "Per-request ceiling, including thinking"]
+        for label, value in _qc_phase_output_ceiling_rows(qc_result)
     )
     cost = qc_result.get("estimated_cost_usd")
     if cost is None or legacy:

@@ -16,6 +16,7 @@ import {
   qcInconclusiveCandidates,
   qcOperationEvaluation,
   qcPanelSizePhrase,
+  qcPhaseTokenCeilings,
   qcPrimaryReport,
   qcReportExportUrl,
   qcPreRemediationState,
@@ -34,6 +35,18 @@ import {
   type QcReportResult,
   type QcReportVerdict,
 } from "../src/lib/qcReport.ts";
+
+test("phase token ceilings use the saved manifest without inventing legacy limits", () => {
+  const report = { input_manifest: { configuration: { phase_max_tokens: {
+    lens: 64000, consolidation: 32000, verifier: 16000,
+  } } } } as QcReportResult;
+  assert.deepEqual(qcPhaseTokenCeilings(report), { lens: 64000, consolidation: 32000, verifier: 16000 });
+  assert.deepEqual(qcPhaseTokenCeilings({ max_tokens: 128000 } as QcReportResult), {
+    lens: null, consolidation: null, verifier: null,
+  });
+  report.input_manifest = { configuration: { phase_max_tokens: { lens: true, consolidation: 0, verifier: "32000" } } };
+  assert.deepEqual(qcPhaseTokenCeilings(report), { lens: null, consolidation: null, verifier: null });
+});
 
 function verdict(
   reviewerIndex: number,

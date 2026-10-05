@@ -9,6 +9,7 @@ Critic's suite.
 """
 from __future__ import annotations
 
+import functools
 import itertools
 import json
 import re
@@ -637,6 +638,162 @@ def request_context_text(request: dict) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Request shapes the current models refuse. The fakes accept any dict, so a
+# request the provider would answer with a 400 used to pass the suite: the
+# research final submission sent ``thinking: {"type": "disabled"}`` and a
+# forced ``tool_choice`` to Sonnet 5.5 (2026-10-04, fixed the next day)
+# while every test drove it on Sonnet 5. Every request a fake in this module
+# receives is checked here first; a refused shape raises the same
+# ``BadRequestError`` the API would and is recorded, and ``conftest.py``
+# fails the test that sent it even when the code under test swallowed the
+# error (research turns a 400 into a failed area, which a test expecting
+# failure would otherwise read as a pass).
+#
+# The model ids are literals on purpose. This is an oracle written from
+# Anthropic's documentation (the claude-api skill's model-migration guide,
+# "Migrating to Claude Sonnet 5.5" / "Migrating to Claude Opus 5.5", and its
+# error-code reference), not from the app's own capability tables: reusing
+# those would let a wrong table vouch for itself.
+# ---------------------------------------------------------------------------
+
+# ``{"type": "disabled"}`` is a 400 on these at every effort ("thinking.type.
+# disabled" is not supported for this model). Fable runs thinking always on.
+_NO_DISABLED_THINKING = frozenset(
+    {"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"}
+)
+# Claude Opus 5 accepts ``disabled`` only at effort ``high`` or below.
+_DISABLED_THINKING_AT_HIGH_OR_BELOW = frozenset({"claude-opus-5"})
+# ``between_tools`` exists on Claude Sonnet 5.5 alone, at ``high`` or below.
+_BETWEEN_TOOLS_MODELS = frozenset({"claude-sonnet-5-5"})
+_THINKING_OFF_EFFORTS = frozenset({"low", "medium", "high"})
+# tool_choice: type "tool" and "any" are not supported for this model.
+_NO_FORCED_TOOL_CHOICE = frozenset(
+    {"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"}
+)
+_PRESERVED_THINKING_BETA = "thinking-binding-controls-2026-08-01"
+
+# Every refused shape a fake has received since the current test began.
+# ``conftest.py`` clears it before each test and fails the test if it is not
+# empty afterwards. Appends are atomic, so worker threads may record too.
+REQUEST_SHAPE_VIOLATIONS: list[str] = []
+
+
+def _request_betas(request: dict) -> set[str]:
+    """Every beta a request opts into, through ``betas`` or the header."""
+    betas = {str(beta) for beta in request.get("betas") or ()}
+    for key, value in dict(request.get("extra_headers") or {}).items():
+        if isinstance(key, str) and key.lower() == "anthropic-beta":
+            betas.update(
+                part.strip() for part in str(value or "").split(",") if part.strip()
+            )
+    return betas
+
+
+def request_shape_problems(request: dict) -> list[str]:
+    """Why the provider would refuse ``request`` — empty when it would not.
+
+    Pure: reads the request, never changes it. Checks only shapes that are
+    documented 400s for the named model, so an unknown model id (an env
+    override) passes everything except the rules that hold everywhere.
+    """
+    problems: list[str] = []
+    model = request.get("model")
+    output_config = request.get("output_config")
+    effort = (
+        output_config.get("effort", "high")
+        if isinstance(output_config, dict)
+        else "high"
+    )
+    thinking = request.get("thinking")
+    if isinstance(thinking, dict):
+        kind = thinking.get("type")
+        if kind == "enabled" or "budget_tokens" in thinking:
+            problems.append(
+                "a manual thinking budget is rejected on every current model; "
+                "use adaptive thinking and output_config.effort"
+            )
+        if kind == "disabled":
+            if model in _NO_DISABLED_THINKING:
+                problems.append(
+                    '"thinking.type.disabled" is not supported for this model'
+                )
+            elif (
+                model in _DISABLED_THINKING_AT_HIGH_OR_BELOW
+                and effort not in _THINKING_OFF_EFFORTS
+            ):
+                problems.append(
+                    f"output_config.effort {effort!r} is not supported when "
+                    "thinking is disabled on this model"
+                )
+        if kind == "between_tools":
+            if model not in _BETWEEN_TOOLS_MODELS:
+                problems.append(
+                    '"thinking.type.between_tools" is not supported for this model'
+                )
+            extra = sorted(key for key in thinking if key != "type")
+            if extra:
+                problems.append(
+                    "between_tools takes no other thinking field "
+                    f"(got {', '.join(extra)})"
+                )
+            if effort not in _THINKING_OFF_EFFORTS:
+                problems.append(
+                    f"output_config.effort {effort!r} is not supported with "
+                    "between_tools; use effort 'high' or below"
+                )
+        if "block_binding" in thinking:
+            if kind not in (None, "adaptive"):
+                problems.append(
+                    "thinking.block_binding works only with adaptive thinking"
+                )
+            if _PRESERVED_THINKING_BETA not in _request_betas(request):
+                problems.append(
+                    "block_binding: Extra inputs are not permitted (the "
+                    f"{_PRESERVED_THINKING_BETA} beta is missing)"
+                )
+    tool_choice = request.get("tool_choice")
+    if (
+        isinstance(tool_choice, dict)
+        and tool_choice.get("type") in ("tool", "any")
+        and model in _NO_FORCED_TOOL_CHOICE
+    ):
+        problems.append(
+            'tool_choice: type "tool" and "any" are not supported for this model'
+        )
+    return problems
+
+
+def reject_invalid_request_shape(request: dict) -> None:
+    """Raise the provider's 400 for a refused shape, and record it."""
+    problems = request_shape_problems(request)
+    if not problems:
+        return
+    message = f"{request.get('model')!r}: " + "; ".join(problems)
+    REQUEST_SHAPE_VIOLATIONS.append(message)
+    raise bad_request(message)
+
+
+def _validates_shape(method):
+    """``method`` with the shape check in front of it (subclass overrides).
+
+    ``SequencedFakeClient`` wraps every ``stream``/``count_tokens``/
+    ``pop_turn`` a subclass defines, so an override that never calls
+    ``super()`` cannot let a refused shape through. An override that does
+    call it is checked twice, which changes nothing for a valid request.
+    """
+    if getattr(method, "_validates_request_shape", False):
+        return method
+
+    @functools.wraps(method)
+    def checked(self, *args, **request):
+        reject_invalid_request_shape(args[0] if args else request)
+        return method(self, *args, **request)
+
+    checked._validates_request_shape = True
+    return checked
+
+
 class _FakeStreamCtx:
     def __init__(self, turn: SimpleNamespace):
         self._turn = turn
@@ -714,6 +871,7 @@ class _FakeMessages:
 
     def stream(self, **request):
         self.requests.append(request)
+        reject_invalid_request_shape(request)
         if not self._turns:
             raise AssertionError("Fake client got more requests than scripted turns.")
         turn = self._turns.pop(0)
@@ -1266,6 +1424,15 @@ class SequencedFakeClient:
         # test can prove the settlement window applied its bound.
         self.request_options: list[dict] = []
 
+    def __init_subclass__(cls, **kwargs):
+        # A subclass's own transport methods get the shape check too, so no
+        # override can receive a request the provider would refuse.
+        super().__init_subclass__(**kwargs)
+        for name in ("stream", "count_tokens", "pop_turn"):
+            method = cls.__dict__.get(name)
+            if callable(method):
+                setattr(cls, name, _validates_shape(method))
+
     def with_options(self, **options):
         """The SDK's per-request override, as the settlement window uses it.
 
@@ -1280,8 +1447,10 @@ class SequencedFakeClient:
         """Hermetic stand-in for the unbilled input-token counter.
 
         Budget boundary tests override this with exact scripted counts.
-        Ordinary lifecycle tests need only a small, deterministic input.
+        Ordinary lifecycle tests need only a small, deterministic input. The
+        counter refuses the same shapes the Messages endpoint does.
         """
+        reject_invalid_request_shape(request)
         serialized = json.dumps(request, default=lambda value: vars(value))
         return SimpleNamespace(input_tokens=max(1, len(serialized) // 3))
 
@@ -1298,6 +1467,7 @@ class SequencedFakeClient:
             if isinstance(captured.get("messages"), list):
                 captured["messages"] = list(captured["messages"])
             self.requests.append(captured)
+            reject_invalid_request_shape(request)
             first_user = user_text(request.get("messages", []))
             return self._match_locked(first_user)
 
@@ -1307,6 +1477,7 @@ class SequencedFakeClient:
             if isinstance(captured.get("messages"), list):
                 captured["messages"] = list(captured["messages"])
             self.requests.append(captured)
+            reject_invalid_request_shape(request)
             first_user = user_text(request.get("messages", []))
             turn = self._match_locked(first_user)
         if isinstance(turn, Exception):
@@ -1407,6 +1578,11 @@ class _FakeBatches:
                 turn = self._client.pop_turn(params)
             except AssertionError:
                 raise
+            except Exception as refused:
+                # A refused request shape: the batch accepts the rest and
+                # errors this seat, as the real API does. The refusal is
+                # recorded, so the test that sent it fails anyway.
+                turn = refused
             if isinstance(turn, Exception):
                 counts["errored"] += 1
                 results.append(

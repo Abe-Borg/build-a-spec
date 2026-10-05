@@ -98,8 +98,10 @@ from .schema import (
     extract_tool_use_block,
     input_transformation_counts,
     last_tagged_json_object,
+    lowest_thinking,
     missing_output_tool_reply,
     requirements_research_tool,
+    single_output_tool_kwargs,
     with_drop_block,
 )
 
@@ -158,9 +160,18 @@ RESEARCH_MAX_CONTINUATIONS = 16
 # so their allowance is conservative and a separate margin covers framing.
 _SEARCH_RESULT_RESERVE_TOKENS = 5_000
 _CONTEXT_MARGIN_TOKENS = 50_000
-# One submission-only call after a guard trips. Thinking and web tools are
-# disabled, so this is an answer allowance rather than more exploration.
+# One submission-only call after a guard trips. Web tools are removed and
+# thinking runs at the lowest setting the model accepts
+# (:func:`.schema.lowest_thinking`), so this is an answer allowance rather
+# than more exploration.
 _SUBMISSION_MAX_TOKENS = 32_000
+# Where the submission cannot force its tool (Sonnet 5.5 and Opus 5.5 reject
+# a forced ``tool_choice``; :func:`.schema.single_output_tool_kwargs`), it
+# runs on automatic choice, which does not guarantee a call. A reply that
+# ends with neither the tool call nor the tagged-JSON fallback gets this many
+# more submission requests before the area fails. A forced submission gets
+# none, exactly as before.
+_SUBMISSION_RESENDS = 1
 
 # A research area whose reply ends without the output tool (the Opus 5.5
 # prompting guide's early stop: "some of those updates end the turn with text
@@ -2401,9 +2412,16 @@ def _run_dimension(
     has landed. The reminder's response is the conversation's like any
     other: billed once, pooled for grounding, counted against the budget.
     Search, fetch, continuation and reminder exhaustion request one final
-    structured submission with web tools and thinking disabled. Its
-    transport retries retain the conversation, even on the last attempt.
-    No-payload/refusal/incomplete responses from that submission are terminal.
+    structured submission with the web tools removed and thinking at the
+    lowest setting the model accepts (:func:`.schema.lowest_thinking`:
+    ``between_tools`` on Sonnet 5.5, ``disabled`` where the model still
+    takes it, adaptive otherwise). It forces the output tool only where the
+    model allows forcing (:func:`.schema.single_output_tool_kwargs`); on
+    automatic choice — the Sonnet 5.5 default — a reply carrying neither the
+    tool call nor the tagged-JSON fallback earns :data:`_SUBMISSION_RESENDS`
+    more submission request. Its transport retries retain the conversation,
+    even on the last attempt. Refusal/incomplete responses from that
+    submission are terminal, as is a missing payload once no resend is left.
     Each request is estimated using a supported equivalent at the provider's
     free input-token endpoint, plus server-tool framing reserves;
     output and tool-result reserves keep new fetches inside the context
@@ -2419,9 +2437,13 @@ def _run_dimension(
     bound to the prefix it saw, and on an account created on or after
     2026-08-31 replaying it would be a 400. A conversation the sanitizer
     never edited sends exactly what it always did; a restart clears the
-    flag with the rest of the conversation. Submission converts readable
-    thinking notes to text and omits their signatures, so it needs no binding
-    override while thinking is disabled.
+    flag with the rest of the conversation. A submission that turns thinking
+    off converts readable thinking notes to text and omits their signatures
+    (:func:`.budget.without_thinking`), so it replays no bound block and needs
+    no binding override — which ``between_tools`` would reject anyway. One
+    that must keep adaptive thinking (Opus 5.5) sends every thinking block
+    back unchanged and always carries ``drop_block``: removing the web tools
+    edits the prefix those blocks were bound to.
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
@@ -2510,6 +2532,23 @@ def _run_dimension(
         "output_config": {"effort": settings.RESEARCH_EFFORT},
     }
 
+    # The final submission's own request options, decided once from the
+    # model and the effort every request of the conversation states: the
+    # lowest thinking setting the model accepts. ``adaptive`` means it
+    # accepts nothing lower, so the conversation's thinking blocks go back
+    # as they are (see the docstring).
+    submission_thinking = lowest_thinking(
+        model=model, effort=request_kwargs["output_config"]["effort"]
+    )
+    submission_keeps_thinking = submission_thinking["type"] == "adaptive"
+    # Forced only where the model allows it; parallel calls are disabled
+    # only then, as before. Automatic choice sends no ``tool_choice`` at all.
+    submission_choice = single_output_tool_kwargs(
+        model=model, tool_name=RESEARCH_TOOL_NAME
+    ).get("tool_choice")
+    if submission_choice:
+        submission_choice = {**submission_choice, "disable_parallel_tool_use": True}
+
     # Conversation-wide allowances, enforced on the next request's tools.
     # Reaching a ceiling requests a submission instead of discarding work.
     search_budget_ceiling = max(1, max_searches * 2)
@@ -2562,6 +2601,22 @@ def _run_dimension(
     conversation_tools = tools
     submission_reason = ""
     submission_prepared = False
+    # Extra submission requests sent after an unforced submission recorded
+    # nothing (:data:`_SUBMISSION_RESENDS`). A resume keeps the count; a
+    # restart cannot follow a submission, but clears it with the rest.
+    submission_resends = 0
+
+    def _submission_messages(outgoing: list[dict]) -> list[dict]:
+        """The conversation as a submission request sends it.
+
+        Thinking turned off: readable notes become text and signed blocks
+        are omitted, so nothing bound to the old prefix is replayed.
+        Adaptive kept: every block goes back unchanged, and the request's
+        ``drop_block`` lets the API drop the ones the tool change voided.
+        """
+        if not submission_keeps_thinking:
+            outgoing = without_thinking(outgoing)
+        return _sanitize(outgoing)
 
     def _sanitize(outgoing: list[dict]) -> list[dict]:
         nonlocal thinking_edited
@@ -2669,7 +2724,7 @@ def _run_dimension(
                             reply = {"role": "user", "content": [
                                 {"type": "text", "text": instruction}
                             ]}
-                        messages = _sanitize(without_thinking([*messages, reply]))
+                        messages = _submission_messages([*messages, reply])
                         submission_prepared = True
                         _log.info(
                             "Research area %s requesting final submission: %s.",
@@ -2677,12 +2732,14 @@ def _run_dimension(
                         )
                     stream_kwargs["tools"] = [tools[-1]]
                     stream_kwargs["max_tokens"] = min(max_tokens, _SUBMISSION_MAX_TOKENS)
-                    stream_kwargs["thinking"] = {"type": "disabled"}
+                    stream_kwargs["thinking"] = dict(submission_thinking)
                     stream_kwargs.pop("extra_headers", None)
-                    stream_kwargs["tool_choice"] = {
-                        "type": "tool", "name": RESEARCH_TOOL_NAME,
-                        "disable_parallel_tool_use": True,
-                    }
+                    if submission_choice:
+                        stream_kwargs["tool_choice"] = dict(submission_choice)
+                    if submission_keeps_thinking:
+                        # Dropping the web tools edits the prefix every
+                        # replayed block was bound to.
+                        stream_kwargs = with_drop_block(stream_kwargs)
                     in_request = True
                     input_count = count_request_tokens(client, messages, stream_kwargs)
                     input_limit = (
@@ -2779,6 +2836,37 @@ def _run_dimension(
                     payload, parse_source = _parse_research_payload(all_responses)
                     if payload is not None:
                         break
+                    if (
+                        submission_reason
+                        and not submission_choice
+                        and submission_resends < _SUBMISSION_RESENDS
+                    ):
+                        # Automatic choice did not guarantee the call
+                        # (Sonnet 5.5 and Opus 5.5 cannot be forced). Append
+                        # the reply and ask once more, exactly as the
+                        # submission was first asked: the instruction, or an
+                        # is_error result for a call to any other name. The
+                        # top of the loop re-counts and, if needed, elides
+                        # again before anything is sent; a Stop is checked
+                        # there and once more before the stream opens.
+                        instruction = _submission_instruction(submission_reason)
+                        messages = _submission_messages([
+                            *messages,
+                            {"role": "assistant", "content": response.content},
+                            missing_output_tool_reply(
+                                response, reminder=instruction,
+                                wrong_tool=lambda _name, text=instruction: text,
+                            ),
+                        ])
+                        submission_resends += 1
+                        _log.info(
+                            "Research area %s submitted nothing on automatic "
+                            "tool choice; submission resend %d of %d.",
+                            dimension.dimension_id,
+                            submission_resends,
+                            _SUBMISSION_RESENDS,
+                        )
+                        continue
                     if submission_reason:
                         return _failed(
                             "Research produced no parseable payload after final "
@@ -2994,6 +3082,7 @@ def _run_dimension(
                 conversation_tools = tools
                 submission_reason = ""
                 submission_prepared = False
+                submission_resends = 0
             backoff = compute_backoff_seconds(
                 policy, attempt=attempt, failure_class=failure_class
             )

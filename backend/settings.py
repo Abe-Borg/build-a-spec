@@ -254,9 +254,12 @@ API_TIMEOUT_SECONDS = _int_env("BUILD_A_SPEC_API_TIMEOUT_SECONDS", 600, minimum=
 # ``output_config``. Interview turns default to "medium" (owner decision,
 # 2026-09-29; "high" before it). Sonnet 5.5 recalibrated its effort levels
 # from Sonnet 5's, and Anthropic's migration guidance starts multi-step tool
-# work — which a drafting turn is — at "medium". Research passes are
-# background work and default to "high" (dialed back 2026-07-28 from "xhigh" —
-# cost/quality tradeoff, confirmed with Abraham). The chat's condensing
+# work — which a drafting turn is — at "medium". Research passes default to
+# "medium" too (RESEARCH_EFFORT below, since 2026-10-05; "high" from
+# 2026-07-28, dialed back from "xhigh"). At "high" or below Sonnet 5.5 also
+# accepts research's ``between_tools`` final submission
+# (``research.schema.lowest_thinking``); above it the submission keeps
+# adaptive thinking instead. The chat's condensing
 # summary reads INTERVIEW_EFFORT too, and must: an effort change invalidates
 # the messages cache the summary exists to read.
 EFFORT_LEVELS = ("low", "medium", "high", "max", "xhigh")

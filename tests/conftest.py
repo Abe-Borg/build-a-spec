@@ -91,6 +91,30 @@ def settle_capability_sweep(timeout: float = 120.0) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _reject_refused_request_shapes():
+    """Fail any test whose fakes received a request the provider refuses.
+
+    The fakes raise the API's 400 for such a shape (``tests/fakes.py``,
+    :func:`request_shape_problems`), but code under test may swallow it —
+    research turns any 400 into a failed area — so a test expecting a
+    failure could pass for the wrong reason. Checking the record here makes
+    every refused shape a test failure wherever it was sent from.
+    """
+    from tests.fakes import REQUEST_SHAPE_VIOLATIONS
+
+    REQUEST_SHAPE_VIOLATIONS.clear()
+    yield
+    refused = list(REQUEST_SHAPE_VIOLATIONS)
+    REQUEST_SHAPE_VIOLATIONS.clear()
+    if refused:
+        pytest.fail(
+            "A fake client received request shape(s) the provider refuses "
+            "with HTTP 400:\n- " + "\n- ".join(refused),
+            pytrace=False,
+        )
+
+
+@pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
     from backend import cost_checks, sessions
     from backend.llm.client import reset_client_cache

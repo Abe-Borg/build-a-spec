@@ -11,6 +11,13 @@ file is the working reference for AI-assisted development sessions.
 - Tests are hermetic: no network, no real API key. `tests/conftest.py` injects
   a placeholder `ANTHROPIC_API_KEY`; anything touching the API monkeypatches
   `backend.llm.conversation.get_client` with a fake streaming client.
+  Every request a fake in `tests/fakes.py` receives (streamed, counted,
+  batched, or through a subclass override) is checked by
+  `request_shape_problems` against the documented per-model 400s; a refused
+  shape raises the API's `BadRequestError` and `conftest.py` fails the test
+  even if the code under test swallowed it. When a model's request rules
+  change, extend that oracle from Anthropic's documentation with literal
+  model ids — never from the app's own capability tables.
   Four canaries and the compaction evaluator below are the only explicit
   paid exceptions. The first two canaries are
   each a single low-token request. `tools/qc_verifier_canary.py --run`
@@ -398,6 +405,38 @@ the previous thinking depth.” On 2026-10-05 the GitHub Releases API
 confirmed `v1.22.1` is already published; its entry is frozen. There is
 no newer entry in this checkout. Keep this draft for the later release;
 the app version remains `1.22.1`.
+
+## Research's final submission is shaped per model — implemented notes (2026-10-05)
+
+The final submission a research area sends after a guard trips (search,
+fetch, continuation, reminder or context reserve; added 2026-10-04, after
+`v1.22.1`, so never shipped) hard-coded `thinking: {"type": "disabled"}`
+and a forced `tool_choice`. Sonnet 5.5 — the research default — rejects
+both with HTTP 400, which is non-retryable, so every area that tripped a
+guard failed at the finish line after its spend was billed. The suite
+missed it because the fakes accepted any dict and every test ran Sonnet 5.
+
+- **Thinking** comes from `research.schema.lowest_thinking(model, effort)`:
+  `between_tools` on Sonnet 5.5 at effort `high` or below (alone in its
+  dict, no beta header); `disabled` on Sonnet 5, Opus 4.8, and Opus 5 at
+  `high` or below; otherwise `adaptive`. Thinking turned off still runs
+  `budget.without_thinking` (notes become text, signatures are omitted).
+  Adaptive (Opus 5.5, Fable, unknown overrides, Sonnet 5.5 above `high`)
+  replays every thinking block unchanged and always carries
+  `with_drop_block`, because removing the web tools edits the bound prefix.
+- **Tool choice** comes from `single_output_tool_kwargs`: forced, with
+  `disable_parallel_tool_use`, on Sonnet 5, Opus 5 and Fable 5 only.
+  Elsewhere the request carries no `tool_choice`. Automatic choice does
+  not guarantee a call, so a completed reply with neither the tool call nor
+  the tagged-JSON fallback gets `_SUBMISSION_RESENDS` (1) more append-only
+  submission request, then fails as before. Pause/refusal/truncation stay
+  terminal; a forced submission gets no resend.
+- Unchanged: the single output tool, the 32k cap, the beta-header removal
+  (re-added only by `with_drop_block`), the context-fit elision loop, the
+  budget failure, and transport retries resuming the submission.
+
+The full record, release-note draft and reversion evidence are in
+`docs/as-built.md` under the same heading. No paid API call was made.
 
 ## As-built history
 

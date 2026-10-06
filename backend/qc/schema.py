@@ -83,15 +83,22 @@ QC_LENSES: tuple[QCLens, ...] = (
         max_fetches=settings.QC_MAX_FETCHES_LENS,
         web=False,
         brief=(
-            "Check PART 1 / PART 2 / PART 3 alignment: every product "
-            "specified has submittal requirements; every product has "
-            "execution provisions; execution references products that exist; "
-            "cross-references resolve; no duplicated or mutually "
-            "contradicting provisions; no terminology drift (the same thing "
-            "named two ways). Where <attached_reference_documents> are "
-            "present, a provision that contradicts one is the same class of "
-            "defect — flag it and say which side says what. Anchor each "
-            "finding to the element ids involved."
+            "Check PART 1 / PART 2 / PART 3 alignment against "
+            "<writing_policy>: each requirement placed by function, judged "
+            "in context and never by a keyword; products carry the submittal "
+            "and execution coverage the template and section scope call for "
+            "— one general provision, Division 01 or another section may "
+            "cover several, so never demand a clause per product; execution "
+            "references products that exist; cross-references, including "
+            "'Article N.N' references, resolve; no duplicated or mutually "
+            "contradicting provisions (compare conditions and qualifiers "
+            "before calling two provisions duplicates, and flag both sides "
+            "of a contradiction); no terminology drift (the same thing named "
+            "two ways). Where <attached_reference_documents> are present, a "
+            "provision that contradicts one is the same class of defect — "
+            "flag it and say which side says what. A misplaced provision's "
+            "fix relocates it intact. Anchor each finding to the element ids "
+            "involved."
         ),
     ),
     QCLens(
@@ -106,7 +113,8 @@ QC_LENSES: tuple[QCLens, ...] = (
             "represented in the draft or consciously absent), the module's "
             "conventional section scope, and the articles a reviewer would "
             "expect. Flag missing articles and unrepresented controlling "
-            "requirements. Judge coverage against "
+            "requirements — but an article the template omits, or places in "
+            "Division 01 or another section, is not missing. Judge coverage against "
             "<attached_reference_documents> the same way when they are "
             "present: a requirement stated in an owner standard or "
             "basis-of-design that the draft never addresses is a missing "
@@ -141,7 +149,11 @@ QC_LENSES: tuple[QCLens, ...] = (
             "standard. Flag each offending provision by element id with the "
             "concrete rewrite — the directive alone, the reason left to "
             "chat; a requirement found in a REFERENCES entry moves to its "
-            "own article."
+            "own article. Judge obligations, permissions and advice against "
+            "<writing_policy>: flag a 'shall', 'furnish' or 'provide' "
+            "wording only where it changes scope, and replace vague language "
+            "only with criteria the project supplied — otherwise the finding "
+            "stays advisory with proposed_ops null."
         ),
     ),
     QCLens(
@@ -159,9 +171,11 @@ QC_LENSES: tuple[QCLens, ...] = (
             "(ref-...) whose text does not actually support the provision, "
             "at an established project fact (pf-...) that has been "
             "superseded or does not say what the provision says, or at an "
-            "id that exists in none of those sets. Do NOT propose mass "
-            "status upgrades — flag the specific blocks that need a human "
-            "decision."
+            "id that exists in none of those sets; and a default asserted "
+            "as fact — a value, criterion or approval stamped confirmed that "
+            "no user statement, fact or grounded source supports. Do NOT "
+            "propose mass status upgrades — flag the specific blocks that "
+            "need a human decision."
         ),
     ),
 )

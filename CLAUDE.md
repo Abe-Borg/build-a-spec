@@ -67,6 +67,14 @@ file is the working reference for AI-assisted development sessions.
   unknown is written around, stamped `assumed`, and asked about with
   `track_followups`. See "The specification gives directions, never notes"
   below.
+- The writing rules — where a requirement goes, how it keeps its meaning
+  when it moves, how it is worded — live in ONE versioned source,
+  `backend/writing_policy.py`, rendered into the drafting prompt and the
+  Final QC lens and verifier prompts and recorded in the QC manifest. Never
+  restate them in another prompt block or lens brief; point at the policy.
+  Editing a rule bumps `WRITING_POLICY_VERSION` and re-pins the hash in
+  `tests/test_writing_policy.py`. See "The specification writing policy"
+  below and docs/writing-policy.md.
 - Keep `README.md`, `requirements.txt`, and this file current when the
   implementation, dependencies, or conventions change.
 - New as-built notes are appended to `docs/as-built.md`, not to CLAUDE.md.
@@ -836,6 +844,53 @@ Never add a path that stamps a retired status. Tests:
 `frontend/tests/leftoverPlaceholders.test.ts`. Full record, reversion
 evidence and the release-note draft are in `docs/as-built.md` under the
 same heading. No paid API call was made.
+
+## The specification writing policy — implemented notes (2026-10-06)
+
+The owner's coding-agent brief, phases 1–4 (the owner-run live measurement
+is its own change). Policy, reconciliation, source map, capability gaps and
+measurements: docs/writing-policy.md. Build record: docs/as-built.md under
+the same heading.
+
+- **One source.** `backend/writing_policy.py`: `SECTIONS` (seven groups),
+  `core_text()`, `drafting_block()` (with the owner's voice examples),
+  `review_block()` (`<writing_policy version="spec-writing/1">`),
+  `manifest_facts()`. The brief's V1 placement example is NOT in any
+  production prompt (no evaluation yet); it is a fixture and an opt-in arm.
+- **Drafting.** `render_system_prompt` renders `drafting_block()` once,
+  after `_PROVENANCE`. `_SPEC_VOICE` (named in the notes above) is now policy
+  group 4, text unchanged; `_SPEC_CONVENTIONS_ENGINE` is folded in; module
+  conventions render under "# Discipline conventions". The request path is
+  unchanged: the module block already reaches every round, retry, pause
+  resume and the compaction fork, once, and never history.
+- **Final QC.** Lens and verifier system prompts render `review_block()`
+  once; consolidation does not. The coordination brief no longer demands a
+  submittal and execution clause per product. The manifest's
+  `writing_policy` key makes every retained report stale once, and again on
+  any policy change, document untouched; `QC_PROTOCOL_VERSION` unchanged.
+- **Relocation guard** (`spec_doc/obligations.relocation_problems`, run in
+  `_validate_ops` after the dry run, before the imported-source gate): a fix
+  that deletes and adds/retypes content must carry each carried provision's
+  anchors (values with units, tags, designations, section numbers) in its
+  carriers (the added/retyped provisions that take its wording — never the
+  whole document), keep its source link and status on every carrier, and
+  carry its subparagraphs. Chat edits are not checked (the document tool's
+  contract is unchanged).
+- **Lint.** `unresolved_reference` only — an "Article N.N"/"Paragraph
+  N.N.X" this section lacks, never one whose sentence names another
+  document. No article-title placement rule: every lint issue blocks
+  readiness, none can be dismissed, and templates legitimately differ.
+- **The brief vs. the owner's rule.** The brief kept needs_input and
+  "visibly unresolved" placeholders; both were retired the same day, so the
+  policy writes around unknowns and asks with `track_followups`.
+
+Never let a session-varying value render into either policy rendering, and
+never give project material (references, research, facts, imported text)
+system-prompt placement. Tests: `tests/test_writing_policy.py`,
+`tests/test_writing_policy_qc.py`, `tests/test_obligations.py`,
+`tests/test_unresolved_reference_lint.py`, `tests/test_writing_policy_eval.py`.
+`tools/writing_policy_eval.py` is offline and builds no client. No paid API
+call was made; live quality and runtime trade-offs are unmeasured.
 
 ## As-built history
 

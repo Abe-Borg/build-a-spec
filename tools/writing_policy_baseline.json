@@ -1,0 +1,38 @@
+{
+  "about": "Measured on 2026-10-06 at commit 86b6c1f (master, before the shared writing policy), with no request sent. Characters, not tokens: a chars/4 estimate is roughly 11.3k tokens for each drafting prompt. sha is the first 16 hex digits of the prompt's SHA-256. simulated_cache is the prompt-cache model in tests/test_app.py (_simulated_cache_usage) applied to one hermetic four-turn hyperscale_fire session with a research profile (turns: a drafting turn with one tool round, a text turn, a second drafting turn, a text turn) plus the background compaction request that session would fork; values are characters read from and written to cache per request, in order.",
+  "commit": "86b6c1f",
+  "drafting_system_prompt": {
+    "generic": {"chars": 45158, "sha": "b2ab3c9d99248ecb"},
+    "hyperscale_fire": {"chars": 45498, "sha": "79cda4247e42face"}
+  },
+  "qc_system_prompts": {
+    "generic": {
+      "lens": {"chars": 6806, "sha": "c5635c759066fdeb"},
+      "verifier": {"chars": 1907, "sha": "18ef55a35fde9650"},
+      "consolidation": {"chars": 2544, "sha": "5033a57de21d7ade"}
+    },
+    "hyperscale_fire": {
+      "lens": {"chars": 6778, "sha": "7b10fc87a7ed06df"},
+      "verifier": {"chars": 1879, "sha": "0ffff1c45eaa3adb"},
+      "consolidation": {"chars": 2516, "sha": "1494d0467237c28b"}
+    }
+  },
+  "chat_tools_chars": 21016,
+  "curated_template_lint": {
+    "complete-section-starter.bastemplate": {},
+    "hyperscale-fire-starter.bastemplate": {}
+  },
+  "simulated_cache": {
+    "system_chars": 45498,
+    "requests": [
+      {"total": 71813, "read": 0, "write": 71813, "breakpoints": 3},
+      {"total": 72902, "read": 71813, "write": 1089, "breakpoints": 3},
+      {"total": 73130, "read": 68756, "write": 4374, "breakpoints": 4},
+      {"total": 73221, "read": 69845, "write": 3376, "breakpoints": 4},
+      {"total": 74277, "read": 73221, "write": 1056, "breakpoints": 4},
+      {"total": 74267, "read": 69928, "write": 4339, "breakpoints": 4},
+      {"total": 73886, "read": 70881, "write": 0, "breakpoints": 3}
+    ],
+    "history_chars": 2510
+  }
+}

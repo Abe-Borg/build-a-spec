@@ -165,9 +165,9 @@ on it.
 
 ## Current Status — one writing policy for drafting and Final QC
 
-No release entry yet: v1.23.0 is published and its entry is frozen, so the
-release-note draft is in docs/as-built.md ("The specification writing policy
-is one versioned source for drafting and Final QC"). The rules, how they
+Shipped in v1.24.0; the bundled entry is in `backend/release_notes.py`.
+The implementation record is in docs/as-built.md ("The specification writing
+policy is one versioned source for drafting and Final QC"). The rules, how they
 were reconciled with what came before, and what was and was not measured
 are in [docs/writing-policy.md](docs/writing-policy.md).
 
@@ -238,9 +238,9 @@ measured: that takes paid requests, which only the owner runs.
 
 ## Current Status — gaps wait on you, not in the document (needs input and TBDs retired from the panel, tour and tutorial)
 
-No release entry yet: v1.23.0 is published and its entry is frozen, so the
-release-note draft is in docs/as-built.md ("Needs input and TBDs are retired
-from the panel, tour and tutorial"). This is the last of the four changes
+Shipped in v1.24.0; the bundled entry is in `backend/release_notes.py`.
+The implementation record is in docs/as-built.md ("Needs input and TBDs are
+retired from the panel, tour and tutorial"). This is the last of the four changes
 for the rule below ("the specification gives directions, never notes").
 
 The assistant and Final QC had already stopped writing `[TBD]` markers and
@@ -297,8 +297,8 @@ three earlier changes already cost; a saved Final QC result stays current.
 
 ## Current Status — the specification gives directions, never notes (no more TBDs)
 
-No release entry yet: v1.23.0 is published and its entry is frozen, so the
-release-note draft is in docs/as-built.md ("The specification gives
+Shipped in v1.24.0; the bundled entry is in `backend/release_notes.py`.
+The implementation record is in docs/as-built.md ("The specification gives
 directions, never notes").
 
 The document beside the chat is the specification, and the Contractor reads
@@ -402,9 +402,9 @@ because the instructions and the edit tool's description changed.
 
 ## Current Status — suggested replies ride the reply (one request fewer every turn)
 
-No release entry yet: v1.22.1 is published and there is no newer entry, so
-the release-note draft is in docs/as-built.md ("Suggested replies ride the
-reply").
+Shipped in v1.23.0; the bundled entry is in `backend/release_notes.py`.
+The implementation record is in docs/as-built.md ("Suggested replies ride
+the reply").
 
 The one-tap reply chips above the chat box used to come from a tool call of
 their own. Since the 5.5 prompting upgrade the assistant writes its reply
@@ -446,9 +446,9 @@ context, about twelve cents at 600,000, plus a second or two of waiting.
 
 ## Current Status — the research profile is read from the cache, not rewritten every message
 
-No release entry yet: v1.22.1 is published and there is no newer entry, so
-the release-note draft is in docs/as-built.md ("The project background rides
-its own cache breakpoint").
+Shipped in v1.23.0; the bundled entry is in `backend/release_notes.py`.
+The implementation record is in docs/as-built.md ("The project background
+rides its own cache breakpoint").
 
 Every message used to re-send the research profile inside the block of live
 project state attached to your newest message. That block is rebuilt on every

@@ -56,6 +56,29 @@ test("warm-lead copy states the shipped eight-seat minimum and scoped switch-off
   assert.match(readme, /Other cohorts keep their leads/);
 });
 
+test("research copy states the engine's fixed per-request web allowance and its overshoot", () => {
+  // backend/research/engine.py: every request of a research area declares
+  // the same allowance (so its cached prefix never changes) and the budgets
+  // are checked between requests, so the crossing request can overshoot by
+  // its allowance less one. The dossier and README quote both numbers.
+  const engine = readFileSync(new URL("../../backend/research/engine.py", import.meta.url), "utf8");
+  const readme = fold(readFileSync(new URL("../../README.md", import.meta.url), "utf8"));
+  const searches = engine.match(/^RESEARCH_SEARCHES_PER_REQUEST = (\d+)$/m);
+  const fetches = engine.match(/^RESEARCH_FETCHES_PER_REQUEST = (\d+)$/m);
+  assert.ok(searches && fetches, "per-request allowance not found in backend/research/engine.py");
+  const s = Number(searches[1]);
+  const f = Number(fetches[1]);
+  for (const text of [fold(dossier), readme]) {
+    assert.match(text, new RegExp(`at most ${s} searches and ${f} fetches`));
+    assert.match(text, new RegExp(`up to ${s - 1} searches or ${f - 1} fetches past it`));
+  }
+  assert.match(readme, new RegExp(`at most ${s} searches and ${f} page reads`));
+  assert.match(
+    readme,
+    new RegExp(`at most ${s - 1} searches past the 2× search ceiling or ${f - 1} page reads`),
+  );
+});
+
 const SITES: Array<[string, string]> = [
   ["HelpModal", help],
   ["TrustDeepDiveModal", dossier],

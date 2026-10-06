@@ -21,9 +21,12 @@ What is preserved exactly, because it is the hard-won part:
   fanned out on a small thread pool, each with the project's own
   ``user_location`` on the web_search tool.
 - The ``pause_turn`` continuation loop (re-send assistant content), the
-  2× search ceiling, cumulative fetch allowance, and fetched-PDF elision
+  2× search ceiling, cumulative fetch ceiling, and fetched-PDF elision
   guard (:mod:`.resend_sanitizer`) on every resume. Exhausted guards request
-  one submission with no web tools instead of discarding the research.
+  one submission with no web tools instead of discarding the research. The
+  ceilings are checked between requests; the web tools themselves carry a
+  fixed per-request allowance, so their bytes — the head of every cached
+  prefix — never change within a conversation.
 - Structured-tool-then-tagged-JSON parsing, newest response first.
 - Accepted-vs-cited URL grounding pooled across every response in the
   dimension. Grounding proves retrieval, not truth — ungrounded items are
@@ -220,6 +223,30 @@ def _wrong_tool_result(name: str) -> str:
 # Engine defaults when a dimension declares no budget of its own.
 RESEARCH_DEFAULT_MAX_SEARCHES = 24
 RESEARCH_DEFAULT_MAX_FETCHES = 8
+
+# The web tools' PER-REQUEST allowance — what ``max_uses`` says on every
+# request of an area's conversation (the provider counts ``max_uses`` per
+# request, and answers a call past it with an unbilled ``max_uses_exceeded``
+# result). It never changes within a conversation, because the tool
+# definitions are the first bytes of every cached prefix (tools → system →
+# messages): shrinking them to the remaining allowance, as this engine used
+# to, invalidated every cache entry of the conversation after the first
+# fetch, so each later continuation re-wrote the whole conversation at 1.25×
+# instead of reading it at 0.1×. The declared per-area budgets are enforced
+# BETWEEN requests by the cumulative ceilings in :func:`_run_dimension`
+# (searches at 2× the declared budget, fetches at the declared budget),
+# which request the final submission; the request that crosses one can run
+# past it by at most this allowance less one. The values are the interview's
+# per-round defaults (``CHAT_MAX_SEARCHES``/``CHAT_MAX_FETCHES``): above the
+# ~3 searches and under one fetch a research request was sized for, and small
+# enough that the context reserve each request needs (8 × 5,000 + 4 × 50,000
+# tokens) leaves the window clip idle until a conversation is past roughly
+# 580k tokens at the default output ceiling. A dimension that declares less
+# gets its own budget instead. Not a knob: equal allowances give the four
+# areas identical tool bytes, so a staggered launch could share one cache
+# entry for the shared block (the launch is still parallel).
+RESEARCH_SEARCHES_PER_REQUEST = 8
+RESEARCH_FETCHES_PER_REQUEST = 4
 
 # Tagged-JSON fallback for the rare text detour (tool_choice stays absent).
 # The tag NAME: ``schema.last_tagged_json_object`` takes the last complete
@@ -2429,14 +2456,32 @@ def _run_dimension(
     extracted findings and quoted passages; grounding and billing still
     read the untouched original responses.
 
+    The web tools are byte-identical on every request of a conversation —
+    its opening, every continuation, reminder and resumed request — and a
+    restart opens with the same bytes again: each declares the fixed
+    per-request allowance (:data:`RESEARCH_SEARCHES_PER_REQUEST`,
+    :data:`RESEARCH_FETCHES_PER_REQUEST`), never what remains of the
+    budget, so the cache entries for the tools, the system prompt and the
+    shared block are read by every continuation, and the continuation tail
+    can read what the conversation re-sends. The declared budgets are
+    enforced between requests by the cumulative ceilings (searches at 2× the
+    declared budget, fetches at the declared budget), which request the
+    submission; the request that crosses a ceiling can overshoot it by at
+    most its own allowance less one. The one exception is the context
+    window: a request that cannot reserve room for its allowance's fetches
+    switches the conversation, once and for good, to one fetch per request,
+    and one that cannot reserve even that submits.
+
     Once the resend sanitizer has EDITED the conversation (a fetched PDF
-    over the page limit elided, an unpaired server-tool call dropped), every
+    over the page limit elided, an unpaired server-tool call dropped), or
+    the context-window clip has switched its tools after a response, every
     later research request carries ``thinking.block_binding`` ``drop_block``
     and the preserved-thinking beta (the 5.5 prompting upgrade, P55-6;
     :func:`with_drop_block`): a thinking block produced before the edit is
     bound to the prefix it saw, and on an account created on or after
-    2026-08-31 replaying it would be a 400. A conversation the sanitizer
-    never edited sends exactly what it always did; a restart clears the
+    2026-08-31 replaying it would be a 400. Spending the allowance edits
+    nothing — the tools stay as they were — so a conversation neither of
+    those edited sends exactly what it always did; a restart clears the
     flag with the rest of the conversation. A submission that turns thinking
     off converts readable thinking notes to text and omits their signatures
     (:func:`.budget.without_thinking`), so it replays no bound block and needs
@@ -2498,16 +2543,33 @@ def _run_dimension(
             )
         )
 
-    tools = [
-        build_web_search_tool(
-            max_uses=max_searches,
-            user_location=profile.web_search_user_location(),
-        ),
-        build_web_fetch_tool(max_uses=max_fetches),
-        # Output tool last so the trailing cache breakpoint lands on it.
-        requirements_research_tool(model=model),
-    ]
-    tools[-1]["cache_control"] = {"type": "ephemeral"}
+    # The per-request allowance (RESEARCH_SEARCHES_PER_REQUEST says why it is
+    # fixed): the same bytes on every request of the conversation, resumed
+    # or restarted, so the tools' cache entry and everything after it can be
+    # read by every continuation. The declared budgets are enforced by the
+    # cumulative ceilings below, between requests.
+    searches_per_request = min(max_searches, RESEARCH_SEARCHES_PER_REQUEST)
+    fetches_per_request = min(max_fetches, RESEARCH_FETCHES_PER_REQUEST)
+
+    def _web_tools(fetches: int) -> list[dict]:
+        built = [
+            build_web_search_tool(
+                max_uses=searches_per_request,
+                user_location=profile.web_search_user_location(),
+            ),
+            build_web_fetch_tool(max_uses=fetches),
+            # Output tool last so the trailing cache breakpoint lands on it.
+            requirements_research_tool(model=model),
+        ]
+        built[-1]["cache_control"] = {"type": "ephemeral"}
+        return built
+
+    tools = _web_tools(fetches_per_request)
+    # The context-window clip's one alternative (see ``conversation_tools``):
+    # one fetch per request, which reserves the least context a web request
+    # can. Equal to ``tools`` when the dimension allows one fetch anyway, and
+    # then never used.
+    near_window_tools = _web_tools(1)
     # No ``tool_choice``: the system prompt instructs the model to end its
     # turn with the research tool, and the tagged-JSON fallback catches a
     # text detour. Forcing one was impossible while the web tools ran
@@ -2549,8 +2611,11 @@ def _run_dimension(
     if submission_choice:
         submission_choice = {**submission_choice, "disable_parallel_tool_use": True}
 
-    # Conversation-wide allowances, enforced on the next request's tools.
-    # Reaching a ceiling requests a submission instead of discarding work.
+    # Conversation-wide ceilings, checked before every request against what
+    # the conversation's responses report. Reaching one requests a submission
+    # instead of discarding work. The request that crosses one may run past
+    # it by up to its per-request allowance less one: the price of tools whose
+    # bytes never change.
     search_budget_ceiling = max(1, max_searches * 2)
     policy = DEFAULT_REALTIME_RETRY_POLICY
     attempts_planned = max(1, policy.max_attempts)
@@ -2598,6 +2663,17 @@ def _run_dimension(
     # account gets the invalidated blocks dropped instead of a 400. A resume
     # keeps it; a restart is a new conversation and clears it.
     thinking_edited = False
+    # The web tools this CONVERSATION sends: ``tools`` on every request,
+    # unless the context-window clip finds the next request cannot reserve
+    # room for ``tools``' fetches. It then switches to ``near_window_tools``
+    # for the rest of the conversation — one way, at most once, so the bytes
+    # cannot flip back and forth however the context grows or shrinks — and
+    # a request that cannot reserve even one fetch submits instead. That
+    # switch is the only tool change a conversation can see before its
+    # submission, and only past ~580k tokens of context; made after a
+    # response it edits the prefix replayed thinking was bound to, so it sets
+    # ``thinking_edited`` the way a sanitizer edit does. A resume keeps it; a
+    # restart is a new conversation and opens with ``tools`` again.
     conversation_tools = tools
     submission_reason = ""
     submission_prepared = False
@@ -2623,6 +2699,17 @@ def _run_dimension(
         sanitized = sanitize_messages_for_resend(outgoing)
         thinking_edited = thinking_edited or sanitized is not outgoing
         return sanitized
+
+    def _reserve_fits(input_count: int, web_tools: list[dict]) -> bool:
+        """Whether a request with ``web_tools`` leaves room for what it may
+        add: the answer, the margin, and every search and fetch its
+        per-request allowance permits."""
+        return (
+            input_count + max_tokens + _CONTEXT_MARGIN_TOKENS
+            + web_tools[0]["max_uses"] * _SEARCH_RESULT_RESERVE_TOKENS
+            + web_tools[1]["max_uses"] * WEB_FETCH_MAX_CONTENT_TOKENS
+            <= settings.RESEARCH_CONTEXT_WINDOW
+        )
 
     for attempt in range(attempts_planned):
         if should_stop():
@@ -2660,24 +2747,14 @@ def _run_dimension(
                     elif len(all_responses) > RESEARCH_MAX_CONTINUATIONS:
                         submission_reason = "maximum continuation allowance reached"
 
-                # Fresh copies enforce the remaining allowance without
-                # mutating the opening request or another dimension's tools.
-                # Changing max_uses rewrites the tool cache prefix when work
-                # has consumed the allowance; avoiding that rewrite must not
-                # silently renew a dimension's fetch/search allowance.
+                # The conversation's own tools, never this request's remaining
+                # allowance: identical bytes on every request keep the cached
+                # prefix readable (RESEARCH_SEARCHES_PER_REQUEST). The shared
+                # lists are never mutated — a request that needs different
+                # options builds a new dict around them.
                 stream_kwargs = dict(request_kwargs)
                 if not submission_reason:
-                    request_tools = [dict(tool) for tool in tools]
-                    request_tools[0]["max_uses"] = min(
-                        max_searches, search_budget_ceiling - searches_used
-                    )
-                    request_tools[1]["max_uses"] = max_fetches - fetches_used
-                    stream_kwargs["tools"] = request_tools
-                    # Tool definitions precede thinking in the bound prefix.
-                    # Shrinking an allowance invalidates that prefix just as
-                    # a source elision does; recover before counting/sending.
-                    if all_responses and request_tools != conversation_tools:
-                        thinking_edited = True
+                    stream_kwargs["tools"] = conversation_tools
                     if thinking_edited:
                         stream_kwargs = with_drop_block(stream_kwargs)
 
@@ -2686,31 +2763,24 @@ def _run_dimension(
                     # not open; it must never send an unchecked request.
                     in_request = True
                     input_count = count_request_tokens(client, messages, stream_kwargs)
-                    headroom = (
-                        settings.RESEARCH_CONTEXT_WINDOW - input_count - max_tokens
-                        - _CONTEXT_MARGIN_TOKENS
-                        - request_tools[0]["max_uses"] * _SEARCH_RESULT_RESERVE_TOKENS
-                    )
-                    allowed_fetches = min(
-                        request_tools[1]["max_uses"],
-                        max(0, headroom // WEB_FETCH_MAX_CONTENT_TOKENS),
-                    )
-                    if allowed_fetches < 1:
-                        submission_reason = "context window reserve reached"
-                    elif allowed_fetches != request_tools[1]["max_uses"]:
-                        request_tools[1]["max_uses"] = allowed_fetches
-                        if all_responses and request_tools != conversation_tools:
+                    if (
+                        not _reserve_fits(input_count, conversation_tools)
+                        and conversation_tools is tools
+                        and near_window_tools[1]["max_uses"] < tools[1]["max_uses"]
+                        and _reserve_fits(input_count, near_window_tools)
+                    ):
+                        # The clip: one way, once (``conversation_tools``
+                        # says why). After a response it edits the prefix
+                        # replayed thinking is bound to.
+                        conversation_tools = near_window_tools
+                        stream_kwargs["tools"] = conversation_tools
+                        if all_responses:
                             thinking_edited = True
                             stream_kwargs = with_drop_block(stream_kwargs)
-                        # The changed tool definition is part of the input.
+                        # Count the request that will actually be sent.
                         input_count = count_request_tokens(client, messages, stream_kwargs)
-                        if (
-                            input_count + max_tokens + _CONTEXT_MARGIN_TOKENS
-                            + request_tools[0]["max_uses"] * _SEARCH_RESULT_RESERVE_TOKENS
-                            + allowed_fetches * WEB_FETCH_MAX_CONTENT_TOKENS
-                            > settings.RESEARCH_CONTEXT_WINDOW
-                        ):
-                            submission_reason = "context window reserve reached"
+                    if not _reserve_fits(input_count, conversation_tools):
+                        submission_reason = "context window reserve reached"
 
                 if submission_reason:
                     if not submission_prepared:
@@ -2811,7 +2881,6 @@ def _run_dimension(
                     response = stream.get_final_message()
                 in_request = False
                 all_responses.append(response)
-                conversation_tools = stream_kwargs["tools"]
                 _log_input_transformations(response, dimension.dimension_id)
                 if carried_tail:
                     # The tail's value check (Tier 1 finish CT-2): what this
@@ -3079,6 +3148,8 @@ def _run_dimension(
                 container_id = ""
                 reminders_sent = 0
                 thinking_edited = False
+                # The bytes the abandoned conversation opened with, so the
+                # new opening can read the cache entries it wrote.
                 conversation_tools = tools
                 submission_reason = ""
                 submission_prepared = False

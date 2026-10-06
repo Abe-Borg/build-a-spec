@@ -923,7 +923,13 @@ function Dossier() {
           bounds={
             <>
               Per-dimension search budgets (up to 40 searches and 12 fetches for
-              governing codes) with a hard 2× runaway ceiling; up to 16
+              governing codes), counted across the agent’s whole conversation,
+              with a hard 2× runaway ceiling on searches. Each step may run at
+              most 8 searches and 4 fetches, the same offer on every step so
+              the conversation’s cached copy keeps matching; the step that
+              reaches a budget can therefore finish up to 7 searches or 3
+              fetches past it, all billed and counted, before the agent hands
+              in what it found. Up to 16
               continuations when the API pauses a long-running turn; retries with
               backoff on transient failures — the first picks the conversation
               up at the step that failed, the last starts it fresh — with the

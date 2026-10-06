@@ -217,11 +217,39 @@ generally and governs…" where the specification needed "Provide…".
   document still show under Open items and still block issue readiness. The
   assistant sees them listed as leftover placeholders and rewrites each one
   when it next works on that topic, asking you for the value it was holding.
+- **Explanation that slips through is flagged.** Two new advisory checks
+  appear in the Issues drawer, and the assistant sees them every turn:
+  - **Explanatory prose** — a provision that explains instead of directing:
+    amendment or adoption narration ("amends", "this amendment", "has
+    adopted", "incorporates … by reference", "is understood to",
+    "corroborated"), a reason ("because", "in order to", "the intent",
+    "is intended to"), where it applies ("applies generally", "governs the
+    …", "this requirement applies"), talk about the document ("this
+    provision"), the app's own terms ("recorded for this Project", "adoption
+    basis", "research item", "project profile", "unverified", "design
+    baseline"), notes to the design team ("the specifier", "the designer"),
+    hedging ("it is recommended", "likely", "may need to"), **"should"**
+    (write "shall" or the imperative), and **"pending"** (a look only — it
+    stays where it is a real condition of the work). One issue per
+    provision, naming every phrase.
+  - **REFERENCES entry shape** — an entry in a REFERENCES (or REFERENCE
+    STANDARDS) article that is more than one sentence, longer than 220
+    characters, adds an em-dash description, names a second standard ("Also
+    referenced"), or carries adoption reasoning or a project decision.
+  Ordinary spec language is deliberately left alone: "this Section",
+  "Comply with", "in accordance with", "IBC §903.4.2 (Alarms)", "refer to
+  Section …", "Coordinate with…", "Confirm … with the Owner before
+  installation", "so that", "where indicated", "as amended by", "generally",
+  "typically", "the more stringent requirement governs", and "shall
+  incorporate a supervisory switch". Neither check reads a preserved Word
+  table, or a file imported as something other than a spec section. Asking
+  the assistant to clean up the section sweeps them.
+- **Final QC's spec-language review** checks the same things and proposes the
+  directive rewrite. Because its instructions changed, a saved Final QC
+  result shows as out of date once; re-run it.
 - **Still to come:** the Word export still appends the assumptions,
   imported-provision and open-item schedules after END OF SECTION; they move
-  to a separate review report you download only when you want it. An
-  advisory lint and Final QC check for explanatory prose and overlong
-  REFERENCES entries follow too.
+  to a separate review report you download only when you want it.
 
 The first message after updating writes the conversation's cache once more,
 because the instructions and the edit tool's description changed.

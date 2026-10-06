@@ -687,6 +687,45 @@ Never add a model-authored path that writes document text without
 reversion evidence and the release-note draft are in `docs/as-built.md`
 under the same heading. No paid API call was made.
 
+## Explanatory prose and overlong REFERENCES entries are linted — implemented notes (2026-10-06)
+
+PR 2 of 4 for the specification-voice rule. Explanation is a matter of
+degree, so it is reported, never refused: two advisory lint rules, the same
+checklist in Final QC's `enforceability_language` lens, and two prompt lines.
+
+- **`explanatory_prose`** — `spec_voice.EXPLANATORY_PROSE_PATTERNS`, the
+  owner's approved list: amendment/adoption narration, reasons (incl. "in
+  order to"), applicability, talk about the document, the app's bookkeeping
+  terms, notes to the design team, hedging, "should", and "pending" (a look
+  only). Three phrases are narrowed so ordinary spec language stays clean:
+  "governs" only before the/this/each/all, "incorporates" only within 80
+  characters of a code, standard, edition, IBC/IFC or "by reference", and
+  "consistent with the" only before an edition, code, adoption or
+  amendment. Deliberately not flagged (owner): "as amended by",
+  "generally", "typically". One issue per provision, phrases in reading
+  order, `match` = the first.
+- **`reference_entry_shape`** — leaf provisions of an article whose title
+  matches `REFERENCES_ARTICLE_RE` (REFERENCES / REFERENCE(D) STANDARDS):
+  more than one sentence (abbreviation, initial and dotted-abbreviation
+  periods excluded), more than `REFERENCE_ENTRY_MAX_CHARS` (220), a
+  lower-case em-dash description, or `REFERENCE_ENTRY_PATTERNS` (case-
+  sensitive except "also referenced", "see also", "because", since titles
+  are Title Case). A lead-in paragraph with entries under it is not checked.
+- Neither rule reads a locked (preserved) block or an `unstructured_import`.
+- **Prompt.** `_SPEC_VOICE` says never "should" and never "in order to";
+  `_LINT_POLICY` names both rules and the "pending" exception. The stable
+  prompt changed, so every open session rewrites its cache once.
+- **Final QC.** The `enforceability_language` brief gains the voice and
+  REFERENCES checklist. Lens briefs are in the QC input manifest, so every
+  retained report reads stale once and needs a re-run.
+- `spec_voice.scan_markers` now wraps `_scan_spans` (same claiming, plus
+  each hit's start), so `explanatory_prose_hits` can sort by position;
+  `scan_markers`' output is unchanged.
+
+Tests: `tests/test_spec_voice_lint.py`. Full record, reversion evidence and
+the release-note draft in `docs/as-built.md` under the same heading. No
+paid API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

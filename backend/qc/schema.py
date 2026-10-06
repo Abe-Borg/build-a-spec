@@ -127,8 +127,21 @@ QC_LENSES: tuple[QCLens, ...] = (
             "'Install', 'Submit'); measurable, verifiable criteria; no 'as "
             "required' / 'as needed' / 'etc.' / vague responsibility; no "
             "design-delegation traps; no narrative prose inside the spec. "
-            "Flag each offending provision by element id with the concrete "
-            "rewrite."
+            "Specification voice: a provision directs the Contractor and "
+            "never explains — flag a reason ('because', 'in order to'), an "
+            "account of where a requirement applies, narration of a code "
+            "amendment, adoption or research finding, talk about the "
+            "document itself, a note to the design team, this app's "
+            "bookkeeping terms (recorded, assumed, basis, research item), "
+            "hedging, and 'should' where 'shall' or the imperative belongs. "
+            "Code citations such as 'IBC §903.4.2 (Alarms)' are fine. Flag "
+            "any REFERENCES entry carrying more than one standard's "
+            "designation, full title, and edition: adoption reasoning, a "
+            "description of the standard, a project decision, or a second "
+            "standard. Flag each offending provision by element id with the "
+            "concrete rewrite — the directive alone, the reason left to "
+            "chat; a requirement found in a REFERENCES entry moves to its "
+            "own article."
         ),
     ),
     QCLens(

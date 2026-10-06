@@ -387,6 +387,16 @@ cd frontend && npm run build           # tsc --noEmit && vite build -> dist/
 python main.py                         # run the app (serves dist/)
 ```
 
+**Who runs the full suite (owner preference, 2026-10-06).** CI
+(`.github/workflows/ci.yml`) runs Ruff, the full backend suite on Python
+3.11 and 3.12, and the frontend `npm test` and build on every push to a PR.
+A session therefore does not run the full backend suite (about eleven
+minutes) before pushing. It runs Ruff and the test files its change touches
+or adds (seconds), plus any reversion probes, which CI cannot do; then it
+pushes and lets CI run everything. A red CI run is fixed like any other.
+Run the full suite locally only to chase a failure CI reports. `npm test`
+still runs locally after touching UI (next paragraph).
+
 `npm test` is not optional after touching UI: it is what enforces the
 capability-coverage contract (`frontend/tests/tour.test.ts`). A new control
 without a `data-capability`, a capability without a tour step, or a step

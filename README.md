@@ -163,6 +163,75 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — the diagnostics say whether an agent was starved
+
+No release entry yet: v1.23.0 is published and its entry is frozen, so the
+release-note draft is in docs/as-built.md ("The diagnostics say whether an
+agent was starved").
+
+Research runs four areas at once, Final QC runs lenses, grouping calls and
+dozens of verifier seats, and every chat turn is a model call with a tool
+loop. Any of them can be starved of something while it runs — the provider
+rate-limits or overloads, a connection drops, a batched request expires
+before the provider gets to it, a search or continuation allowance runs out,
+the context window fills, a reply is cut at `max_tokens`, a seat waits for
+a free worker, or the areas waiting to share a lead's cached copy wait the
+whole bound for a lead that never starts streaming. Until now the
+diagnostics could not tell you. The live board showed a retry while it
+happened and the round's event log kept it until the next round started;
+the budget ceilings, the context clip and the staggered launch's wait
+outcome were lines in the activity log or nothing; the SDK's own retries
+(two per request before the app ever sees a failure) were invisible
+everywhere.
+
+Now every research area, every Final QC call and seat, and every chat turn
+reports into one **resource pressure ledger** at the moment it waits or runs
+out, and the ledger answers the question:
+
+- **Settings → Developer tools → Engine state → Resource pressure** opens
+  with the session verdict — "No agent was starved this session — Research
+  8 areas over 2 runs · Final QC 14 calls over 1 run · Chat 12 turns", or
+  "Starved this session — Research 1 of 8 areas over 2 runs · …" — then one
+  line per starved run the ledger kept (the last eight of each engine),
+  naming each starved agent and what it met, in plain words: "governing_codes
+  — rate limited ×2 (backoff 15 s), hit the search ceiling; ahj_requirements
+  — waited the whole bound for its lead (45 s)". An agent that did not
+  complete says how it ended ("failed (rate_limit)"). The last line is the
+  SDK's own retries: how many it is allowed per request, whether the ledger
+  can see them, and how many it saw outside any agent.
+- **The diagnostics snapshot and the support bundle** carry the whole
+  ledger as `resource_pressure`: per run, every agent's outcome, attempts,
+  queue wait, warm-wait outcome, backoff seconds, SDK retries and pressure
+  counts, plus an event record per pressure with that moment's facts (the
+  attempt, the backoff, the provider's `retry-after`, the searches used, the
+  input tokens at the clip). Numbers and closed tokens only — never a
+  message, a URL or a title — and bounded (8 runs per engine, 200 agents and
+  300 records per run; the counts keep running past the caps and the drops
+  are counted).
+- **What counts as starved.** Every kind the ledger records is a starvation
+  signal, grouped by what was short: the provider's capacity (a 429, a
+  529/5xx, a dropped connection, an SDK retry, an expired batch request),
+  one of the app's own allowances (searches, fetches, continuations,
+  reminders, the chat's tool rounds, the batched phase's round and
+  wall-clock ceilings), the context window (its reserve, the one-fetch
+  clip, raw sources elided to fit a submission, a chat request the provider
+  called too long), the output allowance (`max_tokens`), or a turn to run (a
+  pool-worker wait of a second or more; a lead that never started streaming
+  inside the bound). A wait that ended the way the launch intends — the
+  lead streamed, or you pressed Stop — and a sub-second queue wait are
+  recorded as numbers, never as pressure.
+- **A Final QC batch round is noted, not counted:** how long the provider
+  took and what its counts said sit beside the pressures, because waiting
+  on the Batches API is the ordinary cost of the 50% rate, not starvation.
+
+The ledger lives in memory for the app session (a restart clears it; the
+bundle is the record that lasts). It changes no request, no budget and no
+result, and it adds no event to the chat or research streams. The SDK-retry
+count reads the SDK's own log line, so `BUILD_A_SPEC_LOG_LEVEL` set above
+INFO mutes it — and the row says so rather than reporting zero. No paid
+request was sent to build or test this; what the live provider's pressure
+looks like on real runs is unmeasured.
+
 ## Current Status — one writing policy for drafting and Final QC
 
 No release entry yet: v1.23.0 is published and its entry is frozen, so the
@@ -3093,7 +3162,7 @@ Shipped in v0.5.0 (Phase 5) and still current:
 - **Compliance audit.** One click audits the draft against the Phase 4 requirements profile, with Spec Critic's trust model intact: only **grounded** requirements control; `[UNVERIFIED]` items can at most earn a confirm-with-authority advisory; `[PROCESS]` items are excluded. Output: a coverage matrix (`represented / missing / contradicted / unclear`, every controlling requirement always classified — a skipped one reports `unclear`, never invisible) with evidence quotes + click-to-jump element ids, advisory findings, a staleness marker when the draft moves past the audited version, and a **compliance closing section in the `.docx` export**. Full multi-spec reviews still belong to Spec Critic.
 - **Windows packaging + auto-update.** Spec Critic's release pipeline, cloned: PyInstaller one-folder build (`packaging/windows/build-a-spec.spec`, bundling the built frontend + pywebview/WebView2), Inno Setup installer with its own stable AppId, and the serverless GitHub-Releases updater — `latest.json` manifest fetched https-only (redirect-downgrade guarded), installer **SHA-256-verified before it ever runs**, once-a-day throttle, skip-this-version, and an update pill in the header. `docs/RELEASE_WINDOWS.md` is the runbook; `--version`/`--selfcheck` smoke-test the frozen exe; a version-consistency gate keeps settings/package.json/tag aligned (and runs in pytest).
 - **Session tracing.** The ported Spec Critic tracing core (JSONL spans + events, background writer, credential redaction, prompt-hash dedup, deep mode) records turns — now with per-round detail and prompt material — plus every REST request and state-changing action (edits, exports, project saves/loads, QC dispositions, stops, key changes, frontend errors), research runs, audits, Final QC, and imports. Every record carries a run/process identity and monotonic sequence; requests carry a correlation id, stable outcome code, timing, and workspace generation before/after. The live run metadata checkpoints capture counts by event/span/request outcome, token totals, queue count/byte high-water marks, categorized drops, write failures, active-run storage, and open spans, so the diagnostic system reports its own gaps. Runs are local-only, env-gated (`BUILD_A_SPEC_TRACE`, default on), storage-bounded by age/count/bytes (with the byte ceiling also preventing one active run's JSONL payload from growing without bound), and viewable through the self-contained HTML viewer at `GET /api/trace/viewer` (no network, dynamic event filters).
-- **Always-on activity log + Developer tools.** Every launch writes a rotating local log beneath its own `<log-root>/process-<uuid>/` directory (`BUILD_A_SPEC_LOG`, default on: requests, errors with tracebacks, crashes via `faulthandler` and exception hooks, an unclean-shutdown marker) — the only place output survives in the packaged windowed build, where stdout/stderr go to devnull. Credential-shaped substrings are redacted from normal messages and exception text before file formatting. Historical log runs are storage-bounded by age/count/bytes without pruning the current launch, another live process, or recent unclean-shutdown evidence. **Settings → Developer tools** shows process/server identity, document shape and generation, import evidence, research/audit/QC worker state, trace coverage and writer health, recent activity, the log tail, retention results, the trace-run list, and the cost self-checks (what each one has measured, and whether it has switched a saving off for the session). Its one-click **diagnostics bundle** contains the point-in-time snapshot, the current launch's bounded log rotations, read-only/redacted legacy flat logs, the flushed current trace, bounded event/span tails from up to three completed prior runs, an exact inclusion/truncation manifest, and a time-ordered recent-incident index; live sibling runs are identified but never copied. The artifacts are local-only but may contain draft text, prompts, document titles, file paths, and error context; treat both folders and every exported bundle as sensitive project data.
+- **Always-on activity log + Developer tools.** Every launch writes a rotating local log beneath its own `<log-root>/process-<uuid>/` directory (`BUILD_A_SPEC_LOG`, default on: requests, errors with tracebacks, crashes via `faulthandler` and exception hooks, an unclean-shutdown marker) — the only place output survives in the packaged windowed build, where stdout/stderr go to devnull. Credential-shaped substrings are redacted from normal messages and exception text before file formatting. Historical log runs are storage-bounded by age/count/bytes without pruning the current launch, another live process, or recent unclean-shutdown evidence. **Settings → Developer tools** shows process/server identity, document shape and generation, import evidence, research/audit/QC worker state, trace coverage and writer health, recent activity, the log tail, retention results, the trace-run list, the cost self-checks (what each one has measured, and whether it has switched a saving off for the session), and the resource pressure ledger (whether any research area, Final QC call or chat turn was starved — rate limited, cut by a ceiling or the context window, truncated at `max_tokens`, left waiting for a worker or a lead — with what each one met, per run). Its one-click **diagnostics bundle** contains the point-in-time snapshot, the current launch's bounded log rotations, read-only/redacted legacy flat logs, the flushed current trace, bounded event/span tails from up to three completed prior runs, an exact inclusion/truncation manifest, and a time-ordered recent-incident index; live sibling runs are identified but never copied. The artifacts are local-only but may contain draft text, prompts, document titles, file paths, and error context; treat both folders and every exported bundle as sensitive project data.
 
 Shipped in v0.4.0 (Phase 4) and still current (the near-verbatim port of Spec Critic's requirements-research fan-out, pointed at drafting):
 
@@ -3231,6 +3300,12 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          off, the tail's refusal guard + value check and
                          the warm lead's read check; a leaf both engines
                          import; Developer tools' Cost self-checks row
+  resource_pressure.py   the resource pressure ledger: in-memory, per-process,
+                         bounded record of what every research area, Final QC
+                         call and chat turn waited for or ran out of (a closed
+                         pressure vocabulary, outcomes, backoff, the SDK's own
+                         retries via a log observer); a leaf the three engines
+                         report into; Developer tools' Resource pressure row
   diagnostics.py         always-on rotating activity log + crash capture
                          (faulthandler, exception hooks, unclean-shutdown
                          marker) + the /api/diagnostics* snapshot/tail/

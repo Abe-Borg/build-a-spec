@@ -1435,7 +1435,7 @@ def snapshot() -> dict[str, Any]:
     I/O: anything held under that lock blocks model turns (the freeze
     class the capability-sweep work removed).
     """
-    from . import api_key_store, cost_checks, sessions, settings
+    from . import api_key_store, cost_checks, resource_pressure, sessions, settings
     from .llm.conversation import effective_discipline
     from .llm.history_hygiene import history_composition
     from .research.engine import incomplete_dimension_facts
@@ -1722,6 +1722,13 @@ def snapshot() -> dict[str, Any]:
         # process, not to a workspace. Read without the session guard — it is
         # not session state, and ``cost_checks`` takes its own lock.
         "cost_checks": cost_checks.snapshot(),
+        # Was an agent starved while it ran (``backend.resource_pressure``):
+        # what each research area, Final QC seat and chat turn waited for or
+        # ran out of, per run, the last few runs of each engine. Top level
+        # for the same reason as the cost checks — the ledger belongs to the
+        # process, not to a workspace — and read without the session guard
+        # (it takes its own lock). Shaped for the scrub's six-level bound.
+        "resource_pressure": resource_pressure.snapshot(),
     }
     if server_identity:
         payload["server"] = server_identity

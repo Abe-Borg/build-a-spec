@@ -892,6 +892,97 @@ system-prompt placement. Tests: `tests/test_writing_policy.py`,
 `tools/writing_policy_eval.py` is offline and builds no client. No paid API
 call was made; live quality and runtime trade-offs are unmeasured.
 
+## The diagnostics say whether an agent was starved — implemented notes (2026-10-06)
+
+Owner question (Abraham): can the diagnostics tell whether the agents were
+starved of resources during execution? They could not: the snapshot carried
+run status, error kinds and incomplete coverage; the retry events lived in
+the per-round event log (cleared at every start, counted in the snapshot);
+the staggered launch's wait outcome, the budget ceilings, the context clip
+and `max_tokens` were INFO lines or nothing; and the SDK's own retries were
+invisible everywhere. Now they can.
+
+- **One ledger, a leaf like `cost_checks`:** `backend/resource_pressure.py`.
+  Process-wide, lock-guarded, bounded (the last 8 runs per engine, 200
+  agents and 300 event records per run; counts run past the caps and the
+  drops are counted). A RUN is a research round, a Final QC run or a chat
+  turn; an AGENT is a research area, a Final QC lens / grouping call /
+  verifier seat, or the turn. Each records what it waited for or ran out
+  of as one KIND of a closed vocabulary grouped by source
+  (`PRESSURE_SOURCES`): `provider` (`rate_limit`, `server_error`,
+  `connection` — each app-level retry with its backoff, mode and the
+  provider's `retry-after`, plus the final failure that gave up —
+  `sdk_retry`, `batch_expired`), `budget` (`search_ceiling`,
+  `fetch_ceiling`, `continuation_ceiling`, `reminder_ceiling`,
+  `tool_rounds_exhausted`, `batch_round_ceiling`, `batch_wall_clock`),
+  `context` (`context_reserve`, `near_window_clip`, `submission_elided`,
+  `prompt_too_long`), `output` (`output_truncated`) and `scheduling`
+  (`queued` — a pool-worker wait of at least `QUEUE_PRESSURE_MIN_MS`,
+  1 s — and `warm_wait_timeout`). Every kind is a starvation signal by
+  construction: an agent with any pressure is starved, a run with any
+  starved agent is starved. A `warm` or `stopped` wait and a short queue
+  wait are numbers on the agent, never pressure. Outcomes: `completed`,
+  `failed`, `cancelled`, `interrupted` (still running when the run ended);
+  the first `ended` wins, so a worker that outlives a Stop cannot rewrite a
+  closed record. Ids are the modules' (area ids, lens ids, `seat-i-j`,
+  `consolidation:<bucket>`, `turn`); tokens are sanitized to
+  `unrecognized`; no text of the work ever enters it.
+- **Handles are null-object safe.** `begin_run(engine, run_id, label)`
+  returns a `RunPressure`; `run.agent(id, kind=…)` an `AgentPressure`
+  (`submitted` → `started` → `pressure`/`retry`/`warm_wait` → `ended`).
+  Engine functions default to `NO_AGENT`/`NO_RUN`, so direct callers and
+  the fixtures change nothing. A handle references its own run, so a stale
+  worker writes into the run it belongs to, never a successor's.
+- **The engines report at the spot.** Research: `run_requirements_research`
+  opens `round N` around the pool (`with pressure_run, ThreadPoolExecutor`),
+  `_run_dimension(pressure=…)` reports the queue wait, each retry and the
+  final failure, the submission reason (`_SUBMISSION_PRESSURE_KINDS`), the
+  clip, the elision, a `max_tokens` cut and the outcome; `_launch_staggered`
+  gained `on_release(members, outcome, waited_ms)` for the followers' warm
+  waits. Final QC: `run_final_qc` is now a thin wrapper that opens the run
+  under its `run_id` and closes it in a `finally`; the body is
+  `_run_final_qc(pressure_run=…)`. `_run_streaming_call(pressure=…)` reports
+  for lenses, grouping calls, streamed seats and warm leads (its `done()`
+  records the outcome); `_BatchSeatState.pressure` records a batched seat's
+  outcome in `settle`/`settle_parsed`; `_run_batch_calls` reports refused
+  submissions, item retries, expiry, the round and wall-clock ceilings
+  (`settle_all(..., pressure_kind)`), the warm lead's wait on its batched
+  members, and one `batch_round` NOTE per round (how long the provider took,
+  its counts) — noted beside the pressures, never counted as one. Chat:
+  `stream_user_turn` opens `turn` and closes it in its `finally`; failures
+  record their class (`_record_turn_api_failure`), plus `output_truncated`,
+  `tool_rounds_exhausted` and `prompt_too_long`.
+- **The SDK's own retries are counted.** `SDK_MAX_RETRIES` retries happen
+  inside the SDK before the app sees a failure. An observer handler on the
+  `anthropic._base_client` logger counts its INFO line ("Retrying request
+  to %s in %f seconds", unchanged in SDK 1.11.0) against the thread's agent
+  in flight (`started()` on a worker thread, `requesting()` around the
+  chat's stream open, since a generator's frames hop threads) or as
+  unattributed. The snapshot discloses `attached` and `listening`
+  (`BUILD_A_SPEC_LOG_LEVEL` above INFO mutes it); the ledger never lowers a
+  logger level.
+- **Where it shows.** `diagnostics.snapshot()["resource_pressure"]`
+  (top level beside `cost_checks`; in the bundle through the snapshot),
+  shaped for the scrub's six-level bound (an agent's `pressure_counts` sit
+  at the sixth level, scalars only). Developer tools → Engine state →
+  **Resource pressure**: the session verdict, one line per starved run the
+  ledger kept, the SDK line (`frontend/src/lib/resourcePressure.ts`; the
+  vocabulary is pinned against the backend file by
+  `frontend/tests/resourcePressure.test.ts`). The ledger is per process:
+  a restart clears it; the bundle is the record that lasts.
+- **Unchanged.** Every request byte, every budget, the merge, the
+  submission, the QC report and manifest, the SSE event protocol (no new
+  event), readiness. `tests/conftest.py` resets the ledger around every
+  test.
+
+Never let text of the work — a message, a URL, a title — into the ledger,
+and never record a `warm`/`stopped` wait or a sub-floor queue wait as
+pressure. Tests: `tests/test_resource_pressure.py`,
+`frontend/tests/resourcePressure.test.ts`. Full record, reversion evidence
+and the release-note draft are in `docs/as-built.md` under the same heading.
+No paid API call was made; what the live provider's pressure looks like on
+real runs is unmeasured.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

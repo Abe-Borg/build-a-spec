@@ -2440,6 +2440,101 @@ export interface CostChecksSnapshot {
   warm_lead?: WarmLeadCheck;
 }
 
+/** One agent's record on the resource pressure ledger
+ *  (`backend/resource_pressure.py`): a research area, a Final QC lens,
+ *  grouping call or verifier seat, or a chat turn. `pressure_counts` is
+ *  keyed by the backend's closed pressure vocabulary; any key at all means
+ *  the agent was starved of something. Numbers and closed tokens only. */
+export interface PressureAgent {
+  kind: string;
+  outcome: string;
+  error_kind: string;
+  attempts: number;
+  started_at: number | null;
+  ended_at: number | null;
+  duration_ms: number | null;
+  queued_ms: number | null;
+  warm_wait_outcome: string;
+  warm_wait_ms: number | null;
+  warm_lead: string;
+  backoff_s: number;
+  sdk_retries: number;
+  sdk_sleep_s: number;
+  starved: boolean;
+  pressure_counts: Record<string, number>;
+}
+
+/** One pressure (or run-level note) the ledger recorded, with the
+ *  scalar facts of that moment (attempt, backoff, retry-after, ...). */
+export interface PressureEvent {
+  at: number;
+  elapsed_ms: number;
+  agent: string;
+  kind: string;
+  [field: string]: unknown;
+}
+
+/** One run on the ledger: a research round, a Final QC run, a chat turn. */
+export interface PressureRun {
+  engine: string;
+  run_id: string;
+  label: string;
+  status: string;
+  started_at: number;
+  ended_at: number | null;
+  duration_ms: number;
+  starved: boolean;
+  starved_agents: number;
+  agents_total: number;
+  agents_running: number;
+  agents_completed: number;
+  agents_failed: number;
+  agents_cancelled: number;
+  agents_interrupted: number;
+  agents_dropped: number;
+  pressure_counts: Record<string, number>;
+  backoff_s: number;
+  sdk_retries: number;
+  queued_max_ms: number;
+  batch_rounds: number;
+  batch_wait_ms: number;
+  agents: Record<string, PressureAgent>;
+  events: PressureEvent[];
+  events_dropped: number;
+}
+
+/** One engine's totals over every run it has ENDED this app session. */
+export interface PressureTotals {
+  runs_recorded: number;
+  runs_kept: number;
+  runs_ended: number;
+  runs_starved: number;
+  agents: number;
+  starved_agents: number;
+  backoff_s: number;
+  sdk_retries: number;
+  pressure_counts: Record<string, number>;
+}
+
+/** `resource_pressure` in the diagnostics snapshot: was an agent starved
+ *  while it ran? The last few runs of each engine, newest first, and the
+ *  session totals. */
+export interface ResourcePressureSnapshot {
+  schema_version?: number;
+  sdk_retries_per_request?: number;
+  queue_pressure_min_ms?: number;
+  max_runs_per_engine?: number;
+  sdk_retry_observer?: {
+    attached: boolean;
+    logger: string;
+    listening: boolean;
+    unattributed_retries: number;
+    unattributed_sleep_s: number;
+  };
+  totals?: Record<string, PressureTotals>;
+  runs?: PressureRun[];
+}
+
 /** `GET /api/diagnostics` — environment + session snapshot. */
 export interface DiagnosticsSnapshot {
   ok: boolean;
@@ -2696,6 +2791,9 @@ export interface DiagnosticsSnapshot {
   /** The cost self-checks (Tier 1 finish). Absent from a backend older than
    *  CT-1; `{}` when the backend could not read them. */
   cost_checks?: CostChecksSnapshot;
+  /** The resource pressure ledger: was an agent starved while it ran?
+   *  Absent from an older backend; `{}` when the backend could not read it. */
+  resource_pressure?: ResourcePressureSnapshot;
 }
 
 /** `GET /api/diagnostics/log` — activity-log tail. */

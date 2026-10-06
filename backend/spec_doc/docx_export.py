@@ -3,10 +3,14 @@
 Office-style SectionFormat layout: centered section header, PART headings,
 ``1.1  TITLE`` articles, hanging-indent paragraph levels (A. / 1. / a. /
 1) / a)) backed by genuine Word multilevel numbering in clean exports, END OF
-SECTION — followed on a new page by the **assumptions
-schedule**: every ``assumed`` block listed with its numbering so a senior
-reviewer can audit each model default in one pass, plus the open-item
-schedule ([TBD: ...] markers and ``needs_input`` blocks).
+SECTION — and nothing after it. The specification carries specification text
+and nothing else (the owner's rule, 2026-10-06), so the material written for
+the reviewer — the **assumptions schedule** (every ``assumed`` block with its
+numbering, so a senior reviewer can audit each default in one pass), the
+unreviewed imported provisions, the open items, and the Final QC or
+compliance-audit closing — is its own document, the **review report**
+(:func:`build_review_report`), downloaded only when the user asks for it. A
+blank section number or title prints blank, never a ``[TBD]``.
 """
 from __future__ import annotations
 
@@ -80,18 +84,13 @@ def _schedule_table(document, rows: list[tuple[str, str]], headers: tuple[str, s
 
 def build_docx(
     section: SpecSection,
-    audit_result: dict | None = None,
-    qc_result: dict | None = None,
     redline: SectionDiff | None = None,
     redline_date: str | None = None,
 ) -> bytes:
-    """Render the section; a QC or audit closing carries the review trail.
+    """Render the section — the specification and nothing else.
 
-    ``qc_result`` is the Batch 4 Final-QC dict (:meth:`QCResult.to_dict`);
-    ``audit_result`` is the Phase 5 audit dict. When a QC result is present
-    it supersedes the audit closing (the QC lenses cover the audit's ground
-    and more); otherwise the audit closing is rendered as before. The
-    rendering states which document version was reviewed.
+    The document ends at END OF SECTION. The review trail that used to follow
+    it (schedules, QC or audit closing) is :func:`build_review_report`.
 
     When ``redline`` (a :class:`SectionDiff`) is supplied (Batch 5), the body
     is rendered as genuine Word tracked changes (``w:ins``/``w:del`` with
@@ -101,18 +100,14 @@ def build_docx(
     provision *text*. Unlike the clean renderer's genuine Word numbering,
     redline display numbering (A. / 1. / a.) remains a plain positional
     literal so a survivor whose position shifted keeps the current label,
-    never a tracked mark (the frozen "moves are not marked" decision). The
-    schedules below are always rendered plainly from ``section`` (the current
-    document), never redlined. ``redline_date`` overrides the ISO-8601
-    ``w:date`` stamp.
+    never a tracked mark (the frozen "moves are not marked" decision).
+    ``redline_date`` overrides the ISO-8601 ``w:date`` stamp.
     """
     # python-docx ultimately writes XML 1.0, which rejects most C0 controls
-    # and lone surrogates.  Sanitize cloned inputs once at the boundary so all
-    # clean, redline, schedule, QC-closing, and audit-closing writers are
-    # covered without mutating the live document or persisted review record.
+    # and lone surrogates.  Sanitize cloned inputs once at the boundary so the
+    # clean and redline writers are covered without mutating the live
+    # document.
     section = xml_safe_clone(section)
-    audit_result = xml_safe_clone(audit_result)
-    qc_result = xml_safe_clone(qc_result)
     redline = xml_safe_clone(redline)
     redline_date = xml_safe_clone(redline_date)
 
@@ -130,8 +125,69 @@ def build_docx(
     else:
         _render_clean_body(document, section)
 
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def build_review_report(
+    section: SpecSection,
+    audit_result: dict | None = None,
+    qc_result: dict | None = None,
+    *,
+    version_index: int | None = None,
+    generated_on: str | None = None,
+) -> bytes:
+    """The review report: everything written for the reviewer, not the spec.
+
+    Moved, unchanged in substance, out of the specification export (the
+    owner's rule, 2026-10-06): the assumptions schedule, the imported
+    provisions not yet reviewed, the open items, and the Final QC closing —
+    or, without a QC result, the Phase 5 compliance-audit closing. A short
+    header names the section, the document version and the date, because
+    the report now travels apart from the section it describes.
+
+    ``qc_result`` is the Batch 4 Final-QC dict (:meth:`QCResult.to_dict`);
+    the caller passes it only when the review is current and audit-complete,
+    exactly the rule the specification export used. ``audit_result`` is the
+    Phase 5 audit dict. ``generated_on`` (ISO date) is injectable for tests.
+    """
+    section = xml_safe_clone(section)
+    audit_result = xml_safe_clone(audit_result)
+    qc_result = xml_safe_clone(qc_result)
+
+    document = Document()
+    _style_base(document)
+
+    _centered(document, "REVIEW REPORT")
+    heading = " - ".join(
+        part
+        for part in (
+            f"SECTION {section.number}" if section.number else "",
+            section.title,
+        )
+        if part
+    )
+    if heading:
+        _centered(document, heading)
+    facts = []
+    if version_index is not None:
+        # The panel's 1-based number beside the stored index — the one
+        # document-version wording the Final QC report already uses.
+        facts.append(f"Document version {qc_version_label(version_index)}")
+    facts.append(
+        "Generated "
+        + (generated_on or datetime.now(timezone.utc).date().isoformat())
+    )
+    _centered(document, " | ".join(facts), bold=False)
+    document.add_paragraph(
+        "This report accompanies the specification section and is not part "
+        "of it. It lists the provisions drafted from defaults, starter "
+        "content not yet reviewed, the open items, and the latest review."
+    )
+    document.add_paragraph()
+
     # -- assumptions schedule ----------------------------------------------
-    document.add_page_break()
     _centered(document, "ASSUMPTIONS SCHEDULE")
     document.add_paragraph(
         "The following provisions were drafted from defaults (the applicable "
@@ -229,6 +285,7 @@ def build_docx(
             ]
             _schedule_table(document, finding_rows, ("Severity", "Finding"))
 
+
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
@@ -237,8 +294,10 @@ def build_docx(
 def _render_clean_body(document, section: SpecSection) -> None:
     """SectionFormat body with genuine Word-numbered provision levels."""
     numbering = SectionFormatNumbering(document)
-    _centered(document, f"SECTION {section.number or '[TBD]'}")
-    _centered(document, section.title or "[TBD: SECTION TITLE]")
+    # A blank number or title prints blank: the specification never carries
+    # a placeholder (the owner's rule, 2026-10-06).
+    _centered(document, f"SECTION {section.number}".rstrip())
+    _centered(document, section.title)
     document.add_paragraph()
 
     for part in section.parts:
@@ -301,6 +360,12 @@ def export_filename(section: SpecSection) -> str:
     stem = filename_safe_text(stem)
     stem = re.sub(r'[\\/:*?"<>|]+', "", stem).strip() or "DRAFT SECTION"
     return f"{stem}.docx"
+
+
+def review_report_filename(section: SpecSection) -> str:
+    """The clean export name with a `` - REVIEW REPORT`` suffix."""
+    name = export_filename(section)
+    return name[: -len(".docx")] + " - REVIEW REPORT.docx"
 
 
 def redline_filename(section: SpecSection) -> str:
@@ -433,28 +498,36 @@ def _redline_paragraph_format(paragraph, level: int) -> None:
 
 
 def _render_redline_section(document, element: ElementDiff, ids, author, date):
-    # SECTION <number> line (centered). The clean body substitutes "[TBD]" for
-    # an empty number, so an empty side must carry that placeholder too, or the
-    # round-trip diverges on a from-scratch (vs-empty) redline.
+    # SECTION <number> line (centered). The clean body prints "SECTION" alone
+    # for an empty number, so the separating space travels with the number:
+    # Accept-All and Reject-All each reproduce the clean header of their side,
+    # including a from-scratch (vs-empty) redline.
     p = document.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _append_equal(p, "SECTION ", bold=True)
-    if element.number_base == element.number_cur:
-        _append_equal(p, element.number_cur or "[TBD]", bold=True)
+    _append_equal(p, "SECTION", bold=True)
+    base_number = f" {element.number_base}" if element.number_base else ""
+    cur_number = f" {element.number_cur}" if element.number_cur else ""
+    if base_number == cur_number:
+        if cur_number:
+            _append_equal(p, cur_number, bold=True)
     else:
-        _append_del(p, element.number_base or "[TBD]", ids, author, date, bold=True)
-        _append_ins(p, element.number_cur or "[TBD]", ids, author, date, bold=True)
+        if base_number:
+            _append_del(p, base_number, ids, author, date, bold=True)
+        if cur_number:
+            _append_ins(p, cur_number, ids, author, date, bold=True)
 
     # Section title line (centered): word-level diff when both sides have a
-    # title, whole del/ins with the placeholder when a side is empty.
+    # title, whole del/ins when a side is empty (that side prints blank).
     q = document.add_paragraph()
     q.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    placeholder = "[TBD: SECTION TITLE]"
     if element.base_text == element.cur_text:
-        _append_equal(q, element.cur_text or placeholder, bold=True)
+        if element.cur_text:
+            _append_equal(q, element.cur_text, bold=True)
     elif not element.base_text or not element.cur_text:
-        _append_del(q, element.base_text or placeholder, ids, author, date, bold=True)
-        _append_ins(q, element.cur_text or placeholder, ids, author, date, bold=True)
+        if element.base_text:
+            _append_del(q, element.base_text, ids, author, date, bold=True)
+        if element.cur_text:
+            _append_ins(q, element.cur_text, ids, author, date, bold=True)
     else:
         _append_runs(q, element.runs or [], ids, author, date, bold=True)
     document.add_paragraph()
@@ -1213,7 +1286,7 @@ def _qc_version_display(value: object) -> str:
 def _qc_version_phrase(value: object) -> str:
     """The same number, shaped for the middle of a sentence.
 
-    The closing summaries appended to the ISSUED SPEC read as prose, so they
+    The closing summaries in the review report read as prose, so they
     take the display number without the stored index — a data field's
     parenthetical mid-sentence is noise. What they share with
     :func:`qc_version_label` is the VALIDATION, which is where the bug was:
@@ -1986,7 +2059,7 @@ def _qc_version_note(qc_result: dict) -> str:
 
 
 def _render_qc_closing(document, qc_result: dict, *, compact: bool) -> None:
-    """The Final-QC section appended to the issued spec (compact form)."""
+    """The Final-QC section of the review report (compact form)."""
     document.add_page_break()
     _centered(document, "FINAL QC SUMMARY")
     model = str(qc_result.get("model") or "the QC model")

@@ -18820,3 +18820,87 @@ beyond the designation, title and edition. Final QC checks the same things.
 Saved Final QC results need one re-run."
 
 No paid API call was made.
+
+## The specification ends at END OF SECTION; the review trail is its own file — implemented notes (2026-10-06)
+
+PR 3 of 4 for the owner's specification-voice rule. The owner decided
+(2026-10-06) that the assumptions, imported-provision and open-item lists
+and the QC/audit summary move out of the specification into a separate
+document "if the user elects to do that" — downloaded only on request.
+
+**Before.** `build_docx` rendered the body to END OF SECTION, then a page
+break and the ASSUMPTIONS SCHEDULE (always, with "None — every provision is
+confirmed." when empty), IMPORTED PROVISIONS NOT YET REVIEWED, OPEN ITEMS
+(rows prefixed `[TBD]` / `[NEEDS INPUT]`), and either the compact Final QC
+closing (only when `qc_current` and `qc_audit_complete` both passed) or the
+Phase 5 compliance-audit closing. Every clean, normalized and semantic-
+redline export carried them. A blank header printed `SECTION [TBD]` and
+`[TBD: SECTION TITLE]`, and the redline mirrored both so Accept All matched.
+
+**After.**
+
+- `build_docx(section, redline=None, redline_date=None)` stops at END OF
+  SECTION. A blank number prints `SECTION`; a blank title prints an empty
+  line. `_render_redline_section` keeps the round trip: the separating space
+  rides with the number, and an empty side emits no run, so Accept All gives
+  the current side's clean header and Reject All the base side's — including
+  a from-scratch redline against the empty document.
+- `build_review_report(...)` holds the moved blocks unchanged in substance,
+  in the old order, after a header: REVIEW REPORT; `SECTION n - TITLE` when
+  either is set; `Document version vN+1 (stored index N) | Generated
+  YYYY-MM-DD` (UTC date, injectable; the version through `qc_version_label`,
+  the Final QC report's wording — the PR #278 review caught the first push
+  printing the bare 0-based index, which reads one behind the panel); one sentence saying the report accompanies the section and is
+  not part of it. The first schedule no longer starts with a page break.
+  Filename: the export name plus ` - REVIEW REPORT`.
+- `GET /api/export/review-report` captures the detached tree, version index,
+  a deep copy of the audit result and `_review_report_qc_result(session)`
+  under the guard, renders outside it, and records an `export` trace event
+  (`kind="review_report"`, `qc_closing`). The gate moved verbatim from the
+  normalized export capture, which no longer computes readiness.
+- Frontend: Export → Download review report (`REVIEW_REPORT_URL`,
+  `data-capability="export.review-report"`, registered in
+  `END_USER_CAPABILITIES` and the export tour step). The export tooltips,
+  the export and open-items tour text, Help's two provenance notes and the
+  trust explainer now say the schedules live in the review report.
+- Unchanged: the formatting-preserving and byte-exact exports (they never
+  carried schedules), the redline on the original, the standalone Final QC
+  Word/JSON report, and the importer's suppression of the trailing schedules
+  older exports still carry.
+
+### Tests and reversion evidence
+
+`tests/test_review_report.py` (7): the spec ends at END OF SECTION with no
+schedule heading or table; a blank header prints `SECTION` and an empty
+title and adds no TBD; the report carries all four kinds of reviewer
+material with the right refs; a blank header drops the report's heading
+line; the filename; the endpoint serves a current QC closing that the spec
+export does not; an empty document still gets a report.
+`test_redline_export`'s from-scratch round trip now also pins `SECTION`,
+the inserted header, and no `[TBD` under either resolution;
+`test_qc_audit_report`'s failed-rerun test checks the report's gate too.
+Tests that read the schedules or closings out of the spec export
+(`test_app`, `test_compliance`, `test_importer`, `test_manual_edit`,
+`test_preserved_block_refs`, `test_docx_xml_safety`,
+`test_source_preserving_export`, `test_qc_audit_report`) now read them from
+the review report and assert their absence from the spec.
+
+Seven reversions, each restored: the clean header back to `[TBD]`; the
+redline header back to `[TBD]`; a schedule heading back in `build_docx`; the
+QC closing without its issue-grade gate; the endpoint dropping the QC
+closing; the report header removed; and the menu item's `data-capability`
+removed (`npm test` fails the coverage contract). All seven failed.
+
+### Validation
+
+Ruff, the touched and new backend test files, `npm test` (517) and `npm run
+build` passed locally; the full backend suite is CI's (see Commands in
+CLAUDE.md). No paid API call was made.
+
+### Release-note draft (for the release after 1.23.0)
+
+"**The specification ends at END OF SECTION.** The assumptions, unreviewed
+imported provisions, open items and Final QC summary are now a separate
+review report — Export → Download review report — so the Word file you issue
+is the specification and nothing else. A section without a number or title
+yet no longer prints [TBD] in its header."

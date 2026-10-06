@@ -41,6 +41,7 @@ import ProjectFactsPanel from "./ProjectFactsPanel";
 import ProjectPanel from "./ProjectPanel";
 import {
   ORIGINAL_UPLOAD_URL,
+  REVIEW_REPORT_URL,
   downloadAttachment,
   exportDocxUrl,
 } from "../lib/api";
@@ -84,7 +85,8 @@ type ExportKey =
   | "original"
   | "redline-original"
   | "redline-master"
-  | "redline-version";
+  | "redline-version"
+  | "review-report";
 
 /** Which Open-in-Word request is in flight: the export itself, or the
  *  redline on your original. */
@@ -1209,7 +1211,7 @@ export default function ArtifactPanel({
                         )
                       }
                       disabled={exportsBusy}
-                      title="A new DOCX in Build-a-Spec's own styles and fonts, with automatic numbering and the assumptions / open-items schedules; your original's formatting is not used"
+                      title="A new DOCX in Build-a-Spec's own styles and fonts, with automatic numbering, ending at END OF SECTION; your original's formatting is not used"
                     >
                       Export as Build-a-Spec styled Word
                     </button>
@@ -1252,7 +1254,7 @@ export default function ArtifactPanel({
                         )
                       }
                       disabled={exportsBusy}
-                      title="Generate a clean DOCX with the assumptions / open-items schedules"
+                      title="Generate a clean DOCX of the specification, ending at END OF SECTION"
                     >
                       Export clean
                     </button>
@@ -1324,6 +1326,22 @@ export default function ArtifactPanel({
                     Redline vs version…
                   </span>
                 )}
+                <button
+                  type="button"
+                  className={exportItem}
+                  onClick={() =>
+                    runExport(
+                      "review-report",
+                      REVIEW_REPORT_URL,
+                      "specification - REVIEW REPORT.docx",
+                    )
+                  }
+                  disabled={exportsBusy}
+                  title="A separate Word document for the reviewer: the assumptions schedule, imported provisions not yet reviewed, open items, and the current Final QC (or compliance-audit) summary. None of it is part of the specification, which ends at END OF SECTION."
+                  data-capability="export.review-report"
+                >
+                  Download review report
+                </button>
                 {!tutorialActive && (
                   <button
                     className="block w-full border-t border-edge/60 px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink"

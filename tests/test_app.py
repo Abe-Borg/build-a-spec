@@ -520,6 +520,24 @@ def test_docx_export_smoke(monkeypatch):
     assert num_pr is not None
     assert num_pr.find(qn("w:ilvl")).get(qn("w:val")) == "0"
     assert int(num_pr.find(qn("w:numId")).get(qn("w:val"))) > 0
+    # The specification ends at END OF SECTION: no schedule, no table, no
+    # open item — those are the review report's (the owner's rule).
+    assert [t for t in texts if t.strip()][-1] == "END OF SECTION 21 13 13"
+    assert "ASSUMPTIONS SCHEDULE" not in texts
+    assert document.tables == []
+    # (The seeded leftover [TBD] is the user's own panel edit, so it stays in
+    # its provision; the export adds none of its own.)
+
+    report = client.get("/api/export/review-report")
+    assert report.status_code == 200
+    assert (
+        "SECTION 21 13 13 - WET-PIPE SPRINKLER SYSTEMS - REVIEW REPORT.docx"
+        in report.headers["content-disposition"]
+    )
+    document = Document(io.BytesIO(report.content))
+    texts = [p.text for p in document.paragraphs]
+    assert texts[:2] == ["REVIEW REPORT", "SECTION 21 13 13 - WET-PIPE SPRINKLER SYSTEMS"]
+    assert texts[2].startswith("Document version v3 (stored index 2) | Generated ")
     assert "ASSUMPTIONS SCHEDULE" in texts
 
     # The assumed block is scheduled with its numbering; the TBD is an

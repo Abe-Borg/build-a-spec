@@ -20,7 +20,7 @@ from docx import Document
 from backend.qc.engine import _reviewed_location
 from backend.spec_doc import open_questions
 from backend.spec_doc.diffing import diff_sections
-from backend.spec_doc.docx_export import build_docx
+from backend.spec_doc.docx_export import build_review_report
 from backend.spec_doc.importer import parse_master_docx
 from backend.spec_doc.linting import lint_document
 from backend.spec_doc.model import SpecSection, apply_edits, iter_paragraphs, outline
@@ -109,7 +109,7 @@ def test_final_qc_reviewed_ref_names_the_panels_ref(tmp_path):
 
 def test_the_word_schedules_name_the_panels_ref(tmp_path):
     section = _master(tmp_path).section
-    exported = Document(io.BytesIO(build_docx(section)))
+    exported = Document(io.BytesIO(build_review_report(section)))
     cells = [
         (row.cells[0].text, row.cells[1].text)
         for table in exported.tables

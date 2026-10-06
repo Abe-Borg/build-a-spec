@@ -71,6 +71,7 @@ export const END_USER_CAPABILITIES = [
   "export.redline-source",
   "export.redline-original",
   "export.open-in-word",
+  "export.review-report",
   "project.save-open",
   "project.brief-export",
   "project.brief-start",

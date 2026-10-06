@@ -36,12 +36,12 @@ from backend.qc.runner import QCRunner
 from backend.qc.schema import QC_FINDINGS_SCHEMA, QC_LENSES, normalize_findings
 from backend.research.engine import DimensionStatus, RequirementsProfile, ResearchItem
 from backend.spec_doc.docx_export import (
+    build_review_report,
     qc_panel_size_phrase,
     QC_GROUNDING_METHODOLOGY_NOTE,
     _qc_manifest_changes,
     qc_pre_remediation_state,
     QC_REQUEST_METHODOLOGY_NOTE,
-    build_docx,
     build_qc_memo,
     qc_request_population,
     qc_request_population_note,
@@ -2354,7 +2354,14 @@ def test_normalized_docx_omits_qc_closing_after_latest_failed_rerun(
     assert runner.result is successful
     assert runner.latest_attempt_status == "failed"
 
-    response = TestClient(create_app()).get("/api/export/docx?mode=normalized")
+    client = TestClient(create_app())
+    response = client.get("/api/export/docx?mode=normalized")
+    assert response.status_code == 200
+    text = _document_text(Document(io.BytesIO(response.content)))
+    assert "FINAL QC SUMMARY" not in text
+    assert "Upheld source-backed edition issue" not in text
+    # The QC closing moved to the review report, and its gate moved with it.
+    response = client.get("/api/export/review-report")
     assert response.status_code == 200
     text = _document_text(Document(io.BytesIO(response.content)))
     assert "FINAL QC SUMMARY" not in text
@@ -2375,7 +2382,9 @@ def test_compact_qc_closing_keeps_candidate_outcomes_distinct() -> None:
         "inconclusive": [{"finding_id": "qc-inconclusive"}],
     }
 
-    text = _document_text(Document(io.BytesIO(build_docx(store.doc, qc_result=payload))))
+    text = _document_text(
+        Document(io.BytesIO(build_review_report(store.doc, qc_result=payload)))
+    )
     assert "No surviving finding remains open." in text
     assert "0 open, 0 applied, 0 dismissed" in text
     # Four distinct outcomes, each named — a disputed candidate is neither a

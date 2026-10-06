@@ -467,7 +467,9 @@ function HowItWorks() {
                 Each block carries a status — <Tag>confirmed</Tag>,{" "}
                 <Tag>assumed</Tag>, <Tag>needs input</Tag>, or{" "}
                 <Tag>imported</Tag> — plus a link to the research item behind it.
-                The export schedules every assumption and unreviewed block.
+                The review report (Export → Download review report) schedules
+                every assumption and unreviewed block; the specification itself
+                ends at END OF SECTION.
               </>
             ),
           },
@@ -511,8 +513,8 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
             d: (
               <>
                 Every model assumption is stamped <Tag>assumed</Tag> and
-                scheduled in the export, so a reviewer audits each guess in one
-                pass. Over-flagging beats quietly confirming a guess.
+                scheduled in the review report, so a reviewer audits each guess
+                in one pass. Over-flagging beats quietly confirming a guess.
               </>
             ),
           },

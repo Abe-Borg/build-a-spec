@@ -437,12 +437,16 @@ def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
     audit_message = audit_client.requests[0]["messages"][0]["content"]
     assert "<project_discipline>\nMechanical\n</project_discipline>" in audit_message
 
-    # Export carries the compliance closing section.
+    # The review report carries the compliance closing section; the
+    # specification export does not.
     import io
 
     from docx import Document
 
     resp = client.get("/api/export/docx")
+    texts = [p.text for p in Document(io.BytesIO(resp.content)).paragraphs]
+    assert "COMPLIANCE AUDIT SUMMARY" not in texts
+    resp = client.get("/api/export/review-report")
     texts = [p.text for p in Document(io.BytesIO(resp.content)).paragraphs]
     assert "COMPLIANCE AUDIT SUMMARY" in texts
 

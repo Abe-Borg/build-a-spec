@@ -292,7 +292,8 @@ def test_part_emptying_tracks_not_used_placeholder():
 def test_from_scratch_redline_vs_empty_round_trips():
     """A from-scratch section redlined against the empty baseline is all
     insertions; Accept-All == the draft, Reject-All == the empty document
-    (section '[TBD]' placeholders and '(Not used.)' parts included)."""
+    (its bare "SECTION" header — never a '[TBD]' placeholder, the owner's
+    rule — and '(Not used.)' parts included)."""
     store = DocumentStore()
     store.begin_turn()
     store.apply_edits(
@@ -317,6 +318,10 @@ def test_from_scratch_redline_vs_empty_round_trips():
     assert _semantic_body_texts(redline, "reject") == _semantic_body_texts(
         build_docx(empty), "accept"
     )
+    assert _body_texts(redline, "accept")[:2] == ["SECTION 21 13 14", "WIDGETS"]
+    assert _body_texts(redline, "reject")[0] == "SECTION"
+    for mode in ("accept", "reject"):
+        assert not any("[TBD" in text for text in _body_texts(redline, mode))
 
 
 def test_accept_all_via_real_importer_matches_current_tree(tmp_path):

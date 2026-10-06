@@ -177,8 +177,10 @@ from .spec_doc import SpecEditError, diff_sections, open_questions
 from .spec_doc.docx_export import (
     build_docx,
     build_qc_memo,
+    build_review_report,
     export_filename,
     redline_filename,
+    review_report_filename,
     upload_redline_filename,
 )
 from .project_brief import (
@@ -1053,8 +1055,8 @@ class _ExportInputs:
 
     Coherence does not depend on holding the lock, only on capturing
     together: every field here comes from one guarded read, so the bytes,
-    the filename and the QC closing describe the same document however long
-    the render takes and whatever the session does meanwhile.
+    the filename and the body describe the same document however long the
+    render takes and whatever the session does meanwhile.
     """
 
     selected_mode: str
@@ -1073,8 +1075,6 @@ class _ExportInputs:
     #: ``preserved`` mode, which rebuilds the body of a retained package
     #: rather than patching text slices inside it.
     format_map: Any | None = None
-    audit_result: Any | None = None
-    qc_result: dict[str, Any] | None = None
     #: Which redline was asked for ("" | "master" | "version"). With
     #: ``selected_mode == "preserved"`` it is the redline on the original,
     #: ``redline_base`` holding the imported master it is measured from.
@@ -5218,6 +5218,22 @@ def create_app(
                 source_context=session.source_patch_context,
             )
 
+        return _ExportInputs(
+            selected_mode="normalized",
+            current=current,
+            redline_base=redline_base,
+            redline=redline or "",
+        )
+
+    def _review_report_qc_result(session) -> dict[str, Any] | None:
+        """The retained Final QC report, only when it is issue-grade.
+
+        The rule the specification export applied to its QC closing before
+        that closing moved into the review report: the review must be current
+        against the document and its inputs, and audit-complete. A stale or
+        partial review is the panel's to explain, not a report's to print.
+        The CALLER holds ``session_state_guard``.
+        """
         qc_record = session.qc.audit_record_snapshot()
         readiness = _readiness_payload(session, qc_record=qc_record)
         readiness_by_id = {
@@ -5230,18 +5246,10 @@ def create_app(
             and readiness_by_id.get("qc_audit_complete")
         )
         retained_report = qc_record.get("result")
-        qc_result = (
-            retained_report
+        return (
+            copy.deepcopy(retained_report)
             if isinstance(retained_report, dict) and qc_is_issue_grade
             else None
-        )
-        return _ExportInputs(
-            selected_mode="normalized",
-            current=current,
-            redline_base=redline_base,
-            audit_result=session.audit.result,
-            qc_result=qc_result,
-            redline=redline or "",
         )
 
     def _render_original_redline(
@@ -5385,12 +5393,7 @@ def create_app(
                 headers=_attachment_headers(export_filename(inputs.current)),
             )
 
-        payload = build_docx(
-            inputs.current,
-            audit_result=inputs.audit_result,
-            qc_result=inputs.qc_result,
-            redline=redline_diff,
-        )
+        payload = build_docx(inputs.current, redline=redline_diff)
         filename = (
             redline_filename(inputs.current)
             if redline_diff is not None
@@ -5450,6 +5453,43 @@ def create_app(
             **({"refusal": refusal} if refusal else {}),
         )
         return response
+
+    @app.get("/api/export/review-report")
+    def export_review_report() -> Response:
+        """The review report: assumptions, unreviewed imports, open items, QC.
+
+        Everything the specification export used to append after END OF
+        SECTION, as its own Word document downloaded only on request (the
+        owner's rule, 2026-10-06: the specification carries specification
+        text and nothing else). Captured under the guard, rendered without
+        it — the ``/api/export/docx`` shape.
+        """
+        session = sessions.get_session()
+        with session.session_state_guard():
+            current = SpecSection.from_dict(session.doc.doc.to_dict())
+            version_index = session.doc.index
+            audit_result = copy.deepcopy(session.audit.result)
+            qc_result = _review_report_qc_result(session)
+        payload = build_review_report(
+            current,
+            audit_result=audit_result,
+            qc_result=qc_result,
+            version_index=version_index,
+        )
+        _trace_capture.app_event(
+            "export",
+            kind="review_report",
+            ok=True,
+            qc_closing=qc_result is not None,
+        )
+        return Response(
+            content=payload,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document"
+            ),
+            headers=_attachment_headers(review_report_filename(current)),
+        )
 
     @app.get("/api/doc/diff")
     def doc_diff(base: int, cur: int | None = None) -> JSONResponse:

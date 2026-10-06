@@ -89,6 +89,118 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.24.0",
+        date="2026-10-06",
+        headline="Clear requirements and a separate review report",
+        summary=(
+            "Drafting and Final QC now share the same specification writing "
+            "rules. Questions wait in Waiting on you instead of becoming "
+            "placeholders in your section, and exported specifications end "
+            "at END OF SECTION. Download the review trail separately when "
+            "you need it. Saved Final QC results need a re-run after updating."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Writing your specification",
+                items=(
+                    ReleaseItem(
+                        title="Requirements give directions",
+                        body=(
+                            "The assistant writes complete requirements "
+                            "instead of explanatory notes, research summaries "
+                            "or [TBD] markers. When a value is still unknown, "
+                            "it writes around the gap and asks in Waiting on "
+                            "you; model edits and Final QC fixes cannot add "
+                            "new placeholders."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Writing issues are easier to spot",
+                        body=(
+                            "Issues flags explanatory wording, broken article "
+                            "references and REFERENCES entries that contain "
+                            "more than one standard or stray beyond its "
+                            "designation, title and edition. Ordinary "
+                            "requirements and legitimate conditions remain "
+                            "usable."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Drafting and Final QC follow the same rules",
+                        body=(
+                            "Both use the same rules for administration, "
+                            "products and execution, while respecting your "
+                            "template's layout. Final QC no longer asks for "
+                            "a submittal or execution clause for every product "
+                            "regardless of the template."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Moving a requirement keeps its meaning",
+                        body=(
+                            "A Final QC fix that moves a provision is offered "
+                            "for one-click apply only when the moved text "
+                            "keeps its values, tags, standards, source link "
+                            "and status. A move that cannot meet those checks "
+                            "stays advisory."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Exports and review",
+                items=(
+                    ReleaseItem(
+                        title="The specification ends at END OF SECTION",
+                        body=(
+                            "Assumptions, unreviewed imported provisions, "
+                            "open items and the QC or audit summary now live "
+                            "in Export → Download review report. The report "
+                            "uses the same document version numbering as "
+                            "the panel, and a section without a number or "
+                            "title no longer exports [TBD] in its header."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Saved Final QC results need a fresh review",
+                        body=(
+                            "The Final QC report names the writing policy "
+                            "it reviewed against. Reviews saved before this "
+                            "update read out of date; run Final QC again "
+                            "to review against the new rules."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Your existing documents",
+                items=(
+                    ReleaseItem(
+                        title="Leftover placeholders have a clear way out",
+                        body=(
+                            "Older [TBD] markers and needs-input paragraphs "
+                            "appear under Leftover placeholders and still "
+                            "hold back issue readiness. A needs-input row "
+                            "can be confirmed with ✓ or marked assumed "
+                            "with ≈; saving a manual edit also confirms it. "
+                            "Your own typed text remains yours."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The tour teaches gaps through Waiting on you",
+                        body=(
+                            "The panel, tour and tutorial use Waiting on you "
+                            "for unanswered questions, and unnamed sections "
+                            "show a quiet hint instead of [TBD]. The guided "
+                            "tour restarts from the beginning once because "
+                            "its steps changed."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.23.0",
         date="2026-10-05",
         headline="Faster replies, leaner research, and safer saved work",

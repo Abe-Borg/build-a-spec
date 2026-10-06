@@ -58,6 +58,7 @@ from tests.fakes import (
     FakeClient,
     bad_request,
     raw_turn,
+    request_project_block,
     request_project_block_text,
     research_profile,
     text_turn,
@@ -1044,12 +1045,13 @@ def test_a_stale_ready_summary_is_never_adopted():
 
 
 def test_the_summary_fork_carries_the_project_block_its_turn_sent(monkeypatch):
-    """C1: the chat's system prompt is two blocks — the module block and the
-    cached project block. The summary must carry the identical second block,
-    or its prefix diverges right after the module block and it reads none of
-    the conversation the chat already cached. It carries the block the
-    committed turn SENT: a research round that finishes while that turn
-    streams reaches the next turn's block, never the fork's."""
+    """C1: the chat's request opens with the cached project block (the first
+    block of the first message, behind the module block). The summary must
+    open with the identical block, or its prefix diverges right after the
+    module block and it reads none of the conversation the chat already
+    cached. It carries the block the committed turn SENT: a research round
+    that finishes while that turn streams reaches the next turn's block,
+    never the fork's."""
     _enable(monkeypatch, threshold=4_500, keep_turns=1)
     client = _client()
     session = sessions.get_session()
@@ -1071,8 +1073,11 @@ def test_the_summary_fork_carries_the_project_block_its_turn_sent(monkeypatch):
 
     chat_request = fake.chat_requests[2]
     [summary_request] = fake.summary_requests
-    assert len(chat_request["system"]) == 2
     assert summary_request["system"] == chat_request["system"]
+    assert request_project_block(chat_request) is not None
+    assert request_project_block(summary_request) == request_project_block(
+        chat_request
+    )
     assert "Round 1" in request_project_block_text(summary_request)
     assert "Round 2" not in request_project_block_text(summary_request)
     # The session itself moved on: the next turn sends the newer block.
@@ -1111,15 +1116,19 @@ def test_the_backstop_condenses_before_a_request_that_would_not_fit(monkeypatch)
     assert session.compaction.trigger == "backstop"
     assert len(fake.summary_requests) == 1
     request = fake.chat_requests[-1]
-    assert request["messages"][0]["content"][0]["text"].startswith(
+    # The project block leads the first message (C1); the summary follows it,
+    # so a summary being adopted never invalidates the block's cache entry.
+    assert request["messages"][0]["content"][0] is request_project_block(request)
+    assert request["messages"][0]["content"][1]["text"].startswith(
         f"<{SUMMARY_FRAME_TAG}"
     )
     assert [e for e in events if e["type"] == "compaction"]
     # The backstop summary carries the project block this turn sends (C1),
-    # so its system prefix is the one the turn's own request caches.
+    # so its prefix through that block is the one the turn's own request
+    # caches.
     [summary_request] = fake.summary_requests
-    assert len(request["system"]) == 2
     assert summary_request["system"] == request["system"]
+    assert request_project_block(summary_request) == request_project_block(request)
 
 
 def test_the_backstop_leaves_turns_out_when_no_summary_can_be_made(monkeypatch):

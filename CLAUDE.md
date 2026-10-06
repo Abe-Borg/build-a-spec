@@ -285,13 +285,17 @@ already resolved and does nothing). 409 when nothing is running.
   fresh/loaded session ("New session" is also disabled in the UI while a
   turn streams).
 - **Context architecture ("Sonnet unleashed", 2026-07-21; C1, 2026-10-06).**
-  The system prompt is the stable module block (`render_system_prompt`,
-  deterministic per module, `cache_control: ephemeral`) followed, when
-  there is any, by the **project block** (`_project_block_text`, framed
-  `=== PROJECT BACKGROUND ===`, its own breakpoint): the slow-changing
+  The system prompt is ONLY the stable module block
+  (`render_system_prompt`, deterministic per module, `cache_control:
+  ephemeral`). When there is any, the **project block**
+  (`_project_block_text`, framed `=== PROJECT BACKGROUND ===`, its own
+  breakpoint) opens the request's FIRST USER message: the slow-changing
   material — the research profile, the PROJECT SECTIONS list, the project
   description and template note — whose inputs change only through rare
-  actions outside a chat turn. Everything that changes turn to turn — the
+  actions outside a chat turn. It is user-role on purpose and must stay so:
+  findings summarize retrieved pages and the description is the user's, so a
+  system block would hand injected text the operator's authority (Codex
+  review on PR #270). Everything that changes turn to turn — the
   date, standards editions in effect, established facts, the **full
   document text** (`outline(doc, max_text=None)`, with ◆source chips), the
   lint report, open items, the Final QC review, figure and reference stubs —
@@ -299,14 +303,16 @@ already resolved and does nothing). 409 when nothing is running.
   the **newest user message** (`_turn_context_text`). Both render together
   at turn start (`_turn_context`) and are frozen for every round of the
   turn; `_ChatRequestInputs.project_block` carries the project block, and
-  `_system_blocks` builds the system prompt from it. Two more cache
-  breakpoints ride each request's messages (`_with_cache_breakpoints`,
+  `_with_project_block` inserts it into a per-request copy of the first
+  message (never into history, never moving a message index). Two more
+  cache breakpoints ride each request's messages (`_with_cache_breakpoints`,
   copy-on-write — stored history never carries `cache_control`): the
   **committed-history boundary** and the **tail** — four in all, the
   provider's limit. The boundary is what makes caching roll across turns;
   the tail alone cannot (see "Rolling chat cache breakpoint" in
-  docs/as-built.md). TTLs are NON-INCREASING across the request: both
-  system blocks and the boundary carry `settings.CHAT_CACHE_TTL`, the tail
+  docs/as-built.md). TTLs are NON-INCREASING across the request: the module
+  block, the project block and the boundary carry `settings.CHAT_CACHE_TTL`,
+  the tail
   the shortest supported (`CHAT_TAIL_CACHE_TTL`) because its entry cannot
   outlive its own turn. A SHORT-before-LONG request is a nonretryable 400,
   which the pin makes unbuildable (and `tests/fakes.py` now refuses, with a
@@ -494,9 +500,13 @@ tokens) into the PROJECT CONTEXT, which commit strips, so the tail breakpoint
 wrote it at 1.25× on every turn and no later turn read it.
 
 - The request is now: module block (1h) → project block (1h) → committed
-  boundary (1h) → tail (5m). The project block is the second system block,
-  framed `=== PROJECT BACKGROUND ===`, and is sent only when it has content;
-  an empty one leaves the request byte-identical to before.
+  boundary (1h) → tail (5m). The project block is the first content block of
+  the request's first user message (`_with_project_block`), framed
+  `=== PROJECT BACKGROUND ===`, and is sent only when it has content; an
+  empty one leaves the request byte-identical to before. It was a second
+  system block until the Codex review on PR #270 pointed out that this gave
+  retrieved and user-authored text the system prompt's authority; the
+  user-role placement caches identically.
 - What moved (`CACHED_CONTEXT_BLOCKS` plus the `other` slice): the research
   profile and PROJECT SECTIONS, plus the session-fixed project description
   and template note. What stayed per-turn, deliberately: standards editions

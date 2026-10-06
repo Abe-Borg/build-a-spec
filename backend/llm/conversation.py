@@ -7,24 +7,28 @@ document store live on a :class:`SessionState` owned by the caller
 
 Context architecture (the "Sonnet unleashed" restructure, 2026-07-21; C1)
 -------------------------------------------------------------------------
-The system prompt is the stable module-rendered block, carrying
-``cache_control`` — byte-identical across the whole session — followed,
-since C1, by a **project block**: the slow-changing project material (the
-research profile, the project's other sections, the description and
-template note the session started with) behind its own ``cache_control``.
-Everything that changes turn to turn (the date, standards editions in
-effect, established facts, the FULL document text, the lint report, open
-items, the Final QC review) rides a PROJECT CONTEXT block spliced into the
-newest user message instead. At commit that spliced context (and the
+The system prompt is ONLY the stable module-rendered block, carrying
+``cache_control`` — byte-identical across the whole session. Since C1 a
+**project block** — the slow-changing project material (the research
+profile, the project's other sections, the description and template note
+the session started with) — opens the request's FIRST user message, behind
+its own ``cache_control``. It is user-role on purpose: its contents come
+from retrieved pages, the user and the project brief, and must never carry
+the system prompt's authority. Everything that changes turn to turn (the
+date, standards editions in effect, established facts, the FULL document
+text, the lint report, open items, the Final QC review) rides a PROJECT
+CONTEXT block spliced into the newest user message instead. At commit that spliced context (and the
 turn's thinking blocks, plus any fetched-PDF payloads) are stripped from
 the stored history — each request carries exactly one, current, state
-block. The project block is never in history at all; it is re-rendered
-from the session every turn and changes only when its inputs do.
+block. The project block is never in history at all; it is inserted into a
+per-request copy, re-rendered from the session every turn, and changes only
+when its inputs do.
 
 Cache layout (four breakpoints, non-increasing TTL)
 ---------------------------------------------------
 1. the stable module block, which also closes the tools+system prefix;
-2. the project block (only when there is one);
+2. the project block, the first block of the first message (only when
+   there is one);
 3. the **committed-history boundary** — the last block of the last message
    in ``session.history``; and
 4. the tail of the full request, covering the fresh PROJECT CONTEXT and
@@ -2074,14 +2078,14 @@ class _SessionInvalidated(RuntimeError):
 
 
 def _stable_system_blocks(module: SpecModule) -> list[dict[str, Any]]:
-    """The stable module block, cached — the FIRST system block.
+    """The system prompt: ONLY the stable module block, cached.
 
     Nothing session-varying may render here (pinned by
     ``test_stable_system_prompt_is_cached_and_module_rendered``): the
-    slow-changing project material rides the project block right after it
-    (:func:`_system_blocks`), and the live state the PROJECT CONTEXT block
-    of the newest user message (:func:`_turn_context_text`), after the
-    cacheable history prefix.
+    slow-changing project material rides the project block that opens the
+    first message (:func:`_with_project_block`), and the live state the
+    PROJECT CONTEXT block of the newest user message
+    (:func:`_turn_context_text`), after the cacheable history prefix.
 
     Takes the module rather than the session precisely because nothing else
     about the session may reach it: a ``SpecModule`` is frozen, so a captured
@@ -2104,34 +2108,55 @@ def _stable_system_blocks(module: SpecModule) -> list[dict[str, Any]]:
     ]
 
 
-def _system_blocks(module: SpecModule, project_block: str) -> list[dict[str, Any]]:
-    """The whole system prompt: the module block, then the project block.
+def _with_project_block(
+    messages: list[dict[str, Any]], project_block: str
+) -> list[dict[str, Any]]:
+    """``messages`` with the cached project block opening the first one.
 
     The project block (:func:`_project_block_text`) is the slow-changing
     project material — the research profile, the project's other sections,
     the description the session started with — behind its OWN breakpoint at
-    the same long TTL. A turn whose project block is unchanged reads it from
-    the cache instead of writing it fresh at the tail, which is where it rode
-    before (C1). When its bytes change, everything after it — the whole
-    committed history — is written again once; that trade is the reason only
+    the long TTL. It goes first in the first message, right after the system
+    prompt, so a turn whose project block is unchanged reads it — and the
+    committed history behind it — from the cache instead of writing it fresh
+    at the tail, which is where it rode before (C1). When its bytes change,
+    everything after it is written again once; that trade is why only
     material that changes rarely, and never from inside a chat turn, renders
     there.
 
-    ``project_block`` is text frozen at turn start, never re-read from the
-    session here, so this stays as pure as :func:`_build_chat_request`
-    needs. An empty block sends no second system block at all, so a session
-    with nothing slow-changing builds exactly the request it always did.
+    It is a USER-role block, never a system one (Codex review on PR #270):
+    research findings are summaries of retrieved pages and the description
+    and section titles are user-authored, so promoting them into the system
+    prompt would give injected text the operator's authority. In the first
+    message they have the PROJECT CONTEXT's standing — the stable prompt
+    says both are data — and cache exactly as well.
+
+    Copy-on-write, applied to the request after the breakpoints are placed,
+    so stored history never carries it and no message index moves. The
+    request always opens with a typed user message (a turn start, or the
+    new turn itself), so the block leads that message's content; anything
+    else gets a leading user message of its own rather than a block that
+    could land in front of a tool result. An empty block changes nothing, so
+    a session with nothing slow-changing builds exactly the request it
+    always did. ``project_block`` is text frozen at turn start, never
+    re-read from the session here.
     """
-    blocks = _stable_system_blocks(module)
-    if project_block:
-        blocks.append(
-            {
-                "type": "text",
-                "text": project_block,
-                "cache_control": _cache_control(settings.CHAT_CACHE_TTL),
-            }
-        )
-    return blocks
+    if not project_block or not messages:
+        return messages
+    block = {
+        "type": "text",
+        "text": project_block,
+        "cache_control": _cache_control(settings.CHAT_CACHE_TTL),
+    }
+    first = messages[0]
+    if not isinstance(first, dict) or first.get("role") != "user":
+        return [{"role": "user", "content": [block]}, *messages]
+    content = first.get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    elif not isinstance(content, list):
+        content = []
+    return [{**first, "content": [block, *content]}, *messages[1:]]
 
 
 # project_profile dict key -> the label used in the PROJECT PROFILE block
@@ -2369,8 +2394,9 @@ def fact_sources(session: SessionState) -> FactSources:
 # What one turn's session context is made of (Project workspace Phase 5A —
 # the measurement that decides whether the carried research block is worth
 # trimming by relevance). Since C1 that context is TWO blocks: the cached
-# project block in the system prompt (:func:`_project_block_text`) and the
-# PROJECT CONTEXT block in the newest user message (:func:`_turn_context_text`).
+# project block opening the first message (:func:`_project_block_text`) and
+# the PROJECT CONTEXT block in the newest user message
+# (:func:`_turn_context_text`).
 # The sizes describe both together. Estimated tokens per block, by the len/4
 # estimate every cap on these blocks already uses. The named blocks are the
 # ones that can grow: the research profile (capped at 100k), the full
@@ -2475,7 +2501,7 @@ def _project_block_text(session: SessionState) -> tuple[str, dict[str, int]]:
     The project description and template note the session started with, the
     research profile, and the project's other sections — see
     :data:`CACHED_CONTEXT_BLOCKS` for why exactly these. ``("", sizes)``
-    when there is none of it, and then no second system block is sent.
+    when there is none of it, and then no project block is sent.
 
     Rendered once per turn, at turn start, beside the PROJECT CONTEXT and
     frozen with it, so every round of a turn sends the same bytes. It is a
@@ -2535,9 +2561,9 @@ def _project_block_text(session: SessionState) -> tuple[str, dict[str, int]]:
 class _TurnContext:
     """Both session-context blocks of one turn, rendered together at its start.
 
-    ``project_block`` rides the system prompt behind its own cross-turn
-    breakpoint; ``turn_text`` is the PROJECT CONTEXT spliced into the newest
-    user message and stripped at commit. ``sizes`` describes the two as one
+    ``project_block`` opens the request's first message behind its own
+    cross-turn breakpoint; ``turn_text`` is the PROJECT CONTEXT spliced into
+    the newest user message and stripped at commit. ``sizes`` describes the two as one
     (:data:`CONTEXT_SIZE_KEYS`): each block's sizes, added key by key.
     """
 
@@ -2589,9 +2615,10 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
     # the research profile's as-of stamps (in the project block, which the
     # model read earlier in the prompt), and the model's own judgement about
     # which edition is current all depend on knowing what "now" is. It
-    # renders here rather than in either system block for the usual reason
-    # (those are cached and must not vary per turn), and it costs nothing to
-    # repeat: the whole context block is stripped again at commit.
+    # renders here rather than in the system prompt or the project block for
+    # the usual reason (those are cached and must not vary per turn), and it
+    # costs nothing to repeat: the whole context block is stripped again at
+    # commit.
     parts = [
         date_context_block(with_time=True),
         _project_identity_block(session),
@@ -3013,8 +3040,8 @@ def _cache_control(cache_ttl: str) -> dict[str, Any]:
     request that marks system at the 5-minute default and the user turn at
     ``1h`` is rejected outright — not degraded, not uncached.
 
-    This request therefore runs NON-INCREASING: both system blocks (module
-    and project) and the committed-history boundary carry
+    This request therefore runs NON-INCREASING: the module block, the
+    project block and the committed-history boundary carry
     ``settings.CHAT_CACHE_TTL``, and only the tail may differ, pinned to the
     shortest supported TTL (``settings.CHAT_TAIL_CACHE_TTL``). Because the
     tail is the last breakpoint and can never outlive the ones before it, no
@@ -3056,10 +3083,10 @@ def _with_cache_breakpoints(
 ) -> list[dict[str, Any]]:
     """Copy-on-write the request's cache breakpoints onto its messages.
 
-    Two of the request's breakpoints live here (the others are the two
-    system blocks — the stable module block, which also closes the
-    tools+system prefix, and the project block when there is one; four in
-    all, the provider's limit):
+    Two of the request's breakpoints live here (the others are the stable
+    module block, which also closes the tools+system prefix, and the
+    project block that :func:`_with_project_block` puts first in the first
+    message when there is one; four in all, the provider's limit):
 
     * **the committed-history boundary** — the last block of the last
       message in ``session.history``. This is the rolling one: every turn
@@ -3170,7 +3197,7 @@ class _ChatRequestInputs:
     view_spec: ViewSpec | None = None
     # The cached project block (C1), rendered once at turn start beside the
     # PROJECT CONTEXT and frozen with it, so no round re-reads the session
-    # for it. "" sends the module block alone.
+    # for it. "" sends no project block.
     project_block: str = ""
 
 
@@ -3253,14 +3280,17 @@ def _build_chat_request(
     kwargs: dict[str, Any] = {
         "model": inputs.model,
         "max_tokens": inputs.max_tokens,
-        "system": _system_blocks(inputs.module, inputs.project_block),
-        "messages": _with_cache_breakpoints(
-            messages,
-            committed_boundary=_committed_history_boundary(
-                len(view), len(raw), len(messages)
+        "system": _stable_system_blocks(inputs.module),
+        "messages": _with_project_block(
+            _with_cache_breakpoints(
+                messages,
+                committed_boundary=_committed_history_boundary(
+                    len(view), len(raw), len(messages)
+                ),
+                cache_ttl=settings.CHAT_CACHE_TTL,
+                tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
             ),
-            cache_ttl=settings.CHAT_CACHE_TTL,
-            tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
+            inputs.project_block,
         ),
         "tools": _chat_tools(),
         "thinking": _thinking_param(),
@@ -4359,14 +4389,19 @@ _PROMPT_TOO_LONG = re.compile(r"prompt is too long", re.IGNORECASE)
 
 
 def _system_tools_chars(module: SpecModule, project_block: str = "") -> int:
-    """Serialized size of the system prompt (both blocks) and the tool list.
+    """Serialized size of the system prompt, the tool list and the project
+    block — what every request carries besides its messages.
 
-    The project block counts here, not in the turn's own message: it moved
-    out of the PROJECT CONTEXT (C1), and the backstop must still see it.
+    The project block counts here, not in a message's size: it is inserted
+    into each request rather than stored (C1), and the backstop must still
+    see it.
     """
-    return message_chars(_system_blocks(module, project_block)) + message_chars(
+    chars = message_chars(_stable_system_blocks(module)) + message_chars(
         _chat_tools()
     )
+    if project_block:
+        chars += message_chars({"type": "text", "text": project_block})
+    return chars
 
 
 def _backstop_tokens() -> int:
@@ -4397,7 +4432,7 @@ class _CompactionInputs:
     tokens_per_char: float | None
     tokens_before: int
     trigger: str
-    # The second system block the forked chat request carried (C1). Without
+    # The project block the forked chat request opened with (C1). Without
     # it the summary's prefix diverges right after the module block and it
     # reads none of the conversation the chat already cached.
     project_block: str = ""
@@ -4506,9 +4541,9 @@ def _build_compaction_request(inputs: _CompactionInputs) -> dict[str, Any]:
     ``tool_choice`` (it would invalidate the messages cache), and no
     container: a summary never resumes server-tool work.
 
-    The system prompt is the chat's own two blocks — the module block and
-    the project block the forked turn sent (C1) — so the prefix up to the
-    boundary is byte for byte the one the chat cached.
+    It opens with the chat's own project block — the one the forked turn
+    sent (C1) — so the prefix up to the boundary is byte for byte the one
+    the chat cached.
     """
     view, _pending = compacted_view(inputs.history, inputs.view_spec)
     # The same repair the chat request applies, so the prefix stays byte for
@@ -4528,13 +4563,16 @@ def _build_compaction_request(inputs: _CompactionInputs) -> dict[str, Any]:
     return {
         "model": inputs.model,
         "max_tokens": settings.CHAT_COMPACTION_MAX_TOKENS,
-        "system": _system_blocks(inputs.module, inputs.project_block),
-        "messages": _with_cache_breakpoints(
-            [*messages, instruction],
-            committed_boundary=boundary,
-            cache_ttl=settings.CHAT_CACHE_TTL,
-            tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
-            mark_tail=False,
+        "system": _stable_system_blocks(inputs.module),
+        "messages": _with_project_block(
+            _with_cache_breakpoints(
+                [*messages, instruction],
+                committed_boundary=boundary,
+                cache_ttl=settings.CHAT_CACHE_TTL,
+                tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
+                mark_tail=False,
+            ),
+            inputs.project_block,
         ),
         "tools": _chat_tools(),
         "thinking": _thinking_param(),

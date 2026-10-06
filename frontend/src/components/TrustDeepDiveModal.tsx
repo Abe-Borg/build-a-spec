@@ -760,13 +760,15 @@ function Dossier() {
               <b className="text-ink">fixed instruction block</b> built from the
               active discipline module — byte-identical every turn, so it is
               cached and billed at a fraction after the first call; (b) a{" "}
-              <b className="text-ink">project background block</b>, sent only
-              when there is something to put in it: the project description you
-              gave when the session started, the grounded research profile if
-              any, and, for a section started from a project brief, the list of
-              the project's other sections. It changes only when a research
-              round finishes, the project brief is updated or pulled, or a
-              project is opened, so it is cached the same way; the message
+              <b className="text-ink">project background block</b> opening the
+              conversation, sent only when there is something to put in it: the
+              project description you gave when the session started, the
+              grounded research profile if any, and, for a section started from
+              a project brief, the list of the project's other sections. It is
+              part of the conversation, not of the instructions, so nothing in a
+              finding or a description carries their authority. It changes only
+              when a research round finishes, the project brief is updated or
+              pulled, or a project is opened, so it is cached too; the message
               after a change pays once to store it, and the conversation behind
               it, again; (c) the{" "}
               <b className="text-ink">conversation so far</b> — or, once a long

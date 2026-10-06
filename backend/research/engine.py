@@ -3,8 +3,8 @@
 Ported from Claude-Spec-Critic ``src/research/requirements_research.py``
 with the review-pipeline couplings removed: no tracing hooks, no
 diagnostics object, no GUI context splice (the rendered profile block goes
-into the chat's cached project block in the system prompt instead, trimmed
-by :func:`research_context_block`), and progress flows through a single
+into the chat's cached project block instead, trimmed by
+:func:`research_context_block`), and progress flows through a single
 ``event_sink`` callable (the runner turns events into the SSE stream).
 Deviations from the source: research requests state adaptive thinking
 explicitly with the ``settings.RESEARCH_EFFORT`` level (default ``medium``

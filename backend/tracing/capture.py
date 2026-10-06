@@ -492,12 +492,12 @@ def turn_prompts(
     distinct text (the stable system block therefore costs one entry per
     app run); deep mode inlines the text into the event itself.
 
-    The system prompt is two blocks since C1, and each gets its own ref:
-    ``system`` is the stable module block, ``project_block`` the cached
-    project block (``None`` when the turn sent none). Kept apart so the
-    stable block still costs one entry per app run, and the project block —
-    up to the whole research profile — one entry per distinct rendering
-    rather than one per turn.
+    Since C1 the cached project block that opens the first message gets
+    its own ref beside the stable module block's: ``system`` is the module
+    block, ``project_block`` the project block (``None`` when the turn sent
+    none). Kept apart so the stable block still costs one entry per app
+    run, and the project block — up to the whole research profile — one
+    entry per distinct rendering rather than one per turn.
 
     ``context_sizes`` is the composition of both session-context blocks —
     estimated tokens per block (``conversation.CONTEXT_SIZE_KEYS``, Project

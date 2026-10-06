@@ -3,8 +3,8 @@
  * last committed turn's session context, block by block.
  *
  * Since C1 that context is two blocks. The slow-changing one (the research
- * profile, the project's other sections, the session's description) rides
- * the system prompt behind its own one-hour cache breakpoint, so a turn that
+ * profile, the project's other sections, the session's description) opens
+ * the conversation behind its own one-hour cache breakpoint, so a turn that
  * finds it unchanged reads it from the cache instead of writing it. The rest
  * (the PROJECT CONTEXT: document, lint, open items, facts, the Final QC
  * review…) is rewritten on every turn — a cache WRITE, never a read. The row

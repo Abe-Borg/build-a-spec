@@ -621,19 +621,22 @@ def harvest_refusal(
 def request_context_text(request: dict) -> str:
     """The PROJECT CONTEXT block of a captured chat request.
 
-    The context is the FIRST text block of the turn's user message (the
-    user's own text follows it) — the Sonnet-unleashed context placement.
-    Returns "" when the request has no such block.
+    The context leads the turn's user message (the user's own text follows
+    it) — the Sonnet-unleashed context placement — after the cached project
+    block when the turn's message is also the request's first (C1). Matched
+    by its opening marker, never by a mention: the project block's header
+    names the PROJECT CONTEXT too. Returns "" when the request has none.
     """
     for message in request.get("messages", []):
         if message.get("role") != "user":
             continue
         content = message.get("content")
-        if isinstance(content, list) and content:
-            first = content[0]
-            if isinstance(first, dict) and first.get("type") == "text":
-                text = first.get("text", "")
-                if "PROJECT CONTEXT" in text:
+        if not isinstance(content, list):
+            continue
+        for block in content[:2]:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if text.startswith("=== PROJECT CONTEXT"):
                     return text
     return ""
 
@@ -676,23 +679,34 @@ def research_profile(*requirements: str):
     )
 
 
-def request_project_block_text(request: dict) -> str:
+def request_project_block(request: dict) -> dict | None:
     """The cached project block (PROJECT BACKGROUND) of a captured request.
 
-    The slow-changing project material — the research profile, the other
-    sections, the session's description and template note — rides the
-    SECOND system block, after the stable module block, since C1. Returns ""
-    when the request sent no such block.
+    Since C1 the slow-changing project material — the research profile, the
+    other sections, the session's description and template note — opens the
+    request's first user message, as its first content block. ``None`` when
+    the request sent none.
     """
-    system = request.get("system")
-    if not isinstance(system, list) or len(system) < 2:
-        return ""
-    block = system[1]
-    if isinstance(block, dict) and block.get("type") == "text":
-        text = block.get("text", "")
-        if text.startswith("=== PROJECT BACKGROUND"):
-            return text
-    return ""
+    messages = request.get("messages") or []
+    if not messages or messages[0].get("role") != "user":
+        return None
+    content = messages[0].get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    block = content[0]
+    if (
+        isinstance(block, dict)
+        and block.get("type") == "text"
+        and str(block.get("text", "")).startswith("=== PROJECT BACKGROUND")
+    ):
+        return block
+    return None
+
+
+def request_project_block_text(request: dict) -> str:
+    """The text of :func:`request_project_block`, or ""."""
+    block = request_project_block(request)
+    return str(block.get("text", "")) if block else ""
 
 
 # ---------------------------------------------------------------------------

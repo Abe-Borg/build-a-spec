@@ -175,13 +175,15 @@ turn, so the profile — up to about 100,000 tokens on a later section that
 carries the first section's research — was paid for as a fresh cache write on
 every message and never read back.
 
-- **The slow-changing part of the project now rides the system prompt, cached.**
-  The research profile, the list of the project's other sections (a section
-  started from a project brief), and the project description you gave when
-  the session started travel in a **project background** block right after
-  the fixed instructions, behind its own one-hour cache breakpoint. A message
-  that finds it unchanged reads it — and the conversation behind it — from
-  the cache at a tenth of the input price instead of writing it at 1.25×.
+- **The slow-changing part of the project now rides the start of the
+  conversation, cached.** The research profile, the list of the project's
+  other sections (a section started from a project brief), and the project
+  description you gave when the session started travel in a **project
+  background** block that opens the first message the model reads, right
+  after the fixed instructions, behind its own one-hour cache breakpoint. A
+  message that finds it unchanged reads it — and the conversation behind it
+  — from the cache at a tenth of the input price instead of writing it at
+  1.25×.
 - **What changes with your work stays in the per-message block**: the date and
   time, the standards editions in effect, the project facts, the whole draft,
   the lint report, open items, what is waiting on you, the Final QC review, and
@@ -195,7 +197,10 @@ every message and never read back.
   conversation behind it again, once, at the one-hour rate. Research usually
   runs early, while the conversation is short, and the message after that
   reads it all back again.
-- **The model reads the same information**, earlier in the prompt. Its
+- **The model reads the same information**, earlier in the prompt, with the
+  same standing as before: the background is part of the conversation, never
+  the app's own instructions, so a research finding or a description that
+  happens to read like a command cannot borrow their authority. Its
   instructions say where each part now lives. A section with no research, no
   linked brief and no description sends exactly the request it always did.
 - **Condensing a long conversation still reads the chat's cache.** The summary

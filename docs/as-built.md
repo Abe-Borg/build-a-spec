@@ -19627,6 +19627,37 @@ all passed locally; `npm test` and `npm run build` passed; the full backend
 suite is CI's (see Commands in CLAUDE.md). No paid API call was made; what
 the live provider's pressure looks like on real runs is unmeasured.
 
+### PR #282 review corrections
+
+Codex's review of the opening commit found two gaps, both real.
+
+- **The verdict ignored a run in progress.** The ledger's totals count
+  ENDED runs (a run's numbers join them in `end()`), while `runs_recorded`
+  counts every run begun, so Developer tools opened mid-run could read "No
+  agent was starved this session — Final QC 0 calls over 1 run" above a
+  line naming that run's starved call. `verdictLine` now folds every
+  `running` run's `agents_total` and `starved_agents` from `runs` into its
+  engine's phrase. The backend is unchanged: the totals' contract ("ended
+  runs; a running run's numbers are on the run itself") is the documented
+  one, and the formatter is where the two are read together. Pinned by
+  `frontend/tests/resourcePressure.test.ts` ("a run still in progress
+  counts toward the verdict"); the existing running-run test's expected
+  verdict changed from "0 calls over 1 run" to "1 of 2 calls over 1 run".
+- **The prompt-too-long fallback's stream open sat outside the attribution
+  scope.** `stream_user_turn` wrapped only the first `_enter_stream` in
+  `turn_pressure.requesting()`; the shortened request's open after
+  `_retry_view_for_too_long` ran bare, so an SDK retry on exactly the
+  request most likely to be retried counted as unattributed. The second
+  open now carries the same scope. Pinned by
+  `tests/test_resource_pressure.py::test_sdk_retries_on_the_shortened_request_are_the_turns_too`
+  (test_chat_compaction's too-long recipe with `_enter_stream` wrapped to
+  log the SDK's retry line once per open: two `sdk_retry` pressures on the
+  turn, none unattributed).
+
+Both reversions — the bare fallback open, and the verdict reading the
+totals alone — failed their test and were restored. Ruff, the two backend
+files, the frontend roster (536) and `tsc --noEmit` passed.
+
 ### Release-note draft (for the release after 1.24.0)
 
 "**Developer tools now say whether anything was starved.** Settings →

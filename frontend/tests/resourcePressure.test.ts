@@ -225,7 +225,9 @@ test("an agent that did not complete says how it ended, and a running run says s
       ],
     }),
   );
-  assert.equal(lines[0], "Starved this session — Final QC 0 calls over 1 run · Chat 1 of 1 turns");
+  // The totals hold ENDED runs only; the running Final QC run's two calls
+  // and its one starved call are folded into the verdict from the run.
+  assert.equal(lines[0], "Starved this session — Final QC 1 of 2 calls over 1 run · Chat 1 of 1 turns");
   assert.equal(
     lines[1],
     "Final QC Final QC, running: 1 of 2 calls starved — seat-0-0 — expired in the batch before it ran · failed (connection)",
@@ -234,6 +236,43 @@ test("an agent that did not complete says how it ended, and a running run says s
     lines[2],
     "Chat turn: 1 of 1 turns starved — turn — rate limited · failed (rate_limit)",
   );
+});
+
+test("a run still in progress counts toward the verdict, with and without pressure", () => {
+  // Diagnostics opened mid-round: the backend's totals do not yet hold the
+  // round (they join at its end), but runs_recorded does. The verdict must
+  // not read "0 areas over 1 run" above a line naming a starved area.
+  const live = run({
+    status: "running",
+    ended_at: null,
+    agents: {
+      governing_codes: agent({ outcome: "running", starved: true, pressure_counts: { rate_limit: 1 } }),
+      ahj_requirements: agent({ outcome: "running" }),
+      client_standards: agent({ outcome: "running" }),
+      site_environment: agent({ outcome: "completed" }),
+    },
+  });
+  const starvedLines = resourcePressureLines(
+    snapshot({
+      totals: { research: totals({ runs_recorded: 1 }), qc: totals(), chat: totals() },
+      runs: [live],
+    }),
+  );
+  assert.equal(starvedLines[0], "Starved this session — Research 1 of 4 areas over 1 run");
+  assert.equal(
+    starvedLines[1],
+    "Research round 1, running: 1 of 4 areas starved — governing_codes — rate limited · still running",
+  );
+  // The same round without pressure, beside an ended one in the totals.
+  const clean = run({ status: "running", ended_at: null, agents: { a: agent({ outcome: "running" }) } });
+  const cleanLines = resourcePressureLines(
+    snapshot({
+      totals: { research: totals({ runs_recorded: 2, runs_ended: 1, agents: 4 }), qc: totals(), chat: totals() },
+      runs: [clean],
+    }),
+  );
+  assert.equal(cleanLines[0], "No agent was starved this session — Research 5 areas over 2 runs");
+  assert.equal(cleanLines.length, 2);
 });
 
 test("long lists are bounded: four agents a line, six runs a row", () => {

@@ -787,6 +787,58 @@ def test_a_clean_turn_leaves_no_pressure(monkeypatch) -> None:
     assert view["agents"]["turn"]["error_kind"] == ""
 
 
+def test_sdk_retries_on_the_shortened_request_are_the_turns_too(
+    monkeypatch, caplog
+) -> None:
+    """The prompt-too-long fallback opens a second stream; the SDK's retries
+    on that open belong to the turn as much as the first's (Codex review on
+    PR #282 — the fallback open sat outside the attribution scope)."""
+    from backend.llm import conversation
+    from tests.fakes import bad_request
+    from tests.test_chat_compaction import _chat, _chat_turns, _grow
+
+    caplog.set_level(logging.INFO, logger=RP.SDK_RETRY_LOGGER)
+    sdk_log = logging.getLogger(RP.SDK_RETRY_LOGGER)
+    real_enter = conversation._enter_stream
+
+    def noisy_enter(*args, **kwargs):
+        # The SDK retried once, inside this open, before it succeeded.
+        sdk_log.info(
+            "Retrying request to %s in %f seconds",
+            "https://api.anthropic.com/v1/messages",
+            0.25,
+        )
+        return real_enter(*args, **kwargs)
+
+    monkeypatch.setattr(conversation, "_enter_stream", noisy_enter)
+    fake = FakeClient(
+        _chat_turns(3)
+        + [
+            bad_request("prompt is too long: 1204112 tokens > 1000000 maximum"),
+            text_turn(["Recovered."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+    client = _client()
+    _grow(client, 3)
+    RP.reset_for_tests()
+
+    events = _chat(client, "One more")
+    assert events[-1]["type"] == "turn_complete"
+
+    view = _runs(RP.ENGINE_CHAT)[0]
+    turn = view["agents"]["turn"]
+    assert turn["outcome"] == RP.OUTCOME_COMPLETED
+    # Both opens — the rejected request's and the shortened request's — were
+    # the turn's: two SDK retries on the agent, none unattributed.
+    assert turn["pressure_counts"] == {"prompt_too_long": 1, "sdk_retry": 2}
+    assert turn["sdk_retries"] == 2
+    assert turn["sdk_sleep_s"] == 0.5
+    assert RP.snapshot()["sdk_retry_observer"]["unattributed_retries"] == 0
+    (fallback,) = _events(view, "turn", "prompt_too_long")
+    assert fallback["round"] == 0 and fallback["hidden_turns"] >= 1
+
+
 def test_a_turn_that_fails_before_the_model_is_recorded_failed(monkeypatch) -> None:
     def _boom():
         raise RuntimeError("kaput")

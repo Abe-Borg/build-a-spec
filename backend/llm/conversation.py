@@ -5649,9 +5649,13 @@ def stream_user_turn(
                         ) from exc
                     inputs = capture_request_inputs()
                 request = _build_chat_request(inputs, container_id)
-                manager, stream = _enter_stream(
-                    client, request, trace_handle
-                )
+                # The same attribution scope as the first open: the SDK's
+                # retries on the shortened request are this turn's too
+                # (Codex review on PR #282).
+                with turn_pressure.requesting():
+                    manager, stream = _enter_stream(
+                        client, request, trace_handle
+                    )
             stopped_mid_stream = False
             try:
                 for ui_event in _stream_events(stream):

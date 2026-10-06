@@ -150,10 +150,14 @@ function runLine(run: PressureRun): string {
   return named.length ? `${head} — ${named.join("; ")}` : head;
 }
 
-/** The session verdict from the totals: "No agent was starved this
- *  session — Research 8 areas over 2 rounds · Chat 12 turns" or "Starved
- *  this session — Research 1 of 8 areas over 2 rounds · Chat 2 of 12 turns". */
-function verdictLine(totals: Record<string, unknown>): string | null {
+/** The session verdict: "No agent was starved this session — Research 8
+ *  areas over 2 runs · Chat 12 turns" or "Starved this session — Research 1
+ *  of 8 areas over 2 runs · Chat 2 of 12 turns". The backend's totals count
+ *  ENDED runs only (a run's numbers join them when it ends), while
+ *  `runs_recorded` counts every run begun — so a run still in progress is
+ *  folded in from `runs` here, or the verdict would say "0 calls over 1
+ *  run" above a line naming that run's starved call (Codex, PR #282). */
+function verdictLine(totals: Record<string, unknown>, runs: PressureRun[]): string | null {
   const phrases: string[] = [];
   let starvedTotal = 0;
   let recorded = 0;
@@ -164,15 +168,18 @@ function verdictLine(totals: Record<string, unknown>): string | null {
   ];
   for (const engine of ordered) {
     const entry = totals[engine] as Partial<PressureTotals>;
-    const runs = count(entry.runs_recorded);
-    if (runs === 0) continue;
-    recorded += runs;
+    const runsRecorded = count(entry.runs_recorded);
+    if (runsRecorded === 0) continue;
+    recorded += runsRecorded;
     const [, label, unit] = engineOf(engine);
-    const agents = count(entry.agents);
-    const starved = count(entry.starved_agents);
+    const live = runs.filter((run) => run.engine === engine && run.status === "running");
+    const agents =
+      count(entry.agents) + live.reduce((sum, run) => sum + count(run.agents_total), 0);
+    const starved =
+      count(entry.starved_agents) + live.reduce((sum, run) => sum + count(run.starved_agents), 0);
     starvedTotal += starved;
     const body = starved > 0 ? `${starved} of ${agents} ${unit}` : `${agents} ${unit}`;
-    const runWord = engine === "chat" ? "" : ` over ${runs} ${runs === 1 ? "run" : "runs"}`;
+    const runWord = ` over ${runsRecorded} ${runsRecorded === 1 ? "run" : "runs"}`;
     phrases.push(`${label} ${body}${engine === "chat" ? "" : runWord}`);
   }
   if (recorded === 0) return null;
@@ -211,9 +218,10 @@ export function resourcePressureLines(
   const runs = Array.isArray(snapshot.runs) ? snapshot.runs.filter(isRecord) : null;
   if (totals === null || runs === null) return [NOT_REPORTED];
   const lines: string[] = [];
-  const verdict = verdictLine(totals);
+  const typedRuns = runs as unknown as PressureRun[];
+  const verdict = verdictLine(totals, typedRuns);
   lines.push(verdict ?? "nothing recorded yet");
-  const starvedRuns = (runs as unknown as PressureRun[]).filter((run) => run.starved === true);
+  const starvedRuns = typedRuns.filter((run) => run.starved === true);
   for (const run of starvedRuns.slice(0, MAX_RUN_LINES)) lines.push(runLine(run));
   if (starvedRuns.length > MAX_RUN_LINES) {
     lines.push(`+${starvedRuns.length - MAX_RUN_LINES} more starved runs in the snapshot JSON`);

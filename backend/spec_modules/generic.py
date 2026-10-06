@@ -122,9 +122,11 @@ _INTERVIEW_PLAYBOOK = (
         default=(
             "Propose the discipline-standard system selection and design "
             "criteria for the stated project type as the recommended "
-            "answer; on deferral, apply it and stamp the blocks assumed, "
-            "marking values that genuinely need project data as "
-            "[TBD: ...]."
+            "answer; on deferral, apply it and stamp the blocks assumed. "
+            "Where a value genuinely needs project data, write the provision "
+            "so it stands without it (a performance requirement or a "
+            "reference to the Drawings) and ask for the data with "
+            "track_followups."
         ),
     ),
     InterviewTopic(

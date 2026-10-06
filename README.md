@@ -163,6 +163,69 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — the specification gives directions, never notes (no more TBDs)
+
+No release entry yet: v1.23.0 is published and its entry is frozen, so the
+release-note draft is in docs/as-built.md ("The specification gives
+directions, never notes").
+
+The document beside the chat is the specification, and the Contractor reads
+every word of it as a requirement. Until now the app worked against that: it
+told the assistant to mark every unknown value as `[TBD: …]` right in the
+text, to stamp placeholder paragraphs *needs input*, and its instructions
+never said that a provision should state a requirement rather than explain
+it. Drafts came back with TBDs, notes meant for you, and paragraphs like
+"Virginia amends IBC 903.4.2 (Alarms) to require… This amendment applies
+generally and governs…" where the specification needed "Provide…".
+
+- **An unknown is written around, then asked about.** When the assistant does
+  not have a value, it writes the provision so it stands complete without
+  it — a performance requirement, a reference to the Drawings or to a
+  submittal, or the clause left out — stamps it *assumed* in the panel, and
+  adds the question to **Waiting on you**, linked to that provision. When you
+  answer, it revises the provision. The flow test and the seismic design
+  category, which the fire module used to park as TBDs, now work this way.
+- **The app refuses placeholders the assistant tries to write.** An edit
+  whose new text carries `[TBD…]`, `TBD`, `[INSERT…]`, `[VERIFY…]`, any
+  bracketed option such as `[Schedule 10] [Schedule 40]`, a blank (`___`), a
+  `TODO`, "to be determined", or a note to the specifier is rejected before it
+  touches the document, and the assistant is told how to write it instead.
+  The assistant also can no longer stamp a provision *needs input*. Final QC
+  fixes pass the same check, so a fix that would add a placeholder is never
+  offered as a safe fix. **Your own edits in the panel are never checked** —
+  what you type is yours, and you can still set *needs input* by hand.
+- **Directions, not explanations.** The assistant's instructions now carry a
+  *Specification voice* section built from your examples: state the
+  requirement, never why it applies or where it came from; no narration of
+  code amendments or adoptions; drop conditions the project has already
+  settled; no notes to the design team. Code citations stay welcome as
+  citations — "IBC §903.4.2 (Alarms)", "in accordance with NFPA 13". The
+  reasoning goes in the chat and in the provision's source link in the panel.
+- **REFERENCES entries are designation, title, and edition.** No adoption
+  reasoning, no description of what the standard covers, no project decisions
+  tucked in, one standard per entry. The adoption basis behind an edition is
+  still recorded and shown to the assistant every turn, now marked as being
+  for the chat only.
+- **Research findings are rewritten, not copied.** A finding such as
+  "Virginia amends…" is evidence; the assistant drafts the requirement it
+  imposes and keeps the finding's id as the provision's source.
+- **AI template generalization** writes neutral wording ("the Owner", "the
+  Project") instead of placeholders, and is refused if it would add one.
+- **Both curated starters** were rewritten without TBD lines or *needs input*
+  paragraphs.
+- **Existing projects.** TBDs and *needs input* paragraphs already in a
+  document still show under Open items and still block issue readiness. The
+  assistant sees them listed as leftover placeholders and rewrites each one
+  when it next works on that topic, asking you for the value it was holding.
+- **Still to come:** the Word export still appends the assumptions,
+  imported-provision and open-item schedules after END OF SECTION; they move
+  to a separate review report you download only when you want it. An
+  advisory lint and Final QC check for explanatory prose and overlong
+  REFERENCES entries follow too.
+
+The first message after updating writes the conversation's cache once more,
+because the instructions and the edit tool's description changed.
+
 ## Current Status — suggested replies ride the reply (one request fewer every turn)
 
 No release entry yet: v1.22.1 is published and there is no newer entry, so
@@ -1853,7 +1916,10 @@ lives instead.
   "the client hasn't said whether the tenant fit-out is in scope" is not a
   provision, so it could never live in the document tree. The model is told
   the boundary explicitly: if the answer changes a provision's *words* it goes
-  in the document; if it changes what to *do next* it goes here.
+  in the document; if it changes what to *do next* it goes here. *(Changed
+  after v1.23.0: every unknown now goes here, and the model no longer writes
+  `[TBD]` markers or needs-input blocks into the document — see "Current
+  Status — the specification gives directions, never notes".)*
 - **Three kinds, and one flag that means something.** A `question` you were
   asked, a `decision` only you can make, a `todo` either side owes. `blocking`
   is reserved for the ones the draft cannot be correct without — those sort
@@ -2661,7 +2727,8 @@ From-scratch drafting is a first-class path, not the fallback.
   answers, the project profile, the grounded research, and the standards
   editions in effect — provisions tagged with their research provenance,
   statuses stamped honestly (user-stated `confirmed`, defaults `assumed`,
-  unknowns `[TBD]`/needs-input). It streams into the panel article by article
+  unknowns `[TBD]`/needs-input; after v1.23.0, unknowns are written around,
+  stamped `assumed`, and asked about in Waiting on you). It streams into the panel article by article
   (no dead air, no silent mega-batch), it's **one undo step**, and after it
   runs the interview pivots to refining what's on the page — exactly like
   gap-and-adapt does after an import. It rides the ordinary chat path (the
@@ -2872,7 +2939,7 @@ What worked before (Phase 2) and still does:
 
 - Claude-desktop-style UI: streaming chat pane on the left, the **live specification document** on the right, warm dark theme.
 - The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, positional display labels `1.1` / `A.` / `1.` / `a.` / `1)` / `a)`, stable element ids). Those semantic labels are not themselves Word numbering definitions; clean normalized export renders them with genuine Word automatic numbering. Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
-- Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export.
+- Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export. (After v1.23.0 the model writes neither; open items are leftovers from older drafts, starters, or your own hand edits.)
 - Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
 - Version stepper: one snapshot per turn that changed the document; undo/redo from the panel header.
 - `.docx` export via python-docx — SectionFormat styling plus an **assumptions schedule** (every `assumed` block with its numbering, for one-pass senior review) and an open-items schedule.

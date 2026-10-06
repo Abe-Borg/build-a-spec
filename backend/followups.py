@@ -16,6 +16,13 @@ whether the tenant fit-out is in scope" is not a provision. The two are
 rendered side by side and must never be conflated; the context block below
 is headed ``WAITING ON THE USER`` for exactly that reason.
 
+Since 2026-10-06 this is also where every unknown the draft depends on
+goes: the model writes the provision around the missing value, stamps it
+assumed, and tracks the question here with ``element_id`` pointing at it.
+It never writes a ``[TBD: ...]`` (``spec_doc.spec_voice`` refuses one), so
+the document's open items are only leftovers from legacy projects,
+starters, and hand edits.
+
 A store, not a latest-only set
 ------------------------------
 The suggested replies replace their whole list every turn (silence = clear).
@@ -551,10 +558,10 @@ TRACK_FOLLOWUPS_TOOL: dict[str, Any] = {
         "away.\n\n"
         "Add an item when you ask something the user has not answered, when "
         "a decision is genuinely theirs to make, or when either of you owes "
-        "the other a to-do. Do NOT add an unknown that belongs in the "
-        "document instead: a value you can draft around goes in as "
-        "[TBD: ...] or a needs_input block through apply_spec_edits, and is "
-        "already tracked as an Open item.\n\n"
+        "the other a to-do. Every unknown the draft depends on is tracked "
+        "here, never into the document: write the provision so it stands "
+        "complete without the answer, stamp it assumed, and add the question "
+        "with element_id set to that provision.\n\n"
         "Resolve an item in the SAME turn it is settled — the user answers "
         "it, a decision is made, the to-do is done, or it becomes moot. The "
         "'resolution' is one line saying what was settled; it is what the "

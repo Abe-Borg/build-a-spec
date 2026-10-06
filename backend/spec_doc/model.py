@@ -14,9 +14,12 @@ the model can retry after reading the error.
 
 Provenance is per paragraph: ``confirmed`` (user-supplied or approved),
 ``assumed`` (model default, audited later via the export's assumptions
-schedule), ``needs_input`` (placeholder awaiting an answer). ``[TBD: ...]``
-markers inside paragraph text are tracked as first-class open items
-alongside ``needs_input`` blocks.
+schedule), ``needs_input`` (set by the user in the panel; the model may not
+set it since 2026-10-06 — see ``spec_voice``). ``[TBD: ...]`` markers inside
+paragraph text are still tracked as open items alongside ``needs_input``
+blocks: the model no longer writes them, so they are leftovers from a
+legacy project, a starter, or the user's own hand edits, and readiness keeps
+blocking on them.
 
 The id scheme is a generative cousin of Spec Critic's stable review ids
 (``p7`` / ``t0r2``), grown hierarchical for a mutable tree.
@@ -46,6 +49,11 @@ STATUSES = ("confirmed", "assumed", "needs_input", "imported")
 # gap-and-adapt interview upgrades it to confirmed/assumed (or deletes it)
 # article by article; remaining imported blocks are scheduled in the export.
 DEFAULT_STATUS = "assumed"
+#: The statuses the model may stamp (``spec_voice`` enforces it; the tool
+#: description names only these). ``needs_input`` is the user's to set in the
+#: panel and ``imported`` is seeded by the app — a provision the model drafts
+#: is never a placeholder awaiting an answer.
+MODEL_STATUSES = ("confirmed", "assumed")
 
 PART_TITLES = ("PART 1 - GENERAL", "PART 2 - PRODUCTS", "PART 3 - EXECUTION")
 
@@ -1466,8 +1474,8 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "- add_paragraph: target_id = an article id (top-level paragraph) "
         "or a paragraph id (nested subparagraph, max "
         f"{MAX_PARAGRAPH_DEPTH} levels); text = the "
-        "provision text; status = confirmed | assumed | needs_input "
-        "(defaults to assumed).\n"
+        "provision text; status = confirmed | assumed (defaults to "
+        "assumed).\n"
         "- move: target_id = an article or paragraph id; position = its "
         "required final 0-based index among its existing siblings. Articles "
         "stay within their current part, and paragraphs stay within their "
@@ -1478,9 +1486,8 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "section title, numbering = section number like '21 13 13').\n"
         "- delete: target_id = an article or paragraph id.\n"
         "- set_status: target_id = a paragraph id; status = confirmed | "
-        "assumed | needs_input. Changes only the provision's status — use it "
-        "to confirm an assumed block (gap-and-adapt) without retyping its "
-        "text.\n"
+        "assumed. Changes only the provision's status — use it to confirm an "
+        "assumed block (gap-and-adapt) without retyping its text.\n"
         "- set_standard_edition: target_id = 'sec'; standard = the "
         "designation (e.g. 'NFPA 13'); edition = the jurisdiction-adopted "
         "edition (e.g. '2019'); basis = the stated adoption that makes it "
@@ -1521,8 +1528,12 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "project fact id (pf-...). The panel then shows the citation. "
         "Empty string on replace clears it.\n"
         "\n"
-        "Mark undecided values inline as [TBD: short description] — they "
-        "are tracked as open items until resolved."
+        "Write complete specification text only — never a placeholder "
+        "([TBD], [INSERT …], bracketed options, blanks), a to-do marker, or "
+        "a note to the user; a batch whose new text carries one is "
+        "rejected. Where a value is missing, write the provision so it "
+        "stands without it, stamp it assumed, and ask for the value with "
+        "track_followups."
     ),
     "input_schema": {
         "type": "object",
@@ -1541,9 +1552,22 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                         "position": {"type": "integer"},
                         "text": {"type": "string"},
                         "numbering": {"type": "string"},
+                        # The enum still lists every status, deliberately:
+                        # saved histories carry apply_spec_edits inputs that
+                        # name needs_input, and the API reference does not
+                        # establish that a past input outside today's enum
+                        # validates (the suggest_prompts precedent). The
+                        # description says which the model may use, and
+                        # spec_voice refuses the rest.
                         "status": {
                             "type": "string",
                             "enum": list(STATUSES),
+                            "description": (
+                                "confirmed or assumed. needs_input and "
+                                "imported are refused: needs_input is the "
+                                "user's to set, imported is seeded by the "
+                                "app."
+                            ),
                         },
                         "standard": {"type": "string"},
                         "edition": {"type": "string"},

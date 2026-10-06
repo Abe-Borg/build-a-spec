@@ -252,6 +252,18 @@ def effective_editions(
     return tuple(result)
 
 
+# Every recorded edition carries its adoption basis in this block so the
+# model can cite it in chat — and the model copied it straight into the
+# REFERENCES article ("The 2021 Virginia Statewide Fire Prevention Code
+# incorporates…", "edition recorded for this Project"). The basis is the
+# app's record and the chat's explanation; the document carries the entry.
+_BASIS_IS_NOT_DOCUMENT_TEXT = (
+    "Any basis listed above is for you and the chat — never write it into "
+    "the document. A REFERENCES entry is one standard's designation, full "
+    "title, and edition, and nothing else."
+)
+
+
 def standards_context_block(
     basis: StandardsBasis,
     overrides: Mapping[str, Mapping[str, str]] | None,
@@ -261,10 +273,12 @@ def standards_context_block(
 
     Lives OUTSIDE the cached prompt prefix (overrides can change any turn).
     One line per standard; overrides carry their stated adoption basis so
-    the model can cite it — a jurisdiction edition is never in effect
-    silently. A standard the user added for this project is labelled as
-    such; standards the project intentionally excludes are listed at the end
-    so the model does not reintroduce them into REFERENCES.
+    the model can cite it in chat — a jurisdiction edition is never in
+    effect silently, and the basis never becomes document text (the block's
+    closing line says so). A standard the user added for this project is
+    labelled as such; standards the project intentionally excludes are
+    listed at the end so the model does not reintroduce them into
+    REFERENCES.
 
     An **unpinned** basis renders its own posture: the module pins no
     default editions, so the block lists only recorded overrides and states
@@ -298,6 +312,7 @@ def standards_context_block(
             "designation without an edition year. Draft the PART 1 "
             "REFERENCES article from the recorded editions."
         )
+        lines.append(_BASIS_IS_NOT_DOCUMENT_TEXT)
         return "\n".join(lines)
     lines = ["Standards editions in effect for this project:"]
     for eff in effective_editions(basis, overrides, suppressed):
@@ -317,6 +332,7 @@ def standards_context_block(
         "with a set_standard_edition operation (adoption basis required) "
         "before drafting to it."
     )
+    lines.append(_BASIS_IS_NOT_DOCUMENT_TEXT)
     suppressed_map = dict(suppressed or {})
     if suppressed_map:
         excluded = "; ".join(

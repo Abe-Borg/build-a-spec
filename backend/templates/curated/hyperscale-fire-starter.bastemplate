@@ -5,7 +5,7 @@
   "name": "Hyperscale Fire Protection Starter",
   "description": "A review-ready starter for a mission-critical wet-pipe sprinkler section.",
   "created_at": "2026-07-26T00:00:00+00:00",
-  "updated_at": "2026-07-26T00:00:00+00:00",
+  "updated_at": "2026-10-06T00:00:00+00:00",
   "module_id": "hyperscale_fire",
   "document": {
     "section": {"number": "21 13 13", "title": "WET-PIPE SPRINKLER SYSTEMS"},
@@ -16,8 +16,8 @@
           {"id": "pt1.a1.p2", "label": "B.", "text": "Coordinate system zoning, monitoring interfaces, and impairment planning with related work.", "status": "imported", "source_item_id": "", "seq": 1, "children": []}
         ]},
         {"id": "pt1.a2", "number": "1.2", "title": "DESIGN CRITERIA", "seq": 2, "paragraphs": [
-          {"id": "pt1.a2.p1", "label": "A.", "text": "Establish the governing code editions, hazard classifications, water-supply basis, and owner criteria before final design.", "status": "needs_input", "source_item_id": "", "seq": 2, "children": [
-            {"id": "pt1.a2.p1.p1", "label": "1.", "text": "Required design density and area: [TBD: project fire-protection design criteria].", "status": "needs_input", "source_item_id": "", "seq": 1, "children": []}
+          {"id": "pt1.a2.p1", "label": "A.", "text": "Design sprinkler systems hydraulically in accordance with NFPA 13 for the occupancy hazard classifications and design criteria indicated on the Drawings.", "status": "imported", "source_item_id": "", "seq": 2, "children": [
+            {"id": "pt1.a2.p1.p1", "label": "1.", "text": "Base hydraulic calculations on a water flow test conducted not more than 12 months before submittal of working plans.", "status": "imported", "source_item_id": "", "seq": 1, "children": []}
           ]}
         ]}
       ]},

@@ -280,6 +280,7 @@ from .spec_doc.source_package import (
     read_upload_bounded,
     sanitize_source_filename,
 )
+from .spec_doc.spec_voice import has_placeholder
 from .templates import (
     MAX_TEMPLATE_BYTES,
     TEMPLATE_DOCUMENT_TOOL_NAME,
@@ -3098,7 +3099,10 @@ def _template_structure_contract(section: SpecSection) -> dict[str, Any]:
                             parent,
                             depth,
                             paragraph.status == "needs_input",
-                            "[TBD:" in paragraph.text,
+                            # Any placeholder, option, marker or note — not
+                            # just [TBD:] — so a generalized starter can
+                            # neither drop one nor invent "[INSERT OWNER]".
+                            has_placeholder(paragraph.text),
                         )
                     )
                     visit(paragraph.children, paragraph.uid, depth + 1)
@@ -3130,9 +3134,13 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
         "section number, section title, discipline, and project type. "
         "Generalize client, site, "
         "location, quantity, and project-specific body wording without adding "
-        "new requirements. Clear project_profile, edition_overrides, "
-        "suppressed_standards, and every source_item_id. Keep needs_input and "
-        "[TBD: ...] items. Do not invent citations, standards, research, or QC.\n\n"
+        "new requirements. Generalize with neutral specification wording "
+        "(\"the Owner\", \"the Project\", \"as indicated on the Drawings\"), "
+        "never with placeholders, bracketed options, blanks, or notes. Clear "
+        "project_profile, edition_overrides, suppressed_standards, and every "
+        "source_item_id. Leave any needs_input status or placeholder text "
+        "the document already carries exactly where it is. Do not invent "
+        "citations, standards, research, or QC.\n\n"
         + encoded
     )
     try:

@@ -3,9 +3,9 @@
   "format": 1,
   "id": "curated:complete-section-starter",
   "name": "Complete Section Starter",
-  "description": "A discipline-neutral SectionFormat starter with review items, nested provisions, and editable placeholders.",
+  "description": "A discipline-neutral SectionFormat starter with review items and nested provisions.",
   "created_at": "2026-07-26T00:00:00+00:00",
-  "updated_at": "2026-07-26T00:00:00+00:00",
+  "updated_at": "2026-10-06T00:00:00+00:00",
   "module_id": "generic",
   "document": {
     "section": {
@@ -85,8 +85,8 @@
               {
                 "id": "pt1.a1.p3",
                 "label": "C.",
-                "text": "Confirm the final limits of work for [TBD: coordinated project scope].",
-                "status": "needs_input",
+                "text": "Perform the work within the limits indicated on the Drawings.",
+                "status": "imported",
                 "source_item_id": "",
                 "seq": 1,
                 "children": []
@@ -162,8 +162,8 @@
               {
                 "id": "pt2.a1.p2",
                 "label": "B.",
-                "text": "Final performance criteria: [TBD: discipline-specific rating and capacity].",
-                "status": "needs_input",
+                "text": "Provide equipment with ratings and capacities not less than those scheduled on the Drawings.",
+                "status": "imported",
                 "source_item_id": "",
                 "seq": 1,
                 "children": []

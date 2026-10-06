@@ -280,9 +280,12 @@ _INTERVIEW_PLAYBOOK = (
             "absence; municipal vs tank-and-pump supply."
         ),
         default=(
-            "Municipal supply assumed adequate pending a current flow test "
-            "— carry '[TBD: flow test data]' as a needs_input block "
-            "(hydraulic calculations cannot finalize without it)."
+            "Municipal supply. Until flow test data is in hand, draft the "
+            "hydraulic-design provisions so they stand without it: base "
+            "hydraulic calculations on a water flow test conducted not more "
+            "than 12 months before working-plan submittal, per NFPA 13-2025. "
+            "Ask for the test data (static, residual, flow, date, location) "
+            "with track_followups; never hold its place in the document."
         ),
     ),
     InterviewTopic(
@@ -294,8 +297,10 @@ _INTERVIEW_PLAYBOOK = (
         default=(
             "Seismic protection per NFPA 13-2025 Chapter 18 where the "
             "project's seismic design category requires it; bracing design "
-            "delegated to the sprinkler contractor's engineer — '[TBD: "
-            "seismic design category]' until the structural basis is known."
+            "delegated to the sprinkler contractor's engineer, for the "
+            "seismic design category indicated on the structural drawings. "
+            "Ask for the seismic design category with track_followups until "
+            "the structural basis is known."
         ),
     ),
     InterviewTopic(

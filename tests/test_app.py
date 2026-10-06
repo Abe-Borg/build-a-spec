@@ -64,11 +64,30 @@ _SEED_EDITS = {
         {
             "action": "add_paragraph",
             "target_id": "pt1.a1",
-            "text": "Design density: [TBD: density] over remote area.",
-            "status": "needs_input",
+            "text": "Design density: as indicated on the Drawings, over the "
+            "hydraulically most remote area.",
+            "status": "confirmed",
         },
     ]
 }
+
+# A [TBD] and a needs_input block reach the document only through the user's
+# own panel edit since the model stopped writing them (spec_voice); the
+# open-item plumbing still has to carry them, so the tests that cover it seed
+# one this way.
+_LEFTOVER_OPEN_ITEM_OPS = [
+    {
+        "action": "replace",
+        "target_id": "pt1.a1.p2",
+        "text": "Design density: [TBD: density] over remote area.",
+        "status": "needs_input",
+    }
+]
+
+
+def _add_leftover_open_item(client: TestClient) -> None:
+    resp = client.post("/api/doc/edit", json={"ops": _LEFTOVER_OPEN_ITEM_OPS})
+    assert resp.status_code == 200 and resp.json()["ok"] is True
 
 
 def _seed_doc_via_chat(client: TestClient, monkeypatch) -> None:
@@ -245,9 +264,10 @@ def test_tool_turn_patches_document_and_continues(monkeypatch):
     (snapshot_evt,) = [e for e in events if e["type"] == "doc_snapshot"]
     assert snapshot_evt["doc"]["version"] == {"index": 1, "count": 2}
 
+    # The model's draft carries no open items: unknowns are written around
+    # and asked about, never held in the text (spec_voice).
     (open_evt,) = [e for e in events if e["type"] == "open_questions"]
-    kinds = {i["kind"] for i in open_evt["items"]}
-    assert kinds == {"tbd", "needs_input"}
+    assert open_evt["items"] == []
 
     assert events[-1] == {
         "type": "turn_complete",
@@ -453,7 +473,7 @@ def test_doc_snapshot_undo_redo_endpoints(monkeypatch):
     payload = client.get("/api/doc").json()
     assert payload["doc"]["section"]["number"] == "21 13 13"
     assert payload["doc"]["version"] == {"index": 1, "count": 2}
-    assert len(payload["open_questions"]) == 2
+    assert payload["open_questions"] == []
 
     undone = client.post("/api/doc/undo")
     assert undone.status_code == 200
@@ -477,6 +497,7 @@ def test_doc_snapshot_undo_redo_endpoints(monkeypatch):
 def test_docx_export_smoke(monkeypatch):
     client = _client()
     _seed_doc_via_chat(client, monkeypatch)
+    _add_leftover_open_item(client)
 
     resp = client.get("/api/export/docx")
     assert resp.status_code == 200
@@ -541,7 +562,7 @@ def test_project_save_and_resume_round_trip(monkeypatch):
     data = loaded.json()
     assert data["doc"]["section"]["number"] == "21 13 13"
     assert data["doc"]["version"] == {"index": 1, "count": 2}
-    assert len(data["open_questions"]) == 2
+    assert data["open_questions"] == []
     # The transcript shows only text turns (no tool plumbing).
     assert [m["role"] for m in data["chat"]] == ["user", "assistant"]
     assert data["chat"][1]["text"] == "Drafting.\n\nDone."
@@ -846,6 +867,7 @@ def test_stable_system_prompt_is_cached_and_module_rendered(monkeypatch):
 def test_context_block_never_fossilizes_into_history(monkeypatch):
     client = _client()
     _seed_doc_via_chat(client, monkeypatch)
+    _add_leftover_open_item(client)
 
     history = sessions.get_session().history
     assert history[0]["content"] == [
@@ -870,8 +892,11 @@ def test_context_block_never_fossilizes_into_history(monkeypatch):
     assert "WET-PIPE SPRINKLER SYSTEMS" in contexts[0]
     # Full text, not the 160-char truncation: the whole seeded paragraph.
     assert "Section includes wet-pipe systems per NFPA 13-2025." in contexts[0]
-    # The lint/open-item feedback loop reaches the model too.
-    assert "OPEN ITEMS" in contexts[0]
+    # The lint/open-item feedback loop reaches the model too — a leftover
+    # placeholder is named as one to rewrite, never as a pattern to follow.
+    assert "LEFTOVER PLACEHOLDERS" in contexts[0]
+    # …and, like the rest of the context block, it is stripped at commit.
+    assert "[TBD: density]" not in json.dumps(sessions.get_session().history)
 
 
 def test_thinking_blocks_preserved_mid_turn_and_stripped_at_commit(monkeypatch):

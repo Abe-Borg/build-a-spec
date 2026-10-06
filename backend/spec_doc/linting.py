@@ -61,6 +61,11 @@ from ..standards import (
     normalize_standard_name,
 )
 from .model import SpecSection, iter_paragraphs
+from .spec_voice import (
+    PLACEHOLDER_PATTERNS,
+    TEMPLATE_MARKER_PATTERNS,
+    scan_markers as _scan_markers,
+)
 
 RULE_STALE_EDITION = "stale_edition"
 RULE_UNRECORDED_EDITION = "unrecorded_edition"
@@ -84,30 +89,14 @@ def _masterformat_key(value: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Text-scan vocabularies (ported patterns; [TBD: ...] is deliberately absent
-# — it is first-class open-item tracking, not lint)
+# — it is tracked as an open item, not lint). Since 2026-10-06 they live in
+# ``spec_voice``, which also refuses them in every batch the model drafts;
+# the lint still reports them wherever they reach the document by another
+# route (an imported master, a legacy project, a hand edit).
 # ---------------------------------------------------------------------------
 
-_PLACEHOLDER_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"(?i)\[\s*INSERT[^\]]*\]", "INSERT placeholder"),
-    (r"(?i)\[\s*VERIFY[^\]]*\]", "VERIFY placeholder"),
-    (r"(?i)\[\s*EDIT[^\]]*\]", "EDIT placeholder"),
-    (r"(?i)\[\s*SELECT[^\]]*\]", "SELECT placeholder"),
-    (r"(?i)\[\s*COORDINATE[^\]]*\]", "COORDINATE placeholder"),
-    (r"(?i)\[\s*OPTION[^\]]*\]", "OPTION placeholder"),
-    (r"(?i)<\s*VERIFY[^>]*>", "VERIFY tag"),
-    (r"(?i)<\s*INSERT[^>]*>", "INSERT tag"),
-    (r"_{3,}", "Underscore placeholder"),
-    (r"\[\s*\.\.\.\s*\]", "Ellipsis placeholder"),
-)
-
-_TEMPLATE_MARKER_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"\bTODO\s*:", "TODO marker"),
-    (r"\bTODO\b(?=\s+[A-Z])", "TODO marker"),
-    (r"\bFIXME\b", "FIXME marker"),
-    (r"\bXXX\b(?!\d|-)", "XXX marker"),
-    (r"\?{3,}", "??? marker"),
-    (r"(?i)\blorem\s+ipsum\b", "Lorem-ipsum boilerplate"),
-)
+_PLACEHOLDER_PATTERNS = PLACEHOLDER_PATTERNS
+_TEMPLATE_MARKER_PATTERNS = TEMPLATE_MARKER_PATTERNS
 
 # ---------------------------------------------------------------------------
 # Stale-edition detection
@@ -636,24 +625,6 @@ def _sibling_groups(section: SpecSection) -> Iterable[list[Any]]:
                         pending.append(paragraph.children)
 
 
-def _scan_markers(
-    text: str,
-    patterns: Iterable[tuple[str, str]],
-) -> Iterable[dict[str, str]]:
-    seen_spans: list[tuple[int, int]] = []
-    for source, label in patterns:
-        try:
-            compiled = re.compile(source)
-        except re.error:
-            continue
-        for match in compiled.finditer(text):
-            span = (match.start(), match.end())
-            if any(s <= span[0] and span[1] <= e for s, e in seen_spans):
-                continue
-            seen_spans.append(span)
-            yield {"match": match.group(0), "label": label}
-
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -746,8 +717,9 @@ def lint_document(
                 RULE_PLACEHOLDER,
                 paragraph.uid,
                 ref,
-                f"Unresolved {hit['label'].lower()} — resolve or convert to "
-                "a tracked [TBD: ...].",
+                f"Unresolved {hit['label'].lower()} — rewrite the provision "
+                "so it stands complete, and ask the user for any missing "
+                "value.",
                 hit["match"],
             )
         for hit in _scan_markers(

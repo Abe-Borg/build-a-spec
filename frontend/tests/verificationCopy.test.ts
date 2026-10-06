@@ -79,6 +79,25 @@ test("research copy states the engine's fixed per-request web allowance and its 
   );
 });
 
+test("research launch copy quotes the shipped warm-wait bound and its own switch", () => {
+  // backend/settings.py: RESEARCH_WARM_WAIT_SECONDS is the longest a
+  // research round's waiting areas hold for the lead's first output. The
+  // dossier and README quote the number; the README names the switch.
+  const match = settings.match(
+    /^RESEARCH_WARM_WAIT_SECONDS = _int_env\(\s*"BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS",\s*(\d+)/m,
+  );
+  assert.ok(match, "RESEARCH_WARM_WAIT_SECONDS default not found in backend/settings.py");
+  const seconds = Number(match[1]);
+  const readme = fold(readFileSync(new URL("../../README.md", import.meta.url), "utf8"));
+  assert.match(
+    fold(dossier),
+    new RegExp(`others wait until it begins answering \\(after at most ${seconds} seconds`),
+  );
+  assert.match(readme, new RegExp(`BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS\` \\(${seconds} s by default\\)`));
+  assert.match(readme, new RegExp(`at most ${seconds} s per round`));
+  assert.match(readme, /BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS` \| `\d+` \| Staggered research launch/);
+});
+
 const SITES: Array<[string, string]> = [
   ["HelpModal", help],
   ["TrustDeepDiveModal", dossier],

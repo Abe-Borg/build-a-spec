@@ -19,7 +19,10 @@ What is preserved exactly, because it is the hard-won part:
 
 - One synchronous streaming call per module :class:`ResearchDimension`,
   fanned out on a small thread pool, each with the project's own
-  ``user_location`` on the web_search tool.
+  ``user_location`` on the web_search tool. The launch is staggered
+  (``settings.RESEARCH_WARM_WAIT_SECONDS``, :func:`_launch_staggered`): one
+  area goes first and the rest follow its first streamed output, so they
+  can read its cache entry for the prefix they share.
 - The ``pause_turn`` continuation loop (re-send assistant content), the
   2× search ceiling, cumulative fetch ceiling, and fetched-PDF elision
   guard (:mod:`.resend_sanitizer`) on every resume. Exhausted guards request
@@ -43,10 +46,11 @@ import dataclasses
 import hashlib
 import json
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Callable
@@ -152,6 +156,21 @@ class ResearchFanoutError(RuntimeError):
 # flight is plenty and stays inside per-account concurrency limits.
 _RESEARCH_MAX_WORKERS = 4
 
+# The staggered launch (``settings.RESEARCH_WARM_WAIT_SECONDS``;
+# :func:`_launch_staggered`). How often a waiting area re-checks a Stop and
+# its deadline: the wait still returns the moment its lead releases it, so
+# this only bounds how late a Stop is noticed. Copied from ``qc.engine``
+# rather than imported, like the rest of the launch (the engines keep their
+# own copies of what they share).
+_WARM_WAIT_SLICE_SECONDS = 1.0
+
+# How a wait ended, as the round's INFO line names it: the lead's first
+# output (or the end of its first request, or of its task), a Stop, or the
+# bound. The same words as Final QC's, so one log reads alike for both.
+WARM_OUTCOME_WARM = "warm"
+WARM_OUTCOME_TIMEOUT = "timeout"
+WARM_OUTCOME_STOPPED = "stopped"
+
 # Cap on pause_turn continuations per dimension call. Research dimensions
 # carry web_search budgets of 16–40, and the server pauses long multi-search
 # turns; sized for the heaviest dimension (~one pause per 3 searches).
@@ -243,10 +262,48 @@ RESEARCH_DEFAULT_MAX_FETCHES = 8
 # tokens) leaves the window clip idle until a conversation is past roughly
 # 580k tokens at the default output ceiling. A dimension that declares less
 # gets its own budget instead. Not a knob: equal allowances give the four
-# areas identical tool bytes, so a staggered launch could share one cache
-# entry for the shared block (the launch is still parallel).
+# areas identical tool bytes, so the staggered launch
+# (:func:`_launch_staggered`) lets the areas that follow the lead read its
+# cache entry for the shared block instead of each writing their own.
 RESEARCH_SEARCHES_PER_REQUEST = 8
 RESEARCH_FETCHES_PER_REQUEST = 4
+
+
+def _per_request_allowance(dimension: ResearchDimension) -> tuple[int, int]:
+    """``(searches, fetches)`` every request of this area's conversation
+    declares: the fixed allowance, or the area's own budget when it declares
+    less. The one place both the request and the launch's lineage key read
+    it, so the two cannot disagree about an area's tool bytes."""
+    max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
+    max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
+    return (
+        min(max_searches, RESEARCH_SEARCHES_PER_REQUEST),
+        min(max_fetches, RESEARCH_FETCHES_PER_REQUEST),
+    )
+
+
+def _research_tools(
+    *, searches: int, fetches: int, profile: ProjectProfile, model: str
+) -> list[dict]:
+    """The three tools a research request declares, built fresh per call.
+
+    Web search (with the project's own locale), web fetch, then the output
+    tool, which carries the request's trailing tools breakpoint. Shared by
+    :func:`_run_dimension`, which sends them, and the staggered launch,
+    which hashes them into each area's lineage key — so an area whose tool
+    bytes differ is never made to wait for an entry it could not read.
+    """
+    built = [
+        build_web_search_tool(
+            max_uses=searches,
+            user_location=profile.web_search_user_location(),
+        ),
+        build_web_fetch_tool(max_uses=fetches),
+        # Output tool last so the trailing cache breakpoint lands on it.
+        requirements_research_tool(model=model),
+    ]
+    built[-1]["cache_control"] = {"type": "ephemeral"}
+    return built
 
 # Tagged-JSON fallback for the rare text detour (tool_choice stays absent).
 # The tag NAME: ``schema.last_tagged_json_object`` takes the last complete
@@ -2275,6 +2332,7 @@ def _relay_stream_activity(
     dimension_id: str,
     event_sink: EventSink,
     activity_state: dict[str, str],
+    first_output: threading.Event | None = None,
 ) -> None:
     """Iterate raw stream events, emitting live per-dimension activity.
 
@@ -2302,6 +2360,16 @@ def _relay_stream_activity(
     breaks out early: the call always drains naturally (no mid-call
     interruption — the runner's run-token guard drops post-stop events
     instead).
+
+    ``first_output`` (a staggered launch's lead only; copied from
+    ``qc.engine._relay_stream_activity``) is set on the first frame that is
+    not ``message_start``: the first content output, which follows prefill.
+    It is the moment this request's cache entries become readable, and what
+    the areas waiting on the lead are released by
+    (:func:`_launch_staggered`). ``message_start`` itself does not count — it
+    opens the stream, and the rule the stagger relies on is "the first
+    response begins streaming", read conservatively as the first output
+    after it.
     """
     json_buffers: dict[int, str] = {}
     start_inputs: dict[int, dict[str, Any]] = {}
@@ -2309,6 +2377,8 @@ def _relay_stream_activity(
     for event in stream:
         try:
             etype = getattr(event, "type", None)
+            if first_output is not None and etype != "message_start":
+                first_output.set()
             if etype == "content_block_start":
                 block = getattr(event, "content_block", None)
                 index = getattr(event, "index", 0)
@@ -2388,6 +2458,7 @@ def _run_dimension(
     continuation_cache: bool = False,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
+    first_output: threading.Event | None = None,
 ) -> _DimensionOutcome:
     """One dimension's full lifecycle: request → continuations → parse → ground.
 
@@ -2418,6 +2489,18 @@ def _run_dimension(
     research's tail switches off until the app restarts (:func:`_open_stream`,
     Tier 1 finish CT-1), so a refusal costs one request instead of the
     dimension.
+
+    ``first_output`` (a staggered launch's lead only; ``None`` everywhere
+    else, which changes nothing) releases the areas waiting on this one
+    (:func:`_launch_staggered`). It is idempotent and set three ways here:
+    on the first streamed output (:func:`_relay_stream_activity`); when any
+    request ENDS, raised or not; and when an attempt fails for any reason,
+    the token count before the stream included. The second and third are
+    what keep a lead that fails fast — a 429, a dropped connection, a failed
+    count — from holding the others through its retry backoff: its entry was
+    never written, so waiting on it buys nothing. The launcher's
+    done-callback covers every other way the task can end, a Stop before the
+    first request included. Nothing about any request changes.
 
     A transient failure RESUMES the conversation rather than starting it over
     (cost Tier 1, Chunk 5; :func:`retry_mode`): when the request that failed
@@ -2548,21 +2631,15 @@ def _run_dimension(
     # or restarted, so the tools' cache entry and everything after it can be
     # read by every continuation. The declared budgets are enforced by the
     # cumulative ceilings below, between requests.
-    searches_per_request = min(max_searches, RESEARCH_SEARCHES_PER_REQUEST)
-    fetches_per_request = min(max_fetches, RESEARCH_FETCHES_PER_REQUEST)
+    searches_per_request, fetches_per_request = _per_request_allowance(dimension)
 
     def _web_tools(fetches: int) -> list[dict]:
-        built = [
-            build_web_search_tool(
-                max_uses=searches_per_request,
-                user_location=profile.web_search_user_location(),
-            ),
-            build_web_fetch_tool(max_uses=fetches),
-            # Output tool last so the trailing cache breakpoint lands on it.
-            requirements_research_tool(model=model),
-        ]
-        built[-1]["cache_control"] = {"type": "ephemeral"}
-        return built
+        return _research_tools(
+            searches=searches_per_request,
+            fetches=fetches,
+            profile=profile,
+            model=model,
+        )
 
     tools = _web_tools(fetches_per_request)
     # The context-window clip's one alternative (see ``conversation_tools``):
@@ -2865,20 +2942,28 @@ def _run_dimension(
                         "Cancelled by user.", kind=DIMENSION_ERROR_CANCELLED,
                         responses=[*billed_responses, *all_responses],
                     )
-                with _open_stream(
-                    client, messages=messages, stream_kwargs=stream_kwargs
-                ) as (stream, carried_tail):
-                    # Live activity rides the raw events; the SDK keeps
-                    # accumulating, so get_final_message() afterwards
-                    # returns the same fully-drained message as before
-                    # (the chat loop's proven iterate-then-final pattern).
-                    _relay_stream_activity(
-                        stream,
-                        dimension_id=dimension.dimension_id,
-                        event_sink=event_sink,
-                        activity_state=activity_state,
-                    )
-                    response = stream.get_final_message()
+                try:
+                    with _open_stream(
+                        client, messages=messages, stream_kwargs=stream_kwargs
+                    ) as (stream, carried_tail):
+                        # Live activity rides the raw events; the SDK keeps
+                        # accumulating, so get_final_message() afterwards
+                        # returns the same fully-drained message as before
+                        # (the chat loop's proven iterate-then-final pattern).
+                        _relay_stream_activity(
+                            stream,
+                            dimension_id=dimension.dimension_id,
+                            event_sink=event_sink,
+                            activity_state=activity_state,
+                            first_output=first_output,
+                        )
+                        response = stream.get_final_message()
+                finally:
+                    # This request is over, raised or not. Anything an area
+                    # waiting on this one could read was written by now;
+                    # anything that was not never will be.
+                    if first_output is not None:
+                        first_output.set()
                 in_request = False
                 all_responses.append(response)
                 _log_input_transformations(response, dimension.dimension_id)
@@ -3110,6 +3195,11 @@ def _run_dimension(
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:  # noqa: BLE001 — classified below
+            if first_output is not None:
+                # A failed attempt — a failed token count included, which
+                # opened no stream at all — leaves nothing to wait for:
+                # never hold the waiting areas through the backoff below.
+                first_output.set()
             failure_class = classify_exception(exc)
             if not is_retryable_failure_class(failure_class) or is_last_attempt:
                 message = (
@@ -3185,6 +3275,202 @@ def _run_dimension(
 # ---------------------------------------------------------------------------
 
 
+def _opening_lineage_key(
+    *,
+    tools: list[dict],
+    system_prompt: str,
+    shared: str,
+    model: str,
+    effort: str,
+) -> str:
+    """Name the cache lineage an area's opening request writes, as SHA-256 hex.
+
+    Exactly what precedes the shared block's breakpoint — the tools, the
+    system prompt, then the shared block, in render order — plus the
+    settings that fork a cache (model, effort). Two areas share a lineage
+    exactly when their keys match. Copy-adapted from
+    ``qc.engine._prefix_lineage_key`` (the engines keep their own copies).
+
+    Computed from the builders the requests use (:func:`_research_tools`,
+    :func:`build_research_system_prompt`, :func:`build_dimension_user_message`),
+    never from a list of dimension ids: an area that declares less than the
+    per-request web allowance sends different tool bytes, so it is a lineage
+    of its own and never waits for an entry it could not read. A wrong key
+    cannot break a round — it only costs the saving, or makes an area wait,
+    boundedly, for nothing.
+    """
+    payload = {
+        "effort": effort,
+        "model": model,
+        "shared": shared,
+        "system": system_prompt,
+        "tools": tools,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=repr,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _await_leads(
+    leads: list[tuple[list[ResearchDimension], threading.Event]],
+    *,
+    wait_seconds: float,
+    should_stop: Callable[[], bool],
+    on_release: Callable[[list[ResearchDimension], str, int], None],
+) -> None:
+    """Wait for each lead's first output, releasing each lineage exactly once.
+
+    Copy-adapted from ``qc.engine._await_leaders``. ``leads`` pairs each
+    lineage (its lead first) with the event its lead sets. Each pair is
+    released through ``on_release(members, outcome, waited_ms)``: ``warm``
+    the moment its event is set, or — for every one still waiting —
+    ``stopped`` once ``should_stop`` answers yes, or ``timeout`` once
+    ``wait_seconds`` have passed since the call. One deadline covers every
+    lead, because they were all sent together.
+
+    The wait runs on the CALLING thread (the coordinator's), never in the
+    pool, so it can never starve a lead of a worker; it waits in slices of
+    :data:`_WARM_WAIT_SLICE_SECONDS`, so a Stop is noticed within one slice
+    and a lead that fires is noticed at once.
+    """
+    started = time.monotonic()
+    deadline = started + float(wait_seconds)
+    pending = list(leads)
+
+    def waited_ms() -> int:
+        return max(0, int((time.monotonic() - started) * 1000))
+
+    while pending:
+        for entry in [entry for entry in pending if entry[1].is_set()]:
+            pending.remove(entry)
+            on_release(entry[0], WARM_OUTCOME_WARM, waited_ms())
+        if not pending:
+            break
+        remaining = deadline - time.monotonic()
+        if should_stop():
+            outcome = WARM_OUTCOME_STOPPED
+        elif remaining <= 0:
+            outcome = WARM_OUTCOME_TIMEOUT
+        else:
+            pending[0][1].wait(timeout=min(_WARM_WAIT_SLICE_SECONDS, remaining))
+            continue
+        for entry in pending:
+            on_release(entry[0], outcome, waited_ms())
+        pending = []
+
+
+def _launch_staggered(
+    dimensions: list[ResearchDimension],
+    *,
+    key_of: Callable[[ResearchDimension], str],
+    submit: Callable[[ResearchDimension, threading.Event | None], Future],
+    wait_seconds: float,
+    should_stop: Callable[[], bool],
+    capacity: int,
+    on_wait: Callable[[ResearchDimension, ResearchDimension], None],
+) -> dict[Future, ResearchDimension]:
+    """Submit a round's areas, leads first; return ``{future: dimension}``.
+
+    Copy-adapted from ``qc.engine._launch_staggered``, which staggers Final
+    QC's lenses for the same reason. The areas of a round send byte-identical
+    requests up to the shared block's breakpoint (tools, system prompt,
+    shared block), but a cache entry becomes readable only once the response
+    that writes it begins streaming, so areas sent together each pay to
+    write their own copy of the same prefix.
+
+    ``dimensions`` are grouped by ``key_of`` (:func:`_opening_lineage_key`).
+    A lineage of two or more gets a lead — its first area in declaration
+    order, so the choice is deterministic — submitted with a fresh
+    ``threading.Event`` for ``submit`` to hand to :func:`_run_dimension` as
+    ``first_output``. Each of its followers is announced through
+    ``on_wait(follower, lead)`` (the ``dimension_waiting`` event) the moment
+    the lead is sent. Then every single-area lineage the pool can START at
+    once is submitted, then the leads are waited on, each lineage's
+    followers are submitted the moment its lead releases them, and any
+    single-area lineage left over goes last.
+
+    ``capacity`` is the pool's worker count and decides where a single-area
+    lineage goes: one the pool cannot start at once would wait in the
+    pool's FIFO queue, and waiting ahead of released followers would make
+    them sit out a minutes-long area while their lead's 5-minute entry
+    expires (the lesson of Final QC's Codex review, PR #210). So it goes
+    ahead of the wait only while a worker is free for it. Leads go first of
+    all.
+
+    The wait is bounded (``wait_seconds``) and stop-aware
+    (:func:`_await_leads`). On a Stop the followers are submitted anyway:
+    each checks ``should_stop`` before it sends anything and returns
+    cancelled, so the round's records stay complete and the existing
+    cancellation path is unchanged. A lead releases on its first output,
+    when a request of its ends, when an attempt of its fails, and when its
+    task ends for any reason (a done-callback), so a lead that cannot
+    produce output never holds anyone longer than its own first request.
+
+    A follower's ``dimension_started`` comes from its own worker, so it is
+    emitted only once the follower has actually been submitted — the live
+    board never shows an area as running while it waits.
+
+    ``wait_seconds`` of 0 (or fewer than two areas, or no shared lineage)
+    submits everything at once in declaration order and announces nothing —
+    exactly the pre-stagger behaviour.
+    """
+    futures: dict[Future, ResearchDimension] = {}
+    groups: dict[str, list[ResearchDimension]] = {}
+    if wait_seconds > 0 and len(dimensions) > 1:
+        for dimension in dimensions:
+            groups.setdefault(key_of(dimension), []).append(dimension)
+    if not any(len(members) > 1 for members in groups.values()):
+        for dimension in dimensions:
+            futures[submit(dimension, None)] = dimension
+        return futures
+
+    leads: list[tuple[list[ResearchDimension], threading.Event]] = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        released = threading.Event()
+        future = submit(members[0], released)
+        futures[future] = members[0]
+        future.add_done_callback(lambda _done, event=released: event.set())
+        leads.append((members, released))
+        for follower in members[1:]:
+            on_wait(follower, members[0])
+    singles = [members[0] for members in groups.values() if len(members) == 1]
+    room = max(0, int(capacity) - len(leads))
+    for single in singles[:room]:
+        futures[submit(single, None)] = single
+
+    def release(members: list[ResearchDimension], outcome: str, waited_ms: int) -> None:
+        _log.info(
+            "Research round: %d areas share a cached prefix (lead %s); the %d "
+            "waiting were released (%s) after %d ms.",
+            len(members),
+            members[0].dimension_id,
+            len(members) - 1,
+            outcome,
+            waited_ms,
+        )
+        for follower in members[1:]:
+            futures[submit(follower, None)] = follower
+
+    _await_leads(
+        leads,
+        wait_seconds=wait_seconds,
+        should_stop=should_stop,
+        on_release=release,
+    )
+    # Whatever the pool could not start at once goes behind the followers.
+    for single in singles[room:]:
+        futures[submit(single, None)] = single
+    return futures
+
+
 def run_requirements_research(
     module: SpecModule,
     profile: ProjectProfile,
@@ -3199,6 +3485,7 @@ def run_requirements_research(
     section_label: str = "",
     project_facts: list[ProjectFact] | None = None,
     continuation_cache: bool | None = None,
+    warm_wait_seconds: float | None = None,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> RequirementsProfile:
@@ -3243,10 +3530,23 @@ def run_requirements_research(
     has provably cost more than it saved. It changes how a resume is
     cached, never what any dimension is asked.
 
+    ``warm_wait_seconds`` staggers the launch (:func:`_launch_staggered`):
+    the areas whose opening requests share a cached prefix — every area of
+    a shipped module — wait for one lead area's first streamed output, at
+    most this many seconds, so they can read the lead's entry for the
+    tools, the system prompt and the shared block instead of each writing
+    their own. ``None`` reads ``settings.RESEARCH_WARM_WAIT_SECONDS``,
+    pinned ONCE for the round; 0 launches every area at once, as before. It
+    changes when a request is sent, never what is sent: request bytes,
+    budgets, grounding, the merge and the submission are all untouched.
+
     ``event_sink`` receives progress dicts: ``research_started`` (with the
-    id→title roster), then live per-worker activity as it happens
+    id→title roster), then — on a staggered launch — one coordinator
+    ``dimension_waiting`` per follower (``lead_id``, ``max_wait_s``), sent
+    when its lead is, then live per-worker activity as it happens
     (``dimension_started`` / ``dimension_activity`` / ``dimension_search``
-    / ``dimension_fetch`` / ``dimension_retry``), then
+    / ``dimension_fetch`` / ``dimension_retry``; a follower's
+    ``dimension_started`` comes only once it is released), then
     ``dimension_complete`` / ``dimension_failed`` as dimensions finish;
     the terminal event is the runner's job (it knows whether the result
     was adopted). Worker events interleave freely ACROSS dimensions but
@@ -3282,6 +3582,17 @@ def run_requirements_research(
         settings.CONTINUATION_CACHE
         if continuation_cache is None
         else bool(continuation_cache)
+    )
+    # Pinned beside them, and for the same reason: every lineage of the round
+    # waits under one bound whatever the environment does mid-run. It changes
+    # when a request is sent, never what is sent.
+    warm_wait_seconds = max(
+        0.0,
+        float(
+            settings.RESEARCH_WARM_WAIT_SECONDS
+            if warm_wait_seconds is None
+            else warm_wait_seconds
+        ),
     )
 
     # Echo the parsed location the moment research starts: a typo'd city
@@ -3328,12 +3639,62 @@ def run_requirements_research(
         current_discipline=discipline,
     )
 
+    # The staggered launch's lineage key reads the very builders each area's
+    # opening request is built from (``_opening_lineage_key`` says why).
+    # Only consulted when the launch staggers at all, and guarded whole: a
+    # builder that raises here must fail its area in its own worker, as it
+    # always did, never the round on this thread.
+    def lineage_key(dimension: ResearchDimension) -> str:
+        try:
+            system_prompt = build_research_system_prompt(module)
+            shared, _task = build_dimension_user_message(
+                module,
+                profile,
+                dimension,
+                discipline,
+                today=today_block,
+                reference_documents=reference_block,
+                project_facts=facts_block,
+            )
+            searches, fetches = _per_request_allowance(dimension)
+            return _opening_lineage_key(
+                tools=_research_tools(
+                    searches=searches, fetches=fetches, profile=profile, model=model
+                ),
+                system_prompt=system_prompt,
+                shared=shared,
+                model=model,
+                effort=settings.RESEARCH_EFFORT,
+            )
+        except Exception:  # noqa: BLE001 — a key never fails the round
+            # Its own lineage: it starts at once and makes nobody wait. Its
+            # worker builds the same message and reports any failure itself.
+            _log.debug(
+                "Research area %s: no lineage key; launching it unstaggered.",
+                dimension.dimension_id,
+                exc_info=True,
+            )
+            return f"unkeyed:{dimension.dimension_id}"
+
+    def announce_wait(follower: ResearchDimension, lead: ResearchDimension) -> None:
+        event_sink(
+            {
+                "type": "dimension_waiting",
+                "dimension_id": follower.dimension_id,
+                "title": follower.title,
+                "lead_id": lead.dimension_id,
+                "max_wait_s": warm_wait_seconds,
+            }
+        )
+
     outcomes: dict[str, _DimensionOutcome] = {}
-    with ThreadPoolExecutor(
-        max_workers=min(_RESEARCH_MAX_WORKERS, len(dimensions))
-    ) as pool:
-        futures = {
-            pool.submit(
+    workers = min(_RESEARCH_MAX_WORKERS, len(dimensions))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+
+        def submit(
+            dimension: ResearchDimension, first_output: threading.Event | None
+        ) -> Future:
+            return pool.submit(
                 _run_dimension,
                 client,
                 module=module,
@@ -3351,9 +3712,18 @@ def run_requirements_research(
                 continuation_cache=continuation_cache,
                 event_sink=event_sink,
                 should_stop=should_stop,
-            ): dimension
-            for dimension in dimensions
-        }
+                first_output=first_output,
+            )
+
+        futures = _launch_staggered(
+            dimensions,
+            key_of=lineage_key,
+            submit=submit,
+            wait_seconds=warm_wait_seconds,
+            should_stop=should_stop,
+            capacity=workers,
+            on_wait=announce_wait,
+        )
         for future in as_completed(futures):
             dimension = futures[future]
             try:

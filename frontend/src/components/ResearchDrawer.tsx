@@ -26,6 +26,7 @@ import {
   RETRY_REASONS,
   foldResearchBoard,
   labelFromId,
+  queuedLabel,
   trimUrl,
   type DimLive,
 } from "../lib/researchAgents";
@@ -108,7 +109,7 @@ function AgentCard({ dim, onOpen }: { dim: DimLive; onOpen: () => void }) {
       </span>
       {dim.state === "queued" && (
         <span className="mt-1 block text-[11px] text-ink-faint">
-          Waiting for an agent…
+          {queuedLabel(dim)}
         </span>
       )}
       {dim.state === "running" && !dim.retry && (

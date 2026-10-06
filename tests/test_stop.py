@@ -9,9 +9,10 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from backend import sessions
+from backend import sessions, settings
 from backend.app import create_app
 from backend.llm.conversation import stream_user_turn
+from backend.research import engine as research_engine
 from backend.research.runner import ResearchRunner
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.fakes import (
@@ -591,7 +592,7 @@ def test_a_stop_cannot_cancel_the_round_that_replaces_it():
     assert second_settled.wait(timeout=10)
 
 
-def test_a_stopped_research_round_still_meters_what_it_already_spent():
+def test_a_stopped_research_round_still_meters_what_it_already_spent(monkeypatch):
     """Stopping is lossy by design — the findings go — but the provider does
     not refund the calls, so the spend still belongs to the session.
 
@@ -599,7 +600,13 @@ def test_a_stopped_research_round_still_meters_what_it_already_spent():
     the time the worker's fan-out error surfaces, the failure branch's
     compare-and-set LOSES. Metering gated on winning that CAS would drop
     exactly the spend a user who just cancelled is most likely to ask about.
+
+    Every area must be in flight when the Stop lands, so the launch is not
+    staggered here (``RESEARCH_WARM_WAIT_SECONDS=0``, the switch-off): a
+    staggered lead would sit at the barrier alone. The staggered round's own
+    Stop is the next test.
     """
+    monkeypatch.setattr(settings, "RESEARCH_WARM_WAIT_SECONDS", 0)
     arrived = threading.Event()
     release = threading.Event()
 
@@ -663,6 +670,66 @@ def test_a_stopped_research_round_still_meters_what_it_already_spent():
     assert "stopped" in runner.error.lower()
     # The bill is not: 4 dimensions × one 50-token paused response.
     assert billed == [{"input_tokens": 200, "web_search_requests": 4}]
+
+
+def test_a_stop_while_research_areas_wait_on_their_lead_meters_only_the_lead(
+    monkeypatch,
+):
+    """The staggered launch (``RESEARCH_WARM_WAIT_SECONDS``, on by default):
+    a Stop that lands while the lead's first request is in flight releases
+    the waiting areas, which see the Stop before sending anything. Only the
+    lead's paid response is metered, and nothing else reaches the provider."""
+    monkeypatch.setattr(settings, "RESEARCH_WARM_WAIT_SECONDS", 45)
+    monkeypatch.setattr(research_engine, "_WARM_WAIT_SLICE_SECONDS", 0.01)
+    arrived = threading.Event()
+    release = threading.Event()
+
+    class _HeldLeadClient(SequencedFakeClient):
+        """Holds the first streamed request (the lead's) until released."""
+
+        def __init__(self, scripts: dict) -> None:
+            super().__init__(scripts)
+            self.streamed = 0
+
+        def stream(self, **request):
+            self.streamed += 1
+            arrived.set()
+            assert release.wait(timeout=10)
+            return super().stream(**request)
+
+    client = _HeldLeadClient(
+        {
+            key: [
+                research_response(
+                    searched_urls=["https://a.gov"],
+                    stop_reason="pause_turn",
+                    tokens={"input": 50},
+                )
+            ]
+            for key in DIM_KEYS.values()
+        }
+    )
+    runner = ResearchRunner()
+    settled = threading.Event()
+    billed: list[dict] = []
+    assert runner.start(
+        module=HYPERSCALE_FIRE,
+        project_profile=RESEARCH_PROFILE,
+        client=client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        on_settled=settled.set,
+        usage_sink=billed.append,
+    )
+
+    assert arrived.wait(timeout=10)
+    assert runner.stop() is True
+    release.set()
+    assert settled.wait(timeout=10)
+
+    assert runner.profile_result is None
+    assert client.streamed == 1
+    assert billed == [{"input_tokens": 50, "web_search_requests": 1}]
 
 
 # ---------------------------------------------------------------------------

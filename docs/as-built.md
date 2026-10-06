@@ -19303,3 +19303,368 @@ frozen app, compiles the installer, and publishes `BuildASpecSetup.exe`
 with its SHA-256 `latest.json`. No paid API call, real-Word visual check,
 interactive Windows installation or previous-version in-app update was
 performed in this Linux workspace. Those manual checks remain unverified.
+
+## The diagnostics say whether an agent was starved — implemented notes (2026-10-06)
+
+Owner question (Abraham, 2026-10-06): "The diagnostics need to include a
+way to determine if the agent(s) was starved of resources during execution.
+I don't know if the current diagnostics track that. if not, let's do it."
+
+### What the diagnostics tracked before
+
+Nothing that answered the question. `diagnostics.snapshot()`'s research
+block carried the runner's status, whether its worker thread was alive, the
+event COUNT, the active round, an error kind, the round count and the
+dimensions whose coverage never completed (with a sanitized error kind,
+which for a dimension that failed on a 429 does read `rate_limit`). The QC
+block carried the same shape plus result counts. `cost_checks` said whether
+the two savings were switched off. The trace summary counted events by
+type, but a research `dimension_retry` reaches the trace as a
+`research_progress` event, so the bounded count never says "retry".
+
+What was missing: the retries themselves (how many, what class, how long
+the backoff was, whether a restart threw work away) for an agent that
+eventually COMPLETED — the per-area `DimensionStatus` and the per-seat QC
+records carry billed usage and a failure kind, nothing else; the runners'
+`dimension_retry` / `{prefix}_retry` events, cleared at every start; the
+staggered launch's wait outcome (`warm`/`timeout`/`stopped`), an INFO line
+only; the research submission reason ("web_search budget ceiling reached",
+"context window reserve reached", …), an INFO line only; the context-window
+clip to one fetch per request and the elision of raw sources before a
+submission, nothing; a `max_tokens` cut, nothing beyond the failure kind;
+the time a seat waited for a pool worker, nothing; the Batches API's
+expired items and ceilings, only as seat error text; the chat turn's
+failures, only as the error event the user already saw; and the SDK's own
+retries (`SDK_MAX_RETRIES`, default 2, per request), which happen inside
+the SDK before the app sees anything at all and were invisible everywhere.
+
+### What changed
+
+**`backend/resource_pressure.py`**, the resource pressure ledger: a leaf
+like `cost_checks` — in-memory, per-process, one lock, imported by the
+research engine, the Final QC engine and the chat turn, read by
+`diagnostics.snapshot()`.
+
+- A RUN is a research round (`round N`, with N from the established
+  profile's round count, exactly as the runner numbers it), a Final QC run
+  (under its `run_id`), or a chat turn (`turn`). An AGENT is a research
+  area, a Final QC lens, grouping call (`consolidation:<bucket>`) or
+  verifier seat (`seat-i-j`), or the chat turn (`turn`). Ids are the
+  modules' and the engines' own key schemes; a hostile id is reduced to
+  `[A-Za-z0-9_.:-]` and 120 characters.
+- Nineteen pressure KINDS in a closed vocabulary, each with a SOURCE
+  (`PRESSURE_SOURCES`): `provider` — `rate_limit`, `server_error`,
+  `connection` (one record per app-level retry, with `attempt`,
+  `max_attempts`, `backoff_s`, `mode` resume/restart and the provider's
+  `retry-after` when it sent one, plus one `final: true` record for the
+  failure that gave up — so three failed attempts read as three pressures,
+  not two), `sdk_retry`, `batch_expired`; `budget` — `search_ceiling`,
+  `fetch_ceiling`, `continuation_ceiling`, `reminder_ceiling`,
+  `tool_rounds_exhausted`, `batch_round_ceiling`, `batch_wall_clock`;
+  `context` — `context_reserve`, `near_window_clip`, `submission_elided`,
+  `prompt_too_long`; `output` — `output_truncated`; `scheduling` —
+  `queued` (a pool-worker wait of at least `QUEUE_PRESSURE_MIN_MS`, 1,000
+  ms; a shorter one is thread scheduling and is recorded as `queued_ms`
+  only) and `warm_wait_timeout` (the follower waited the whole bound for a
+  lead that never started streaming; a `warm` or `stopped` wait is recorded
+  as `warm_wait_outcome`/`warm_wait_ms`/`warm_lead` on the agent and is not
+  pressure). Every kind is a starvation signal by construction, so
+  `starved` on an agent is "any pressure recorded" and on a run "any
+  starved agent"; there is no second threshold to tune.
+- Outcomes `completed` / `failed` / `cancelled` / `interrupted` (still
+  running when the run ended), with a sanitized `error_kind` and the
+  `attempts` begun. The FIRST `ended` wins: a worker that outlives a Stop or
+  a successor run cannot rewrite a closed record, and the coordinator can
+  safely close an agent whose worker raised past its own record.
+- One run-level NOTE kind, `batch_round` (`round`, `submitted`, `waited_ms`,
+  the batch's `processing`/`succeeded`/`errored`/`canceled`/`expired`
+  counts), accumulated as `batch_rounds` and `batch_wait_ms` on the run.
+  Waiting on the Batches API is the ordinary cost of the 50% rate, so it is
+  noted beside the pressures and never counted as one.
+- Bounds: `MAX_RUNS_PER_ENGINE` 8 (a deque; `runs_recorded` keeps
+  counting), `MAX_AGENTS_PER_RUN` 200 (a later id gets `NO_AGENT`, counted
+  in `agents_dropped` and in the totals), `MAX_EVENTS_PER_RUN` 300 (the
+  counts keep running; `events_dropped` says how many records were not
+  kept). Totals per engine accumulate when a run ENDS, so a running run's
+  numbers are on the run itself and never double-counted.
+- Handles are null-object safe. `begin_run(engine, run_id="", label="")`
+  returns a `RunPressure` (also a context manager); `run.agent(id, kind=…)`
+  is get-or-create and order-free (the staggered launch names a follower's
+  warm wait before the pool starts it); `AgentPressure` has `submitted()`,
+  `started(in_flight=True)`, `pressure(kind, **scalar fields)`,
+  `retry(...)`, `warm_wait(...)`, `sdk_retry(...)`, `ended(...)` and
+  `requesting()`. `NO_RUN`/`NO_AGENT` accept every call and record
+  nothing, so every engine parameter defaults to one and no fixture had to
+  change. A handle holds a reference to its own `_Run`, so a stale thread's
+  write lands in the run it belongs to; an evicted run is simply
+  unreachable. Nothing raises into an engine: every recording path
+  swallows and logs at DEBUG.
+- **The SDK retry observer.** The sync SDK retries synchronously on the
+  calling thread and logs each retry at INFO from `anthropic._base_client`
+  as `"Retrying request to %s in %f seconds"` (verified in the installed
+  SDK 1.11.0, `_base_client.py` lines 1358 and 2088; the test pins the
+  source line). `_SdkRetryObserver` is a `logging.Handler` attached to that
+  logger on the first `begin_run`; it counts a matching record against the
+  thread's agent in flight — set by `started()` on an engine worker thread,
+  or by `requesting()` around a single request for the chat turn, whose
+  generator frames the server iterates from a thread pool — and otherwise
+  as `unattributed` (the QC coordinator's `batches.create`, a key probe).
+  The snapshot discloses `attached` and `listening`
+  (`logger.isEnabledFor(INFO)`; `BUILD_A_SPEC_LOG_LEVEL` above INFO mutes
+  the whole tree). The ledger never changes a logger's level: lowering the
+  SDK logger would leak its INFO lines into a WARNING-configured activity
+  log. A changed SDK message blinds the observer silently; the disclosure
+  and the source pin are the two guards.
+- `retry_after_seconds(exc)` reads the provider's `retry-after` header off
+  an SDK error's response (duck-typed, delay-seconds form only, the
+  Python README's `e.response.headers.get("retry-after")` idiom from the
+  bundled `claude-api` skill).
+- `snapshot()` never raises and is shaped for `scrub_data`'s six-level
+  bound: `resource_pressure` (1) → `runs` (2) → run (3) → `agents` (4) →
+  agent (5) → `pressure_counts` (6, ints). A per-pressure event list sits
+  at the run level (`events`, each `{at, elapsed_ms, agent, kind, …scalar
+  fields}`) for the same reason. `totals` per engine and the observer's
+  state ride beside the runs; `sdk_retries_per_request` echoes
+  `settings.SDK_MAX_RETRIES` so a reader knows each recorded failure hides
+  that many more attempts. `reset_for_tests()` clears everything but the
+  observer (process state, like a log handler).
+
+**Research (`backend/research/engine.py`).** `run_requirements_research`
+opens the round's run before the pool and closes it after the pool joins
+(`with pressure_run, ThreadPoolExecutor(...) as pool`), hands each area a
+handle at `submit()` (`submitted()` starts the queue clock) and passes it to
+`_run_dimension(pressure=…)`, which calls `started()` after its
+`dimension_started` event. `_run_dimension` records: the submission reason
+when the submission is first prepared, through `_SUBMISSION_PRESSURE_KINDS`
+(the five reason strings → `search_ceiling`, `fetch_ceiling`,
+`continuation_ceiling`, `context_reserve`, `reminder_ceiling`), with the
+responses, searches and fetches used; the clip to `near_window_tools`
+(`near_window_clip`, with the input count); each elision before a
+submission (`submission_elided`); the submission that cannot fit even after
+elision (`context_reserve`, `final`); a `max_tokens` stop
+(`output_truncated`); each retry (beside the `dimension_retry` event, with
+`retry_after_s`) and the final retryable failure (`final: true`); and the
+outcome through `_failed` (cancelled for `DIMENSION_ERROR_CANCELLED`,
+failed otherwise, `error_kind` = the existing closed kind) or the
+completion. `attempts_used` is written at the top of each attempt and read
+by `_failed` through the closure. `_launch_staggered` gained
+`on_release(members, outcome, waited_ms)`, called in `release()` before the
+followers are submitted; the fan-out's `record_release` writes each
+follower's `warm_wait`. A dimension whose future raised is closed by the
+coordinator (`ended(failed, error_kind)`; first wins).
+
+**Final QC (`backend/qc/engine.py`).** `run_final_qc` is now a thin public
+wrapper with the identical signature and docstring: it mints the `run_id`
+(as the body did), opens the run (`label="Final QC"`) and calls
+`_run_final_qc(..., pressure_run=…)` in a `try/finally` that ends the run
+however the pipeline exits (a result, a `QCFanoutError`, anything raised).
+The wrapper exists so the record opens before the first phase and closes
+after the last without indenting 900 lines into a `try`.
+`_run_streaming_call(pressure=…)` calls `started()`, records the search
+ceiling (`search_ceiling`), the continuation ceiling (`continuation_ceiling`
+— both the `not completed` exit and the no-payload exit when the reminder
+cap was not the limit), the reminder cap (`reminder_ceiling`), a
+`max_tokens` stop (`output_truncated`), each retry and the final retryable
+failure, and its outcome in `done()` (completed with a payload, cancelled
+on "Cancelled by user.", failed with the result's `failure_class`
+otherwise), through which every return path passes. `_run_lens`,
+`_run_consolidation_call` and `_verify_one` take `pressure` and pass it
+through (the two early returns before a call record cancelled / failed
+`shared_request_failure`); `_consolidate_candidates` and `_run_batch_calls`
+take `pressure_run`. The lens pool, the consolidation pool and the streamed
+verifier pool each create the agent at submission (`submitted()`), pass
+`on_release` to `_launch_staggered` (which gained the same hook as
+research's) and close an agent whose future raised. `_BatchSeatState`
+gained a `pressure` field: `settle()` records cancelled/failed with the
+failure class and `settle_parsed()` completed/failed, so every batched-seat
+path — phase-wide failures, Stops and ceilings included — closes its
+record; `_run_batch_calls` creates the seats' agents with the states,
+marks a seat `started(in_flight=False)` when the provider first accepts
+it (its requests ride the coordinator's batch, so it is never the
+coordinator thread's agent in flight), records a refused submission's
+retries per seat (and the final refusal, per seat, when the class was
+retryable but no attempt or round was left), the warm lead's wait on each
+batched member of its lineage, the between-rounds and in-poll wall-clock
+ceilings (`settle_all(..., pressure_kind=KIND_BATCH_WALL_CLOCK)`, threaded
+through `settle_open_batch`), the round ceiling
+(`KIND_BATCH_ROUND_CEILING`), and one `batch_round` note when the poll loop
+sees `ended`. `_apply_batch_item` records an expired item
+(`batch_expired`, then the existing `connection` settle), an errored item's
+retry or final failure, a seat the reminder rule could not remind again
+(`batch_round_ceiling` when no round was left, else `reminder_ceiling` or
+`continuation_ceiling`), the pause branch's search and continuation
+ceilings, and a `max_tokens` stop. The refused-submission helper binds the
+round's `retryable`/`failure_class`/`retry_after` as defaults (the B023
+idiom).
+
+**Chat (`backend/llm/conversation.py`).** `stream_user_turn` opens `turn`
+just before its `try` (`started(in_flight=False)`), wraps the stream open in
+`turn_pressure.requesting()`, records `prompt_too_long` beside the
+`_trace_compaction(trigger="prompt_too_long")` fallback, `output_truncated`
+in the truncation branch when `stop_reason == "max_tokens"`,
+`tool_rounds_exhausted` before the `MAX_TOOL_ROUNDS` raise, and the failure
+handlers' outcomes (`missing_api_key`, `session_invalidated` → cancelled,
+`auth_error`, `_record_turn_api_failure` for `APIStatusError` and
+`APIConnectionError` — the retryable class as a `final` pressure plus a
+failed outcome with that class — and `classify_exception(exc).value` for
+anything else). The `finally` closes the turn: completed when it committed
+(a user stop commits), cancelled with `did_not_commit` otherwise (a
+disconnect, a reset that raced the commit); the handlers' outcomes stand
+because the first `ended` wins. Then `pressure_run.end()`.
+
+**Diagnostics.** `snapshot()` adds `"resource_pressure":
+resource_pressure.snapshot()` beside `cost_checks` — top level, process
+state, read without the session guard — and the bundle inherits it through
+the snapshot. `tests/conftest.py` resets the ledger around every test.
+
+**Frontend.** `types.ts` gains `PressureAgent`, `PressureEvent`,
+`PressureRun`, `PressureTotals`, `ResourcePressureSnapshot` and
+`DiagnosticsSnapshot.resource_pressure?`. `lib/resourcePressure.ts`
+renders the row: the session verdict from the totals ("No agent was
+starved this session — Research 8 areas over 2 runs · Final QC 14 calls
+over 1 run · Chat 12 turns" / "Starved this session — Research 1 of 8 areas
+over 2 runs · …", or "nothing recorded yet"), one line per starved run the
+ledger kept (newest first, at most six, at most four agents named per
+line, the rest counted), each agent as "id — what it met" with the backoff,
+queue or wait seconds and a non-completed outcome ("failed (rate_limit)"),
+and the SDK line (retries allowed per request, observer listening/muted,
+retries seen outside any agent). `PRESSURE_KIND_TEXT`, `OUTCOME_TEXT` and
+`ENGINE_LABELS` are the vocabulary; `DeveloperToolsModal` renders the lines
+as "Resource pressure" rows in Engine state, after Final QC. No new
+control, so no capability or tour step.
+
+### Decisions
+
+- **A ledger, not the event logs and not the trace.** The event logs are
+  per-round and cleared at start; the trace is off by default and its
+  bounded summary counts `research_progress`, not retries; neither holds
+  the signals that were never events (the wait outcome, the ceilings, the
+  clip, `max_tokens`). Adding those as SSE events would have widened the
+  wire protocol and the board for bookkeeping the user never watches live.
+  Recording at the spot, into a process-wide leaf the snapshot reads, is
+  the `cost_checks` shape the repository already has.
+- **Chat turns are included.** The owner said "agent(s)"; in this codebase
+  the word names the research areas and the QC seats, but the chat turn is
+  the same kind of thing (a model call with a tool loop) and the only one
+  the user watches directly. Its failures were already visible as error
+  events; the ledger adds the class, the `retry-after`, and the three
+  pressures (`output_truncated`, `tool_rounds_exhausted`,
+  `prompt_too_long`) nothing else recorded, and it means "no agent was
+  starved" is a statement about everything that ran.
+- **Every kind is starvation; no second threshold.** The vocabulary IS the
+  set of signals, so a reader never wonders whether a count "counts". The
+  one judgment call — a queue wait — has one floor (1 s) and is otherwise a
+  number on the agent; a `warm` wait is the launch working, so it is a
+  number too.
+- **Explicit handles, not a thread-local or "current run".** The research
+  runner can start a new round while a stopped round's worker is still
+  finishing a request; a "current run" would let that worker's retry land
+  in the new round. A handle holds its own run. The QC wrapper exists for
+  the same reason as research's `with`: the run must open before the first
+  phase and close after the last, and the two engines' bodies are too long
+  to indent.
+- **Batched seats are never the coordinator's agent in flight.** Their
+  requests ride `batches.create` on the coordinator thread; attributing the
+  SDK's retries of that call to whichever seat was named last would be a
+  false record. `started(in_flight=False)` for them; the submission retries
+  the app makes are recorded per seat where the engine already decides them.
+- **The SDK logger's level is disclosed, never lowered.** See above.
+
+### Costs and compatibility
+
+No request byte changes anywhere: the ledger records what the engines
+already decide, at the spot they decide it. No budget, merge, submission,
+QC report or manifest changes; a retained Final QC report stays current.
+No SSE event is added. The per-request overhead is a lock acquisition and
+a dict write on the events the engines already handle. Memory is bounded
+(8 runs × 300 records × 3 engines at most). The snapshot is scrubbed on the
+way out like the rest; nothing in it can carry text of the work.
+
+### Tests and reversion evidence
+
+`tests/test_resource_pressure.py` (30): the vocabulary is closed and every
+kind has a source, with the retryable failure classes mapped by value; a
+clean run; a retry's kind, backoff and `retry-after`; the queue floor; the
+warm-wait outcomes; first outcome wins and the run end interrupts; unknown
+tokens reduced or refused; the bounds; the null handles; the SDK observer
+attributing to the agent in flight and counting the rest (pinned to the
+installed SDK's source line and logger name); a muted logger disclosed;
+`retry_after_seconds`; the snapshot through `scrub_data` with its agents
+intact; reset. Research: a rate-limited area recorded and recovered (and
+the round labels); an area that gives up records the final failure too;
+the search ceiling; a `max_tokens` cut; a timed-out warm wait on the
+followers (the stepped clock); a warm release as a number only. Final QC:
+a rate-limited lens; a refused batch submission on every seat plus the
+round note; an expired item; a clean batched run noted and not starved; a
+run that raises still closes its record. Chat: a rate-limited turn, a
+`max_tokens` turn, a clean turn, a turn that fails before the model. The
+diagnostics endpoint carries the block intact with no `<max-depth>`
+marker. `frontend/tests/resourcePressure.test.ts` (11): the formatter
+state by state, the three vocabulary pins against the backend file, the
+malformed-snapshot guard, the modal source pin.
+
+Fifteen reversion probes, each applied alone, each failing exactly the
+test named, each restored (the probe script verified every file's hash
+afterwards): the research retry record removed; the research release hook
+removed; the submission ceiling record removed; the research `max_tokens`
+record removed; the QC batch-round note given an unknown kind; the QC
+expired record removed; the batched seat's `settle` outcome removed; the
+QC streaming retry record removed; the QC wrapper's `finally` no longer
+ending the run; the chat API-failure record removed; the chat `max_tokens`
+record removed; the diagnostics block removed; the ledger letting the last
+outcome win; the queue floor ignored; the observer attributing to nobody.
+
+### Validation
+
+Ruff; `tests/test_resource_pressure.py`, `tests/test_diagnostics.py`,
+`tests/test_app.py`, `tests/test_chat_compaction.py`, the research files
+(`test_research_engine`, `test_research_budget`,
+`test_research_warm_launch`, `test_retry_resume`) and the QC files
+(`test_qc_batch_verification`, `test_qc_warm_launch`,
+`test_qc_batch_warm_lead`, `test_qc_live_events`, `test_qc_live_runner`,
+`test_qc_consolidation`, the two prompt55 files, the two cost-check files)
+all passed locally; `npm test` and `npm run build` passed; the full backend
+suite is CI's (see Commands in CLAUDE.md). No paid API call was made; what
+the live provider's pressure looks like on real runs is unmeasured.
+
+### PR #282 review corrections
+
+Codex's review of the opening commit found two gaps, both real.
+
+- **The verdict ignored a run in progress.** The ledger's totals count
+  ENDED runs (a run's numbers join them in `end()`), while `runs_recorded`
+  counts every run begun, so Developer tools opened mid-run could read "No
+  agent was starved this session — Final QC 0 calls over 1 run" above a
+  line naming that run's starved call. `verdictLine` now folds every
+  `running` run's `agents_total` and `starved_agents` from `runs` into its
+  engine's phrase. The backend is unchanged: the totals' contract ("ended
+  runs; a running run's numbers are on the run itself") is the documented
+  one, and the formatter is where the two are read together. Pinned by
+  `frontend/tests/resourcePressure.test.ts` ("a run still in progress
+  counts toward the verdict"); the existing running-run test's expected
+  verdict changed from "0 calls over 1 run" to "1 of 2 calls over 1 run".
+- **The prompt-too-long fallback's stream open sat outside the attribution
+  scope.** `stream_user_turn` wrapped only the first `_enter_stream` in
+  `turn_pressure.requesting()`; the shortened request's open after
+  `_retry_view_for_too_long` ran bare, so an SDK retry on exactly the
+  request most likely to be retried counted as unattributed. The second
+  open now carries the same scope. Pinned by
+  `tests/test_resource_pressure.py::test_sdk_retries_on_the_shortened_request_are_the_turns_too`
+  (test_chat_compaction's too-long recipe with `_enter_stream` wrapped to
+  log the SDK's retry line once per open: two `sdk_retry` pressures on the
+  turn, none unattributed).
+
+Both reversions — the bare fallback open, and the verdict reading the
+totals alone — failed their test and were restored. Ruff, the two backend
+files, the frontend roster (536) and `tsc --noEmit` passed.
+
+### Release-note draft (for the release after 1.24.0)
+
+"**Developer tools now say whether anything was starved.** Settings →
+Developer tools → Engine state → Resource pressure tells you, for the whole
+app session and per run, whether any research area, Final QC call or chat
+turn was rate limited, lost its connection, ran out of a search or
+continuation allowance, filled the context window, was cut at max_tokens,
+waited for a free worker, or waited the whole bound for a lead that never
+started — with what each one met, in plain words. The diagnostics bundle
+carries the same record. Nothing about any request changed."

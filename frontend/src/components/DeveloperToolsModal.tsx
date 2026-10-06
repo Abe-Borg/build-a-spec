@@ -14,6 +14,7 @@ import {
 } from "../lib/api";
 import { contextMakeup } from "../lib/contextSizes";
 import { costCheckLines } from "../lib/costChecks";
+import { resourcePressureLines } from "../lib/resourcePressure";
 import { describeCompaction } from "../lib/compaction";
 import { useDialogFocus } from "../lib/dialogFocus";
 
@@ -544,6 +545,13 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                   name="Final QC"
                   value={`${sess.qc.status} / worker ${sess.qc.worker_alive ? "alive" : "idle"}/${sess.qc.worker_settled ? "settled" : "settling"} / ${sess.qc.event_count} events${sess.qc.error_present ? ` / error ${sess.qc.error_kind ?? "unclassified"}` : ""}`}
                 />
+                {/* Was an agent starved while it ran: what each research
+                    area, Final QC call and chat turn waited for or ran out
+                    of (backend/resource_pressure.py) — the session verdict,
+                    then each starved run the ledger kept. */}
+                {resourcePressureLines(snapshot?.resource_pressure).map((line, index) => (
+                  <Row key={`pressure-${index}`} name={index === 0 ? "Resource pressure" : ""} value={line} />
+                ))}
               </div>
             ) : (
               <p className="mt-2 text-xs text-ink-faint">Not loaded.</p>

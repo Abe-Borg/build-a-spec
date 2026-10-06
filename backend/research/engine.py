@@ -57,7 +57,7 @@ from typing import Any, Callable
 
 import anthropic
 
-from .. import cost_checks, settings
+from .. import cost_checks, resource_pressure, settings
 from ..llm.client import AUTH_ERROR_MESSAGE, is_authentication_error
 from ..project_facts import ProjectFact, project_facts_block
 from ..project_profile import ProjectProfile
@@ -194,6 +194,24 @@ _SUBMISSION_MAX_TOKENS = 32_000
 # more submission requests before the area fails. A forced submission gets
 # none, exactly as before.
 _SUBMISSION_RESENDS = 1
+
+# Which of the app's own allowances ended an area's exploration, as the
+# resource pressure ledger names it (``backend.resource_pressure``), keyed
+# by the ``submission_reason`` the loop below writes. Recorded once, when
+# the submission is first prepared, so a reader of the diagnostics snapshot
+# can see that an area was cut short by a ceiling and which one — the
+# INFO line used to be the only record.
+_SUBMISSION_PRESSURE_KINDS: dict[str, str] = {
+    "web_search budget ceiling reached": resource_pressure.KIND_SEARCH_CEILING,
+    "web_fetch budget ceiling reached": resource_pressure.KIND_FETCH_CEILING,
+    "maximum continuation allowance reached": (
+        resource_pressure.KIND_CONTINUATION_CEILING
+    ),
+    "context window reserve reached": resource_pressure.KIND_CONTEXT_RESERVE,
+    "missing output tool reminder allowance reached": (
+        resource_pressure.KIND_REMINDER_CEILING
+    ),
+}
 
 # A research area whose reply ends without the output tool (the Opus 5.5
 # prompting guide's early stop: "some of those updates end the turn with text
@@ -2459,6 +2477,7 @@ def _run_dimension(
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
     first_output: threading.Event | None = None,
+    pressure: resource_pressure.AgentPressure = resource_pressure.NO_AGENT,
 ) -> _DimensionOutcome:
     """One dimension's full lifecycle: request → continuations → parse → ground.
 
@@ -2572,6 +2591,15 @@ def _run_dimension(
     that must keep adaptive thinking (Opus 5.5) sends every thinking block
     back unchanged and always carries ``drop_block``: removing the web tools
     edits the prefix those blocks were bound to.
+
+    ``pressure`` is this area's handle on the resource pressure ledger
+    (``backend.resource_pressure``; :data:`resource_pressure.NO_AGENT`, the
+    default for a direct caller, records nothing). The area reports what it
+    waited for or ran out of at the spot it is observed — each transport
+    retry with its backoff and the provider's ``retry-after``, the final
+    failure that gave up, the ceiling that requested its submission, the
+    context-window clip and elision, a ``max_tokens`` cut — and its
+    outcome. Numbers and closed tokens only; it changes no request byte.
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
@@ -2584,6 +2612,9 @@ def _run_dimension(
             "max_fetches": max_fetches,
         }
     )
+    # The ledger's clock for this area starts here, on the worker: the queue
+    # wait since the coordinator submitted it is what it records.
+    pressure.started()
     # The worker's last-emitted activity kind — dimension_activity fires on
     # change only, so continuations don't repeat themselves.
     activity_state: dict[str, str] = {"kind": ""}
@@ -2600,6 +2631,11 @@ def _run_dimension(
         project_facts=project_facts,
     )
 
+    # How many attempts this area has begun, for the ledger's outcome record.
+    # Read by ``_failed`` through the closure, written at the top of each
+    # attempt below.
+    attempts_used = 0
+
     def _failed(
         error: str,
         *,
@@ -2608,6 +2644,13 @@ def _run_dimension(
     ) -> _DimensionOutcome:
         billed = responses or []
         tokens = _sum_token_usage(billed)
+        pressure.ended(
+            resource_pressure.OUTCOME_CANCELLED
+            if kind == DIMENSION_ERROR_CANCELLED
+            else resource_pressure.OUTCOME_FAILED,
+            error_kind=kind,
+            attempts=attempts_used,
+        )
         return _DimensionOutcome(
             status=DimensionStatus(
                 dimension_id=dimension.dimension_id,
@@ -2789,6 +2832,7 @@ def _run_dimension(
         )
 
     for attempt in range(attempts_planned):
+        attempts_used = attempt + 1
         if should_stop():
             return _failed(
                 "Cancelled by user.",
@@ -2851,6 +2895,12 @@ def _run_dimension(
                         # replayed thinking is bound to.
                         conversation_tools = near_window_tools
                         stream_kwargs["tools"] = conversation_tools
+                        # Context pressure, for the ledger: the window no
+                        # longer holds a full allowance of fetches.
+                        pressure.pressure(
+                            resource_pressure.KIND_NEAR_WINDOW_CLIP,
+                            input_tokens=input_count,
+                        )
                         if all_responses:
                             thinking_edited = True
                             stream_kwargs = with_drop_block(stream_kwargs)
@@ -2873,6 +2923,18 @@ def _run_dimension(
                             ]}
                         messages = _submission_messages([*messages, reply])
                         submission_prepared = True
+                        # The ceiling that ended the exploration, for the
+                        # ledger: an area cut short by its own allowance is
+                        # starved of it, and the snapshot should say which.
+                        pressure.pressure(
+                            _SUBMISSION_PRESSURE_KINDS.get(
+                                submission_reason,
+                                resource_pressure.KIND_CONTINUATION_CEILING,
+                            ),
+                            responses=len(all_responses),
+                            searches=searches_used,
+                            fetches=fetches_used,
+                        )
                         _log.info(
                             "Research area %s requesting final submission: %s.",
                             dimension.dimension_id, submission_reason,
@@ -2900,9 +2962,19 @@ def _run_dimension(
                         if trimmed is messages:
                             continue
                         thinking_edited = True
+                        pressure.pressure(
+                            resource_pressure.KIND_SUBMISSION_ELIDED,
+                            fetch_only=fetch_only,
+                            input_tokens=input_count,
+                        )
                         messages = _sanitize(trimmed)
                         input_count = count_request_tokens(client, messages, stream_kwargs)
                     if input_count > input_limit:
+                        pressure.pressure(
+                            resource_pressure.KIND_CONTEXT_RESERVE,
+                            input_tokens=input_count,
+                            final=True,
+                        )
                         return _failed(
                             "Research submission cannot fit the context window "
                             "even after raw source content was omitted.",
@@ -3126,6 +3198,14 @@ def _run_dimension(
                         kind=DIMENSION_ERROR_REFUSAL,
                         responses=[*billed_responses, *all_responses],
                     )
+                if getattr(response, "stop_reason", None) == "max_tokens":
+                    # Output pressure, for the ledger: the reply was cut at
+                    # the output allowance, not ended by the model.
+                    pressure.pressure(
+                        resource_pressure.KIND_OUTPUT_TRUNCATED,
+                        max_tokens=stream_kwargs.get("max_tokens"),
+                        submission=bool(submission_reason),
+                    )
                 return _failed(
                     "Research response incomplete (stop_reason: "
                     f"{getattr(response, 'stop_reason', None)}).",
@@ -3167,6 +3247,9 @@ def _run_dimension(
             # all_responses, counted once.
             billed = [*billed_responses, *all_responses]
             tokens = _sum_token_usage(billed)
+            pressure.ended(
+                resource_pressure.OUTCOME_COMPLETED, attempts=attempts_used
+            )
             return _DimensionOutcome(
                 status=DimensionStatus(
                     dimension_id=dimension.dimension_id,
@@ -3202,6 +3285,18 @@ def _run_dimension(
                 first_output.set()
             failure_class = classify_exception(exc)
             if not is_retryable_failure_class(failure_class) or is_last_attempt:
+                if is_retryable_failure_class(failure_class):
+                    # The provider failure that gave up, for the ledger: the
+                    # last attempt's 429/5xx/drop is pressure too, not just
+                    # the retries before it.
+                    pressure.retry(
+                        failure_class=failure_class.value,
+                        attempt=attempt + 1,
+                        max_attempts=attempts_planned,
+                        backoff_s=0.0,
+                        retry_after_s=resource_pressure.retry_after_seconds(exc),
+                        final=True,
+                    )
                 message = (
                     AUTH_ERROR_MESSAGE
                     if is_authentication_error(exc)
@@ -3246,6 +3341,17 @@ def _run_dimension(
                 submission_resends = 0
             backoff = compute_backoff_seconds(
                 policy, attempt=attempt, failure_class=failure_class
+            )
+            # The same facts the live event carries, kept past the round in
+            # the ledger, plus the provider's own retry-after when it sent
+            # one.
+            pressure.retry(
+                failure_class=failure_class.value,
+                attempt=attempt + 1,
+                max_attempts=attempts_planned,
+                backoff_s=backoff,
+                mode=mode,
+                retry_after_s=resource_pressure.retry_after_seconds(exc),
             )
             event_sink(
                 {
@@ -3374,8 +3480,15 @@ def _launch_staggered(
     should_stop: Callable[[], bool],
     capacity: int,
     on_wait: Callable[[ResearchDimension, ResearchDimension], None],
+    on_release: Callable[[list[ResearchDimension], str, int], None] | None = None,
 ) -> dict[Future, ResearchDimension]:
     """Submit a round's areas, leads first; return ``{future: dimension}``.
+
+    ``on_release(members, outcome, waited_ms)``, when given, is told how
+    each lineage's wait ended — the lead first in ``members``, the outcome
+    one of ``warm``/``timeout``/``stopped`` — just before its followers are
+    submitted; the fan-out hands it to the resource pressure ledger. It
+    changes nothing about the launch.
 
     Copy-adapted from ``qc.engine._launch_staggered``, which staggers Final
     QC's lenses for the same reason. The areas of a round send byte-identical
@@ -3456,6 +3569,8 @@ def _launch_staggered(
             outcome,
             waited_ms,
         )
+        if on_release is not None:
+            on_release(members, outcome, waited_ms)
         for follower in members[1:]:
             futures[submit(follower, None)] = follower
 
@@ -3689,11 +3804,27 @@ def run_requirements_research(
 
     outcomes: dict[str, _DimensionOutcome] = {}
     workers = min(_RESEARCH_MAX_WORKERS, len(dimensions))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    # This round's record on the resource pressure ledger
+    # (``backend.resource_pressure``): one run, one agent per area, what
+    # each waited for or ran out of. Opened first and closed last, so every
+    # worker has reported by the time the run's numbers join the totals;
+    # a worker that outlives a Stop still writes into THIS run's record.
+    pressure_run = resource_pressure.begin_run(
+        resource_pressure.ENGINE_RESEARCH,
+        label=(
+            f"round {established.round_count + 1 if established is not None else 1}"
+        ),
+    )
+    with pressure_run, ThreadPoolExecutor(max_workers=workers) as pool:
 
         def submit(
             dimension: ResearchDimension, first_output: threading.Event | None
         ) -> Future:
+            area_pressure = pressure_run.agent(
+                dimension.dimension_id, kind=resource_pressure.AGENT_DIMENSION
+            )
+            # The queue wait starts at submission; the worker ends it.
+            area_pressure.submitted()
             return pool.submit(
                 _run_dimension,
                 client,
@@ -3713,7 +3844,23 @@ def run_requirements_research(
                 event_sink=event_sink,
                 should_stop=should_stop,
                 first_output=first_output,
+                pressure=area_pressure,
             )
+
+        def record_release(
+            members: list[ResearchDimension], outcome: str, waited_ms: int
+        ) -> None:
+            # How long each follower waited for its lead and how the wait
+            # ended; a ``timeout`` is pressure (the lead never started
+            # streaming inside the bound), ``warm`` is the launch working.
+            for follower in members[1:]:
+                pressure_run.agent(
+                    follower.dimension_id, kind=resource_pressure.AGENT_DIMENSION
+                ).warm_wait(
+                    outcome=outcome,
+                    waited_ms=waited_ms,
+                    lead=members[0].dimension_id,
+                )
 
         futures = _launch_staggered(
             dimensions,
@@ -3723,6 +3870,7 @@ def run_requirements_research(
             should_stop=should_stop,
             capacity=workers,
             on_wait=announce_wait,
+            on_release=record_release,
         )
         for future in as_completed(futures):
             dimension = futures[future]
@@ -3745,6 +3893,13 @@ def run_requirements_research(
                             else classify_exception(exc).value
                         ),
                     )
+                )
+                # The worker raised past its own record, so the coordinator
+                # closes it (first ``ended`` wins; a worker that did report
+                # keeps its own outcome).
+                pressure_run.agent(dimension.dimension_id).ended(
+                    resource_pressure.OUTCOME_FAILED,
+                    error_kind=outcome.status.error_kind,
                 )
             outcomes[dimension.dimension_id] = outcome
             status = outcome.status

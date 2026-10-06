@@ -63,7 +63,7 @@ from typing import Any, Callable
 
 import anthropic
 
-from .. import cost_checks, settings, writing_policy
+from .. import cost_checks, resource_pressure, settings, writing_policy
 from ..llm.client import (
     AUTH_ERROR_MESSAGE,
     bounded_request_options,
@@ -4264,8 +4264,16 @@ def _run_streaming_call(
     first_output: threading.Event | None = None,
     continuation_cache: bool = False,
     refusal_fallback: bool = False,
+    pressure: resource_pressure.AgentPressure = resource_pressure.NO_AGENT,
 ) -> _CallResult:
     """One QC call: request → pause_turn continuations → parse. Never raises.
+
+    ``pressure`` is this call's handle on the resource pressure ledger
+    (``backend.resource_pressure``; :data:`resource_pressure.NO_AGENT`, the
+    default for a direct caller, records nothing): each transport retry with
+    its backoff and the provider's ``retry-after``, the final failure that
+    gave up, the ceiling that ended the call, a ``max_tokens`` cut, and the
+    outcome. Numbers and closed tokens only; no request byte changes.
 
     ``should_stop`` (user-initiated stop) is checked before each retry
     attempt and each pause_turn continuation — a call that hasn't started
@@ -4365,10 +4373,16 @@ def _run_streaming_call(
             cache_ttl=cache_ttl,
         )
 
+        # The ledger's clock for this call starts here, on the worker; the
+        # queue wait since the coordinator submitted it is what it records.
+        pressure.started()
         search_ceiling = max(1, max_searches * 2)
         policy = DEFAULT_REALTIME_RETRY_POLICY
         attempts = max(1, policy.max_attempts)
         api_request_count = 0
+        # How many attempts this call has begun, for the ledger's outcome
+        # record (``done`` reads it through the closure).
+        attempts_used = 0
         activity_state: dict[str, str] = {"kind": ""}
 
         def count_request() -> None:
@@ -4429,9 +4443,21 @@ def _run_streaming_call(
 
         def done(result: _CallResult) -> _CallResult:
             result.served_by_model = _served_by_label(served_models)
+            # The call's outcome on the ledger: every return path comes
+            # through here, so the record cannot miss one.
+            pressure.ended(
+                resource_pressure.OUTCOME_COMPLETED
+                if result.payload is not None
+                else resource_pressure.OUTCOME_CANCELLED
+                if result.error == "Cancelled by user."
+                else resource_pressure.OUTCOME_FAILED,
+                error_kind=result.failure_class,
+                attempts=attempts_used,
+            )
             return result
 
         for attempt in range(attempts):
+            attempts_used = attempt + 1
             if should_stop():
                 return done(_CallResult(
                     None,
@@ -4632,6 +4658,14 @@ def _run_streaming_call(
                                 _MISSING_TOOL_REMINDERS,
                             )
                             continue
+                        # The allowance that ran out, for the ledger.
+                        pressure.pressure(
+                            resource_pressure.KIND_REMINDER_CEILING
+                            if reminders_sent >= _MISSING_TOOL_REMINDERS
+                            else resource_pressure.KIND_CONTINUATION_CEILING,
+                            responses=len(all_responses),
+                            reminders=reminders_sent,
+                        )
                         return done(_CallResult(
                             None,
                             all_responses,
@@ -4645,6 +4679,11 @@ def _run_streaming_call(
                             _web_search_count(r) for r in all_responses
                         )
                         if total_search > search_ceiling:
+                            pressure.pressure(
+                                resource_pressure.KIND_SEARCH_CEILING,
+                                searches=total_search,
+                                ceiling=search_ceiling,
+                            )
                             return done(_CallResult(
                                 None,
                                 all_responses,
@@ -4676,6 +4715,13 @@ def _run_streaming_call(
                             api_request_count,
                             REFUSAL_KIND,
                         ))
+                    if getattr(response, "stop_reason", None) == "max_tokens":
+                        # Output pressure, for the ledger: cut at the
+                        # allowance, not ended by the model.
+                        pressure.pressure(
+                            resource_pressure.KIND_OUTPUT_TRUNCATED,
+                            max_tokens=max_tokens,
+                        )
                     return done(_CallResult(
                         None,
                         all_responses,
@@ -4685,6 +4731,10 @@ def _run_streaming_call(
                         api_request_count,
                     ))
                 if not completed:
+                    pressure.pressure(
+                        resource_pressure.KIND_CONTINUATION_CEILING,
+                        responses=len(all_responses),
+                    )
                     return done(_CallResult(
                         None,
                         all_responses,
@@ -4706,6 +4756,16 @@ def _run_streaming_call(
             except Exception as exc:  # noqa: BLE001 — classified below
                 failure_class = classify_exception(exc)
                 if not is_retryable_failure_class(failure_class) or is_last:
+                    if is_retryable_failure_class(failure_class):
+                        # The provider failure that gave up, for the ledger.
+                        pressure.retry(
+                            failure_class=failure_class.value,
+                            attempt=attempt + 1,
+                            max_attempts=attempts,
+                            backoff_s=0.0,
+                            retry_after_s=resource_pressure.retry_after_seconds(exc),
+                            final=True,
+                        )
                     message = (
                         AUTH_ERROR_MESSAGE
                         if is_authentication_error(exc)
@@ -4738,6 +4798,16 @@ def _run_streaming_call(
                     fallback_in_conversation = False
                 backoff = compute_backoff_seconds(
                     policy, attempt=attempt, failure_class=failure_class
+                )
+                # The live event's facts, kept past the run in the ledger,
+                # plus the provider's own retry-after when it sent one.
+                pressure.retry(
+                    failure_class=failure_class.value,
+                    attempt=attempt + 1,
+                    max_attempts=attempts,
+                    backoff_s=backoff,
+                    mode=mode,
+                    retry_after_s=resource_pressure.retry_after_seconds(exc),
                 )
                 event_sink(
                     {
@@ -5125,8 +5195,15 @@ def _launch_staggered(
     should_stop: Callable[[], bool],
     label: str,
     capacity: int,
+    on_release: Callable[[list[Any], str, int], None] | None = None,
 ) -> dict[Future, Any]:
     """Submit ``items``, leaders first; return ``{future: item}``.
+
+    ``on_release(members, outcome, waited_ms)``, when given, is told how each
+    lineage's wait ended — the leader first in ``members``, the outcome one
+    of ``warm``/``timeout``/``stopped`` — just before its followers are
+    submitted; the phases hand it to the resource pressure ledger. It
+    changes nothing about the launch.
 
     ``items`` are grouped by ``key_of``. A lineage of two or more gets a
     leader — its first item in input order, so the choice is deterministic —
@@ -5195,6 +5272,8 @@ def _launch_staggered(
             outcome,
             waited_ms,
         )
+        if on_release is not None:
+            on_release(members, outcome, waited_ms)
         for follower in members[1:]:
             futures[submit(follower, None)] = follower
 
@@ -5302,6 +5381,7 @@ def _run_lens(
     first_output: threading.Event | None = None,
     continuation_cache: bool = False,
     refusal_fallback: bool = False,
+    pressure: resource_pressure.AgentPressure = resource_pressure.NO_AGENT,
 ) -> _LensOutcome:
     """One lens's full lifecycle. Never raises (KeyboardInterrupt aside).
 
@@ -5320,6 +5400,7 @@ def _run_lens(
         }
     )
     if should_stop():
+        pressure.ended(resource_pressure.OUTCOME_CANCELLED)
         return _LensOutcome(
             lens=lens,
             status=QCLensStatus(
@@ -5350,6 +5431,7 @@ def _run_lens(
         first_output=first_output,
         continuation_cache=continuation_cache,
         refusal_fallback=refusal_fallback,
+        pressure=pressure,
     )
     usage = _sum_billed(result.billed)
     queries, retrieved_sources = _collect_call_activity(result.responses)
@@ -5735,8 +5817,12 @@ def _consolidate_candidates(
     refusal_fallback: bool = False,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
+    pressure_run: resource_pressure.RunPressure = resource_pressure.NO_RUN,
 ) -> tuple[list[_Candidate], QCConsolidation, list[Any]]:
     """Group near-duplicate lens candidates. Never raises, never loses one.
+
+    ``pressure_run`` is the run's record on the resource pressure ledger;
+    each grouping call becomes its own agent (``consolidation:<bucket>``).
 
     Returns the candidates phase 2 will verify, the persisted grouping
     record, and the billed responses. Every early return produces a complete
@@ -5942,9 +6028,17 @@ def _consolidate_candidates(
     bucket_workers = min(_qc_max_workers(), len(eligible))
     with ThreadPoolExecutor(max_workers=bucket_workers) as pool:
 
+        def bucket_pressure(bucket: _CandidateBucket) -> resource_pressure.AgentPressure:
+            return pressure_run.agent(
+                f"consolidation:{bucket.bucket_id}",
+                kind=resource_pressure.AGENT_CONSOLIDATION,
+            )
+
         def submit_bucket(
             bucket: _CandidateBucket, first_output: threading.Event | None
         ) -> Future:
+            pressure = bucket_pressure(bucket)
+            pressure.submitted()
             return pool.submit(
                 _run_consolidation_call,
                 client,
@@ -5959,7 +6053,18 @@ def _consolidate_candidates(
                 first_output=first_output,
                 continuation_cache=continuation_cache,
                 refusal_fallback=refusal_fallback,
+                pressure=pressure,
             )
+
+        def record_release(
+            members: list[_CandidateBucket], outcome: str, waited_ms: int
+        ) -> None:
+            for follower in members[1:]:
+                bucket_pressure(follower).warm_wait(
+                    outcome=outcome,
+                    waited_ms=waited_ms,
+                    lead=f"consolidation:{members[0].bucket_id}",
+                )
 
         futures = _launch_staggered(
             eligible,
@@ -5971,6 +6076,7 @@ def _consolidate_candidates(
             should_stop=should_stop,
             label="consolidation",
             capacity=bucket_workers,
+            on_release=record_release,
         )
         for future in as_completed(futures):
             bucket = futures[future]
@@ -5981,6 +6087,11 @@ def _consolidate_candidates(
                     None,
                     f"{type(exc).__name__}: {exc}",
                     None,
+                )
+                # Raised past its own record: the coordinator closes it.
+                bucket_pressure(bucket).ended(
+                    resource_pressure.OUTCOME_FAILED,
+                    error_kind=classify_exception(exc).value,
                 )
 
     candidates: list[_Candidate] = []
@@ -6084,6 +6195,7 @@ def _run_consolidation_call(
     first_output: threading.Event | None = None,
     continuation_cache: bool = False,
     refusal_fallback: bool = False,
+    pressure: resource_pressure.AgentPressure = resource_pressure.NO_AGENT,
 ) -> tuple[list[dict[str, Any]] | None, str, _CallResult | None]:
     """One bucket's grouping call. ``None`` groups = fall back to singletons."""
     result = _run_streaming_call(
@@ -6106,6 +6218,7 @@ def _run_consolidation_call(
         first_output=first_output,
         continuation_cache=continuation_cache,
         refusal_fallback=refusal_fallback,
+        pressure=pressure,
     )
     if result.payload is None:
         return None, result.error or "The grouping call failed.", result
@@ -6237,6 +6350,7 @@ def _verify_one(
     shared_should_stop: Callable[[], bool] = lambda: False,
     continuation_cache: bool = False,
     refusal_fallback: bool = False,
+    pressure: resource_pressure.AgentPressure = resource_pressure.NO_AGENT,
 ) -> _VerifierOutcome:
     worker_fields = {
         "candidate_id": candidate_id,
@@ -6244,6 +6358,9 @@ def _verify_one(
     }
     event_sink({"type": "verifier_started", **worker_fields})
     if shared_should_stop():
+        pressure.ended(
+            resource_pressure.OUTCOME_FAILED, error_kind="shared_request_failure"
+        )
         return _VerifierOutcome(
             verdict=QCVerdict(
                 upholds=False,
@@ -6253,6 +6370,7 @@ def _verify_one(
             ),
         )
     if should_stop():
+        pressure.ended(resource_pressure.OUTCOME_CANCELLED)
         return _VerifierOutcome(
             verdict=QCVerdict(
                 upholds=False,
@@ -6294,6 +6412,7 @@ def _verify_one(
         # so they get the tail too: 5 minutes after this seat's 1h markers.
         continuation_cache=continuation_cache,
         refusal_fallback=refusal_fallback,
+        pressure=pressure,
     )
     return _verifier_outcome(
         result,
@@ -6502,6 +6621,11 @@ class _BatchSeatState:
     # carried across rounds. A resume keeps it (the reminder request that
     # failed is submitted again as it stood); a restart starts it at zero.
     reminders_sent: int = 0
+    # The seat's handle on the resource pressure ledger
+    # (``backend.resource_pressure``): ``settle``/``settle_parsed`` record
+    # its outcome, the fold and the phase record what it waited for or ran
+    # out of. ``NO_AGENT`` for a seat built outside a run (records nothing).
+    pressure: resource_pressure.AgentPressure = resource_pressure.NO_AGENT
 
     def initial_messages(self) -> list[dict]:
         return [
@@ -6565,6 +6689,13 @@ class _BatchSeatState:
         return mode
 
     def settle(self, error: str, failure_class: str = "") -> None:
+        self.pressure.ended(
+            resource_pressure.OUTCOME_CANCELLED
+            if error == "Cancelled by user."
+            else resource_pressure.OUTCOME_FAILED,
+            error_kind=failure_class,
+            attempts=self.attempt + 1,
+        )
         self.settled = _CallResult(
             None,
             self.all_responses,
@@ -6624,6 +6755,12 @@ class _BatchSeatState:
 
     def settle_parsed(self, payload: dict | None) -> None:
         """Settle on a completed turn: its payload, or the familiar failure."""
+        self.pressure.ended(
+            resource_pressure.OUTCOME_COMPLETED
+            if payload is not None
+            else resource_pressure.OUTCOME_FAILED,
+            attempts=self.attempt + 1,
+        )
         self.settled = _CallResult(
             payload,
             self.all_responses,
@@ -6887,8 +7024,17 @@ def _run_batch_calls(
     warm_wait_seconds: float = 0.0,
     continuation_cache: bool = False,
     refusal_fallback: bool = False,
+    pressure_run: resource_pressure.RunPressure = resource_pressure.NO_RUN,
 ) -> _BatchPhaseOutcome:
     """Run many independent QC calls through the Message Batches API.
+
+    ``pressure_run`` is the run's record on the resource pressure ledger
+    (``backend.resource_pressure``): every seat is an agent of it, a lead
+    through its streamed call, a batched seat through its state. The phase
+    records a refused submission's retries, an item's retries and expiry,
+    the round and wall-clock ceilings, each lineage's wait for its lead, and
+    one note per batch round with how long the provider took and what its
+    counts said — numbers only, and no request byte changes.
 
     The transposition of :func:`_run_streaming_call`: the same pause_turn
     continuation loop, the same retry policy and attempt ceiling, the same
@@ -6944,7 +7090,12 @@ def _run_batch_calls(
     seat's continuation never carries it — see the request builder below.
     """
     states = {
-        key: _BatchSeatState(spec=spec, messages=[]) for key, spec in specs.items()
+        key: _BatchSeatState(
+            spec=spec,
+            messages=[],
+            pressure=pressure_run.agent(key, kind=resource_pressure.AGENT_VERIFIER),
+        )
+        for key, spec in specs.items()
     }
     for state in states.values():
         state.messages = state.initial_messages()
@@ -7001,13 +7152,22 @@ def _run_batch_calls(
         """The unsettled seats that ride the batch. A lead never does."""
         return [key for key in unsettled() if key not in lead_keys]
 
-    def settle_all(keys: list[str], error: str, failure_class: str = "") -> None:
+    def settle_all(
+        keys: list[str],
+        error: str,
+        failure_class: str = "",
+        pressure_kind: str = "",
+    ) -> None:
+        # ``pressure_kind`` names the ceiling that is settling these seats
+        # (the ledger's word for it), recorded on each before it settles.
         for key in keys:
             if key in lead_keys:
                 # A lead's record is the _CallResult its own streamed call
                 # returns. A phase-wide failure, a Stop or a ceiling settling
                 # it here would overwrite a real, billed record.
                 continue
+            if pressure_kind:
+                states[key].pressure.pressure(pressure_kind)
             states[key].settle(error, failure_class)
 
     def fold_leads(*, wait: bool = False) -> None:
@@ -7025,6 +7185,11 @@ def _run_batch_calls(
                     f"{type(exc).__name__}: {exc}",
                     0,
                     FailureClass.UNKNOWN.value,
+                )
+                # Raised past its own record: the coordinator closes it.
+                states[key].pressure.ended(
+                    resource_pressure.OUTCOME_FAILED,
+                    error_kind=FailureClass.UNKNOWN.value,
                 )
             states[key].settled = result
             del lead_futures[key]
@@ -7064,6 +7229,7 @@ def _run_batch_calls(
         status: str,
         message: str,
         failure_class: str = "",
+        pressure_kind: str = "",
     ) -> _BatchPhaseOutcome:
         """End the phase on a LIVE batch, collecting what it already produced.
 
@@ -7153,7 +7319,7 @@ def _run_batch_calls(
         uncollected = [key for key in pending if key not in answered]
         for key in uncollected:
             states[key].uncollected_requests += 1
-        settle_all(unsettled(), message, failure_class)
+        settle_all(unsettled(), message, failure_class, pressure_kind)
         return finish(
             status,
             terminated_early=True,
@@ -7263,6 +7429,7 @@ def _run_batch_calls(
         for lead in leads:
             spec = states[lead.key].spec
             released = threading.Event()
+            states[lead.key].pressure.submitted()
             future = lead_pool.submit(
                 _run_streaming_call,
                 client,
@@ -7284,6 +7451,7 @@ def _run_batch_calls(
                 first_output=released,
                 continuation_cache=continuation_cache,
                 refusal_fallback=refusal_fallback,
+                pressure=states[lead.key].pressure,
             )
             future.add_done_callback(lambda _done, event=released: event.set())
             lead_futures[lead.key] = future
@@ -7291,6 +7459,13 @@ def _run_batch_calls(
 
         def release(lead: _WarmLead, outcome: str, waited_ms: int) -> None:
             release_outcomes[lead.key] = outcome
+            # The batched seats of the lineage are the followers here: how
+            # long the batch waited for the lead and how the wait ended.
+            for key in lead.members:
+                if key != lead.key and key in states:
+                    states[key].pressure.warm_wait(
+                        outcome=outcome, waited_ms=waited_ms, lead=lead.key
+                    )
             _log.info(
                 "Final QC verification: %d %s seats share a cached prefix; "
                 "one streamed first, and the wait for its first output "
@@ -7325,7 +7500,12 @@ def _run_batch_calls(
             # but a round that ENDS before the ceiling and then needs another
             # (a continuation, a retry) never re-enters that loop before
             # submitting again.
-            settle_all(pending, ceiling_message, FailureClass.CONNECTION.value)
+            settle_all(
+                pending,
+                ceiling_message,
+                FailureClass.CONNECTION.value,
+                resource_pressure.KIND_BATCH_WALL_CLOCK,
+            )
             return finish(
                 "timeout", terminated_early=True, round=round_index + 1
             )
@@ -7377,9 +7557,37 @@ def _run_batch_calls(
             # ceiling (and, if a Stop cut that sleep short, calling a
             # cancellation a ceiling breach; caught in review on PR #151).
             no_round_left = round_index + 1 >= max_rounds
+            retry_after = resource_pressure.retry_after_seconds(exc)
+
+            def record_final_refusal(
+                keys: list[str],
+                *,
+                # Bound per round, the B023 idiom: the helper is called in
+                # the iteration that defines it and nowhere else.
+                retryable: bool = retryable,
+                failure_class: FailureClass = failure_class,
+                retry_after: float | None = retry_after,
+            ) -> None:
+                # The provider refusal that gave up on these seats, for the
+                # ledger: a retryable class on the last attempt or round is
+                # pressure too, not just the retries before it.
+                if not retryable:
+                    return
+                for key in keys:
+                    states[key].pressure.retry(
+                        failure_class=failure_class.value,
+                        attempt=states[key].attempt + 1,
+                        max_attempts=attempts,
+                        backoff_s=0.0,
+                        retry_after_s=retry_after,
+                        final=True,
+                    )
+
             if not retryable or len(exhausted) == len(pending) or no_round_left:
+                record_final_refusal(pending)
                 settle_all(pending, message, failure_class.value)
                 return finish("failed", round=round_index + 1, error=message)
+            record_final_refusal(exhausted)
             settle_all(exhausted, message, failure_class.value)
             retrying = [key for key in pending if states[key].settled is None]
             # Keyed on the seats' own attempt counter (read BEFORE the retry
@@ -7398,6 +7606,14 @@ def _run_batch_calls(
                 # (cost Tier 1, Chunk 5). One without progress, or on its
                 # final attempt, restarts as before.
                 mode = states[key].retry(attempts=attempts)
+                states[key].pressure.retry(
+                    failure_class=failure_class.value,
+                    attempt=states[key].attempt,
+                    max_attempts=attempts,
+                    backoff_s=backoff,
+                    mode=mode,
+                    retry_after_s=retry_after,
+                )
                 event_sink(
                     {
                         "type": f"{seat_event_prefix}_retry",
@@ -7429,6 +7645,11 @@ def _run_batch_calls(
             # batch; the first one the provider accepted is.
             if states[key].first_round is None:
                 states[key].first_round = round_index
+                # A batched seat's work begins when the provider accepts it;
+                # its requests ride the coordinator's batch, so it is never
+                # this thread's agent in flight.
+                states[key].pressure.started(in_flight=False)
+        round_submitted = time.monotonic()
         emit("submitted", round=round_index + 1, batch_id=batch_id, submitted=len(requests))
 
         last_counts: dict[str, int] | None = None
@@ -7462,6 +7683,19 @@ def _run_batch_calls(
                         **counts,
                     )
                 if str(_item_attr(snapshot, "processing_status") or "") == "ended":
+                    # How long the provider took with this round and what
+                    # its counts said, for the ledger: the ordinary cost of
+                    # the Batches API, noted beside the pressures, never
+                    # counted as one.
+                    pressure_run.note(
+                        resource_pressure.NOTE_BATCH_ROUND,
+                        round=round_index + 1,
+                        submitted=len(requests),
+                        waited_ms=max(
+                            0, int((time.monotonic() - round_submitted) * 1000)
+                        ),
+                        **counts,
+                    )
                     break
             if time.monotonic() > deadline:
                 return settle_open_batch(
@@ -7471,6 +7705,7 @@ def _run_batch_calls(
                     status="timeout",
                     message=ceiling_message,
                     failure_class=FailureClass.CONNECTION.value,
+                    pressure_kind=resource_pressure.KIND_BATCH_WALL_CLOCK,
                 )
             time.sleep(poll_seconds)
 
@@ -7537,6 +7772,7 @@ def _run_batch_calls(
         unsettled(),
         "Batched verification did not settle within the round ceiling.",
         FailureClass.UNKNOWN.value,
+        resource_pressure.KIND_BATCH_ROUND_CEILING,
     )
     # The normal end — the only one the warm lead's self-check reads, and
     # only once every lead is joined (finish() joining again is harmless).
@@ -7707,6 +7943,8 @@ def _apply_batch_item(
         state.settle("Cancelled by user.")
         return
     if outcome_type == "expired":
+        # Provider pressure, for the ledger: the batch never got to it.
+        state.pressure.pressure(resource_pressure.KIND_BATCH_EXPIRED)
         state.settle(
             "Batched verification request expired before it ran.",
             FailureClass.CONNECTION.value,
@@ -7716,6 +7954,15 @@ def _apply_batch_item(
         failure_class, message = _batch_error_facts(_item_attr(outcome, "error"))
         is_last = state.attempt >= attempts - 1
         if recovering or not is_retryable_failure_class(failure_class) or is_last:
+            if is_retryable_failure_class(failure_class):
+                # The provider failure that gave up, for the ledger.
+                state.pressure.retry(
+                    failure_class=failure_class.value,
+                    attempt=state.attempt + 1,
+                    max_attempts=attempts,
+                    backoff_s=0.0,
+                    final=True,
+                )
             state.settle(message, failure_class.value)
             return
         backoff = compute_backoff_seconds(
@@ -7727,6 +7974,13 @@ def _apply_batch_item(
         # conversation had progressed re-submits the request that failed in
         # the next round; any other seat starts a fresh conversation.
         mode = state.retry(attempts=attempts)
+        state.pressure.retry(
+            failure_class=failure_class.value,
+            attempt=state.attempt,
+            max_attempts=attempts,
+            backoff_s=backoff,
+            mode=mode,
+        )
         event_sink(
             {
                 "type": retry_event,
@@ -7779,6 +8033,19 @@ def _apply_batch_item(
                 _MISSING_TOOL_REMINDERS,
             )
             return
+        if payload is None and not recovering:
+            # The allowance that kept the seat from being reminded again,
+            # for the ledger: no round left, or the reminder or
+            # continuation budget spent.
+            state.pressure.pressure(
+                resource_pressure.KIND_BATCH_ROUND_CEILING
+                if not round_left
+                else resource_pressure.KIND_REMINDER_CEILING
+                if state.reminders_sent >= _MISSING_TOOL_REMINDERS
+                else resource_pressure.KIND_CONTINUATION_CEILING,
+                reminders=state.reminders_sent,
+                continuations=state.continuations,
+            )
         state.settle_parsed(payload)
         return
     if stop_class == STOP_CLASS_PAUSE:
@@ -7790,12 +8057,21 @@ def _apply_batch_item(
         search_ceiling = max(1, state.spec.max_searches * 2)
         total_search = sum(_web_search_count(r) for r in state.all_responses)
         if total_search > search_ceiling:
+            state.pressure.pressure(
+                resource_pressure.KIND_SEARCH_CEILING,
+                searches=total_search,
+                ceiling=search_ceiling,
+            )
             state.settle(
                 "QC call exceeded the web_search budget ceiling "
                 f"({total_search} > {search_ceiling})."
             )
             return
         if state.continuations >= QC_MAX_CONTINUATIONS:
+            state.pressure.pressure(
+                resource_pressure.KIND_CONTINUATION_CEILING,
+                continuations=state.continuations,
+            )
             state.settle("QC call did not complete after maximum continuations.")
             return
         # No ``drop_block`` after a sanitizer edit, deliberately (P55-6): the
@@ -7812,6 +8088,12 @@ def _apply_batch_item(
         # content decision is neither.
         state.settle(_refusal_error(response), REFUSAL_KIND)
         return
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        # Output pressure, for the ledger: cut at the allowance.
+        state.pressure.pressure(
+            resource_pressure.KIND_OUTPUT_TRUNCATED,
+            max_tokens=state.spec.max_tokens,
+        )
     state.settle(
         "QC response incomplete (stop_reason: "
         f"{getattr(response, 'stop_reason', None)})."
@@ -8348,7 +8630,84 @@ def run_final_qc(
     ``should_stop`` takes this same path — every lens reports "Cancelled by
     user."). ``should_stop`` also reaches every verifier in phase 2, so
     cancelling mid-verification stops new verifier calls from starting too.
+
+    The run is recorded on the resource pressure ledger
+    (``backend.resource_pressure``) under its ``run_id`` for as long as it
+    runs and closed however it ends — a result, a :exc:`QCFanoutError`, or
+    anything else raised — so the diagnostics snapshot can say what each
+    lens, grouping call and verifier seat waited for or ran out of. The
+    body is :func:`_run_final_qc`; this wrapper exists so that record is
+    opened before the first phase and closed after the last without
+    indenting the pipeline into a ``try``.
     """
+    run_id = run_id or f"qc-run-{uuid.uuid4().hex}"
+    pressure_run = resource_pressure.begin_run(
+        resource_pressure.ENGINE_QC, run_id=run_id, label="Final QC"
+    )
+    try:
+        return _run_final_qc(
+            section,
+            profile,
+            module,
+            client,
+            model=model,
+            max_tokens=max_tokens,
+            effort=effort,
+            lens_effort=lens_effort,
+            verifier_effort=verifier_effort,
+            batch_verification=batch_verification,
+            warm_wait_seconds=warm_wait_seconds,
+            batch_warm_lead=batch_warm_lead,
+            continuation_cache=continuation_cache,
+            refusal_fallback=refusal_fallback,
+            version_index=version_index,
+            started_at=started_at,
+            finished_at=finished_at,
+            discipline=discipline,
+            source_guard=source_guard,
+            reference_docs=reference_docs,
+            project_facts=project_facts,
+            remembered_dismissed=remembered_dismissed,
+            run_id=run_id,
+            event_sink=event_sink,
+            should_stop=should_stop,
+            pressure_run=pressure_run,
+        )
+    finally:
+        pressure_run.end()
+
+
+def _run_final_qc(
+    section: SpecSection,
+    profile: RequirementsProfile | None,
+    module: SpecModule,
+    client: Any,
+    *,
+    model: str,
+    max_tokens: int,
+    effort: str = "",
+    lens_effort: str = "",
+    verifier_effort: str = "",
+    batch_verification: bool | None = None,
+    warm_wait_seconds: float | None = None,
+    batch_warm_lead: bool | None = None,
+    continuation_cache: bool | None = None,
+    refusal_fallback: bool | None = None,
+    version_index: int,
+    started_at: str,
+    finished_at: str,
+    discipline: str = "",
+    source_guard: QCSourceGuard | None = None,
+    reference_docs: list[ReferenceDoc] | None = None,
+    project_facts: list[ProjectFact] | None = None,
+    remembered_dismissed: set[str] | dict[str, dict[str, Any]] | None = None,
+    run_id: str = "",
+    event_sink: EventSink = _noop_sink,
+    should_stop: Callable[[], bool] = lambda: False,
+    pressure_run: resource_pressure.RunPressure = resource_pressure.NO_RUN,
+) -> QCResult:
+    """The pipeline body; :func:`run_final_qc` is its public face and the
+    one that opens and closes the run's ledger record."""
     pipeline_started = time.monotonic()
     # Pinned once per run rather than re-read at each call site, so the audit
     # record provably describes what was sent even if the env changes mid-run.
@@ -8510,6 +8869,11 @@ def run_final_qc(
         def submit_lens(
             lens: QCLens, first_output: threading.Event | None
         ) -> Future:
+            lens_pressure = pressure_run.agent(
+                lens.lens_id, kind=resource_pressure.AGENT_LENS
+            )
+            # The queue wait starts at submission; the worker ends it.
+            lens_pressure.submitted()
             return pool.submit(
                 _run_lens,
                 client,
@@ -8523,7 +8887,18 @@ def run_final_qc(
                 first_output=first_output,
                 continuation_cache=continuation_cache,
                 refusal_fallback=refusal_fallback,
+                pressure=lens_pressure,
             )
+
+        def record_release(members: list[QCLens], outcome: str, waited_ms: int) -> None:
+            # How long each follower waited for its leader and how the wait
+            # ended; a ``timeout`` is pressure, ``warm`` is the launch working.
+            for follower in members[1:]:
+                pressure_run.agent(
+                    follower.lens_id, kind=resource_pressure.AGENT_LENS
+                ).warm_wait(
+                    outcome=outcome, waited_ms=waited_ms, lead=members[0].lens_id
+                )
 
         futures = _launch_staggered(
             list(QC_LENSES),
@@ -8535,6 +8910,7 @@ def run_final_qc(
             should_stop=should_stop,
             label="lenses",
             capacity=lens_workers,
+            on_release=record_release,
         )
         for future in as_completed(futures):
             lens = futures[future]
@@ -8553,6 +8929,17 @@ def run_final_qc(
                             if is_authentication_error(exc)
                             else f"{type(exc).__name__}: {exc}"
                         ),
+                    ),
+                )
+                # Raised past its own record: the coordinator closes it
+                # (first ``ended`` wins, so a lens that did report keeps
+                # its own outcome).
+                pressure_run.agent(lens.lens_id).ended(
+                    resource_pressure.OUTCOME_FAILED,
+                    error_kind=(
+                        "auth_error"
+                        if is_authentication_error(exc)
+                        else classify_exception(exc).value
                     ),
                 )
             outcomes[lens.lens_id] = outcome
@@ -8682,6 +9069,7 @@ def run_final_qc(
         refusal_fallback=refusal_fallback,
         event_sink=event_sink,
         should_stop=should_stop,
+        pressure_run=pressure_run,
     )
     _merge_usage(usage_totals, _sum_billed(consolidation_billed))
     raw_findings = [(candidate.lens, candidate.finding) for candidate in candidates]
@@ -8881,6 +9269,7 @@ def run_final_qc(
                 # The streamed leads' continuations only; batched seats never.
                 continuation_cache=continuation_cache,
                 refusal_fallback=refusal_fallback,
+                pressure_run=pressure_run,
             )
             call_results = batch_phase.results
             unassigned_batch_results = batch_phase.unassigned_results
@@ -8933,6 +9322,12 @@ def run_final_qc(
                         and not shared_failure.is_set()
                     ):
                         i, j = pending_tasks.popleft()
+                        seat_pressure = pressure_run.agent(
+                            _seat_key(i, j), kind=resource_pressure.AGENT_VERIFIER
+                        )
+                        # The queue wait starts at submission; the worker
+                        # ends it.
+                        seat_pressure.submitted()
                         future = pool.submit(
                             _verify_one,
                             client,
@@ -8955,6 +9350,7 @@ def run_final_qc(
                             shared_should_stop=shared_failure.is_set,
                             continuation_cache=continuation_cache,
                             refusal_fallback=refusal_fallback,
+                            pressure=seat_pressure,
                         )
                         futures[future] = (i, j)
 
@@ -8975,6 +9371,11 @@ def run_final_qc(
                                     error=f"{type(exc).__name__}: {exc}",
                                     reviewer_index=j + 1,
                                 )
+                            )
+                            # Raised past its own record: closed here.
+                            pressure_run.agent(_seat_key(i, j)).ended(
+                                resource_pressure.OUTCOME_FAILED,
+                                error_kind=classify_exception(exc).value,
                             )
                         record_verifier_outcome(i, outcome)
                         if outcome.shared_request_failure and not shared_failure.is_set():

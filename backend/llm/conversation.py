@@ -105,7 +105,7 @@ from typing import Any, Iterator
 
 import anthropic
 
-from .. import settings
+from .. import resource_pressure, settings
 from ..figures import CREATE_FIGURE_TOOL, FigureError, FigureStore
 from ..reference_docs import (
     READ_REFERENCE_DOC_TOOL,
@@ -226,6 +226,7 @@ from ..project_brief import (
     within_reference_cap,
 )
 from ..research.engine import RequirementsProfile
+from ..research.retry_policy import classify_exception, is_retryable_failure_class
 from ..spec_doc.project import sanitize_project_link
 from ..suggestions import (
     REPLY_CHIPS_TAG_PATTERN,
@@ -5218,6 +5219,32 @@ def _prepare_turn_view(
     return _TurnView(fallback, _view_sizes(history, fallback), fixed, record)
 
 
+def _record_turn_api_failure(
+    pressure: resource_pressure.AgentPressure, exc: BaseException
+) -> None:
+    """A provider failure that ended a chat turn, on the ledger.
+
+    The chat has no app-level retry loop: a rate limit, an overload or a
+    dropped connection that reaches the turn's handler has already outlasted
+    the SDK's ``SDK_MAX_RETRIES`` and fails the turn. So a retryable class is
+    recorded as the final pressure of its kind (with the provider's
+    ``retry-after`` when it sent one) and the turn ends failed with that
+    class as its kind; a non-retryable class ends it failed with the class
+    alone.
+    """
+    failure_class = classify_exception(exc)
+    if is_retryable_failure_class(failure_class):
+        pressure.retry(
+            failure_class=failure_class.value,
+            attempt=1,
+            max_attempts=1,
+            backoff_s=0.0,
+            retry_after_s=resource_pressure.retry_after_seconds(exc),
+            final=True,
+        )
+    pressure.ended(resource_pressure.OUTCOME_FAILED, error_kind=failure_class.value)
+
+
 def _retry_view_for_too_long(
     exc: Exception,
     inputs: _ChatRequestInputs,
@@ -5470,6 +5497,18 @@ def stream_user_turn(
     # every read_reference_doc call (commit-time elision does not help the
     # continuation rounds). Turn-local, discarded with the turn.
     reference_budget = TurnReferenceBudget()
+    # This turn's record on the resource pressure ledger
+    # (``backend.resource_pressure``): one run, one agent. The turn is a
+    # generator the server iterates from a thread pool, so its frames can
+    # hop threads; it is never a thread's agent in flight by itself
+    # (``started(in_flight=False)``) — ``requesting()`` around each stream
+    # open attributes the SDK's own retries to it call by call instead. The
+    # ``finally`` below closes both with the turn, whatever ended it.
+    pressure_run = resource_pressure.begin_run(
+        resource_pressure.ENGINE_CHAT, label="turn"
+    )
+    turn_pressure = pressure_run.agent("turn", kind=resource_pressure.AGENT_TURN)
+    turn_pressure.started(in_flight=False)
     try:
         client = get_client()
         # The view is chosen ONCE, before round 0, and every round of the
@@ -5562,9 +5601,10 @@ def stream_user_turn(
                 break
             round_started = time.perf_counter()
             try:
-                manager, stream = _enter_stream(
-                    client, request, trace_handle
-                )
+                with turn_pressure.requesting():
+                    manager, stream = _enter_stream(
+                        client, request, trace_handle
+                    )
             except anthropic.BadRequestError as exc:
                 # The estimate let through a request the provider counts as
                 # too long (a conversation of dense, token-heavy content).
@@ -5589,6 +5629,15 @@ def stream_user_turn(
                     if retry_view.spec
                     else 0,
                 )
+                # Context pressure, for the ledger: the window would not take
+                # the request as estimated.
+                turn_pressure.pressure(
+                    resource_pressure.KIND_PROMPT_TOO_LONG,
+                    round=_round,
+                    hidden_turns=(
+                        retry_view.spec.hidden_turns if retry_view.spec else 0
+                    ),
+                )
                 with session.owned_model_turn_guard(
                     turn_token,
                     generation,
@@ -5600,9 +5649,13 @@ def stream_user_turn(
                         ) from exc
                     inputs = capture_request_inputs()
                 request = _build_chat_request(inputs, container_id)
-                manager, stream = _enter_stream(
-                    client, request, trace_handle
-                )
+                # The same attribution scope as the first open: the SDK's
+                # retries on the shortened request are this turn's too
+                # (Codex review on PR #282).
+                with turn_pressure.requesting():
+                    manager, stream = _enter_stream(
+                        client, request, trace_handle
+                    )
             stopped_mid_stream = False
             try:
                 for ui_event in _stream_events(stream):
@@ -5755,6 +5808,14 @@ def stream_user_turn(
                     fallback = "[Generation stopped by user.]"
                 else:
                     fallback = "[Response was cut off before completion.]"
+                    if stop_reason == "max_tokens":
+                        # Output pressure, for the ledger: cut at the
+                        # allowance, not ended by the model.
+                        turn_pressure.pressure(
+                            resource_pressure.KIND_OUTPUT_TRUNCATED,
+                            round=_round,
+                            max_tokens=inputs.max_tokens,
+                        )
                 content = [
                     b
                     for b in content
@@ -5807,18 +5868,30 @@ def stream_user_turn(
                     yield event
             new_messages.append({"role": "user", "content": tool_results})
         else:
+            # Budget pressure, for the ledger: the runaway circuit breaker
+            # tripped (no legitimate turn approaches it).
+            turn_pressure.pressure(
+                resource_pressure.KIND_TOOL_ROUNDS_EXHAUSTED, rounds=MAX_TOOL_ROUNDS
+            )
             raise RuntimeError(
                 f"Turn exceeded {MAX_TOOL_ROUNDS} tool rounds; aborted."
             )
     except MissingApiKeyError as exc:
+        turn_pressure.ended(
+            resource_pressure.OUTCOME_FAILED, error_kind="missing_api_key"
+        )
         yield {"type": "error", "message": str(exc)}
         return
     except _SessionInvalidated as exc:
         # The fresh/loaded session must stay exactly as the user made it —
         # nothing was applied after the generation change.
+        turn_pressure.ended(
+            resource_pressure.OUTCOME_CANCELLED, error_kind="session_invalidated"
+        )
         yield {"type": "error", "message": str(exc)}
         return
     except anthropic.AuthenticationError:
+        turn_pressure.ended(resource_pressure.OUTCOME_FAILED, error_kind="auth_error")
         yield {
             "type": "error",
             "message": AUTH_ERROR_MESSAGE,
@@ -5826,18 +5899,27 @@ def stream_user_turn(
         }
         return
     except anthropic.APIStatusError as exc:
+        # Provider pressure, for the ledger: the chat has no app-level retry
+        # loop, so a 429/529/5xx that reached here outlasted the SDK's own
+        # retries and failed the turn outright.
+        _record_turn_api_failure(turn_pressure, exc)
         yield {
             "type": "error",
             "message": f"Anthropic API error ({exc.status_code}): {exc.message}",
         }
         return
-    except anthropic.APIConnectionError:
+    except anthropic.APIConnectionError as exc:
+        _record_turn_api_failure(turn_pressure, exc)
         yield {
             "type": "error",
             "message": "Could not reach the Anthropic API. Check your connection and try again.",
         }
         return
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI, never raised
+        turn_pressure.ended(
+            resource_pressure.OUTCOME_FAILED,
+            error_kind=classify_exception(exc).value,
+        )
         yield {"type": "error", "message": f"Unexpected error: {exc}"}
         return
     else:
@@ -6056,6 +6138,18 @@ def stream_user_turn(
                 doc_changed=doc_changed,
                 usage=usage_totals,
             )
+        # The ledger's record closes with the turn, however it ended. A
+        # failure's handler above already set its outcome (first ``ended``
+        # wins); a committed turn — a user stop included — completed, and a
+        # turn that never committed for any other reason (a disconnect, a
+        # reset that raced the commit) is cancelled.
+        turn_pressure.ended(
+            resource_pressure.OUTCOME_COMPLETED
+            if committed
+            else resource_pressure.OUTCOME_CANCELLED,
+            error_kind="" if committed else "did_not_commit",
+        )
+        pressure_run.end()
 
     # doc_patch snapshots stream mid-turn, before the version commit; this
     # frozen batch carries the committed pointer and same-generation reports.

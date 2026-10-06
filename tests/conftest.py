@@ -116,7 +116,7 @@ def _reject_refused_request_shapes():
 
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
-    from backend import cost_checks, sessions
+    from backend import cost_checks, resource_pressure, sessions
     from backend.llm.client import reset_client_cache
     from backend.llm.conversation import reset_thinking_display_probe
     from backend.qc.engine import reset_refusal_fallback_probe
@@ -130,6 +130,9 @@ def _fresh_session(monkeypatch):
     # So are the cost self-checks' latches (Tier 1 finish): a test that
     # switches a saving off must not leave it off for the next one.
     cost_checks.reset_for_tests()
+    # And the resource pressure ledger: a run one test recorded must not
+    # read as this test's.
+    resource_pressure.reset_for_tests()
     # And Final QC's refusal-fallback latch (the 5.5 prompting upgrade,
     # P55-7), for the same reason.
     reset_refusal_fallback_probe()
@@ -153,4 +156,5 @@ def _fresh_session(monkeypatch):
     reset_client_cache()
     reset_thinking_display_probe()
     cost_checks.reset_for_tests()
+    resource_pressure.reset_for_tests()
     reset_refusal_fallback_probe()

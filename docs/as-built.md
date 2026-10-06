@@ -18389,3 +18389,50 @@ same turn merges into it without a stray separator. A text-less message that
 never carried a block is reduced exactly as before.
 `test_a_chip_only_reply_keeps_its_turn_in_the_transcript` pins it, and
 fails with the entry removed.
+
+## The measurement-invisibility test compares requests, not arrival order — implemented notes (2026-10-06)
+
+`tests/test_cost_checks_tail_value.py::test_the_measurement_is_invisible`
+failed intermittently on untouched master: 1 of 3 isolated runs at
+`d8cda0b` (Python 3.13, the owner's report), 6 of 12 at `7d7a5c4` here.
+Test-only fix: no route, no SSE event, no dep, no behaviour change, no
+release-note item.
+
+- **The cause was thread scheduling, not the code.** The assertion compared
+  each run's `client.requests` in the order requests reached the fake.
+  Research runs its four areas and Final QC its lenses on worker threads,
+  and the fake appends under its lock in whatever order the threads arrive.
+  In a failing pair, `ahj_requirements` came before `client_standards` in
+  one run and after it in the other. That is why the diff sat inside a
+  dimension prompt, behind ~29k identical characters of shared prefix.
+  Forty identical Final QC runs gave four different lens orders. The clock
+  was already pinned (`_fixed_clocks`), and the requests matched byte for
+  byte once sorted, so neither a date, dict ordering nor shared state was
+  involved. It predates the staggered research launch; the stagger, which
+  releases the three followers together, is one more place the order can
+  change.
+- **The fix compares the requests as a multiset**:
+  `sorted(map(_canonical, requests))`, the idiom
+  `tests/test_research_engine.py` and `tests/test_cost_checks_tail_rejection.py`
+  already use for the same fan-out. Every request's bytes and the request
+  count are still compared. A conversation's own order is in those bytes,
+  because each continuation re-sends every message of the request before
+  it. Pinning the engines to one worker was rejected: the test would then
+  stop exercising the parallel, staggered launch whose requests it checks.
+- **A second gap, found while proving the first fix.** Both runs shared the
+  scripted turn objects, and the engines re-send a response's `content`
+  list by reference (the fake snapshots only the outer `messages` list). If
+  the measurement had changed a response, both runs' requests would have
+  shown the change alike, and the test would have passed. Each run now
+  gets its own `copy.deepcopy` of the turns. The copies keep the scripted
+  ids, so the bytes still match.
+- **Reversion evidence.** Restoring the arrival-order comparison over the
+  deep-copied turns brings back the failure (7 of 12 runs). Reversing the
+  measured runs' request lists passes (order only). Changing one request's
+  `max_tokens` fails at the comparison. A temporary `observe_continuation`
+  that appended a copy of the opening response's last block passed before
+  the deep copy and fails after it. Every probe was reverted.
+- **Validation.** 120 consecutive isolated passes (60, then 60 after the
+  deep copy). Full suite: 3725 passed, 64 skipped; after merging master at
+  `4fd48d2`, 3784 passed, 64 skipped, and 20 more isolated passes. Ruff
+  passed. No paid API call was made.

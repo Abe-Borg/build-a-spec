@@ -10,10 +10,14 @@ called safe:
 
 - every **anchor** of a carried provision — a value with its unit, a tag
   such as ``V1`` or ``FDC-1``, a standard designation, a section number —
-  still appears in the document after the fix;
-- its ``source_item_id`` still appears on some provision;
-- nothing in the fix stamps the carried content ``confirmed`` unless all of
-  it already was (relocation is editorial; it never upgrades a status);
+  appears in the provisions that carry it (its **carriers**: the provisions
+  the fix adds or retypes that take their wording from it), not merely
+  somewhere in the document, where an unrelated provision could hold the
+  same value;
+- every carrier keeps its ``source_item_id`` and its status — relocation is
+  editorial, so a confirmed provision is not quietly re-stamped assumed by
+  an ``add_paragraph`` that omits ``status``, an assumed one is not
+  promoted, and content still stamped imported is reviewed before it moves;
 - a carried provision's subparagraphs are carried too. One fix cannot re-add
   them under the new provision, whose id the server assigns, so a provision
   with subparagraphs is effectively never relocatable in one fix — the
@@ -182,13 +186,33 @@ def _find_element(section: SpecSection, uid: str) -> Article | Paragraph | None:
     return None
 
 
-def _document_text(section: SpecSection) -> str:
-    texts: list[str] = []
-    for part in section.parts:
-        for article in part.articles:
-            texts.append(article.title)
-            texts.extend(paragraph.text for paragraph in _walk(article.paragraphs))
-    return _normalized("\n".join(texts))
+#: A touched provision carries a deleted one when at least this share of
+#: either's content words is shared: most of a split piece's words come from
+#: its source, and most of a relocated provision's words reappear in its copy.
+CARRIER_SHARE = 0.5
+
+
+def _carriers(paragraph: Paragraph, touched: list[Paragraph]) -> list[Paragraph]:
+    """The touched provisions that take their wording from ``paragraph``.
+
+    Falls back to every touched provision sharing any word when none clears
+    :data:`CARRIER_SHARE` — a carried provision always has somewhere to be
+    checked against.
+    """
+    words = _content_words(paragraph.text)
+    shares = []
+    for candidate in touched:
+        theirs = _content_words(candidate.text)
+        shared = len(words & theirs)
+        if shared:
+            shares.append(
+                (
+                    candidate,
+                    max(shared / len(words), shared / len(theirs) if theirs else 0),
+                )
+            )
+    strong = [candidate for candidate, share in shares if share >= CARRIER_SHARE]
+    return strong or [candidate for candidate, _share in shares]
 
 
 def relocation_problems(
@@ -242,9 +266,29 @@ def relocation_problems(
     if not deleted:
         return []
 
+    # What the fix wrote: provisions it added (ids the snapshot never had)
+    # and provisions it retyped. Read from the dry-run result, so status and
+    # source are what will actually land — an add_paragraph without a status
+    # is stamped assumed there, exactly as it would be on apply.
+    before_ids = {
+        paragraph.uid
+        for _part, _article, paragraph, _depth, _ref in iter_paragraphs(before)
+    }
+    retyped = {
+        str(op.get("target_id") or "")
+        for op in new_text_ops
+        if op.get("action") == "replace"
+    }
+    touched = [
+        paragraph
+        for _part, _article, paragraph, _depth, _ref in iter_paragraphs(after)
+        if paragraph.uid not in before_ids or paragraph.uid in retyped
+    ]
+    if not touched:
+        return []
     new_words: set[str] = set()
-    for op in new_text_ops:
-        new_words |= _content_words(op["text"])
+    for paragraph in touched:
+        new_words |= _content_words(paragraph.text)
 
     def carried(paragraph: Paragraph) -> bool:
         words = _content_words(paragraph.text)
@@ -257,28 +301,40 @@ def relocation_problems(
         return []
 
     problems: list[str] = []
-    haystack = _document_text(after)
-    after_sources = {
-        paragraph.source_item_id
-        for _part, _article, paragraph, _depth, _ref in iter_paragraphs(after)
-        if paragraph.source_item_id
-    }
     for paragraph in deleted:
         if paragraph.uid not in carried_ids:
             continue
         ref = refs.get(paragraph.uid, paragraph.uid)
+        carriers = _carriers(paragraph, touched)
+        carrier_text = _normalized("\n".join(c.text for c in carriers))
         lost = [
             anchor
             for anchor in obligation_anchors(paragraph.text)
-            if not anchor_present(anchor, haystack)
+            if not anchor_present(anchor, carrier_text)
         ]
         if lost:
             problems.append(
                 f"{ref} loses {', '.join(repr(anchor) for anchor in lost)}"
             )
-        if paragraph.source_item_id and paragraph.source_item_id not in after_sources:
+        if paragraph.source_item_id and any(
+            carrier.source_item_id != paragraph.source_item_id
+            for carrier in carriers
+        ):
             problems.append(
                 f"{ref} loses its source link {paragraph.source_item_id}"
+            )
+        changed = sorted(
+            {carrier.status for carrier in carriers} - {paragraph.status}
+        )
+        if changed:
+            problems.append(
+                f"{ref} changes status from {paragraph.status} to "
+                + " / ".join(changed)
+                + (
+                    " (review imported content before it moves)"
+                    if paragraph.status == "imported"
+                    else ""
+                )
             )
         dropped_children = [
             child for child in paragraph.children if child.uid not in carried_ids
@@ -288,16 +344,4 @@ def relocation_problems(
                 f"{ref} moves without its subparagraphs; one fix cannot "
                 "re-add them under the new provision"
             )
-
-    carried_statuses = {
-        paragraph.status for paragraph in deleted if paragraph.uid in carried_ids
-    }
-    if carried_statuses - {"confirmed"}:
-        for op in new_text_ops:
-            if op.get("status") == "confirmed":
-                problems.append(
-                    "the fix stamps carried content confirmed although it was "
-                    + " / ".join(sorted(carried_statuses - {"confirmed"}))
-                )
-                break
     return problems

@@ -262,10 +262,58 @@ def test_a_relocation_may_not_upgrade_a_status():
     ops[0]["status"] = "confirmed"
     finding = _validated(_hanger_section(status="assumed"), ops)
     assert finding.ops_valid is False
-    assert "confirmed" in finding.ops_invalid_reason
+    assert "changes status from assumed to confirmed" in finding.ops_invalid_reason
     # Carrying a confirmed provision as confirmed is not an upgrade.
     finding = _validated(_hanger_section(status="confirmed"), ops)
     assert finding.ops_valid is True, finding.ops_invalid_reason
+
+
+def test_a_relocation_may_not_quietly_downgrade_a_status():
+    # An add_paragraph without a status lands assumed: a confirmed provision
+    # moved that way loses the user's confirmation (Codex review, PR #280).
+    finding = _validated(_hanger_section(status="confirmed"), copy.deepcopy(_RELOCATE))
+    assert finding.ops_valid is False
+    assert "changes status from confirmed to assumed" in finding.ops_invalid_reason
+
+
+def test_an_anchor_elsewhere_in_the_document_does_not_excuse_a_loss():
+    # Codex review, PR #280: the dropped designation still appears in an
+    # untouched provision, which must not make the lossy copy look intact.
+    section = _hanger_section()
+    section, _ = apply_edits(
+        section,
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt2.a1",
+                "text": "Fabricate base plates from ASTM A36 steel.",
+            }
+        ],
+    )
+    ops = copy.deepcopy(_RELOCATE)
+    ops[0]["text"] = ops[0]["text"].replace("ASTM A36 ", "")
+    finding = _validated(section, ops)
+    assert finding.ops_valid is False
+    assert "'astm a36'" in finding.ops_invalid_reason
+
+
+def test_a_source_link_elsewhere_does_not_excuse_a_lost_one():
+    # Codex review, PR #280: another provision citing the same item must not
+    # stand in for the moved provision's own link.
+    section = _hanger_section(source="r-000000000001")
+    section, _ = apply_edits(
+        section,
+        [
+            {
+                "action": "replace",
+                "target_id": "pt2.a1.p1",
+                "source_item_id": "r-000000000001",
+            }
+        ],
+    )
+    finding = _validated(section, copy.deepcopy(_RELOCATE))
+    assert finding.ops_valid is False
+    assert "r-000000000001" in finding.ops_invalid_reason
 
 
 def test_a_relocation_must_carry_its_source_link():
@@ -383,9 +431,16 @@ def test_an_imported_master_keeps_its_boundary_for_relocation_fixes(tmp_path: Pa
         {"action": "add_paragraph", "target_id": fabrication.uid, "text": install.text},
         {"action": "delete", "target_id": install.uid},
     ]
-    # The same relocation that is safe on a native document carries the
-    # provision intact here too, but the imported boundary forbids moving
-    # content between parents: the fix stays advisory, with the reason.
+    # Content still stamped imported is reviewed before it moves: a copy
+    # cannot be stamped imported, so moving it would quietly re-stamp it.
+    assert install.status == "imported"
+    unreviewed = _validated(copy.deepcopy(current), copy.deepcopy(ops))
+    assert unreviewed.ops_valid is False
+    assert "changes status from imported" in unreviewed.ops_invalid_reason
+    # Once reviewed, the same relocation is safe on a native document, but
+    # the imported boundary forbids moving content between parents: the fix
+    # stays advisory, with the reason.
+    install.status = "assumed"
     native = _validated(copy.deepcopy(current), copy.deepcopy(ops))
     assert native.ops_valid is True, native.ops_invalid_reason
     imported = _validated(current, ops, guard)

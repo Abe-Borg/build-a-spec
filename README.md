@@ -207,7 +207,9 @@ one versioned writing policy, word for word.
   like "test". A Final QC fix that relocates or splits a provision is
   offered for one-click apply only when it carries the provision intact —
   every value with its unit, tag, standard designation and section number,
-  its source link, its subparagraphs — and does not upgrade its status. A
+  its source link, its subparagraphs — in the provisions that now carry
+  it, and keeps its status (confirmed stays confirmed; content still marked
+  imported is reviewed before it moves). A
   provision with subparagraphs cannot be moved in one fix, so such a
   finding stays advisory. On an imported Word master kept in its original
   formatting, moving content between parents is not available, so a

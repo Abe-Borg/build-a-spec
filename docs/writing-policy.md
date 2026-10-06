@@ -126,14 +126,20 @@ fixture.
 **The relocation check on Final QC fixes** (`relocation_problems`). Applies
 only to a fix that deletes content and adds or retypes content, and only to
 deleted provisions whose content words reappear in the fix's new text (60%
-coverage). For each such provision:
+coverage). Each such provision is checked against its **carriers** — the
+provisions the fix adds or retypes that take their wording from it (half or
+more of either's content words shared) — never against the whole document,
+where an unrelated provision could hold the same value or cite the same
+item:
 
 - every anchor — a value with its unit (closed unit list), a prefix size
   (NPS, DN), a tag (V1, FDC-1), a standard designation, a section number, a
-  bare number of two or more digits — must still appear in the document;
-- its `source_item_id` must still appear on some provision;
-- no provision in the fix may be stamped confirmed unless all carried
-  content was confirmed;
+  bare number of two or more digits — must appear in its carriers;
+- every carrier keeps its `source_item_id` and its status. An
+  `add_paragraph` without a status lands assumed, so moving a confirmed
+  provision that way is a downgrade; an assumed one may not be promoted;
+  and content still stamped imported must be reviewed before it moves (no
+  edit can stamp a copy imported);
 - its subparagraphs must be carried too. One fix cannot re-add them under a
   provision whose id the server assigns, so a provision with subparagraphs
   is never relocatable in one fix and the finding stays advisory.

@@ -19204,7 +19204,7 @@ display-degrade and too-long retries, the compaction fork and a project
 reload, no copy in history or the project file, breakpoint count and TTL
 order, simulated cache reads, forged policy text in a project description,
 research finding, reference document and paragraph reaching only user-role
-content), `tests/test_writing_policy_qc.py` (26: review block once in lens
+content), `tests/test_writing_policy_qc.py` (29 after the review correction below: review block once in lens
 and verifier and absent from consolidation, identical core across writer and
 reviewers, reconciled briefs, manifest key, staleness on a policy edit and a
 version bump with the document unchanged, legacy reports stale, the Word
@@ -19256,3 +19256,23 @@ status. A new lint finding flags an "Article 2.3" reference that no longer
 points at anything. The Final QC report names the policy version it
 reviewed against, so a saved review reads out of date once after updating
 and needs a re-run."
+
+### PR #280 review correction
+
+Codex (P1, P2, P2) found that the relocation check read the whole document:
+a moved clause that dropped "175 psi" passed if an untouched provision also
+said 175 psi, a lost source link passed if another provision cited the same
+item, and only an upgrade to confirmed was refused, so an `add_paragraph`
+without a status silently re-stamped a confirmed provision assumed (and
+imported content assumed). Each carried provision is now checked against its
+**carriers** — the provisions the fix adds or retypes that share half or more
+of either's content words (`CARRIER_SHARE`), falling back to any that share
+a word — read from the dry-run result: its anchors must appear in their
+text, and every carrier must keep its `source_item_id` and its status.
+Relocating content still stamped imported is therefore always advisory
+(nothing can stamp a copy imported); the imported-master test now shows that
+first, then marks the paragraph reviewed before showing the source gate's
+refusal. Three new tests in `tests/test_writing_policy_qc.py` (a status
+downgrade; an anchor and a source link elsewhere in the document) each fail
+against the guard as first pushed and pass now; every fixture, the other
+relocation tests and the assessor are unchanged and green.

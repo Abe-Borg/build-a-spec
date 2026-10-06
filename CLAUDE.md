@@ -871,9 +871,11 @@ the same heading.
 - **Relocation guard** (`spec_doc/obligations.relocation_problems`, run in
   `_validate_ops` after the dry run, before the imported-source gate): a fix
   that deletes and adds/retypes content must carry each carried provision's
-  anchors (values with units, tags, designations, section numbers), source
-  link and subparagraphs, and may not stamp it confirmed. Chat edits are
-  not checked (the document tool's contract is unchanged).
+  anchors (values with units, tags, designations, section numbers) in its
+  carriers (the added/retyped provisions that take its wording — never the
+  whole document), keep its source link and status on every carrier, and
+  carry its subparagraphs. Chat edits are not checked (the document tool's
+  contract is unchanged).
 - **Lint.** `unresolved_reference` only — an "Article N.N"/"Paragraph
   N.N.X" this section lacks, never one whose sentence names another
   document. No article-title placement rule: every lint issue blocks

@@ -14,7 +14,7 @@ from backend.llm.conversation import SessionState
 from backend.sessions import SessionManager, WorkspaceBusyError, WorkspaceConflictError
 from backend.spec_doc.docx_export import build_docx
 from backend.spec_doc import lint_document
-from backend.spec_doc.model import SpecSection, iter_paragraphs
+from backend.spec_doc.model import SpecSection, iter_paragraphs, open_questions
 from backend.tutorial import (
     analyze_tutorial_coverage,
     blank_practice_copy,
@@ -59,8 +59,6 @@ def test_bundled_llm_authored_showcase_satisfies_real_content_fixtures():
     assert {
         "first_paragraph",
         "first_assumed",
-        "first_needs_input",
-        "tbd_paragraph",
         "nested_paragraph",
         "article_move_source",
         "article_move_target",
@@ -88,6 +86,32 @@ def test_bundled_llm_authored_showcase_satisfies_real_content_fixtures():
     assert session.template_origin is None
 
 
+def test_the_tutorial_never_teaches_a_placeholder_as_a_way_to_work():
+    """No tutorial fixture plants a [TBD:] or a needs_input block (PR 4).
+
+    Until 2026-10-06 the showcase planted one of each so the tour's
+    open-items chapter had something to point at; that chapter now folds
+    into Waiting on you, which teaches gaps the way the app handles them.
+    The lint lesson's [VERIFY]/TODO leftovers stay: they show the lint
+    catching leftovers, and neither is an open item.
+    """
+    showcase = build_showcase_session()
+    coverage = analyze_tutorial_coverage(showcase)
+    assert not {"first_needs_input", "tbd_paragraph"} & set(coverage.anchors)
+    assert not {"needs_input_content", "tbd_content"} & set(coverage.gaps)
+    for session in (
+        showcase,
+        structural_practice_copy(showcase),
+        review_practice_copy(showcase),
+        media_practice_copy(showcase),
+    ):
+        section = session.doc.doc
+        assert open_questions(section) == []
+        for _pt, _a, paragraph, _d, _r in iter_paragraphs(section):
+            assert paragraph.status != "needs_input"
+            assert "[TBD" not in paragraph.text
+
+
 def test_sparse_current_spec_reports_conditions_not_article_count_only():
     sparse = SessionState()
     sparse.doc.doc = SpecSection.empty()
@@ -103,8 +127,6 @@ def test_sparse_current_spec_reports_conditions_not_article_count_only():
         "paragraph_siblings",
         "four_paragraph_levels",
         "assumed_content",
-        "needs_input_content",
-        "tbd_content",
         "version_history",
         "suggested_prompts",
     } == set(coverage.gaps)

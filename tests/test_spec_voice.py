@@ -25,6 +25,7 @@ from backend.llm.prompts import (
 from backend.qc.engine import QCFinding, _validate_ops
 from backend.spec_doc.model import (
     APPLY_SPEC_EDITS_TOOL,
+    RETIRED_STATUSES,
     STATUSES,
     SpecEditError,
     SpecSection,
@@ -33,9 +34,11 @@ from backend.spec_doc.model import (
 from backend.spec_doc.spec_voice import (
     MODEL_STATUSES,
     check_drafted_edits,
+    check_user_edits,
     drafted_edit_problems,
     drafted_text_hits,
     has_placeholder,
+    retired_status_problems,
 )
 from backend.spec_modules.generic import GENERIC
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
@@ -261,7 +264,9 @@ def test_a_chat_batch_carrying_a_tbd_is_rejected_and_the_model_self_corrects(mon
     assert paragraphs[0].status == "assumed"
 
 
-def test_the_users_own_panel_edits_are_never_policed(monkeypatch):
+def test_the_users_own_typed_text_is_never_policed(monkeypatch):
+    # What the user types is theirs: a hand-typed [TBD] lands (and is still
+    # counted as a leftover). Only the retired status is refused.
     client = _client()
     resp = client.post(
         "/api/doc/edit",
@@ -272,7 +277,7 @@ def test_the_users_own_panel_edits_are_never_policed(monkeypatch):
                     "action": "add_paragraph",
                     "target_id": "pt1.a1",
                     "text": "Riser count: [TBD: confirm with owner].",
-                    "status": "needs_input",
+                    "status": "assumed",
                 },
             ]
         },
@@ -280,7 +285,142 @@ def test_the_users_own_panel_edits_are_never_policed(monkeypatch):
     assert resp.status_code == 200
     para = resp.json()["doc"]["parts"][0]["articles"][0]["paragraphs"][0]
     assert para["text"] == "Riser count: [TBD: confirm with owner]."
+    assert para["status"] == "assumed"
+    assert [item["kind"] for item in resp.json()["open_questions"]] == ["tbd"]
+
+
+_SEED_ARTICLE = [
+    {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+    {
+        "action": "add_paragraph",
+        "target_id": "pt1.a1",
+        "text": "Provide sprinkler systems.",
+        "status": "assumed",
+    },
+]
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        {"action": "set_status", "target_id": "pt1.a1.p1", "status": "needs_input"},
+        {
+            "action": "replace",
+            "target_id": "pt1.a1.p1",
+            "text": "Provide sprinkler systems throughout.",
+            "status": "needs_input",
+        },
+        {
+            "action": "add_paragraph",
+            "target_id": "pt1.a1",
+            "text": "Coordinate risers.",
+            "status": "needs_input",
+        },
+    ],
+    ids=["set_status", "replace", "add_paragraph"],
+)
+def test_no_edit_may_stamp_needs_input_any_more(op):
+    """PR 4: needs_input is retired for the user's own edits too.
+
+    The panel never offered it; a hand-built request is refused whole, with
+    the batch's other ops, and the document is left exactly as it was.
+    """
+    client = _client()
+    assert client.post("/api/doc/edit", json={"ops": _SEED_ARTICLE}).status_code == 200
+    before = client.get("/api/doc").json()["doc"]
+
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {"action": "add_article", "target_id": "pt2", "text": "PRODUCTS"},
+                op,
+            ]
+        },
+    )
+    assert resp.status_code == 400
+    error = resp.json()["error"]
+    assert "needs_input" in error and "retired" in error
+    assert "edit 2 (" in error
+    assert "Waiting on you" in error
+    assert client.get("/api/doc").json()["doc"] == before
+
+
+def test_retired_status_problems_reads_only_what_would_stamp_a_status():
+    assert retired_status_problems("not a list") == []
+    assert retired_status_problems(
+        [
+            "not an op",
+            {"action": "replace", "target_id": "pt1.a1.p1", "text": "Retyped."},
+            {"action": "set_status", "target_id": "pt1.a1.p1", "status": "assumed"},
+            {"action": "set_status", "target_id": "pt1.a1.p1", "status": "imported"},
+        ]
+    ) == []
+    assert RETIRED_STATUSES == ("needs_input",)
+    assert set(RETIRED_STATUSES) <= set(STATUSES)
+    assert not set(RETIRED_STATUSES) & set(MODEL_STATUSES)
+    with pytest.raises(SpecEditError, match="retired"):
+        check_user_edits(
+            [{"action": "set_status", "target_id": "x", "status": "needs_input"}]
+        )
+
+
+def _load_legacy_needs_input_project(client: TestClient) -> dict:
+    """A project saved before 2026-10-06, still carrying a needs_input block."""
+    assert client.post("/api/doc/edit", json={"ops": _SEED_ARTICLE}).status_code == 200
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
+    current = project["doc"]["versions"][project["doc"]["index"]]
+    paragraph = current["parts"][0]["articles"][0]["paragraphs"][0]
+    paragraph["text"] = "Riser count: [TBD: confirm with owner]."
+    paragraph["status"] = "needs_input"
+    client.post("/api/session/reset")
+    resp = client.post("/api/project/load", json=project)
+    assert resp.status_code == 200
+    return resp.json()
+
+
+@pytest.mark.parametrize("status", ["confirmed", "assumed"])
+def test_a_legacy_needs_input_block_loads_counts_and_switches(status):
+    client = _client()
+    loaded = _load_legacy_needs_input_project(client)
+    para = loaded["doc"]["parts"][0]["articles"][0]["paragraphs"][0]
     assert para["status"] == "needs_input"
+    assert [item["kind"] for item in loaded["open_questions"]] == ["needs_input", "tbd"]
+    checks = {c["id"]: c for c in client.get("/api/readiness").json()["checks"]}
+    assert checks["no_open_items"]["ok"] is False
+    assert "leftover placeholder" in checks["no_open_items"]["detail"]
+
+    # Retyping the text without a status is not a new stamp: it keeps the
+    # legacy status, and the edit lands.
+    retyped = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "pt1.a1.p1",
+                    "text": "Riser count: as indicated on the Drawings.",
+                }
+            ]
+        },
+    )
+    assert retyped.status_code == 200
+    para = retyped.json()["doc"]["parts"][0]["articles"][0]["paragraphs"][0]
+    assert para["status"] == "needs_input"
+    assert [item["kind"] for item in retyped.json()["open_questions"]] == ["needs_input"]
+
+    # The panel row's one click (✓ Confirm or ≈ Mark assumed).
+    switched = client.post(
+        "/api/doc/edit",
+        json={"ops": [{"action": "set_status", "target_id": "pt1.a1.p1", "status": status}]},
+    )
+    assert switched.status_code == 200
+    para = switched.json()["doc"]["parts"][0]["articles"][0]["paragraphs"][0]
+    assert para["status"] == status
+    assert switched.json()["open_questions"] == []
+    checks = {c["id"]: c for c in client.get("/api/readiness").json()["checks"]}
+    assert checks["no_open_items"]["ok"] is True
+    assert "No leftover placeholders" in checks["no_open_items"]["detail"]
 
 
 def test_a_qc_fix_that_would_insert_a_placeholder_is_never_a_safe_fix():

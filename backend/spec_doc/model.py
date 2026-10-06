@@ -13,13 +13,14 @@ tree is swapped only if every op validates, so a failed batch is a no-op
 the model can retry after reading the error.
 
 Provenance is per paragraph: ``confirmed`` (user-supplied or approved),
-``assumed`` (model default, audited later via the export's assumptions
-schedule), ``needs_input`` (set by the user in the panel; the model may not
-set it since 2026-10-06 — see ``spec_voice``). ``[TBD: ...]`` markers inside
-paragraph text are still tracked as open items alongside ``needs_input``
-blocks: the model no longer writes them, so they are leftovers from a
-legacy project, a starter, or the user's own hand edits, and readiness keeps
-blocking on them.
+``assumed`` (model default, audited later via the review report's assumptions
+schedule), ``imported`` (seeded starter content), and ``needs_input`` — a
+RETIRED status (2026-10-06): the model may not stamp it (``spec_voice``) and,
+since PR 4, neither may the user's own panel edits, so it survives only in
+documents written before then. ``[TBD: ...]`` markers inside paragraph text
+are still tracked as open items alongside those ``needs_input`` blocks: the
+model no longer writes them, so they are leftovers from a legacy project, a
+starter, or the user's own typing, and readiness keeps blocking on them.
 
 The id scheme is a generative cousin of Spec Critic's stable review ids
 (``p7`` / ``t0r2``), grown hierarchical for a mutable tree.
@@ -50,10 +51,16 @@ STATUSES = ("confirmed", "assumed", "needs_input", "imported")
 # article by article; remaining imported blocks are scheduled in the export.
 DEFAULT_STATUS = "assumed"
 #: The statuses the model may stamp (``spec_voice`` enforces it; the tool
-#: description names only these). ``needs_input`` is the user's to set in the
-#: panel and ``imported`` is seeded by the app — a provision the model drafts
-#: is never a placeholder awaiting an answer.
+#: description names only these). ``needs_input`` is retired and ``imported``
+#: is seeded by the app — a provision the model drafts is never a placeholder
+#: awaiting an answer.
 MODEL_STATUSES = ("confirmed", "assumed")
+#: Statuses NO edit may stamp any more — not the model's, not the user's own
+#: panel edit (``spec_voice.check_user_edits``). They stay in ``STATUSES``
+#: because documents written before the retirement still carry them: those
+#: load, display, count as open items and can be switched to another status,
+#: but nothing creates a new one.
+RETIRED_STATUSES = ("needs_input",)
 
 PART_TITLES = ("PART 1 - GENERAL", "PART 2 - PRODUCTS", "PART 3 - EXECUTION")
 
@@ -1564,9 +1571,9 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                             "enum": list(STATUSES),
                             "description": (
                                 "confirmed or assumed. needs_input and "
-                                "imported are refused: needs_input is the "
-                                "user's to set, imported is seeded by the "
-                                "app."
+                                "imported are refused: needs_input is a "
+                                "retired status only older documents carry, "
+                                "imported is seeded by the app."
                             ),
                         },
                         "standard": {"type": "string"},

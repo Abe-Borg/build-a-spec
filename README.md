@@ -163,6 +163,64 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — gaps wait on you, not in the document (needs input and TBDs retired from the panel, tour and tutorial)
+
+No release entry yet: v1.23.0 is published and its entry is frozen, so the
+release-note draft is in docs/as-built.md ("Needs input and TBDs are retired
+from the panel, tour and tutorial"). This is the last of the four changes
+for the rule below ("the specification gives directions, never notes").
+
+The assistant and Final QC had already stopped writing `[TBD]` markers and
+*needs input* paragraphs, but the app's own screens still taught them as the
+way to handle an unknown: the tour had a chapter on them, the tutorial's
+practice section planted one of each so that chapter had something to show,
+an unnamed section read `SECTION [TBD]`, and a hand-built edit request could
+still mark a provision *needs input*. Now a gap the draft still has lives in
+one place, **Waiting on you**, and a `[TBD]` or *needs input* paragraph is
+always a **leftover** from an older document to rewrite.
+
+- **Nothing marks a provision *needs input* any more — not you either.** The
+  panel never offered it (its only status control is ✓ Confirm), and now the
+  edit request refuses it too, with a message saying to mark the provision
+  confirmed or assumed and to track what is missing in Waiting on you. What
+  you **type** is still never checked: a `[TBD]` you type yourself lands, and
+  is counted.
+- **A leftover *needs input* paragraph clears in one click.** Its badge now
+  reads **needs input · leftover**, and hovering the row offers **✓**
+  (confirm) and **≈** (mark assumed). Before, the only ways out were
+  retyping the text or asking in chat. Retyping still works and keeps the
+  badge until you switch it.
+- **Leftover placeholders.** The strip under the paper that listed "Open
+  items — N unresolved" is now **Leftover placeholders — N to rewrite**, each
+  row a "[TBD] marker" or a "needs-input block" that jumps to its provision.
+  The folded tray bar counts "N leftover placeholders". They are still listed
+  in the review report and still hold back issue readiness, whose line now
+  reads "No leftover placeholders ([TBD] markers or needs-input blocks) in
+  the document." A `[TBD]` in a provision stays highlighted.
+- **An unnamed section shows a greyed hint**, "number not set" and "title
+  not set", beside SECTION — in the panel and in Compare — instead of
+  `[TBD]`. The Word export already printed `SECTION` and an empty line.
+- **The guided tour** no longer has an "Open decisions stay counted" step.
+  The **Waiting on you** step now teaches the rule — the specification never
+  holds a place for something it does not know; the assistant writes the
+  provision around the gap, marks it assumed and asks you there — and says
+  in one sentence what an older document's leftovers look like. The section
+  header, provenance, panel tray, Final QC and readiness steps were reworded
+  to match. Because a step was removed, a tour you left part-way through
+  starts again from the beginning once.
+- **The tutorial's practice section** no longer plants a `[TBD]` and a
+  *needs input* paragraph. Its status-key figure shows Assumed and
+  Confirmed, and its suggested reply asks "What are you waiting on from me?".
+  The lint lesson keeps its deliberate `[VERIFY: …]` and `TODO:` — they show
+  the lint catching leftovers.
+- **Help, the Final QC drawer and the trust explainer** describe leftover
+  placeholders rather than "[TBD] values" or "open items".
+
+Saved projects are unaffected: a *needs input* paragraph in one loads,
+shows, counts and can be switched as above; only a new one is refused. The
+first message after updating writes the conversation's cache once, which the
+three earlier changes already cost; a saved Final QC result stays current.
+
 ## Current Status — the specification gives directions, never notes (no more TBDs)
 
 No release entry yet: v1.23.0 is published and its entry is frozen, so the
@@ -192,8 +250,9 @@ generally and governs…" where the specification needed "Provide…".
   touches the document, and the assistant is told how to write it instead.
   The assistant also can no longer stamp a provision *needs input*. Final QC
   fixes pass the same check, so a fix that would add a placeholder is never
-  offered as a safe fix. **Your own edits in the panel are never checked** —
-  what you type is yours, and you can still set *needs input* by hand.
+  offered as a safe fix. **What you type in the panel is never checked** —
+  it is yours. (Marking a provision *needs input* by hand has since been
+  retired as well; see "Gaps wait on you, not in the document" above.)
 - **Directions, not explanations.** The assistant's instructions now carry a
   *Specification voice* section built from your examples: state the
   requirement, never why it applies or where it came from; no narration of
@@ -214,7 +273,8 @@ generally and governs…" where the specification needed "Provide…".
 - **Both curated starters** were rewritten without TBD lines or *needs input*
   paragraphs.
 - **Existing projects.** TBDs and *needs input* paragraphs already in a
-  document still show under Open items and still block issue readiness. The
+  document still show in the panel (now under Leftover placeholders) and
+  still block issue readiness. The
   assistant sees them listed as leftover placeholders and rewrites each one
   when it next works on that topic, asking you for the value it was holding.
 - **Explanation that slips through is flagged.** Two new advisory checks
@@ -366,7 +426,7 @@ No release entry yet: which release carries it is the owner's call, and the
 release-note draft is in docs/as-built.md ("Room for the paper").
 
 **The panels under the paper no longer crowd it out.** Review, Research,
-Final QC, Issues, Open items, Waiting on you, Project, Project facts,
+Final QC, Issues, Leftover placeholders, Waiting on you, Project, Project facts,
 Standards and Documents are stacked under the specification. Ten collapsed
 bars take about 360px, and two panels open on their own the first time
 something lands in them. At the app's default window size (1440×900), with
@@ -376,8 +436,8 @@ panel.
 - **One bar folds them all away.** The tray has its own **Panels** bar.
   **Hide** folds every panel away and gives the height back to the
   specification: 750px of it in the same window. The folded bar still counts
-  what needs you, for example "13 to review · 7 issues · 4 open items · 2
-  waiting on you". **Show** brings the tray back exactly as it was. Panels
+  what needs you, for example "13 to review · 7 issues · 4 leftover
+  placeholders · 2 waiting on you". **Show** brings the tray back exactly as it was. Panels
   that were open stay open, and nothing inside a panel is lost: a review
   walk in progress, a half-typed standard or a Final QC selection survives
   the fold.
@@ -2981,7 +3041,7 @@ What worked before (Phase 2) and still does:
 
 - Claude-desktop-style UI: streaming chat pane on the left, the **live specification document** on the right, warm dark theme.
 - The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, positional display labels `1.1` / `A.` / `1.` / `a.` / `1)` / `a)`, stable element ids). Those semantic labels are not themselves Word numbering definitions; clean normalized export renders them with genuine Word automatic numbering. Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
-- Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export. (After v1.23.0 the model writes neither; open items are leftovers from older drafts, starters, or your own hand edits.)
+- Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export. (After v1.23.0 nothing writes either — not the assistant, and not a hand edit marking a provision *needs input*. The ones an older document carries are listed under the panel as **Leftover placeholders** and in the review report, and a *needs input* badge clears in one click.)
 - Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
 - Version stepper: one snapshot per turn that changed the document; undo/redo from the panel header.
 - `.docx` export via python-docx — SectionFormat styling plus an **assumptions schedule** (every `assumed` block with its numbering, for one-pass senior review) and an open-items schedule. (After v1.23.0 the schedules are the separate review report; the specification ends at END OF SECTION.)

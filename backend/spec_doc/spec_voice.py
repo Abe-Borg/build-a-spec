@@ -20,6 +20,12 @@ Three consumers share one vocabulary:
   one the model may not set — is refused as a whole with a message that
   says how to write it instead. The user's own panel edits never pass
   through it: what the user types is theirs.
+- :func:`check_user_edits` is the one rule the user's own edits
+  (``/api/doc/edit``) DO pass: no op may stamp a retired status
+  (``model.RETIRED_STATUSES``, i.e. ``needs_input``). The panel never
+  offered it, so only a hand-built request could; typed text is still not
+  checked, and a legacy block that already carries the status keeps it
+  until it is switched.
 - ``linting`` reuses :data:`PLACEHOLDER_PATTERNS`,
   :data:`TEMPLATE_MARKER_PATTERNS` and :func:`scan_markers` for its
   advisory rules, which also cover text the guard never sees (an imported
@@ -44,7 +50,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-from .model import MODEL_STATUSES, SpecEditError
+from .model import MODEL_STATUSES, RETIRED_STATUSES, SpecEditError
 
 __all__ = [
     "DRAFTING_ONLY_PATTERNS",
@@ -56,11 +62,13 @@ __all__ = [
     "REFERENCE_ENTRY_PATTERNS",
     "TEMPLATE_MARKER_PATTERNS",
     "check_drafted_edits",
+    "check_user_edits",
     "drafted_edit_problems",
     "drafted_text_hits",
     "explanatory_prose_hits",
     "has_placeholder",
     "reference_entry_problems",
+    "retired_status_problems",
     "scan_markers",
 ]
 
@@ -186,8 +194,8 @@ _TEXT_FIELDS: dict[str, tuple[str, ...]] = {
 # (pinned against ``model.STATUSES`` in tests/test_spec_voice.py).
 _STATUS_REFUSALS = {
     "needs_input": (
-        "status 'needs_input' is set only by the user in the panel — stamp "
-        "the provision assumed and ask with track_followups instead"
+        "status 'needs_input' is retired and only older documents carry it "
+        "— stamp the provision assumed and ask with track_followups instead"
     ),
     "imported": (
         "status 'imported' marks starter content the app seeds — you never "
@@ -252,6 +260,48 @@ def check_drafted_edits(edits: Any) -> None:
         "out), stamp it assumed, and ask the user with track_followups, "
         "setting element_id to that provision. Write unit conversions and "
         "titles in parentheses, not square brackets."
+    )
+
+
+def retired_status_problems(edits: Any) -> list[str]:
+    """One line per op that would stamp a retired status.
+
+    Shape-tolerant like :func:`drafted_edit_problems`. Any op carrying a
+    ``status`` counts (``replace`` and ``add_paragraph`` take one too, not
+    only ``set_status``); an op that omits it never changes a status, so
+    retyping a legacy needs_input block's text is not a new stamp.
+    """
+    if not isinstance(edits, list):
+        return []
+    problems: list[str] = []
+    for index, op in enumerate(edits, start=1):
+        if not isinstance(op, dict):
+            continue
+        status = op.get("status")
+        if isinstance(status, str) and status in RETIRED_STATUSES:
+            problems.append(
+                f"- edit {index} ({op.get('action')} on {op.get('target_id')}): "
+                f"status '{status}' is retired"
+            )
+    return problems
+
+
+def check_user_edits(edits: Any) -> None:
+    """Refuse a user edit batch that would stamp a retired status.
+
+    The panel's own controls only ever send confirmed or assumed, so this
+    catches a hand-built ``/api/doc/edit`` request. Raises
+    :class:`SpecEditError`, all-or-nothing like every other refusal.
+    """
+    problems = retired_status_problems(edits)
+    if not problems:
+        return
+    raise SpecEditError(
+        "this batch would mark a provision needs_input, a status that is "
+        "retired:\n"
+        + "\n".join(problems)
+        + "\nMark the provision confirmed or assumed. Track what is still "
+        "missing in Waiting on you, not in the document."
     )
 
 

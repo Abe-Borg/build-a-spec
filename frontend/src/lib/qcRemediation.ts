@@ -69,12 +69,12 @@ export function qcFindingDecisionSignals(
   };
 
   if (context.status === "needs_input") {
-    add("the current provision is marked needs input");
+    add("the current provision is a leftover needs-input block");
   } else if (context.status === "assumed") {
     add("the current provision is an unconfirmed assumption");
   }
   if (TBD_RE.test(context.text ?? "")) {
-    add("the current provision contains a [TBD]");
+    add("the current provision contains a leftover [TBD]");
   }
 
   for (const operation of finding.proposed_ops) {

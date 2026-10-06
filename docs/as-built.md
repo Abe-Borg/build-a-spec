@@ -18904,3 +18904,215 @@ imported provisions, open items and Final QC summary are now a separate
 review report — Export → Download review report — so the Word file you issue
 is the specification and nothing else. A section without a number or title
 yet no longer prints [TBD] in its header."
+
+## Needs input and TBDs are retired from the panel, tour and tutorial — implemented notes (2026-10-06)
+
+PR 4 of 4 for the owner's specification-voice rule. PRs 1–3 stopped the
+model, Final QC and the export from writing placeholders; the app's own
+interface still presented `[TBD]` and *needs input* as a normal way to work.
+This PR makes everything that remains describe them as **leftover
+placeholders** — legacy material to rewrite — and teaches gaps through
+**Waiting on you**.
+
+**Owner decisions (Abraham, 2026-10-06, asked before any code).** The plan
+said "remove needs_input from the panel's status picker", but the panel has
+no status picker: its only status control is ✓ Confirm, shown on assumed
+and imported rows, and nothing in the UI could stamp *needs input*. The only
+way was a hand-built `POST /api/doc/edit`, which PR 1 left unguarded. Asked
+to choose, the owner took both recommendations:
+
+1. **Retire it fully.** The edit API refuses a new needs_input stamp. Legacy
+   blocks still load, display, count as open items, block readiness and
+   appear in the review report, and their rows gain ✓ Confirm and ≈ Mark
+   assumed. Typed text stays the user's (a hand-typed `[TBD]` is allowed and
+   still counted).
+2. **Fold the tour's open-items chapter into Waiting on you.** The step is
+   retired along with the showcase's planted examples; its
+   `document.open-items` capability moves to the Waiting on you step.
+
+**Before.**
+
+- `/api/doc/edit` accepted any status, so a hand-built request could stamp
+  needs_input; the prompt, the `apply_spec_edits` status description and
+  the model-side refusal all said it was "the user's to set in the panel".
+- A legacy needs_input row had no one-click way out: retype its text (which
+  confirms) or ask in chat.
+- A blank header printed `SECTION [TBD]` and `[TBD: section title]` in the
+  panel and in Compare, though the export had printed `SECTION` and an empty
+  line since PR 3.
+- The strip read "Open items — N unresolved" with the title "Unresolved
+  provisions — [TBD] markers and needs-input blocks", rows labeled
+  "needs input — " / "TBD — ", and the empty paper promised "every [TBD]
+  stays tracked". The folded tray said "N open items".
+- The tour: a "Name the section" step saying "An unnamed section reads
+  SECTION [TBD]", a provenance step saying "red needs input", an open-items
+  step ("Open decisions stay counted") anchored on a strip that renders only
+  while leftovers exist, an unused `first-needs-input` resolver, and an
+  `openItems` drawer nonce that only that step bumped.
+- The tutorial: `build_showcase_session` planted a `[TBD:]` and a
+  needs_input stamp into `pt1.a1.p3` / `pt2.a1.p2`
+  (`_SHOWCASE_OPEN_ITEM_EXAMPLES`) so coverage's `needs_input_content` /
+  `tbd_content` gaps passed and the `first_needs_input` / `tbd_paragraph`
+  anchors existed. Its SVG figure fixture was a status key reading
+  "Assumed / Needs input", its table ended "Close open items", its transcript
+  promised "an unresolved project decision", and one suggested reply was
+  "Show me the next open item".
+- Readiness: "No open document items ([TBD]/needs-input)."
+
+**After.**
+
+- **The guard.** `model.RETIRED_STATUSES = ("needs_input",)` — still in
+  `STATUSES`, because older documents carry it. `spec_voice` gains
+  `retired_status_problems(edits)` and `check_user_edits(edits)`; the
+  `/api/doc/edit` route calls `check_user_edits` inside its existing
+  rollback-guarded try, so a refusal is the usual all-or-nothing 400 and the
+  document is untouched. Any op carrying `status: "needs_input"` counts
+  (`set_status`, `replace`, `add_paragraph`); an op that omits `status`
+  never changes one, so retyping a legacy block's text keeps its stamp. The
+  drafting guard (`check_drafted_edits`) is not applied to user edits: typed
+  text is still theirs. Model and QC paths were already refusing the status
+  (PR 1). Switching a legacy block to confirmed or assumed is an ordinary
+  `set_status`.
+- **Model-facing wording.** The `_PROVENANCE` line, the `status` property's
+  description in `apply_spec_edits`, and `_STATUS_REFUSALS["needs_input"]`
+  now say the status is retired and only older documents carry it.
+- **Readiness.** `no_open_items` keeps its id and its rule; the detail reads
+  "No leftover placeholders ([TBD] markers or needs-input blocks) in the
+  document." or "N leftover placeholder(s) in the document ([TBD] markers or
+  needs-input blocks) — rewrite each as a complete provision."
+- **Panel.** A blank header shows `SECTION` with a greyed, sentence-case
+  "number not set" / "title not set" hint (`HeaderPlaceholder`), in the live
+  header and in Compare. The needs_input badge reads "needs input ·
+  leftover", with a tooltip saying what it is and how to clear it. Its row
+  gets ✓ Confirm (now also for needs_input) and ≈ Mark assumed (needs_input
+  only), both gated on the same `set_status` source capability as Confirm.
+  `TBD_SPLIT` highlighting stays, with a "Leftover placeholder — rewrite this
+  as a complete provision" tooltip. `EditOp.status` is now `EditableStatus`
+  (`BlockStatus` minus needs_input), so no op the frontend builds can name
+  it; `BlockStatus` keeps it for display.
+- **The strip** is **Leftover placeholders — N to rewrite**, with rows
+  labeled "needs-input block — " / "[TBD] marker — ", and a title saying
+  where they come from, that nothing writes new ones, and that they are in
+  the review report and block readiness. The tray label and the folded
+  bar's count follow ("N leftover placeholder(s)"). The panel id stays
+  `open-items` (saved tray layouts name it), as do the `open_questions`
+  payload and SSE event, `data-tour="open-items"` and the
+  `document.open-items` capability. The empty paper now says anything the
+  assistant still needs from you waits in Waiting on you.
+- **Tour** (`TOUR_VERSION` 8 → 9: a step was removed, so stale resume
+  records are discarded). The open-items step is gone; the Waiting on you
+  step lists `["followups.track", "document.open-items"]` and opens with the
+  rule (no `[TBD]`, no placeholder, no note to you; the provision is written
+  around the gap and the question is asked here), then says an older
+  document's leftovers collect in a Leftover placeholders list beside it, are
+  in the review report and hold back readiness, and that the practice copy
+  has none. The header step, the provenance step ("a red needs-input badge
+  appears only on a leftover from an older document…"), the panel-tray, QC
+  and readiness steps and the export step's review-report sentence are
+  reworded. The `first-needs-input` resolver and the `openItems` drawer
+  (type members in `tour.ts` and `useOnboarding.ts`, both App nonce
+  objects, ArtifactPanel's prop type and expand effect) are removed.
+- **Tutorial.** `_SHOWCASE_OPEN_ITEM_EXAMPLES` and its loop, the two gaps,
+  the two anchors and the `needs_input` / `tbd` counts are removed; the
+  showcase keeps the curated starter's own text. The status-key figure reads
+  "Assumed / Confirmed", the checklist row "Settle what is waiting on you",
+  the transcript "…nested structure and assumed provisions to review", and
+  the suggested reply "What are you waiting on from me?". The lint lesson's
+  `[VERIFY: tutorial placeholder] TODO: resolve template note.` stays: it
+  demonstrates the `placeholder_marker` and `template_marker` rules catching
+  leftovers, which is the new framing, and neither is an open item.
+- **Copy.** Help's provenance card (three statuses; gaps go to Waiting on
+  you; a *needs input* block is a leftover, one click from confirmed or
+  assumed), the QC drawer's "Needs your decision" group (leftover
+  placeholders, not "[TBD] values"), the trust explainer (verifiers reject a
+  fix that "would write a placeholder into the specification"; readiness
+  requires "no leftover placeholders"), the review-report tooltip, and the
+  comments in `FollowUpsPanel`, `reviewQueue`, `panelTray` and `types.ts`.
+  `qcRemediation`'s current-provision signals read "is a leftover
+  needs-input block" / "contains a leftover [TBD]"; the detection itself
+  (`TBD_RE`, the status check) is unchanged.
+- **Unchanged, deliberately.** `open_questions` and its counting; the
+  review report's OPEN ITEMS table (its heading included); the per-turn
+  LEFTOVER PLACEHOLDERS block; the importer and template rebasing (which
+  carry legacy needs_input through); manual edits' freedom over text; the
+  Final QC lens briefs (`qc/schema.py` still names surviving `[TBD:...]`
+  markers and needs_input blocks as findings); the review walk, which never
+  included needs_input.
+
+### Costs and compatibility
+
+- The stable prompt and the `apply_spec_edits` tool bytes changed, so each
+  open session rewrites its cached prefix once. PRs 1–3 already changed both
+  since 1.23.0, so a user upgrading pays that rewrite once for all four, not
+  once more. Final QC echoes only the tool's top-level `description`
+  (`_op_vocabulary`), which did not change, and no lens brief changed, so
+  retained Final QC reports do not go stale. Research is untouched.
+- A saved project carrying needs_input loads and behaves as before; only a
+  NEW stamp is refused. A saved tutorial resume record from tour version 8
+  is discarded (the tour restarts at its beginning).
+- No paid API call was made.
+
+### Tests and reversion evidence
+
+`tests/test_spec_voice.py`: the old `test_the_users_own_panel_edits_are_never_policed`
+(which pinned a user needs_input stamp landing) became
+`test_the_users_own_typed_text_is_never_policed` (a typed `[TBD]` with
+status assumed lands and is counted); `test_no_edit_may_stamp_needs_input_any_more`
+(set_status, replace and add_paragraph, each beside a valid op: 400, the
+error names the edit, says retired and points to Waiting on you, document
+unchanged); `test_retired_status_problems_reads_only_what_would_stamp_a_status`;
+and `test_a_legacy_needs_input_block_loads_counts_and_switches` (a legacy
+project loaded over `/api/project/load` counts, fails readiness with the new
+wording, keeps its stamp through a status-less retype, and clears to
+confirmed or assumed in one `set_status`). `tests/test_tutorial.py` drops the
+two anchors and gaps and adds
+`test_the_tutorial_never_teaches_a_placeholder_as_a_way_to_work` (no anchor,
+no gap, and no `[TBD` or needs_input in the showcase or any practice copy).
+`tests/test_app.py`'s `_add_leftover_open_item` now seeds the leftover by
+reopening the session as an older project file — the one way one arrives —
+so the export smoke test's review-report header reads v2, not v3.
+`frontend/tests/leftoverPlaceholders.test.ts` (6, registered in
+`package.json`) pins the header hint, the highlight, the legacy row's two
+actions, `EditableStatus`, the strip and tray copy, and the tour fold;
+`panelTray.test.ts`, `qcRemediation.test.ts` and `projectPanel.test.ts`
+(tour version) were updated.
+
+Seventeen reversions, each restored, each failing its test: the route
+skipping `check_user_edits`; the guard reading only `set_status`; the old
+readiness detail; the showcase planting a needs_input block again; coverage
+keeping the `first_needs_input` anchor; the header falling back to `[TBD]`;
+needs_input rows losing ✓; the ≈ button dropped; the badge reading plain
+"needs input"; `EditOp.status` back to `BlockStatus`; the tray label and the
+strip title back to "Open items"; the empty state's "every [TBD] stays
+tracked"; `document.open-items` leaving the Waiting on you step; the tour
+version not bumped; the `first-needs-input` resolver restored; the
+`openItems` nonce restored. With all restored, every probe's test was green.
+
+### Validation
+
+Ruff, the touched backend test files and every file importing the prompt,
+the edit tool, the drafting guard or the tutorial (`test_app`,
+`test_spec_voice`, `test_tutorial`, `test_review_report`, `test_templates`,
+`test_spec_doc`, `test_source_capabilities`, `test_full_draft`,
+`test_docs_consistency`, `test_followups`, `test_manual_edit` and 21 more),
+`npm test` (523) and `npm run build` passed locally; the full backend suite
+is CI's (see Commands in CLAUDE.md). No paid API call was made.
+
+### Errata for the PR 1 record above
+
+"Not guarded, deliberately. The panel's manual edits … including a
+hand-set needs_input" and "The tutorial showcase plants its two open-item
+examples itself … until the tour's open-item chapter is retired" describe
+the state before this PR: manual edits are still unguarded for text, but a
+needs_input stamp is refused, and the showcase plants nothing.
+
+### Release-note draft (for the release after 1.23.0)
+
+"**Gaps wait on you, not in the document.** The panel, the tour and the
+tutorial no longer treat [TBD] or *needs input* as a way to work. Anything
+the assistant still needs is in **Waiting on you**. A [TBD] or *needs input*
+paragraph from an older document now shows under **Leftover placeholders**,
+still counts against issue readiness, and its *needs input* badge clears in
+one click (✓ to confirm, ≈ to mark assumed). An unnamed section shows a
+greyed hint instead of [TBD]. The guided tour starts again from the
+beginning once, because a step was removed."

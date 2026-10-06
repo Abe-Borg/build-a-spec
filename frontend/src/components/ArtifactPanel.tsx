@@ -1,7 +1,9 @@
 /**
  * The live document panel: SectionFormat rendering of the server-owned
  * tree, a per-turn version stepper (undo/redo), export / save / open
- * actions, and the open-items list ([TBD] markers + needs-input blocks).
+ * actions, and the Leftover placeholders list (leftover [TBD] markers and
+ * needs-input blocks — nothing writes either since 2026-10-06, so every one
+ * comes from an older document, a starter or the user's own typing).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -279,7 +281,6 @@ interface Props {
     review: number;
     research: number;
     qc: number;
-    openItems: number;
     followups: number;
     projectFacts: number;
     projectPanel: number;
@@ -415,8 +416,8 @@ function EmptyState({
 
       <p className="mt-12 text-center text-xs leading-relaxed text-paper-dim">
         Use the interview and Draft full section to build the document, or
-        import an office master to start from. Changes appear in place and every
-        [TBD] stays tracked.
+        import an office master to start from. Changes appear in place, and
+        anything the assistant still needs from you waits in Waiting on you.
       </p>
     </div>
   );
@@ -636,11 +637,6 @@ export default function ArtifactPanel({
     importReport?.front_matter && importReport.front_matter.count > 0
       ? importReport.front_matter
       : null;
-  // The tour opens the list by bumping the nonce (same idiom as the drawers).
-  const openItemsNonce = drawerNonces?.openItems ?? 0;
-  useEffect(() => {
-    if (openItemsNonce) setOpenItemsExpanded(true);
-  }, [openItemsNonce]);
   // item_id -> short tooltip text for the paper's source chips. Two kinds of
   // origin share the map (and the chip): grounded research items, and the
   // reference documents the user attached — a provision drafted from an
@@ -1337,7 +1333,7 @@ export default function ArtifactPanel({
                     )
                   }
                   disabled={exportsBusy}
-                  title="A separate Word document for the reviewer: the assumptions schedule, imported provisions not yet reviewed, open items, and the current Final QC (or compliance-audit) summary. None of it is part of the specification, which ends at END OF SECTION."
+                  title="A separate Word document for the reviewer: the assumptions schedule, imported provisions not yet reviewed, any leftover placeholders, and the current Final QC (or compliance-audit) summary. None of it is part of the specification, which ends at END OF SECTION."
                   data-capability="export.review-report"
                 >
                   Download review report
@@ -1926,13 +1922,13 @@ export default function ArtifactPanel({
               <button
                 className="flex w-full items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
                 onClick={() => setOpenItemsExpanded((v) => !v)}
-                title="Unresolved provisions — [TBD] markers and needs-input blocks"
+                title="Leftover placeholders from an older document, a starter or your own typing — [TBD] markers and needs-input blocks. Nothing writes new ones: rewrite each as a complete provision. They are listed in the review report and block readiness until they are gone."
               >
                 <span className="shrink-0 font-medium tracking-wide uppercase">
-                  Open items
+                  Leftover placeholders
                 </span>
                 <span className="truncate">
-                  {openItems.length} unresolved
+                  {openItems.length} to rewrite
                 </span>
                 <span className="ml-auto shrink-0">
                   {openItemsExpanded ? "▾" : "▸"}
@@ -1954,7 +1950,9 @@ export default function ArtifactPanel({
                           {item.ref}
                         </span>
                         <span className="truncate">
-                          {item.kind === "needs_input" ? "needs input — " : "TBD — "}
+                          {item.kind === "needs_input"
+                            ? "needs-input block — "
+                            : "[TBD] marker — "}
                           {item.label}
                         </span>
                       </button>

@@ -20,7 +20,6 @@ export type DrawerName =
   | "review"
   | "research"
   | "qc"
-  | "openItems"
   | "followups"
   | "projectFacts"
   | "projectPanel";

@@ -38,13 +38,13 @@ _TUTORIAL_FIGURE_FIXTURES: tuple[dict[str, Any], ...] = (
         "kind": "svg",
         "title": "Tutorial Review Status Key",
         "caption": "A bundled tutorial-only schematic.",
-        "alt_text": "Assumed and needs-input review states.",
+        "alt_text": "Assumed and confirmed review states.",
         "source": (
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 90">'
             '<rect x="10" y="15" width="150" height="55" rx="8" fill="#f5c46b"/>'
-            '<rect x="200" y="15" width="150" height="55" rx="8" fill="#e98585"/>'
+            '<rect x="200" y="15" width="150" height="55" rx="8" fill="#9fd3a8"/>'
             '<text x="85" y="49" text-anchor="middle">Assumed</text>'
-            '<text x="275" y="49" text-anchor="middle">Needs input</text></svg>'
+            '<text x="275" y="49" text-anchor="middle">Confirmed</text></svg>'
         ),
     },
     {
@@ -56,7 +56,7 @@ _TUTORIAL_FIGURE_FIXTURES: tuple[dict[str, Any], ...] = (
         "rows": [
             ["Coordinate", "Resolve interfaces"],
             ["Review", "Confirm assumptions"],
-            ["Verify", "Close open items"],
+            ["Verify", "Settle what is waiting on you"],
         ],
     },
 )
@@ -142,8 +142,6 @@ def analyze_tutorial_coverage(session: SessionState) -> TutorialCoverage:
         if len(entry[2].text.split()) >= 4 and len(entry[2].text.strip()) >= 24
     ]
     assumed = [entry for entry in paragraphs if entry[2].status == "assumed"]
-    needs = [entry for entry in paragraphs if entry[2].status == "needs_input"]
-    tbds = [entry for entry in paragraphs if "[TBD:" in entry[2].text]
     nested = [entry for entry in paragraphs if entry[3] > 0]
     deepest = max((entry[3] for entry in paragraphs), default=-1)
 
@@ -185,10 +183,9 @@ def analyze_tutorial_coverage(session: SessionState) -> TutorialCoverage:
         gaps.append("four_paragraph_levels")
     if not assumed:
         gaps.append("assumed_content")
-    if not needs:
-        gaps.append("needs_input_content")
-    if not tbds:
-        gaps.append("tbd_content")
+    # No needs_input or [TBD:] gap since 2026-10-06 (PR 4): the tour no
+    # longer teaches either as a way to work, so the showcase carries none —
+    # gaps are taught through Waiting on you instead.
     if len(session.doc.versions) < 2:
         gaps.append("version_history")
     # Figures are not part of upfront coverage — Chapter 6 attaches its
@@ -203,10 +200,6 @@ def analyze_tutorial_coverage(session: SessionState) -> TutorialCoverage:
         anchors["first_paragraph"] = nonempty[0][2].uid
     if assumed:
         anchors["first_assumed"] = assumed[0][2].uid
-    if needs:
-        anchors["first_needs_input"] = needs[0][2].uid
-    if tbds:
-        anchors["tbd_paragraph"] = tbds[0][2].uid
     if nested:
         anchors["nested_paragraph"] = nested[-1][2].uid
     if article_pair:
@@ -221,32 +214,11 @@ def analyze_tutorial_coverage(session: SessionState) -> TutorialCoverage:
         "paragraphs": len(paragraphs),
         "usable_paragraphs": len(usable),
         "assumed": len(assumed),
-        "needs_input": len(needs),
-        "tbd": len(tbds),
         "versions": len(session.doc.versions),
         "figures": len(session.figures.figures),
         "valid_figure_kinds": len(valid_figure_kinds),
     }
     return TutorialCoverage(not gaps, tuple(gaps), anchors, counts, session.doc.index)
-
-
-# The open-items chapter of the tour teaches a needs-input block and a
-# [TBD: ...] marker, and coverage requires one of each. The curated starter
-# carried them until 2026-10-06, when the owner's no-placeholders rule
-# rewrote it as plain specification text (and the model stopped writing
-# either). Until that chapter is retired in favour of Waiting on you, the
-# showcase plants its own labeled examples here — demo content in a practice
-# project, never anything the model or a starter writes.
-_SHOWCASE_OPEN_ITEM_EXAMPLES: dict[str, str] = {
-    "pt1.a1.p3": (
-        "Confirm the final limits of work for [TBD: coordinated project "
-        "scope]."
-    ),
-    "pt2.a1.p2": (
-        "Final performance criteria: [TBD: discipline-specific rating and "
-        "capacity]."
-    ),
-}
 
 
 def build_showcase_session() -> SessionState:
@@ -262,10 +234,6 @@ def build_showcase_session() -> SessionState:
     for _part, _article, paragraph, _depth, _ref in iter_paragraphs(section):
         if paragraph.status == "imported":
             paragraph.status = "assumed"
-        example = _SHOWCASE_OPEN_ITEM_EXAMPLES.get(paragraph.uid)
-        if example is not None:
-            paragraph.text = example
-            paragraph.status = "needs_input"
     session = SessionState()
     session.module = get_module("generic")
     session.doc.seed_template(section)
@@ -318,14 +286,14 @@ def build_showcase_session() -> SessionState:
             "content": [
                 {
                     "type": "text",
-                    "text": "I created a reusable example with nested structure, review items, and an unresolved project decision.",
+                    "text": "I created a reusable example with nested structure and assumed provisions to review.",
                 }
             ],
         },
     ]
     session.suggested_prompts = [
         "Use the recommended default",
-        "Show me the next open item",
+        "What are you waiting on from me?",
     ]
     return session
 

@@ -2,10 +2,13 @@
  * "Waiting on you" — the questions, decisions and to-dos the model is
  * tracking for the user.
  *
- * Sits directly under Open items and is deliberately its sibling in shape,
- * not its twin in meaning: Open items are gaps in the SPEC ([TBD] markers,
- * needs-input blocks), these are gaps in what the model has been TOLD. The
- * list is model-authored; the user's side of it is the checkbox.
+ * Sits directly under Leftover placeholders and is deliberately its sibling
+ * in shape, not its twin in meaning: those are leftover [TBD] markers and
+ * needs-input blocks in the SPEC (nothing writes either since 2026-10-06),
+ * these are gaps in what the model has been TOLD — and, since that date,
+ * where every gap the draft still has is tracked: the model writes the
+ * provision around the missing value and asks here. The list is
+ * model-authored; the user's side of it is the checkbox.
  *
  * Rendered whenever the list holds anything at all, open or settled — not
  * only while something is waiting — so the last check-off is visible

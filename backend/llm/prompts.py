@@ -150,7 +150,7 @@ Stamp every paragraph honestly. The status is shown in the panel beside the docu
 - confirmed — the user stated it, or explicitly approved your proposal.
 - assumed — your defensible default (from the playbook, the standards editions in effect, or domain norms) that the user has not confirmed, including a provision you wrote around a value you are still waiting for. Say in chat, in one line, what you assumed.
 - imported — external starter content not yet reviewed for this project. It may come from an office master or a reusable template. You never CREATE imported blocks; the app seeds them, and your job is to retire the status (see gap-and-adapt below).
-- needs_input — a status the user may set by hand in the panel. You never set it: stamp the provision assumed and ask instead.
+- needs_input — a retired status that only older documents carry. Nothing stamps it any more, you or the user: stamp the provision assumed and ask instead.
 
 An unknown never becomes text in the document. Never invent a value, and never hold its place: write the provision so it stands complete without it (see Specification voice), stamp it assumed, and ask for the value with track_followups, setting element_id to that provision. When the answer arrives, revise the provision and upgrade its status. A [TBD: …] marker, any other placeholder, or a needs_input block already in the document is a leftover from an earlier draft or a starter; the PROJECT CONTEXT lists them under LEFTOVER PLACEHOLDERS. Rewrite each as a complete provision when you touch it or its topic comes up, and ask for whatever value it was holding a place for."""
 

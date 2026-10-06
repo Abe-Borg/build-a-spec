@@ -95,16 +95,16 @@ test("a folded bar still counts what needs attention, minus panels left out", ()
   assert.deepEqual(foldedAttention(counts, new Set()), [
     "13 to review",
     "7 issues",
-    "1 open item",
+    "1 leftover placeholder",
     "2 waiting on you",
   ]);
   assert.deepEqual(
     foldedAttention({ review: 0, openItems: 4, waiting: 0, issues: 1 }, new Set()),
-    ["1 issue", "4 open items"],
+    ["1 issue", "4 leftover placeholders"],
   );
   assert.deepEqual(foldedAttention(counts, new Set(["review", "followups"])), [
     "7 issues",
-    "1 open item",
+    "1 leftover placeholder",
   ]);
 });
 

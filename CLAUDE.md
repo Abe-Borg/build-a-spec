@@ -288,30 +288,52 @@ already resolved and does nothing). 409 when nothing is running.
   final commit, so a zombie turn discards itself instead of polluting the
   fresh/loaded session ("New session" is also disabled in the UI while a
   turn streams).
-- **Context architecture ("Sonnet unleashed", 2026-07-21).** The system
-  prompt is ONLY the stable module block (`render_system_prompt`,
-  deterministic per module, `cache_control: ephemeral`). Everything
-  session-varying — standards editions in effect, the research profile,
-  the **full document text** (`outline(doc, max_text=None)`, with
-  ◆source chips), the lint report, and open items — renders into a
-  PROJECT CONTEXT block spliced ahead of the user's text in the **newest
-  user message** (`_turn_context_text`, frozen at turn start). Two more
-  cache breakpoints ride each request's messages
-  (`_with_cache_breakpoints`, copy-on-write — stored history never
-  carries `cache_control`): the **committed-history boundary** and the
-  **tail**. The boundary is what makes caching roll across turns; the
-  tail alone cannot (see "Rolling chat cache breakpoint" below). TTLs are
-  NON-INCREASING across the request: system and boundary carry
-  `settings.CHAT_CACHE_TTL`, the tail the shortest supported
-  (`CHAT_TAIL_CACHE_TTL`) because its entry cannot outlive its own turn.
-  A SHORT-before-LONG request is a nonretryable 400, which the pin makes
-  unbuildable. Nothing session-varying
-  may render into the stable block (pinned by
-  `test_stable_system_prompt_is_cached_and_module_rendered`).
+- **Context architecture ("Sonnet unleashed", 2026-07-21; C1, 2026-10-06).**
+  The system prompt is ONLY the stable module block
+  (`render_system_prompt`, deterministic per module, `cache_control:
+  ephemeral`). When there is any, the **project block**
+  (`_project_block_text`, framed `=== PROJECT BACKGROUND ===`, its own
+  breakpoint) opens the request's FIRST USER message: the slow-changing
+  material — the research profile, the PROJECT SECTIONS list, the project
+  description and template note — whose inputs change only through rare
+  actions outside a chat turn. It is user-role on purpose and must stay so:
+  findings summarize retrieved pages and the description is the user's, so a
+  system block would hand injected text the operator's authority (Codex
+  review on PR #270). Everything that changes turn to turn — the
+  date, standards editions in effect, established facts, the **full
+  document text** (`outline(doc, max_text=None)`, with ◆source chips), the
+  lint report, open items, the Final QC review, figure and reference stubs —
+  renders into a PROJECT CONTEXT block spliced ahead of the user's text in
+  the **newest user message** (`_turn_context_text`). Both render together
+  at turn start (`_turn_context`) and are frozen for every round of the
+  turn; `_ChatRequestInputs.project_block` carries the project block, and
+  `_with_project_block` inserts it into a per-request copy of the first
+  message (never into history, never moving a message index). Two more
+  cache breakpoints ride each request's messages (`_with_cache_breakpoints`,
+  copy-on-write — stored history never carries `cache_control`): the
+  **committed-history boundary** and the **tail** — four in all, the
+  provider's limit. The boundary is what makes caching roll across turns;
+  the tail alone cannot (see "Rolling chat cache breakpoint" in
+  docs/as-built.md). TTLs are NON-INCREASING across the request: the module
+  block, the project block and the boundary carry `settings.CHAT_CACHE_TTL`,
+  the tail
+  the shortest supported (`CHAT_TAIL_CACHE_TTL`) because its entry cannot
+  outlive its own turn. A SHORT-before-LONG request is a nonretryable 400,
+  which the pin makes unbuildable (and `tests/fakes.py` now refuses, with a
+  fifth breakpoint). Nothing session-varying may render into the module
+  block (pinned by `test_stable_system_prompt_is_cached_and_module_rendered`
+  and `test_a_completed_research_round_changes_only_the_project_block`);
+  nothing per-turn — no timestamp, no counter — may render into the project
+  block, and nothing a chat turn's own tools change may either (see
+  `CACHED_CONTEXT_BLOCKS` for what moved and why). A changed project block
+  rewrites the whole committed history once at the long TTL: that is the
+  accepted trade. The compaction summary forks the chat request, so it
+  carries the same project block (`_CompactionInputs.project_block`).
 - **Strip at commit** (`_committed_messages`): the context block is
   replaced by the user's bare text (exactly one current state block per
   request, never a stale one — pinned by
-  `test_context_block_never_fossilizes_into_history`), thinking blocks
+  `test_context_block_never_fossilizes_into_history`; the project block is
+  never in history at all), thinking blocks
   drop (only required within their own turn), and fetched-PDF payloads
   are elided wholesale (`elide_all_pdf_sources` — a PDF left in history
   would be re-billed forever and balloon the project file). Server-tool
@@ -474,6 +496,45 @@ and pins them; `frontend/tests/verificationCopy.test.ts` pins the dossier's
 and README's numbers to the constants. Full record, reversion evidence and
 the release-note draft are in `docs/as-built.md` under the same heading. No
 paid API call was made.
+
+## The project background rides its own cache breakpoint — implemented notes (2026-10-06)
+
+C1. Every chat turn rendered the research profile (up to 100k estimated
+tokens) into the PROJECT CONTEXT, which commit strips, so the tail breakpoint
+wrote it at 1.25× on every turn and no later turn read it.
+
+- The request is now: module block (1h) → project block (1h) → committed
+  boundary (1h) → tail (5m). The project block is the first content block of
+  the request's first user message (`_with_project_block`), framed
+  `=== PROJECT BACKGROUND ===`, and is sent only when it has content; an
+  empty one leaves the request byte-identical to before. It was a second
+  system block until the Codex review on PR #270 pointed out that this gave
+  retrieved and user-authored text the system prompt's authority; the
+  user-role placement caches identically.
+- What moved (`CACHED_CONTEXT_BLOCKS` plus the `other` slice): the research
+  profile and PROJECT SECTIONS, plus the session-fixed project description
+  and template note. What stayed per-turn, deliberately: standards editions
+  (the model records them with `set_standard_edition` during turns; undo
+  reverts them), established facts (`record_project_facts` during turns),
+  reference stubs (tiny; an attach would rewrite the history to save a few
+  dozen tokens), and the date, document, lint, open items, waiting-on-you
+  list and QC review.
+- Each project-block change rewrites the whole committed history once at
+  the long TTL. Background compaction carries the committed turn's frozen
+  block; the backstop carries the current turn's block.
+- `CONTEXT_SIZE_KEYS` gains `project_block` (a subtotal of `total`, not a
+  slice); `total` now covers both blocks. Developer tools marks cached
+  blocks, and `prompt_refs` gains a `project_block` ref beside `system`.
+- `compaction.CONTEXT_BOUNDARY_PATTERN` also escapes `PROJECT BACKGROUND`
+  markers. The stable prompt says where moved blocks live; the compaction
+  preface names both current blocks. Changing the stable prompt rewrites
+  every open session's cache once after upgrade.
+- `tests/fakes.py` refuses a fifth breakpoint or a 1h-after-5m order.
+  `tests/test_app.py` pins the layout with a small prompt-cache model
+  (`_simulated_cache_usage`).
+
+Full record, economics, reversion evidence and the release-note draft:
+`docs/as-built.md` under the same heading. No paid API call was made.
 
 ## The research launch is staggered — implemented notes (2026-10-06)
 

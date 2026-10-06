@@ -58,6 +58,9 @@ from tests.fakes import (
     FakeClient,
     bad_request,
     raw_turn,
+    request_project_block,
+    request_project_block_text,
+    research_profile,
     text_turn,
     token_usage,
     tool_turn,
@@ -1041,15 +1044,66 @@ def test_a_stale_ready_summary_is_never_adopted():
     assert session.compaction is None
 
 
+def test_the_summary_fork_carries_the_project_block_its_turn_sent(monkeypatch):
+    """C1: the chat's request opens with the cached project block (the first
+    block of the first message, behind the module block). The summary must
+    open with the identical block, or its prefix diverges right after the
+    module block and it reads none of the conversation the chat already
+    cached. It carries the block the committed turn SENT: a research round
+    that finishes while that turn streams reaches the next turn's block,
+    never the fork's."""
+    _enable(monkeypatch, threshold=4_500, keep_turns=1)
+    client = _client()
+    session = sessions.get_session()
+    session.research.profile_result = research_profile("Round 1: the 2021 IFC governs.")
+
+    class _RoundFinishesDuringTurnThree(_Routed):
+        def stream(self, **request):
+            if not _is_summary_request(request) and len(self.chat_requests) == 2:
+                session.research.profile_result = research_profile(
+                    "Round 2: the insurer requires FM Global data sheets."
+                )
+            return super().stream(**request)
+
+    fake = _RoundFinishesDuringTurnThree(_chat_turns(3), [_summary_turn()])
+    _patch_client(monkeypatch, fake)
+    _grow(client, 3)
+    assert session.compaction_runner.wait(10)
+    assert session.compaction is not None
+
+    chat_request = fake.chat_requests[2]
+    [summary_request] = fake.summary_requests
+    assert summary_request["system"] == chat_request["system"]
+    assert request_project_block(chat_request) is not None
+    assert request_project_block(summary_request) == request_project_block(
+        chat_request
+    )
+    assert "Round 1" in request_project_block_text(summary_request)
+    assert "Round 2" not in request_project_block_text(summary_request)
+    # The session itself moved on: the next turn sends the newer block.
+    assert "Round 2" in conversation._project_block_text(session)[0]
+    # Module + project + boundary: three breakpoints, never the tail.
+    controls = [b["cache_control"] for b in summary_request["system"]] + [
+        block["cache_control"]
+        for message in summary_request["messages"]
+        for block in message["content"]
+        if isinstance(block, dict) and "cache_control" in block
+    ]
+    assert len(controls) == 3
+
+
 def test_the_backstop_condenses_before_a_request_that_would_not_fit(monkeypatch):
     # Routine condensing OFF: this is the backstop alone.
     monkeypatch.setattr(settings, "CHAT_COMPACTION", False)
-    monkeypatch.setattr(conversation, "_system_tools_chars", lambda module: 0)
+    monkeypatch.setattr(
+        conversation, "_system_tools_chars", lambda module, project_block="": 0
+    )
     fake = _Routed(_chat_turns(3) + [text_turn(["Fits now."])], [_summary_turn()])
     _patch_client(monkeypatch, fake)
     client = _client()
-    _grow(client, 3)
     session = sessions.get_session()
+    session.research.profile_result = research_profile("The 2021 IFC governs.")
+    _grow(client, 3)
     assert session.compaction is None
 
     # ~21k chars of conversation ≈ 6k tokens; a 6k window's backstop is 5.1k.
@@ -1062,14 +1116,25 @@ def test_the_backstop_condenses_before_a_request_that_would_not_fit(monkeypatch)
     assert session.compaction.trigger == "backstop"
     assert len(fake.summary_requests) == 1
     request = fake.chat_requests[-1]
-    assert request["messages"][0]["content"][0]["text"].startswith(
+    # The project block leads the first message (C1); the summary follows it,
+    # so a summary being adopted never invalidates the block's cache entry.
+    assert request["messages"][0]["content"][0] is request_project_block(request)
+    assert request["messages"][0]["content"][1]["text"].startswith(
         f"<{SUMMARY_FRAME_TAG}"
     )
     assert [e for e in events if e["type"] == "compaction"]
+    # The backstop summary carries the project block this turn sends (C1),
+    # so its prefix through that block is the one the turn's own request
+    # caches.
+    [summary_request] = fake.summary_requests
+    assert summary_request["system"] == request["system"]
+    assert request_project_block(summary_request) == request_project_block(request)
 
 
 def test_the_backstop_leaves_turns_out_when_no_summary_can_be_made(monkeypatch):
-    monkeypatch.setattr(conversation, "_system_tools_chars", lambda module: 0)
+    monkeypatch.setattr(
+        conversation, "_system_tools_chars", lambda module, project_block="": 0
+    )
     declined = raw_turn([], stop_reason="refusal")
     fake = _Routed(
         _chat_turns(3)

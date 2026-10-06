@@ -40,7 +40,12 @@ from backend.research.engine import (
     append_research_round,
 )
 from backend.spec_doc import SpecSection
-from tests.fakes import FakeClient, request_context_text, text_turn
+from tests.fakes import (
+    FakeClient,
+    request_context_text,
+    request_project_block_text,
+    text_turn,
+)
 
 PROFILE = ProjectProfile("Ashburn", "VA", "US", "Client X")
 
@@ -579,7 +584,10 @@ def test_the_sections_block_trims_articles_first_then_sections():
     assert "- 21 01 00 Section 1" in tight
 
 
-def test_the_sections_block_reaches_the_turn_but_never_the_cached_prompt(monkeypatch):
+def test_the_sections_block_rides_the_project_block_never_the_stable_one(monkeypatch):
+    """The other sections change only when the brief does (C1), so they ride
+    the cached project block — read before the document — and never the
+    stable module block, the per-turn PROJECT CONTEXT or the history."""
     client = _client()
     session = sessions.get_session()
     session.project_link = _link(
@@ -589,11 +597,11 @@ def test_the_sections_block_reaches_the_turn_but_never_the_cached_prompt(monkeyp
     monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
     client.post("/api/chat", json={"message": "hi"})
     request = fake.messages.last_request
-    context = request_context_text(request)
-    assert "PROJECT SECTIONS" in context
-    assert "21 13 13 Wet-Pipe Sprinkler Systems" in context
-    assert context.index("PROJECT SECTIONS") < context.index("Current specification document")
-    assert "Wet-Pipe Sprinkler Systems" not in json.dumps(request["system"])
+    background = request_project_block_text(request)
+    assert "PROJECT SECTIONS" in background
+    assert "21 13 13 Wet-Pipe Sprinkler Systems" in background
+    assert "Wet-Pipe Sprinkler Systems" not in request["system"][0]["text"]
+    assert "PROJECT SECTIONS" not in request_context_text(request)
     assert "PROJECT SECTIONS" not in json.dumps(sessions.get_session().history)
 
 

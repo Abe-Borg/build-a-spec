@@ -2324,12 +2324,13 @@ export interface HistoryComposition {
   categories: HistoryCompositionCategory[];
 }
 
-/** What one turn's PROJECT CONTEXT block was made of
- *  (``conversation.CONTEXT_SIZE_KEYS``): estimated tokens per block, by the
- *  same len/4 estimate the History makeup row uses. The blocks partition the
- *  context — they sum to `total` — and `other` is everything the named ones
- *  do not cover. `research_dropped_items` is a COUNT of findings the
- *  research block's cap left out of that turn, not tokens. */
+/** What one turn's session context was made of — the cached project block
+ *  plus the PROJECT CONTEXT block (``conversation.CONTEXT_SIZE_KEYS``):
+ *  estimated tokens per block, by the same len/4 estimate the History makeup
+ *  row uses. The blocks partition the context — they sum to `total` — and
+ *  `other` is everything the named ones do not cover. `research_dropped_items`
+ *  is a COUNT of findings the research block's cap left out of that turn, not
+ *  tokens; `project_block` is how much of `total` rode the cached block. */
 export interface ContextSizes {
   research: number;
   research_dropped_items: number;
@@ -2341,6 +2342,9 @@ export interface ContextSizes {
   open_items: number;
   qc_review: number;
   other: number;
+  /** How much of `total` rode the cached project block (C1) — a subtotal,
+   *  not a slice. */
+  project_block: number;
   total: number;
 }
 

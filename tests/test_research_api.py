@@ -14,6 +14,7 @@ from tests.fakes import (
     FakeClient,
     SequencedFakeClient,
     request_context_text,
+    request_project_block_text,
     research_response,
     text_turn,
     tool_turn,
@@ -255,16 +256,20 @@ def test_research_lifecycle_stream_and_context_splice(monkeypatch):
     # The doc payload reflects the terminal state.
     assert client.get("/api/doc").json()["research_status"] == "complete"
 
-    # The next chat turn's dynamic block carries the profile facts.
+    # The next chat turn's cached project block carries the profile facts
+    # (C1: the profile changes only when a round completes, so it rides the
+    # system prompt's second block rather than the per-turn PROJECT CONTEXT).
     chat_fake = FakeClient([text_turn(["Noted."])])
     _patch_chat_client(monkeypatch, chat_fake)
     client.post("/api/chat", json={"message": "continue"})
-    dynamic = request_context_text(chat_fake.messages.last_request)
-    assert "PROJECT REQUIREMENTS PROFILE" in dynamic
-    assert "2021 VCC governs" in dynamic
+    request = chat_fake.messages.last_request
+    background = request_project_block_text(request)
+    assert "PROJECT REQUIREMENTS PROFILE" in background
+    assert "2021 VCC governs" in background
+    assert "2021 VCC governs" not in request_context_text(request)
     # Stable prompt stayed free of run-specific research data (cacheable —
     # it may MENTION the profile in its policy text, but never carry facts).
-    stable = chat_fake.messages.last_request["system"][0]["text"]
+    stable = request["system"][0]["text"]
     assert "2021 VCC governs" not in stable
 
 
@@ -356,11 +361,11 @@ def test_research_profile_survives_project_round_trip(monkeypatch):
         i["requirement"] == "Grounded fact." for i in snapshot["profile"]["items"]
     )
 
-    # And the restored profile reaches the next turn's context.
+    # And the restored profile reaches the next turn's project block.
     chat_fake = FakeClient([text_turn(["Hi."])])
     _patch_chat_client(monkeypatch, chat_fake)
     client.post("/api/chat", json={"message": "resume"})
-    assert "Grounded fact." in request_context_text(
+    assert "Grounded fact." in request_project_block_text(
         chat_fake.messages.last_request
     )
 

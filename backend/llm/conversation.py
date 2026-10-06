@@ -226,7 +226,16 @@ from ..project_brief import (
 )
 from ..research.engine import RequirementsProfile
 from ..spec_doc.project import sanitize_project_link
-from ..suggestions import SUGGEST_PROMPTS_TOOL, SuggestError, validate_prompts
+from ..suggestions import (
+    REPLY_CHIPS_TAG_PATTERN,
+    RETIRED_TOOL_MESSAGE,
+    SUGGEST_PROMPTS_TOOL,
+    ReplyChipFilter,
+    SuggestError,
+    neutralize_reply_chip_tags,
+    parse_reply_chips,
+    strip_unclosed_reply_chips,
+)
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
@@ -256,7 +265,7 @@ MAX_TOOL_ROUNDS = 50
 
 def _chat_tools() -> list[dict[str, Any]]:
     """The interview tool list: document edits + figures + live web lookups
-    + suggested replies.
+    + the reference, QC, follow-up, fact and recall tools.
 
     Static configuration on purpose — tools precede the system prompt in
     the cached prefix, so anything per-turn here (e.g. a profile-derived
@@ -266,7 +275,11 @@ def _chat_tools() -> list[dict[str, Any]]:
     ``track_followups``, ``record_project_facts`` and then
     ``recall_conversation`` are appended LAST, in that order, so each
     addition leaves the existing tool bytes intact as a stable cached
-    prefix. ``recall_conversation`` is in the list from a session's first
+    prefix. ``suggest_prompts`` is RETIRED — suggested replies ride the
+    reply's ``<suggested_replies>`` block (``backend/suggestions.py``) — but
+    stays declared, at its old position, so saved histories that called it
+    remain valid requests; removal is scheduled for a later release.
+    ``recall_conversation`` is in the list from a session's first
     turn even though nothing is condensed yet: tools render ahead of
     everything else, so adding it only once a conversation was condensed
     would re-write the whole cache at the worst possible moment.
@@ -451,10 +464,11 @@ class SessionState:
     # Not turn-atomic — they arrive through REST, not through a turn — so
     # this needs no begin/commit/rollback, only an in-place reset.
     references: ReferenceDocStore = field(default_factory=ReferenceDocStore)
-    # Suggested-reply chips staged by the model (Batch 9). Turn-atomic,
+    # Suggested-reply chips staged by the model (Batch 9; since 2026-10-06
+    # read off the reply's <suggested_replies> block). Turn-atomic,
     # latest-only: each committed turn REPLACES this with what it staged —
-    # including [] when the tool was not called, which is how the bar winds
-    # down as the section nears issue-ready. A failed turn leaves it
+    # including [] when the reply carried no block, which is how the bar
+    # winds down as the section nears issue-ready. A failed turn leaves it
     # untouched (staging is a turn-local in stream_user_turn, not a store).
     suggested_prompts: list[str] = field(default_factory=list)
     # What the model is waiting on the user for: questions it asked,
@@ -2290,8 +2304,23 @@ def _source_editing_boundary_block(session: SessionState) -> str | None:
 # changes no match.
 _CONTEXT_BOUNDARY_PATTERN = CONTEXT_BOUNDARY_PATTERN
 
+# What the context blocks make inert, in one pass: their own boundary
+# markers, and the reply-chip tag the model ends its closing message with
+# (``suggestions.REPLY_CHIPS_TAG``). The blocks carry imported text,
+# research findings and the user's description verbatim; a planted
+# ``<suggested_replies>`` there is a ready-made block for the model to echo.
+# One alternation rather than two passes, so the per-part accounting below
+# stays one walk over one set of matches. A chip-tag match starts with
+# ``<``, as a marker match starts with ``=`` — never inside a separator.
+_CONTEXT_ESCAPE_PATTERN = re.compile(
+    rf"(?:{_CONTEXT_BOUNDARY_PATTERN.pattern})|(?:{REPLY_CHIPS_TAG_PATTERN.pattern})",
+    re.IGNORECASE,
+)
+
 
 def _escaped_marker(match: re.Match[str]) -> str:
+    if match.group(0).startswith("<"):
+        return neutralize_reply_chip_tags(match.group(0))
     return f"[escaped marker: {' '.join(match.group(0).strip('= ').split())}]"
 
 
@@ -2305,9 +2334,9 @@ def _join_and_neutralize(parts: list[str]) -> tuple[str, list[int]]:
     finding grows or shrinks when made inert), so a part's raw length is not
     what it adds to the text as sent. Each match's characters come off the
     part(s) they were taken from, and its replacement is credited to the part
-    it began in (a match starts with ``=``, never in a separator) — so every
-    character of the result belongs to exactly one part or to a separator,
-    and no part's count can go negative.
+    it began in (a match starts with ``=`` or ``<``, never in a separator) —
+    so every character of the result belongs to exactly one part or to a
+    separator, and no part's count can go negative.
     """
     joined = "\n\n".join(parts)
     matches: list[tuple[int, int, int]] = []
@@ -2317,7 +2346,7 @@ def _join_and_neutralize(parts: list[str]) -> tuple[str, list[int]]:
         matches.append((match.start(), match.end(), len(escaped)))
         return escaped
 
-    text = _CONTEXT_BOUNDARY_PATTERN.sub(replace, joined)
+    text = _CONTEXT_ESCAPE_PATTERN.sub(replace, joined)
     supplied = [len(part) for part in parts]
     if matches:
         spans = []
@@ -2945,6 +2974,30 @@ def _elide_reference_tool_results(
     return result
 
 
+def _without_unclosed_reply_chips(
+    content: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """``content`` with unclosed reply-chip fragments cut from its text (COW).
+
+    Only text blocks, and only when there is something to cut, so every
+    other block — and every text block without a fragment — is the same
+    object it was. A text block the cut leaves blank is dropped (the API
+    refuses whitespace-only text); no other block is.
+    """
+    result: list[dict[str, Any]] = []
+    for block in content:
+        text = block.get("text")
+        if block.get("type") != "text" or not isinstance(text, str):
+            result.append(block)
+            continue
+        trimmed = strip_unclosed_reply_chips(text)
+        if trimmed == text:
+            result.append(block)
+        elif trimmed.strip():
+            result.append({**block, "text": trimmed})
+    return result
+
+
 def _committed_messages(
     new_messages: list[dict[str, Any]],
     user_text: str,
@@ -2959,6 +3012,12 @@ def _committed_messages(
       into every later request).
     - Thinking blocks drop — the adaptive-thinking contract only requires
       them within the turn that produced them.
+    - A ``<suggested_replies>`` block that never closed (a stop, a
+      ``max_tokens`` cut) is cut from its text, which the chat never showed
+      (:func:`suggestions.strip_unclosed_reply_chips`); a text block left
+      blank by that cut goes too, since the API refuses whitespace-only text. A
+      COMPLETE block stays verbatim: it is how the model sees, next turn,
+      the chips it offered — the display strips it instead.
     - Fetched-PDF payloads are elided wholesale (see
       :func:`elide_all_pdf_sources`). While the page-text trim is switched
       on, so is the text of every other fetched page (see
@@ -3001,11 +3060,13 @@ def _committed_messages(
         if message.get("role") != "assistant":
             committed.append(message)
             continue
-        content = [
-            b
-            for b in (message.get("content") or [])
-            if b.get("type") not in _TRANSIENT_BLOCK_TYPES
-        ]
+        content = _without_unclosed_reply_chips(
+            [
+                b
+                for b in (message.get("content") or [])
+                if b.get("type") not in _TRANSIENT_BLOCK_TYPES
+            ]
+        )
         if not content:
             content = [{"type": "text", "text": "[Model reasoning omitted.]"}]
         committed.append({"role": "assistant", "content": content})
@@ -3545,6 +3606,14 @@ def estimated_retained_output(
 # so a 40-op batch streams a handful of "drafting… 2.4k" pulses, not a flood.
 _DRAFT_PROGRESS_INTERVAL_S = 0.25
 
+# While a reply's <suggested_replies> block streams, its text is held back
+# and nothing reaches the chat — but the turn loop checks the Stop button
+# only after a yielded event. So the relay yields a "writing" status (which
+# the chat renders as nothing: text is already showing) at most this often
+# while it holds text: a model that opened the block and never closed it
+# can still be stopped.
+_HELD_TEXT_TICK_S = 0.25
+
 
 def _safe_json(text: str) -> dict[str, Any]:
     """Parse an accumulated tool-input JSON fragment; ``{}`` on garbage."""
@@ -3579,6 +3648,20 @@ def _start_input(block: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _reply_chip_events(inner: str) -> Iterator[dict[str, Any]]:
+    """The ``suggested_prompts`` event for one closed reply block, or nothing.
+
+    A block that does not validate stages nothing and is logged — a count
+    and the reason, never the chips' text.
+    """
+    try:
+        prompts = parse_reply_chips(inner)
+    except SuggestError as exc:
+        _log.warning("Dropped a malformed suggested-replies block: %s", exc)
+        return
+    yield {"type": "suggested_prompts", "prompts": prompts}
+
+
 def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
     """Translate one round's raw stream events into UI event dicts.
 
@@ -3589,6 +3672,22 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
     block's input finishes (``content_block_stop``) — not derived after the
     round from the final message. Empty thinking deltas (``display:
     omitted``) are dropped so they don't prematurely clear the status strip.
+
+    Text is relayed through a per-block :class:`ReplyChipFilter`: the
+    closing message's ``<suggested_replies>`` block never reaches the chat
+    as text. When a block closes it is parsed and validated
+    (:func:`suggestions.parse_reply_chips`) and a ``suggested_prompts``
+    event carries the chips — the same event the retired tool's dispatch
+    yielded; ``stream_user_turn`` stages it. A malformed block yields
+    nothing and is logged ("no chips this turn": correcting it would cost
+    the very round the block exists to save). A block still open when its
+    text block stops (a stop, a ``max_tokens`` cut, a forgotten closing
+    tag) is dropped, logged, and never shown; commit strips its fragment
+    (:func:`suggestions.strip_unclosed_reply_chips`). While text is held,
+    throttled ``writing`` status frames keep the turn loop's Stop check
+    turning over. Thinking summaries pass through the same filter for
+    display only: a block in a progress note stages nothing (it is not the
+    closing message's) and its markup never reaches the Thinking disclosure.
 
     A server-tool input arrives either as streamed ``input_json_delta``
     frames (the direct-caller shape both web tools pin) or complete on the
@@ -3617,7 +3716,9 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
     json_buffers: dict[int, str] = {}
     start_inputs: dict[int, dict[str, Any]] = {}
     block_kinds: dict[int, tuple[str, str]] = {}
+    chip_filters: dict[int, ReplyChipFilter] = {}
     last_progress = time.monotonic()
+    last_held_tick = float("-inf")
     for event in stream:
         try:
             etype = getattr(event, "type", None)
@@ -3628,6 +3729,8 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
                 bname = getattr(block, "name", "") or ""
                 block_kinds[index] = (btype, bname)
                 json_buffers[index] = ""
+                if btype in ("text", "thinking"):
+                    chip_filters[index] = ReplyChipFilter()
                 if btype == "server_tool_use":
                     started = _start_input(block)
                     if started:
@@ -3650,12 +3753,36 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
                 index = getattr(event, "index", 0)
                 if dtype == "text_delta":
                     text = getattr(delta, "text", "") or ""
-                    if text:
-                        yield {"type": "text_delta", "text": text}
+                    if not isinstance(text, str) or not text:
+                        continue
+                    chips = chip_filters.setdefault(index, ReplyChipFilter())
+                    shown, blocks = chips.feed(text)
+                    if shown:
+                        yield {"type": "text_delta", "text": shown}
+                    for inner in blocks:
+                        yield from _reply_chip_events(inner)
+                    if chips.holding:
+                        now = time.monotonic()
+                        if now - last_held_tick >= _HELD_TEXT_TICK_S:
+                            last_held_tick = now
+                            yield {"type": "status", "kind": "writing"}
                 elif dtype == "thinking_delta":
                     text = getattr(delta, "thinking", "") or ""
-                    if text:
-                        yield {"type": "thinking_delta", "text": text}
+                    if not isinstance(text, str) or not text:
+                        continue
+                    # Display hygiene only: a block written into a progress
+                    # note (text before a tool call, on Sonnet 5.5) is not
+                    # the closing message's, so it stages nothing — but its
+                    # markup stays out of the Thinking disclosure too.
+                    chips = chip_filters.setdefault(index, ReplyChipFilter())
+                    shown, _blocks = chips.feed(text)
+                    if shown:
+                        yield {"type": "thinking_delta", "text": shown}
+                    if chips.holding:
+                        now = time.monotonic()
+                        if now - last_held_tick >= _HELD_TEXT_TICK_S:
+                            last_held_tick = now
+                            yield {"type": "status", "kind": "writing"}
                 elif dtype == "input_json_delta":
                     json_buffers[index] = json_buffers.get(index, "") + (
                         getattr(delta, "partial_json", "") or ""
@@ -3674,6 +3801,23 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
                 btype, bname = block_kinds.pop(index, ("", ""))
                 streamed = _safe_json(json_buffers.pop(index, ""))
                 started = start_inputs.pop(index, {})
+                chips = chip_filters.pop(index, None)
+                if chips is not None:
+                    rest, unclosed = chips.finish()
+                    if rest:
+                        yield {
+                            "type": (
+                                "thinking_delta"
+                                if btype == "thinking"
+                                else "text_delta"
+                            ),
+                            "text": rest,
+                        }
+                    if unclosed and btype != "thinking":
+                        _log.info(
+                            "A suggested-replies block never closed; it was "
+                            "dropped and no chips were staged from it."
+                        )
                 if btype != "server_tool_use":
                     continue
                 payload = streamed or started
@@ -3934,34 +4078,23 @@ def _run_record_project_facts(
 def _run_suggest_prompts(
     block: dict[str, Any], trace_handle: Any = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Execute one ``suggest_prompts`` tool_use block.
+    """Answer a call to the RETIRED ``suggest_prompts`` tool.
 
-    The tool result is deliberately compact (``{"suggested": N}`` — token
-    discipline); the validated list travels in the ``suggested_prompts`` UI
-    event, which ``stream_user_turn`` also stages (committed only on turn
-    success, replacing the previous set). A bad payload becomes an
-    ``is_error`` result the model can correct — never a turn failure.
+    Suggested replies ride the closing message's ``<suggested_replies>``
+    block now (see ``backend/suggestions.py``), so a call stages nothing: it
+    gets an ``is_error`` result naming the block, which the model reads
+    before it writes the reply that carries one. Still dispatched — not left
+    to the unknown-tool path — because the tool is still declared.
     """
-    try:
-        prompts = validate_prompts(block.get("input") or {})
-    except SuggestError as exc:
-        return (
-            {
-                "type": "tool_result",
-                "tool_use_id": block.get("id"),
-                "content": f"suggest_prompts rejected (nothing was staged): {exc}",
-                "is_error": True,
-            },
-            [],
-        )
-    _trace.note(trace_handle, f"staged {len(prompts)} suggested prompt(s)")
+    _trace.note(trace_handle, "retired suggest_prompts tool called; nothing staged")
     return (
         {
             "type": "tool_result",
             "tool_use_id": block.get("id"),
-            "content": json.dumps({"suggested": len(prompts)}),
+            "content": RETIRED_TOOL_MESSAGE,
+            "is_error": True,
         },
-        [{"type": "suggested_prompts", "prompts": prompts}],
+        [],
     )
 
 
@@ -4049,12 +4182,17 @@ def _run_read_reference_doc(
     # the chat loop was the one channel receiving it raw: no container to
     # bound it and nothing making the container's own tag inert inside it.
     # The behavioural half rides ``_REFERENCE_DOC_POLICY`` in the stable
-    # prompt; both halves are needed, neither works alone.
+    # prompt; both halves are needed, neither works alone. The reply-chip
+    # tag is made inert here too, chat-side only (research and QC never read
+    # a reply block): a document carrying one must not hand the model a
+    # ready-made block to echo into its reply.
     return (
         {
             "type": "tool_result",
             "tool_use_id": block.get("id"),
-            "content": wrap_reference_doc_body(header, doc.text),
+            "content": neutralize_reply_chip_tags(
+                wrap_reference_doc_body(header, doc.text)
+            ),
         },
         [],
     )
@@ -5115,7 +5253,8 @@ def stream_user_turn(
     ``web_search``/``web_fetch`` events fire the instant a server-tool call
     completes; ``doc_patch`` follows each applied edit batch and ``figure``
     each created figure; a ``suggested_prompts`` event carries the reply
-    chips the model staged this turn, and a ``followups`` event the tracked
+    chips read off the reply's ``<suggested_replies>`` block (never shown
+    as text), and a ``followups`` event the tracked
     questions/decisions/to-dos after any ``track_followups`` call. Then — on
     success — ``open_questions``
     and ``lint`` (if the document changed) and ``turn_complete``, which
@@ -5302,11 +5441,12 @@ def stream_user_turn(
     # matters. Committed beside the doc/figures so a failed turn (history
     # rolled back) leaves the previous measurement standing.
     last_round_context: int | None = None
-    # Turn-local staging for suggested-reply chips: the dispatch loop records
-    # each suggest_prompts call here (latest wins); a successful turn commits
-    # it into session.suggested_prompts, a failed turn drops it with the
-    # generator. Initializes to [] so a turn that never calls the tool
-    # commits an empty set — that "no call = clear" rule is the wind-down.
+    # Turn-local staging for suggested-reply chips: the relay loop records
+    # each <suggested_replies> block that validates here (latest wins); a
+    # successful turn commits it into session.suggested_prompts, a failed
+    # turn drops it with the generator. Initializes to [] so a turn whose
+    # reply carries no block — or only one that never closed or did not
+    # validate — commits an empty set: "no block = clear" is the wind-down.
     staged_suggestions: list[str] = []
     # Turn-local staging for apply_qc_fixes dispositions: recorded on the
     # runner ONLY in the commit block, beside the doc/figure/suggestion
@@ -5453,6 +5593,16 @@ def stream_user_turn(
             stopped_mid_stream = False
             try:
                 for ui_event in _stream_events(stream):
+                    if ui_event.get("type") == "suggested_prompts":
+                        # Turn-local staging: committed on turn success only
+                        # (the latest block in a turn wins by reassignment; a
+                        # failed turn drops this local untouched).
+                        staged_suggestions = list(ui_event["prompts"])
+                        _trace.note(
+                            trace_handle,
+                            f"staged {len(staged_suggestions)} suggested "
+                            "prompt(s) from the reply",
+                        )
                     yield ui_event
                     if session.stop_requested.is_set():
                         stopped_mid_stream = True
@@ -5641,11 +5791,6 @@ def stream_user_turn(
                     )
                 tool_results.append(result)
                 for event in ui_events:
-                    if event.get("type") == "suggested_prompts":
-                        # Turn-local staging: committed on turn success only
-                        # (latest call in a turn wins by reassignment; a
-                        # failed turn drops this local untouched).
-                        staged_suggestions = list(event["prompts"])
                     yield event
             new_messages.append({"role": "user", "content": tool_results})
         else:
@@ -5710,6 +5855,9 @@ def stream_user_turn(
                 # Latest-only replace: whatever this turn staged (including
                 # []) becomes the current chip set. Failure paths never reach
                 # this commit block, so the previous list remains untouched.
+                # A stop or cut that left a block unclosed staged nothing from
+                # it, so the bar clears, as a stop before the retired tool's
+                # call always did: the old chips answered the previous reply.
                 session.suggested_prompts = staged_suggestions
                 qc_dispositions_event: dict[str, Any] | None = None
                 if (

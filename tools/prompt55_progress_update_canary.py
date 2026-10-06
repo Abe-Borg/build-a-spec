@@ -6,11 +6,13 @@ Claude Sonnet 5.5, a note longer than a sentence or two that the model
 writes BETWEEN tool calls comes back as a progress-update ``thinking``
 block, not as ``text``. The chat collapses thinking into its "Thinking"
 disclosure, and commit drops every thinking block, so a question or a brief
-written before the ``suggest_prompts`` call could vanish from the chat
-bubble, the saved conversation, the fact harvest and the model's own memory.
-P55-2 tells the model to make every tool call first and write its reply
-after the last one, where it stays a ``text`` block. This canary checks
-whether that ordering holds on the real model.
+written before the last tool call could vanish from the chat bubble, the
+saved conversation, the fact harvest and the model's own memory. P55-2
+tells the model to make every tool call first and write its reply after the
+last one, where it stays a ``text`` block. Since 2026-10-06 the suggested
+replies ride the end of that reply as a ``<suggested_replies>`` block
+instead of a ``suggest_prompts`` call of their own. This canary checks
+whether that ordering holds on the real model, and reports the block.
 
 It runs ONE real interview turn through the production engine
 (``stream_user_turn``) on a fresh in-memory session with the default
@@ -24,11 +26,17 @@ for byte. Under ``"updates"`` reasoning is hidden and every non-empty
 thinking block IS a progress note, so the canary can tell the two apart.
 
 It prints each round's blocks (type and length), the text of every progress
-note (the conversation is synthetic), the usage, and a verdict:
+note (the conversation is synthetic), the usage, what the closing message's
+suggested-replies block held, and a verdict:
 
 - **pass** when the turn's last round ends normally with closing ``text`` of
-  at least 80 characters that asks a question, and no progress note asks one;
+  at least 80 characters that asks a question, and no progress note asks one
+  (the closing text is judged as the chat shows it, without its
+  suggested-replies block);
 - **fail** otherwise, naming the block that broke the rule.
+
+The block itself is reported, not judged: a turn whose reply carries none
+still passes on its ordering, and the report says the chips were missing.
 
 A failed request (a 400, for example) or a refusal prints the error and
 exits nonzero. The production app keeps ``THINKING_DISPLAY`` at
@@ -38,7 +46,8 @@ does not wait on it.
 
 Opt-in and bounded, like ``tools/fetch_elision_canary.py``: without
 ``--run`` nothing is sent. With ``--run`` it makes the requests of one turn
-(typically three or four rounds) on the interview model with your stored
+(typically two or three rounds, one fewer than before the suggested replies
+moved into the reply) on the interview model with your stored
 key, well under a dollar at list prices. Like any chat turn, it leaves a
 trace in the trace folder when tracing is on.
 
@@ -62,6 +71,13 @@ from backend import settings  # noqa: E402
 from backend.api_key_store import key_status  # noqa: E402
 from backend.llm import conversation  # noqa: E402
 from backend.llm.client import MissingApiKeyError, get_client  # noqa: E402
+from backend.suggestions import (  # noqa: E402
+    REPLY_CHIPS_CLOSE,
+    REPLY_CHIPS_OPEN,
+    SuggestError,
+    parse_reply_chips,
+    strip_reply_chips,
+)
 
 BETA = "thinking-display-updates-2026-08-18"
 DEFAULT_MAX_TOKENS = 32_000
@@ -257,7 +273,8 @@ def _notes(round_: Round) -> list[tuple[int, str]]:
 
 def _closing_text(response: Any) -> tuple[str, str]:
     """The text after the round's last non-text block, and the type of the
-    block that ends the round ("" when it has none)."""
+    block that ends the round ("" when it has none). Raw: the
+    suggested-replies block, when there is one, is still in it."""
     blocks = _blocks(response)
     if not blocks:
         return "", ""
@@ -315,7 +332,8 @@ def verdict(rounds: list[Round]) -> Verdict:
         reasons.append(
             f"The turn's last round stopped on {stop!r}, not end_turn."
         )
-    closing, last_type = _closing_text(last)
+    raw_closing, last_type = _closing_text(last)
+    closing = strip_reply_chips(raw_closing).strip()
     if not closing:
         reasons.append(
             "The turn's last round ends with "
@@ -392,21 +410,37 @@ def report(rounds: list[Round]) -> list[str]:
     lines.append(
         "Tool calls in order: " + (", ".join(calls) if calls else "none") + "."
     )
-    if calls:
-        where = (
-            "the last tool call"
-            if calls[-1] == "suggest_prompts"
-            else "called, but not last"
-            if "suggest_prompts" in calls
-            else "not called"
-        )
-        lines.append(f"suggest_prompts: {where}.")
+    if "suggest_prompts" in calls:
+        lines.append("suggest_prompts: called (retired; it staged nothing).")
     if rounds and rounds[-1].response is not None:
         closing, _last = _closing_text(rounds[-1].response)
+        lines.append(f"Suggested replies: {chip_block_summary(closing)}.")
         if closing:
             lines.append(f"Closing text ({len(closing)} chars):")
             lines.append(closing)
     return lines
+
+
+def chip_block_summary(closing: str) -> str:
+    """What the closing text's suggested-replies block held, in words.
+
+    Reported, never judged (see the module docstring). The LAST complete
+    block counts, as the engine's latest-wins staging does; one still open
+    at the end was cut off and staged nothing.
+    """
+    end = closing.rfind(REPLY_CHIPS_CLOSE)
+    start = closing.rfind(REPLY_CHIPS_OPEN, 0, end) if end >= 0 else -1
+    if start < 0:
+        if REPLY_CHIPS_OPEN in closing:
+            return "a block that never closed (nothing staged)"
+        return "none in the closing message"
+    try:
+        chips = parse_reply_chips(closing[start + len(REPLY_CHIPS_OPEN):end])
+    except SuggestError as exc:
+        return f"a block that did not validate ({exc})"
+    trailing = closing[end + len(REPLY_CHIPS_CLOSE):].strip()
+    where = "at the very end" if not trailing else "with text after it"
+    return f"{len(chips)} chip(s), {where}"
 
 
 def run_turn(client: Any, *, max_tokens: int) -> ProgressUpdateClient:

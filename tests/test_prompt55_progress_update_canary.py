@@ -36,6 +36,7 @@ _CLOSING = (
     "recommend 0.20 gpm/sq ft over 1,500 sq ft."
 )
 _NOTE = "Setting the section header and drafting the first two provisions."
+_CHIPS = '<suggested_replies>["Use your recommended density", "Use 0.30 gpm/sq ft"]</suggested_replies>'
 
 _EDITS = {
     "edits": [
@@ -50,24 +51,19 @@ _EDITS = {
 }
 
 
-def _turn(*, note: str = _NOTE, closing: str = _CLOSING) -> list:
-    """Three rounds: edits (with a progress note), chips, then closing text."""
+def _turn(*, note: str = _NOTE, closing: str = _CLOSING, chips: str = _CHIPS) -> list:
+    """Two rounds: edits (with a progress note), then the closing text, which
+    ends with its suggested-replies block (one round fewer than when the
+    chips were a ``suggest_prompts`` call of their own)."""
     return [
         raw_turn(
             [thinking_block(note), tool_use_block("toolu_edit", "apply_spec_edits", _EDITS)],
             stop_reason="tool_use",
         ),
         raw_turn(
-            [
-                tool_use_block(
-                    "toolu_chips",
-                    "suggest_prompts",
-                    {"prompts": ["Use your recommended density"]},
-                )
-            ],
-            stop_reason="tool_use",
+            [thinking_block(""), text_block(f"{closing}\n\n{chips}" if chips else closing)],
+            stop_reason="end_turn",
         ),
-        raw_turn([thinking_block(""), text_block(closing)], stop_reason="end_turn"),
     ]
 
 
@@ -145,8 +141,8 @@ def test_every_round_resends_exactly_what_the_production_engine_builds():
     client, beta = _beta_client(_turn())
     wrapped = canary.run_turn(client, max_tokens=32_000)
 
-    assert len(wrapped.rounds) == len(plain.messages.requests) == 3
-    assert len(beta.messages.requests) == 3
+    assert len(wrapped.rounds) == len(plain.messages.requests) == 2
+    assert len(beta.messages.requests) == 2
     for round_, production, sent in zip(
         wrapped.rounds, plain.messages.requests, beta.messages.requests, strict=True
     ):
@@ -163,8 +159,59 @@ def test_the_verdict_passes_a_reply_written_after_the_last_tool_call():
     assert result.passed, result.reasons
     lines = canary.report(wrapped.rounds)
     assert f"  progress note [0]: {_NOTE}" in lines
-    assert "Tool calls in order: apply_spec_edits, suggest_prompts." in lines
-    assert "suggest_prompts: the last tool call." in lines
+    assert "Tool calls in order: apply_spec_edits." in lines
+    assert "Suggested replies: 2 chip(s), at the very end." in lines
+    assert not any(line.startswith("suggest_prompts:") for line in lines)
+
+
+@pytest.mark.parametrize(
+    ("chips", "summary"),
+    [
+        ("", "none in the closing message"),
+        ('<suggested_replies>["Use it"', "a block that never closed (nothing staged)"),
+        ("<suggested_replies>not json</suggested_replies>", "a block that did not validate"),
+        ('<suggested_replies>["Use it"]</suggested_replies> And more.', "1 chip(s), with text after it"),
+    ],
+)
+def test_the_report_says_what_the_block_held_without_judging_it(chips, summary):
+    """The block is reported, never judged: the ordering verdict is the
+    canary's subject, and a reply without chips still answers it."""
+    client, _fake = _beta_client(_turn(chips=chips))
+    wrapped = canary.run_turn(client, max_tokens=32_000)
+    assert any(
+        line.startswith(f"Suggested replies: {summary}")
+        for line in canary.report(wrapped.rounds)
+    )
+    assert canary.verdict(wrapped.rounds).passed
+
+
+def test_a_retired_suggest_prompts_call_is_reported():
+    turns = _turn()
+    turns.insert(
+        1,
+        raw_turn(
+            [tool_use_block("toolu_chips", "suggest_prompts", {"prompts": ["Use it"]})],
+            stop_reason="tool_use",
+        ),
+    )
+    client, _fake = _beta_client(turns)
+    lines = canary.report(canary.run_turn(client, max_tokens=32_000).rounds)
+    assert "suggest_prompts: called (retired; it staged nothing)." in lines
+
+
+def test_the_verdict_judges_the_closing_text_without_its_chip_block():
+    """A question mark or length inside the block is not the reply asking
+    anything: the chat never shows the block."""
+    client, _fake = _beta_client(
+        _turn(
+            closing="Done.",
+            chips='<suggested_replies>["' + "Why not the alternative layout?" * 3 + '"]</suggested_replies>',
+        )
+    )
+    result = canary.verdict(canary.run_turn(client, max_tokens=32_000).rounds)
+    assert not result.passed
+    assert "The closing text is 5 characters, under 80." in result.reasons
+    assert "The closing text asks no question." in result.reasons
 
 
 def test_the_verdict_fails_a_question_in_a_progress_note():

@@ -18116,3 +18116,276 @@ waiting card says whom it is waiting on. Set
   once and re-read from there by every agent in the run") did not hold for
   research's four areas, which each wrote their own copy; it now holds
   whenever the lead starts answering within the wait.
+
+## Suggested replies ride the reply — implemented notes (2026-10-06)
+
+The reply chips above the composer were a `suggest_prompts` tool call. Since
+P55-2 the reply has to come AFTER the last tool call (on Claude Sonnet 5.5,
+text between tool calls comes back as a progress-update thinking block that
+commit drops), so every turn paid one more request whose only new content was
+`{"suggested": N}`: a re-read of the whole request — tools, system, history,
+PROJECT CONTEXT — at the cache-read price plus a small write, and a second or
+two of latency. At Sonnet 5.5's $0.20/MTok cache-read rate that is about
+$0.02 a turn at 100k tokens of context and $0.12 at 600k. The chips now end
+the closing message as one tagged block, so a question-only turn is one
+request (was two) and a drafting turn two (was three). Each committed turn's
+trace has one `round_end` fewer, and its usage one fewer full cache read.
+
+No route, SSE event type, dependency, setting, project-format change, QC
+schema or protocol bump, or version bump. The `suggested_prompts` event, the
+session field, the doc payload, the project-file key and the frontend bar are
+unchanged; the user sees the same chips, now arriving as the reply finishes
+rather than just before it starts (they were only clickable once the turn
+ended either way).
+
+- **The block.** `<suggested_replies>[…]</suggested_replies>` holding a JSON
+  array of strings, on its own line at the very end of the closing message
+  (`backend/suggestions.py`: `REPLY_CHIPS_TAG`, `REPLY_CHIPS_OPEN`,
+  `REPLY_CHIPS_CLOSE`). JSON because the chips are free text that can contain
+  commas, quotes and dashes, and `json.loads` draws their boundaries exactly.
+  The tag is matched EXACTLY (case-sensitive, no attributes): the stable
+  prompt teaches exactly this spelling, and an exact match is what lets the
+  relay, the commit and the transcript agree byte for byte. The name is
+  specific enough that no specification, user message or attached document
+  plausibly carries it, and the data channels neutralize it anyway.
+- **One grammar, three places.** Complete blocks anywhere are removed; an
+  opening tag with no closing tag after it removes everything after it.
+  `ReplyChipFilter` applies it incrementally in the relay, `strip_reply_chips`
+  applies it to a whole text for display, and `strip_unclosed_reply_chips`
+  applies only its unclosed half at commit. The filter holds back any tail that
+  could still become the opening tag (`<`, `<sugg`, …) until the next delta
+  decides, and searches for the closing tag from where the last search
+  stopped, so a long unclosed block is scanned once. Concatenating what the
+  filter releases equals `strip_reply_chips` of the whole text however the
+  deltas split — fuzz-pinned over random chunkings, so the live bubble and a
+  reloaded transcript cannot disagree.
+- **The relay** (`conversation._stream_events`). Every text block gets a
+  filter; held text never becomes a `text_delta`. When a block closes,
+  `parse_reply_chips` (`json.loads` + `validate_prompts({"prompts": …})` —
+  the retired tool's exact rules) runs, and a valid set yields the same
+  `suggested_prompts` event the tool's dispatch used to yield;
+  `stream_user_turn` stages it (latest valid block in a turn wins) and notes
+  it in the trace. A block that does not validate yields nothing and logs
+  the reason to `buildaspec.chat` (never the chips' text). It cannot be
+  corrected: a correction would cost the very round this change removes, so
+  it means "no chips this turn". A block still open at `content_block_stop`
+  is dropped and logged. Thinking blocks pass through the same filter for
+  display only: a block written into a progress note is not the closing
+  message's, stages nothing, and its markup stays out of the Thinking
+  disclosure.
+- **The Stop button mid-block.** The turn loop checks the stop flag only
+  after each yielded event, and held text yields none. So while text is held,
+  the relay yields a `writing` status at most every `_HELD_TEXT_TICK_S`
+  (0.25 s). The chat renders `writing` as nothing — text is already showing —
+  and a model that opened the block and never closed it can still be
+  stopped.
+- **Commit semantics, decided.** Latest-only and turn-atomic as before: a
+  committed turn REPLACES the set with what it staged; no block, or only one
+  that never closed or did not validate, commits `[]` (the wind-down); a
+  failed turn keeps the previous set. A stop or `max_tokens` cut mid-block
+  CLEARS the bar rather than keeping the prior set. That is what a stop before
+  the old tool call always did, and the old chips answered the previous
+  reply's questions, not the new reply's.
+- **How the model sees its previous chips: the block stays in history.** A
+  complete block is kept verbatim in the committed reply text. The tool's
+  input used to ride history verbatim for the same reason, and every past
+  reply ending in the block keeps the format in front of the model in a long
+  conversation. Stripping it and re-presenting the chips through the PROJECT
+  CONTEXT was rejected: it would show only the latest set, and the model
+  would lose the in-context examples of its own format. `_committed_messages`
+  cuts only an UNCLOSED fragment (`_without_unclosed_reply_chips`, which
+  returns every other block as the same object), and drops a text block
+  only when that cut leaves it blank (the API refuses whitespace-only text;
+  no other block is dropped, so every turn without a fragment commits the
+  bytes it always did). An assistant message left with nothing gets the
+  existing placeholder.
+- **Everything that shows or mines committed text strips the block.**
+  `spec_doc.project.chat_transcript` strips assistant text, so the reloaded
+  chat, the fact harvest's transcript (`harvest.conversation_turns`), the
+  reply digests and `assistant_bubble_count` all read replies as the user
+  saw them, and a chip offering "The ceiling height is 32 ft" is never
+  harvested as a fact. `compaction.recall_turns` strips too, so a recall
+  search cannot find a chip the user never sent. No digest stored before
+  this change moves: those replies carry no block.
+  `compaction.transcript_digest` deliberately stays over raw text (an
+  identity, deterministic either way).
+- **Neutralized where frames already are.** `REPLY_CHIPS_TAG_PATTERN`
+  (any case, inner whitespace, a closing slash, stray attributes; the
+  attribute run bounded at 64 and stopping at `<`, so an unclosed run cannot
+  go quadratic) and `neutralize_reply_chip_tags` make the tag inert with the
+  disclosed `[escaped tag: …]` posture. The places: the PROJECT CONTEXT and
+  the project background, through `_CONTEXT_ESCAPE_PATTERN` — one alternation
+  with the boundary markers, so `_join_and_neutralize`'s per-part accounting
+  stays one walk (a chip match starts with `<`, never in a separator); the
+  `read_reference_doc` result, chat-side only, since research and QC never
+  read a reply block and their bytes stay put; and compaction's frames
+  (`neutralize_compaction_frames`: the summary, recalled turns, the ledgers).
+  User text is not touched: it is the user's own, and the chat shows it as
+  typed.
+- **The retired tool stays declared.** Saved projects carry historical
+  `suggest_prompts` `tool_use` blocks. The bundled API reference was checked
+  and does not establish that a history naming an undeclared tool validates:
+  its documented withdrawal (`tool_removal`) even leaves the entry in
+  `tools`. So `SUGGEST_PROMPTS_TOOL` keeps its name, position and schema,
+  with a description that says "Retired — do not call this tool" and points
+  at the block. A call is still dispatched, and gets an `is_error` naming the
+  block (`RETIRED_TOOL_MESSAGE`) that stages nothing. The model reads it
+  before it writes the reply that carries a block. **Removal is scheduled
+  for a later release**, once the API's behaviour on such histories is
+  confirmed (or the saved histories are rewritten at load).
+- **Prompts.** `_HOW_YOU_WORK` step 2 no longer names `suggest_prompts`;
+  step 3 ends the reply with the suggested replies, and the why-paragraph
+  lists them among what belongs in the closing message.
+  `_SUGGESTED_PROMPTS_POLICY` teaches the block with one example line: write
+  nothing after it, never mention it, never write the tag for anything else,
+  keep it valid JSON with at most five chips (a block that breaks the rules
+  is dropped whole), and do not call the retired tool. Its existing rules
+  (user's voice, answers first, no panel actions, wind down) are unchanged.
+  `_REPLY_AFTER_TOOL_CALLS` became "Order matters: make every tool call
+  first, and write your whole reply to me after them, as your closing
+  message, with the suggested replies at its very end." The full-draft and
+  adapt directives close with the summary and questions "with suggested
+  replies that answer them". Both debriefs "End the brief by asking … with
+  suggested replies — …", and the prerequisite turns "Offer" the likely
+  answers. The P55-2 rule stands — the reply comes after the last tool call;
+  the chips simply ride it. The compaction summary instruction adds "and do
+  not end it with a suggested-replies block". The summary fork carries the
+  chat's system prompt, and `extract_summary` reads only the `<summary>`
+  anyway.
+- **Cache.** The stable prompt and one tool description changed, so every
+  open chat session writes its cached prefix once more after the update.
+  Research, Final QC, the harvest and template generalization never embed
+  the chat's system prompt or tool list, so their request bytes are
+  unchanged and no retained Final QC result reads stale.
+- **The canary** (`tools/prompt55_progress_update_canary.py`) now judges the
+  closing text as the chat shows it (block stripped), and reports — never
+  judges — what the block held (`chip_block_summary`: none, unclosed,
+  invalid, or N chips at the very end / with text after it). It also says
+  when the retired tool was called. Its turn is typically two or three
+  requests, one fewer than before; the ground rules' count is corrected in
+  place.
+- **Trust dossier.** Runtime 9 and the blast-radius row say the model ends
+  its reply with the chips, that the application checks them and hides the
+  markup, and that they stay with the reply in the stored conversation.
+  `frontend/tests/verificationCopy.test.ts` pins that copy to the retired
+  tool's description and the tag constant.
+- **Tests.** `tests/test_suggested_prompts.py` is rebuilt around the block:
+  the grammar (parse, both strips, the neutralizer), the filter fuzzed
+  against `strip_reply_chips` over random chunkings, the relay (held markup,
+  the event, the held-text ticks, an unclosed block dropped and logged, a
+  held fragment released, a block in a progress note hidden and not staged),
+  and the turn through `/api/chat`. The turn tests cover: one request for a
+  question-only turn and two for a drafting turn, the block kept verbatim in
+  history and stripped from the transcript, the next request carrying it
+  once while the system prompt and project block stay byte-identical, no
+  block → clear, an empty array → clear, a failed turn keeping the prior
+  set, malformed blocks → no chips + a log line with no chip text, a
+  `max_tokens` cut and a Stop mid-block → reply kept, fragment cut, bar
+  cleared, a fragment-only reply, latest valid block wins while a broken one
+  stages nothing, the retired tool's `is_error` and its unchanged
+  declaration, a project saved with tool calls loading and continuing,
+  planted blocks inert in the context, the project block and a reference
+  document, and the harvest and recall never reading a chip as said.
+  `tests/test_prompt55_closing_message.py` pins the new prompt, the retired
+  description and the shared sentence; it also checks that no directive stages
+  the chips as a step of its own. `tests/test_prompt55_progress_update_canary.py`
+  scripts the two-round turn and pins the block report and the stripped
+  verdict. `tests/test_chat_compaction.py` pins the summary clause, the
+  frames' chip escape, and the engine's combined escape pattern (still built
+  from compaction's object, still linear on 60,000 `=` and 20,000
+  `<suggested_replies x`). The empty-call audit in
+  `tests/test_prompt55_parsing_and_harvest.py` drops the retired tool's row.
+- **Reversion evidence.** Each mechanism was reverted in place, the targeted
+  tests run, and the file restored byte for byte (asserted). Every row
+  failed:
+
+| Reversion | Failed |
+|---|---|
+| The relay streams held markup as text | 10 |
+| The relay never emits the chips | 14 |
+| The turn never stages the relay's chips | 8 |
+| Commit keeps an unclosed fragment | 3 |
+| Commit keeps a text block the cut emptied | 1 |
+| The transcript shows the block | 2 |
+| Recall reads chips as said | 1 |
+| No held-text tick (Stop waits for the block) | 2 |
+| Thinking display unfiltered | 1 |
+| The filter does not hold a possible tag | 16 |
+| Chips skip `validate_prompts` | 8 |
+| The context escape without the chip tag | 2 |
+| A reference document's block not neutralized | 1 |
+| Compaction frames keep the chip tag | 1 |
+| The tag pattern unbounded (quadratic) | 1 |
+| The retired tool still stages | 1 |
+| The retired tool removed from the list | 3 |
+| The retired tool's description invites a call | 1 |
+| The policy without the block | 2 |
+| Step 2 names `suggest_prompts` last again | 2 |
+| The ordering sentence makes the chips a tool call | 1 |
+| A directive stages the chips first | 3 |
+| The summary instruction without the block clause | 1 |
+| The canary judges the raw closing text | 2 |
+| The canary's report without the block | 5 |
+| The dossier describes a tool call again (`npm test`) | 1 |
+
+**Validation.** Untouched base (`d8cda0b`): 3703 passed, 64 skipped, 1
+failed (the flaky test below). With this change: 3762 passed, 64 skipped, 0
+failed. `ruff check .` clean; `npm test` 513 passed (was 512); `npm run
+build` passed.
+
+**Found, not fixed (out of scope).**
+`tests/test_cost_checks_tail_value.py::test_the_measurement_is_invisible`
+fails intermittently on an untouched checkout of this change's base (1 run in
+3 locally, Python 3.13): two runs of the same research round build requests
+whose canonical forms differ. It is a research/cost-check test this change
+does not touch. It failed the same way in the baseline run and in one of this
+branch's runs. One branch run also failed
+`tests/test_chunk8_opc_adversarial.py::test_fully_strict_main_is_rejected_atomically_without_source_state`
+(a DOCX import route, untouched here) while a frontend build competed for
+the CPU; it passed 3 of 3 in isolation and in the final full run.
+
+**Release-note draft for the next release** (beside the research-effort,
+final-submission, web-tool, project-background and research-stagger drafts;
+`v1.22.1` is published and there is no newer entry, so nothing was added to
+`backend/release_notes.py` and the version stays `1.22.1`): "Replies arrive
+sooner and cost less. The one-tap reply suggestions now come at the end of
+the assistant's reply instead of in a separate step, so a question takes one
+request instead of two and a drafting turn two instead of three. The chips
+look and work the same; they now appear as the reply finishes."
+
+**Errata.**
+- "Batch 9 — implemented notes (v1.4.0: dynamic suggested-prompts bar)"
+  describes `suggest_prompts` as the live third chat tool whose `tool_use`
+  input rides committed history, and "not calling the tool" as the clear.
+  Since this change the chips ride the reply's block, which stays in the
+  committed reply text; "no block" is the clear. The tool is retired and
+  stays declared until a later release.
+- "The reply comes after the last tool call — implemented notes (5.5
+  prompting upgrade, P55-2)" says `_HOW_YOU_WORK` step 2 puts
+  "`suggest_prompts` last of all", that the policy and the tool description
+  say "LAST tool call, then the closing message", and that the canary's turn
+  is three or four requests. Step 2 no longer names it, the policy teaches
+  the block, the description says the tool is retired, the shared sentence
+  puts the chips at the end of the closing message, and the canary's turn is
+  typically two or three requests.
+- "The 5.5 prompting upgrade, as shipped" (its P55-2 row) says "make every
+  tool call first (`suggest_prompts` last)"; the same correction applies.
+- CLAUDE.md's `suggested_prompts` protocol row, its "Strip at commit"
+  invariant and the ground rules' canary request count are corrected in
+  place, since they describe the current state.
+
+No paid API call was made. The saving is structural: a committed turn's
+trace has one `round_end` fewer, and Settings → Developer tools shows the
+turn's usage with one fewer full cache read.
+
+**PR #272 review correction (Codex).** A reply that was nothing but its
+block stripped to empty text, so `chat_transcript` dropped the assistant
+entry. The user's next message (typically the chip itself) then merged into
+the one before it on reload, shifting the bubble count, reply digests and
+harvest turn numbers away from the live chat, which always shows one
+assistant bubble per turn. `chat_transcript` now keeps an empty assistant
+entry for an assistant message whose text was only a block. Later text in the
+same turn merges into it without a stray separator. A text-less message that
+never carried a block is reduced exactly as before.
+`test_a_chip_only_reply_keeps_its_turn_in_the_transcript` pins it, and
+fails with the entry removed.

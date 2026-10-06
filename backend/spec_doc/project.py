@@ -28,6 +28,7 @@ from ..llm.server_tool_pairing import (
     count_unpaired_server_tool_uses,
     without_unpaired_server_tool_uses,
 )
+from ..suggestions import strip_reply_chips
 
 _log = logging.getLogger("buildaspec.project")
 
@@ -494,25 +495,45 @@ def chat_transcript(history: list[dict[str, Any]]) -> list[dict[str, str]]:
 
     Tool plumbing (tool_use / tool_result blocks) is dropped, and the text
     on either side of a tool round merges into one assistant bubble —
-    matching what the user saw stream in live.
+    matching what the user saw stream in live. So is the reply's
+    ``<suggested_replies>`` block: committed history keeps it for the model,
+    and the chat relay never streamed it, so it is stripped here by the
+    same grammar (``suggestions.strip_reply_chips``). Everything built on
+    this reduction — the fact harvest's transcript, the reply digests, the
+    bubble count — therefore reads replies as the user saw them, never a
+    chip as something the conversation said.
     """
     transcript: list[dict[str, str]] = []
     for message in history:
         role = message.get("role")
         if role not in ("user", "assistant"):
             continue
-        parts = [
+        raw = [
             block.get("text", "")
             for block in (message.get("content") or [])
             if isinstance(block, dict)
             and block.get("type") == "text"
             and isinstance(block.get("text"), str)
         ]
+        parts = [strip_reply_chips(p) for p in raw] if role == "assistant" else raw
         text = "\n\n".join(p for p in parts if p).strip()
         if not text:
+            # A reply that was nothing but its suggested-replies block still
+            # took its turn: the chat showed an (empty) assistant bubble for
+            # it. Keeping the entry keeps the turn boundary — without it the
+            # user's next message (often a chip) would merge into the one
+            # before, and the bubble count, reply digests and harvest turn
+            # numbers would all shift (caught by Codex review on PR #272).
+            if (
+                role == "assistant"
+                and any(p.strip() for p in raw)
+                and not (transcript and transcript[-1]["role"] == "assistant")
+            ):
+                transcript.append({"role": "assistant", "text": ""})
             continue
         if transcript and transcript[-1]["role"] == role:
-            transcript[-1]["text"] += "\n\n" + text
+            previous = transcript[-1]["text"]
+            transcript[-1]["text"] = f"{previous}\n\n{text}" if previous else text
         else:
             transcript.append({"role": role, "text": text})
     return transcript

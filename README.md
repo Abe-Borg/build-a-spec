@@ -163,6 +163,77 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — one writing policy for drafting and Final QC
+
+No release entry yet: v1.23.0 is published and its entry is frozen, so the
+release-note draft is in docs/as-built.md ("The specification writing policy
+is one versioned source for drafting and Final QC"). The rules, how they
+were reconciled with what came before, and what was and was not measured
+are in [docs/writing-policy.md](docs/writing-policy.md).
+
+The assistant and Final QC used to work from different instructions about
+where a requirement belongs. The drafting prompt said "three parts,
+imperative language" in two lines; Final QC's coordination reviewer asked
+for a submittal and an execution provision for every product, whatever your
+template said; and neither knew how to move a provision to another PART
+with edit operations that cannot change a provision's parent. Now both read
+one versioned writing policy, word for word.
+
+- **Where a requirement goes.** PART 1 holds administration and
+  coordination, PART 2 what the product is, PART 3 how and where the work
+  is installed and verified. Factory tests go in PART 2 and field tests in
+  PART 3, with a report submission in PART 1 only where a report is
+  required. Product rows of a schedule support PART 2, assignments PART 3,
+  timetables PART 1. Fabrication stays in PART 2 even on site. Commissioning,
+  delegated design and other cross-cutting subjects go where your template
+  puts them.
+- **Your template wins.** Your project's requirements, your client's or
+  agency's template (an imported office master or a template starter
+  included) and the section's own conventions govern where they speak; an
+  article layout like the hyperscale starter's DESIGN CRITERIA in PART 1 is
+  a convention, not a defect. A Division 01 section keeps its
+  administrative content in PART 1, and a Division 00 document is not forced
+  into three parts — the assistant says what the app cannot represent
+  instead.
+- **Moving a requirement keeps its meaning.** A split or relocation carries
+  every actor, condition, exception, qualifier, value, unit, tag and
+  acceptance criterion. Correcting placement or wording never changes a
+  manufacturer, duty, test, tolerance, warranty or scope; a technical change
+  is proposed separately for you to approve. Nothing is invented to fill a
+  gap — a cited test procedure sets no acceptance limit until you supply
+  one.
+- **Final QC reviews against the same rules.** Its reviewers no longer ask
+  for a clause per product, and judge placement in context, never by a word
+  like "test". A Final QC fix that relocates or splits a provision is
+  offered for one-click apply only when it carries the provision intact —
+  every value with its unit, tag, standard designation and section number,
+  its source link, its subparagraphs — and does not upgrade its status. A
+  provision with subparagraphs cannot be moved in one fix, so such a
+  finding stays advisory. On an imported Word master kept in its original
+  formatting, moving content between parents is not available, so a
+  relocation there stays advisory and the assistant points you to **Edit
+  freely** or to Word.
+- **A new lint finding: `unresolved_reference`.** A provision that cites
+  "Article 2.3" or "Paragraph 3.2.A" that this section does not have — the
+  reference an added, deleted or relocated provision leaves behind. It never
+  flags a reference whose sentence names another section, a division, the
+  contract, a code or a standard, and skips preserved blocks and Division 00
+  documents. Like every lint finding it counts against issue readiness.
+- **The Final QC report names the policy** it reviewed against ("Writing
+  policy reviewed against: spec-writing/1 (sha256 …)"), and the input
+  manifest records it. A saved Final QC review therefore reads out of date
+  once after updating and needs a re-run before its fixes can be applied.
+
+The first message after updating writes the conversation's cache once, as
+each change to the assistant's standing instructions does. Measured offline
+(no request sent), the instructions the assistant reads grow by about 7,500
+characters (roughly 1,900 tokens) and Final QC's lens and verifier
+instructions by about 10,300 each; all of it rides the cached part of the
+request, so after a conversation's first message it is read from the cache
+rather than written again. What that costs and saves on real requests, and
+whether drafts and reviews actually follow the policy better, has not been
+measured: that takes paid requests, which only the owner runs.
+
 ## Current Status — gaps wait on you, not in the document (needs input and TBDs retired from the panel, tour and tutorial)
 
 No release entry yet: v1.23.0 is published and its entry is frozen, so the
@@ -3703,6 +3774,17 @@ limits for owner review, not provider guarantees. Small samples, pilots,
 missing evidence and regressions leave the assessment incomplete.
 **Even a passing assessment leaves adoption pending.** A later PR must
 review the real measurements before changing production compaction.
+
+The writing-policy report is offline and costs nothing: it prints the
+policy's version and hashes, the size of every prompt that carries it beside
+the baseline recorded before it landed (`tools/writing_policy_baseline.json`),
+and each placement case's before/after assessment
+(`tests/fixtures/writing_policy/placement_cases.json`). It never builds an
+API client:
+
+```
+.\.venv\Scripts\python tools\writing_policy_eval.py
+```
 
 The DOCX fidelity contract, fixture layers, frontend checks, and release
 verification commands are documented in

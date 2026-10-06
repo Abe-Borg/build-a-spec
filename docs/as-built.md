@@ -19130,3 +19130,129 @@ still counts against issue readiness, and its *needs input* badge clears in
 one click (✓ to confirm, ≈ to mark assumed). An unnamed section shows a
 greyed hint instead of [TBD]. The guided tour starts again from the
 beginning once, because a step was removed."
+
+## The specification writing policy is one versioned source for drafting and Final QC — implemented notes (2026-10-06)
+
+The owner's coding-agent brief ("Integrate a shared, versioned writing
+policy into drafting and Final QC", 2026-10-06), phases 1–4 less the
+owner-run live measurement, which is its own change. The policy rationale,
+reconciliation table, source map, capability gaps and measurements are in
+[docs/writing-policy.md](writing-policy.md); this is the build record.
+
+### What changed
+
+- **`backend/writing_policy.py`** (new): `SECTIONS` — seven titled groups of
+  rules (structure and governing conventions; placement by function;
+  preserving meaning; specification voice; one authoritative requirement;
+  references and missing inputs; relocation with this app's operations) —
+  `core_text()`, `drafting_block()` (preamble + core + the owner's voice
+  examples), `review_block()` (`<writing_policy version="spec-writing/1">`
+  framing + core), `manifest_facts()`, `WRITING_POLICY_VERSION = 1`,
+  `CORE_SHA256`. `PLACEMENT_EXAMPLE` (the brief's V1 example) renders only
+  with `drafting_block(placement_example=True)`, which nothing in production
+  calls.
+- **Drafting prompt** (`prompts.render_system_prompt`): renders
+  `drafting_block()` once, after `_PROVENANCE`, where `_SPEC_VOICE` was.
+  `_SPEC_VOICE` (text unchanged, now policy group 4) and
+  `_SPEC_CONVENTIONS_ENGINE` (folded into groups 1 and 4) are gone; the
+  module's conventions render under "# Discipline conventions".
+  `_TOOL_GUIDE` points its move sentence at the relocation rule;
+  `_LINT_POLICY` names `unresolved_reference`; `_GAP_AND_ADAPT`,
+  `FULL_DRAFT_DIRECTIVE` and `ADAPT_IMPORTED_DIRECTIVE` gain one line each.
+  The stable prompt and the two directives changed bytes, so every open
+  session rewrites its cached prefix once after upgrade (as PRs 1–4 already
+  cost since 1.23.0).
+- **Request path**: unchanged. `_stable_system_blocks` already carries the
+  rendered prompt in every chat round, both retries (display degrade, too
+  long), every pause resume and the compaction fork; history never held it.
+  The tests below prove it rather than assume it.
+- **Final QC**: `_lens_system_prompt` and `_verifier_system_prompt` render
+  `review_block()` once (consolidation does not). The lens output rules gain
+  the relocation rule (add + delete carrying text, status, source; null ops
+  when there are subparagraphs) and "a placement or wording fix stays
+  editorial". The verifier gains what to refute and four more
+  `ops_adequate: false` grounds. Lens briefs reconciled in `qc/schema.py`:
+  coordination (no clause demanded per product; placement in context;
+  `Article N.N` references; compare before calling duplicates), completeness
+  (template omissions are not missing), enforceability (obligations,
+  permissions, advice; vague language), provenance (a default asserted as
+  fact).
+- **Manifest**: `build_qc_input_manifest` gains a top-level
+  `writing_policy: manifest_facts()`. The key is always present, so every
+  retained report reads stale once after the upgrade, and any later change
+  to the review rendering or the version reads stale too, document
+  untouched. `QC_PROTOCOL_VERSION` is unchanged. The Word report gains
+  "Writing policy reviewed against" (`qc_writing_policy_label`, read from
+  the run's own manifest; a legacy report says "Not recorded").
+- **`backend/spec_doc/obligations.py`** (new): `obligation_anchors`,
+  `anchor_present`, `relocation_problems`. `_validate_ops` runs the check
+  after the dry run and before the imported-source gate; a problem keeps the
+  finding advisory with the reason. Scope and limits: docs/writing-policy.md.
+- **Lint**: `unresolved_reference` in `linting.py` (rule list in its
+  docstring). Every lint issue blocks readiness, which is why the rule is
+  narrow and why there is no article-title placement rule.
+- **`tools/writing_policy_eval.py`** (new): fixture loader, `assess`, and an
+  offline report against `tools/writing_policy_baseline.json`. It builds no
+  client.
+
+### Tests and reversion evidence
+
+New files: `tests/test_writing_policy.py` (60: version pin, both renderings,
+every brief rule by its words, the needs_input reconciliation, prompt
+placement, one copy per request through a tool round, a pause resume, the
+display-degrade and too-long retries, the compaction fork and a project
+reload, no copy in history or the project file, breakpoint count and TTL
+order, simulated cache reads, forged policy text in a project description,
+research finding, reference document and paragraph reaching only user-role
+content), `tests/test_writing_policy_qc.py` (26: review block once in lens
+and verifier and absent from consolidation, identical core across writer and
+reviewers, reconciled briefs, manifest key, staleness on a policy edit and a
+version bump with the document unchanged, legacy reports stale, the Word
+report row, intact/lossy/status/source/subparagraph/removal/move relocation
+fixes on a native document, every fixture's reviewed edit safe and lossy
+relocations not, and the same relocation safe natively but refused by an
+imported master's boundary while a status fix there still passes),
+`tests/test_obligations.py` (10), `tests/test_unresolved_reference_lint.py`
+(22, including zero hits across the fixtures and curated templates), and
+`tests/test_writing_policy_eval.py` (22: the nine cases, reviewed outcomes
+pass and lint clean, every lossy edit caught for its recorded reason, the
+"before" misplacements, and the offline report building no client).
+
+Sixteen reversions, each restored, each failing a test: the policy also
+spliced into the project block; rendered twice; dropped from the drafting
+prompt; a rule edited without a version bump (fails the pin and the brief
+rule); the manifest key removed; the verifier without the policy; the
+relocation guard disabled; the blanket per-product rule restored; the
+status-upgrade, subparagraph and carried-coverage rules each disabled; the
+lint's other-document skip removed; the lint rule disabled; the assessor
+ignoring PART; the assessor ignoring invented anchors; the Word report row
+removed. With all restored, every new file passed.
+
+### Validation
+
+Ruff, the five new test files and every existing file importing the prompt,
+the QC engine, the lens briefs, the lint or the Word report
+(`test_spec_voice`, `test_spec_voice_lint`, `test_spec_modules`,
+`test_linting`, `test_qc*`, `test_app`, `test_context_sizes`,
+`test_chat_compaction`, `test_review_report`, `test_debrief`,
+`test_tutorial`, `test_templates`, `test_prompt55_*`,
+`test_source_capabilities`, `test_spec_doc` and fourteen more) passed
+locally: 1,757 tests in one run, 140 of them new. The full backend suite is CI's (see Commands in
+CLAUDE.md). No frontend file changed. No paid API call was made: live
+quality and runtime remain unmeasured.
+
+### Release-note draft (for the release after 1.23.0)
+
+"**One writing policy for drafting and Final QC.** The assistant and Final
+QC now work from the same rules for where a requirement belongs (PART 1
+administration, PART 2 products, PART 3 execution, with factory and field
+testing, schedules and on-site fabrication spelled out), how it keeps its
+meaning when it moves, and how it is worded — and your template's own
+layout wins where it differs. Final QC no longer asks for a submittal or an
+execution clause for every product regardless of your template. A Final QC
+fix that relocates a provision is offered for one-click apply only when it
+carries the provision intact: its values, tags, standards, source link and
+status. A new lint finding flags an "Article 2.3" reference that no longer
+points at anything. The Final QC report names the policy version it
+reviewed against, so a saved review reads out of date once after updating
+and needs a re-run."

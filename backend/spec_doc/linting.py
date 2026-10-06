@@ -57,6 +57,15 @@ Rules (stable ids consumers can branch on):
   sentence, more than ``REFERENCE_ENTRY_MAX_CHARS`` characters, an em-dash
   description, adoption reasoning, a project decision, a second standard.
   Lead-in paragraphs (those with entries under them) are not checked.
+- ``unresolved_reference`` — (2026-10-06, the writing policy) a provision
+  cites "Article 2.3" or "Paragraph 3.2.A" and this section has no such
+  article or paragraph. Numbering follows position, so adding, deleting or
+  relocating content can leave a reference pointing nowhere; the policy says
+  to update every reference an edit affects. Deliberately narrow: only PART
+  1–3 article numbers and paragraph paths, and never a reference whose
+  sentence names another section, a division, the contract, a code, or a
+  standard (that article is somebody else's). Not run on a Division 00
+  document, an ``unstructured_import``, or a preserved (locked) block.
 
 Neither specification-voice rule reads a preserved (locked) block — the
 model cannot retype one — nor a document imported as something other than
@@ -96,6 +105,7 @@ RULE_MISSING_SECTION_HEADER = "missing_section_header"
 RULE_STALE_DOCUMENT_IDENTIFIER = "stale_document_identifier"
 RULE_EXPLANATORY_PROSE = "explanatory_prose"
 RULE_REFERENCE_ENTRY = "reference_entry_shape"
+RULE_UNRESOLVED_REFERENCE = "unresolved_reference"
 
 #: A MasterFormat section number as it appears in running text: three or
 #: four pairs of digits, space- or dot-separated ("23 05 48", "23 05 48.13").
@@ -646,6 +656,89 @@ def _sibling_groups(section: SpecSection) -> Iterable[list[Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Unresolved internal references (the writing policy, 2026-10-06)
+# ---------------------------------------------------------------------------
+
+_REF_KEYWORD_RE = re.compile(r"\b(Articles?|Paragraphs?|Subparagraphs?)\s+")
+# One reference: a PART 1-3 article number ("2.3", "1.02") and an optional
+# paragraph path (".A", ".A.1", ".B.2.a"). The trailing guard keeps "2.3"
+# from matching inside "2.35" or a dotted code section like "903.4.2".
+_REF_TOKEN_RE = re.compile(
+    r"([1-3])\.(\d{1,2})((?:\.[A-Za-z0-9]{1,3})*)(?![\w.]\w)"
+)
+_REF_SEPARATOR_RE = re.compile(r"\s*(?:,\s*(?:and|or)?|and|or|through|to)\s*")
+# A sentence that names something else whose articles the reference could
+# mean: another section or division, the contract documents, a model code.
+# Standards designations are checked separately with ``_DESIGNATION_RE``.
+_OTHER_DOCUMENT_RE = re.compile(
+    r"\bSection\s+(?:\d{2}|[\"“'‘])|\bDivision\s+\d|\bContract\b|"
+    r"\bConditions\b|\bAgreement\b|\b(?:IBC|IFC|IMC|IPC|IFGC|IECC|NEC|UFC|CBC|"
+    r"CFC|NBC|NFC)\b"
+)
+_SENTENCE_BREAK_RE = re.compile(r"(?<=[.;!?])\s+(?=\S)")
+
+
+def _sentence_around(text: str, start: int, end: int) -> str:
+    """The sentence of ``text`` containing ``[start, end)``."""
+    left = 0
+    for match in _SENTENCE_BREAK_RE.finditer(text):
+        if match.end() <= start:
+            left = match.end()
+        elif match.start() >= end:
+            return text[left : match.start()]
+    return text[left:]
+
+
+def _resolution_keys(section: SpecSection) -> tuple[set[str], set[str]]:
+    """``(articles, paragraphs)`` as reference keys: "2.3" and "2.3.A.1"."""
+    articles = {
+        f"{part.number}.{index + 1}"
+        for part in section.parts
+        for index in range(len(part.articles))
+    }
+    paragraphs = {
+        ref.upper() for _part, _article, _p, _depth, ref in iter_paragraphs(section)
+    }
+    return articles, paragraphs
+
+
+def _unresolved_references(
+    text: str, articles: set[str], paragraphs: set[str]
+) -> Iterable[tuple[str, str]]:
+    """Yield ``(kind, reference)`` for each internal reference with no target."""
+    for keyword in _REF_KEYWORD_RE.finditer(text):
+        position = keyword.end()
+        tokens: list[re.Match[str]] = []
+        while True:
+            token = _REF_TOKEN_RE.match(text, position)
+            if token is None:
+                break
+            tokens.append(token)
+            separator = _REF_SEPARATOR_RE.match(text, token.end())
+            if separator is None or not _REF_TOKEN_RE.match(text, separator.end()):
+                break
+            position = separator.end()
+        if not tokens:
+            continue
+        tail = text[tokens[-1].end() :]
+        if re.match(r"\s+(?:of|in)\b", tail):
+            continue
+        sentence = _sentence_around(text, keyword.start(), tokens[-1].end())
+        if _OTHER_DOCUMENT_RE.search(sentence) or _DESIGNATION_RE.search(sentence):
+            continue
+        for token in tokens:
+            article = f"{token.group(1)}.{int(token.group(2))}"
+            path = token.group(3).upper()
+            if path:
+                key = article + path
+                if key not in paragraphs:
+                    yield "paragraph", token.group(0)
+            elif keyword.group(1).lower().startswith("article"):
+                if article not in articles:
+                    yield "article", token.group(0)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -793,6 +886,34 @@ def lint_document(
                         "its own article and any basis into chat.",
                         paragraph.text[:120],
                     )
+
+    # --- unresolved internal references ------------------------------------
+    # The writing policy: an edit that adds, deletes or relocates content
+    # shifts positional numbering, so a reference it affects must follow.
+    # Locked blocks are skipped (the model cannot retype them, so a finding
+    # there could block readiness with no remedy short of Word), as is a
+    # Division 00 document, whose "Articles" are the contract's own.
+    if not unstructured_import and not _masterformat_key(section.number).startswith(
+        "00"
+    ):
+        articles, paragraph_refs = _resolution_keys(section)
+        for _part, _article, paragraph, _depth, ref in iter_paragraphs(section):
+            if paragraph.locked:
+                continue
+            for kind, reference in _unresolved_references(
+                paragraph.text, articles, paragraph_refs
+            ):
+                add(
+                    RULE_UNRESOLVED_REFERENCE,
+                    paragraph.uid,
+                    ref,
+                    f"Refers to {kind} {reference}, which this section does "
+                    "not have. Point it at the provision it means — "
+                    "numbering follows position, so adding, deleting or "
+                    "relocating content shifts it — or name the section it "
+                    "belongs to.",
+                    reference,
+                )
 
     # --- duplicate sibling provisions --------------------------------------
     # Advisory backstop for Chunk 5.2: cross-lens consolidation stops QC

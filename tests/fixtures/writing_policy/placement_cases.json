@@ -1,0 +1,355 @@
+{
+  "format": 1,
+  "about": "Writing-policy placement and preservation cases (2026-10-06). Each case seeds a small document with apply_edits operations, names the instruction a user would give, and records the reviewed expected outcome: which obligations must survive, in which PART, and what must not appear. reviewed_edit is one operation set that reaches that outcome; lossy_edits are deliberate failures the assessor (tools/writing_policy_eval.py) must catch. The source requirements are illustrative, not recommended technical selections. Hermetic tests run every case; the owner-run evaluation sends the instruction to the model and assesses what it drafts.",
+  "cases": [
+    {
+      "id": "v1_mixed_paragraph",
+      "brief": "The compact placement example: a mixed V1 paragraph split by function.",
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "21 05 23", "text": "GENERAL-DUTY VALVES FOR FIRE-PROTECTION PIPING"},
+        {"action": "add_article", "target_id": "pt1", "text": "SUBMITTALS"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit shop drawings for valve assemblies.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt2", "text": "VALVES"},
+        {"action": "add_paragraph", "target_id": "pt2.a1", "text": "Provide Type V1 ball valves, bronze body with threaded ends, at drawing locations tagged V1, with operators accessible from the floor; install them in accordance with the manufacturer's written instructions; submit product data and the manufacturer's installation instructions; factory test each valve in accordance with the procedure and acceptance criteria in the valve schedule; and field test the completed piping system in accordance with the procedure and acceptance criteria in the valve schedule.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt3", "text": "INSTALLATION"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Install valves plumb and level.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt3", "text": "FIELD QUALITY CONTROL"},
+        {"action": "add_paragraph", "target_id": "pt3.a2", "text": "Perform field tests in the presence of the Owner's representative.", "status": "assumed"}
+      ],
+      "focus": ["pt2.a1.p1"],
+      "instruction": "Correct the placement of the requirements in the valve paragraph (2.1.A) without changing what they require.",
+      "expected": {
+        "obligations": [
+          {"id": "product_data_submittal", "part": 1, "all_of": ["submit", "product data"]},
+          {"id": "instruction_submittal", "part": 1, "all_of": ["submit", "installation instructions"]},
+          {"id": "product_definition", "part": 2, "all_of": ["v1", "ball valve", "bronze", "threaded"]},
+          {"id": "factory_test", "part": 2, "all_of": ["factory test", "each", "valve schedule"]},
+          {"id": "locations", "part": 3, "all_of": ["tagged v1"]},
+          {"id": "operator_access", "part": 3, "all_of": ["operators accessible"]},
+          {"id": "install_per_instructions", "part": 3, "all_of": ["install", "manufacturer's written instructions"]},
+          {"id": "field_test", "part": 3, "all_of": ["field test", "completed piping system", "valve schedule"]}
+        ],
+        "absent": [
+          {"id": "no_added_report_submittal", "part": 1, "any_of": ["test report"]}
+        ]
+      },
+      "reviewed_edit": [
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit product data and the manufacturer's installation instructions for Type V1 ball valves.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt2.a1", "text": "Provide Type V1 ball valves, bronze body with threaded ends.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt2", "text": "SOURCE QUALITY CONTROL"},
+        {"action": "add_paragraph", "target_id": "pt2.a2", "text": "Factory test each Type V1 valve in accordance with the procedure and acceptance criteria in the valve schedule.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Install Type V1 valves at drawing locations tagged V1, with operators accessible from the floor.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Install Type V1 valves in accordance with the manufacturer's written instructions.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt3.a2", "text": "Field test the completed piping system in accordance with the procedure and acceptance criteria in the valve schedule.", "status": "assumed"},
+        {"action": "delete", "target_id": "pt2.a1.p1"}
+      ],
+      "lossy_edits": [
+        {
+          "id": "drops_each",
+          "expect": "obligation:factory_test",
+          "replace_in_reviewed": {"Factory test each Type V1 valve": "Factory test Type V1 valves"}
+        },
+        {
+          "id": "retags_product",
+          "expect": "obligation:product_definition",
+          "replace_in_reviewed": {"Provide Type V1 ball valves": "Provide Type V-1 ball valves"}
+        },
+        {
+          "id": "invents_test_pressure",
+          "expect": "invented",
+          "replace_in_reviewed": {"Field test the completed piping system in accordance": "Field test the completed piping system at 200 psi for 2 hours in accordance"}
+        },
+        {
+          "id": "factory_test_in_execution",
+          "expect": "obligation:factory_test",
+          "replace_in_reviewed": {"\"target_id\": \"pt2.a2\", \"text\": \"Factory test": "\"target_id\": \"pt3.a2\", \"text\": \"Factory test"}
+        },
+        {
+          "id": "adds_report_submittal",
+          "expect": "absent:no_added_report_submittal",
+          "append_ops": [
+            {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit factory test reports for each valve.", "status": "assumed"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "factory_vs_field_testing",
+      "brief": "Factory testing in PART 2, field testing in PART 3, report submissions in PART 1.",
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "21 30 00", "text": "FIRE PUMPS"},
+        {"action": "add_article", "target_id": "pt1", "text": "SUBMITTALS"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit product data for fire pumps.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt2", "text": "FIRE PUMPS"},
+        {"action": "add_paragraph", "target_id": "pt2.a1", "text": "Provide a horizontal split-case fire pump listed for fire-protection service.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt3", "text": "FIELD QUALITY CONTROL"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Factory test each fire pump in accordance with NFPA 20 and submit certified factory test curves; after installation, perform a field acceptance test of each fire pump in accordance with NFPA 20 and submit the field acceptance test report.", "status": "assumed"}
+      ],
+      "focus": ["pt3.a1.p1"],
+      "instruction": "Put the testing requirements in 3.1.A where they belong, without changing what they require.",
+      "expected": {
+        "obligations": [
+          {"id": "factory_test", "part": 2, "all_of": ["factory test", "each fire pump", "nfpa 20"]},
+          {"id": "curve_submittal", "part": 1, "all_of": ["submit", "certified factory test curves"]},
+          {"id": "field_test", "part": 3, "all_of": ["field acceptance test", "after installation", "nfpa 20"]},
+          {"id": "field_report_submittal", "part": 1, "all_of": ["submit", "field acceptance test report"]}
+        ],
+        "absent": []
+      },
+      "reviewed_edit": [
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit certified factory test curves for each fire pump.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit the field acceptance test report for each fire pump.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt2", "text": "SOURCE QUALITY CONTROL"},
+        {"action": "add_paragraph", "target_id": "pt2.a2", "text": "Factory test each fire pump in accordance with NFPA 20.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "After installation, perform a field acceptance test of each fire pump in accordance with NFPA 20.", "status": "assumed"},
+        {"action": "delete", "target_id": "pt3.a1.p1"}
+      ],
+      "lossy_edits": [
+        {
+          "id": "field_test_in_products",
+          "expect": "obligation:field_test",
+          "replace_in_reviewed": {"\"target_id\": \"pt3.a1\", \"text\": \"After installation": "\"target_id\": \"pt2.a2\", \"text\": \"After installation"}
+        },
+        {
+          "id": "loses_standard",
+          "expect": "lost",
+          "replace_in_reviewed": {"Factory test each fire pump in accordance with NFPA 20.": "Factory test each fire pump.", "perform a field acceptance test of each fire pump in accordance with NFPA 20.": "perform a field acceptance test of each fire pump."}
+        }
+      ]
+    },
+    {
+      "id": "test_without_report",
+      "brief": "A specified field test does not by itself call for a report submission.",
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "21 13 13", "text": "WET-PIPE SPRINKLER SYSTEMS"},
+        {"action": "add_article", "target_id": "pt1", "text": "SUBMITTALS"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit product data for pipe and fittings.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt3", "text": "FIELD QUALITY CONTROL"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Hydrostatically test the completed piping system in accordance with NFPA 13.", "status": "assumed"}
+      ],
+      "focus": [],
+      "instruction": "Check this section's placement and fix anything misplaced.",
+      "expected": {
+        "obligations": [
+          {"id": "hydrostatic_test", "part": 3, "all_of": ["hydrostatically test", "nfpa 13"]}
+        ],
+        "absent": [
+          {"id": "no_report_submittal", "part": 1, "any_of": ["test report"]}
+        ]
+      },
+      "reviewed_edit": [],
+      "lossy_edits": [
+        {
+          "id": "adds_report_submittal",
+          "expect": "absent:no_report_submittal",
+          "append_ops": [
+            {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit hydrostatic test reports.", "status": "assumed"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "schedules_by_function",
+      "brief": "Product rows support PART 2, assignments PART 3, the timetable PART 1.",
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "21 05 23", "text": "GENERAL-DUTY VALVES FOR FIRE-PROTECTION PIPING"},
+        {"action": "add_article", "target_id": "pt1", "text": "VALVE SCHEDULE"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Type V1: ball valve, bronze body, NPS 2 and smaller.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Type V2: butterfly valve, ductile-iron body, NPS 2-1/2 and larger.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Use Type V1 valves for riser drains and Type V2 valves for sectional control valves.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Complete valve installation before ceiling close-in, in the sequence shown on the construction schedule.", "status": "assumed"}
+      ],
+      "focus": ["pt1.a1.p1", "pt1.a1.p2", "pt1.a1.p3", "pt1.a1.p4"],
+      "instruction": "The valve schedule in PART 1 mixes product types, where they go, and timing. Place each by function without changing what it requires.",
+      "expected": {
+        "obligations": [
+          {"id": "v1_product", "part": 2, "all_of": ["v1", "ball valve", "bronze", "nps 2"]},
+          {"id": "v2_product", "part": 2, "all_of": ["v2", "butterfly valve", "ductile-iron", "nps 2-1/2"]},
+          {"id": "assignments", "part": 3, "all_of": ["v1", "riser drains"]},
+          {"id": "assignments_v2", "part": 3, "all_of": ["v2", "sectional control"]},
+          {"id": "timetable", "part": 1, "all_of": ["before ceiling close-in", "construction schedule"]}
+        ],
+        "absent": []
+      },
+      "reviewed_edit": [
+        {"action": "add_article", "target_id": "pt2", "text": "VALVES"},
+        {"action": "add_paragraph", "target_id": "pt2.a1", "text": "Type V1: ball valve, bronze body, NPS 2 and smaller.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt2.a1", "text": "Type V2: butterfly valve, ductile-iron body, NPS 2-1/2 and larger.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt3", "text": "VALVE APPLICATIONS"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Use Type V1 valves for riser drains and Type V2 valves for sectional control valves.", "status": "assumed"},
+        {"action": "add_article", "target_id": "pt1", "text": "SEQUENCING"},
+        {"action": "add_paragraph", "target_id": "pt1.a2", "text": "Complete valve installation before ceiling close-in, in the sequence shown on the construction schedule.", "status": "assumed"},
+        {"action": "delete", "target_id": "pt1.a1"}
+      ],
+      "lossy_edits": [
+        {
+          "id": "timetable_in_execution",
+          "expect": "obligation:timetable",
+          "replace_in_reviewed": {"\"target_id\": \"pt1.a2\", \"text\": \"Complete valve": "\"target_id\": \"pt3.a1\", \"text\": \"Complete valve"}
+        },
+        {
+          "id": "loses_size_range",
+          "expect": "lost",
+          "replace_in_reviewed": {"butterfly valve, ductile-iron body, NPS 2-1/2 and larger.": "butterfly valve, ductile-iron body."}
+        }
+      ]
+    },
+    {
+      "id": "onsite_fabrication",
+      "brief": "Fabrication stays in PART 2 even on site; installation goes in PART 3.",
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "21 05 29", "text": "HANGERS AND SUPPORTS FOR FIRE-SUPPRESSION PIPING"},
+        {"action": "add_article", "target_id": "pt3", "text": "INSTALLATION"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Fabricate trapeze hangers on site from ASTM A36 steel angles, hot-dip galvanized after fabrication; install trapeze hangers at a maximum spacing of 12 ft.", "status": "assumed"}
+      ],
+      "focus": ["pt3.a1.p1"],
+      "instruction": "Fix the placement of 3.1.A without changing what it requires.",
+      "expected": {
+        "obligations": [
+          {"id": "fabrication", "part": 2, "all_of": ["fabricate", "astm a36", "galvanized"]},
+          {"id": "installation", "part": 3, "all_of": ["install", "12 ft"]}
+        ],
+        "absent": []
+      },
+      "reviewed_edit": [
+        {"action": "add_article", "target_id": "pt2", "text": "FABRICATION"},
+        {"action": "add_paragraph", "target_id": "pt2.a1", "text": "Fabricate trapeze hangers on site from ASTM A36 steel angles, hot-dip galvanized after fabrication.", "status": "assumed"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Install trapeze hangers at a maximum spacing of 12 ft.", "status": "assumed"},
+        {"action": "delete", "target_id": "pt3.a1.p1"}
+      ],
+      "lossy_edits": [
+        {
+          "id": "fabrication_stays_in_execution",
+          "expect": "obligation:fabrication",
+          "replace_in_reviewed": {"\"target_id\": \"pt2.a1\", \"text\": \"Fabricate": "\"target_id\": \"pt3.a1\", \"text\": \"Fabricate"}
+        },
+        {
+          "id": "changes_spacing",
+          "expect": "lost",
+          "replace_in_reviewed": {"maximum spacing of 12 ft.": "maximum spacing of 10 ft."}
+        }
+      ]
+    },
+    {
+      "id": "template_exception",
+      "brief": "A template's article layout is its convention: DESIGN CRITERIA stays in PART 1.",
+      "template": true,
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "21 13 13", "text": "WET-PIPE SPRINKLER SYSTEMS"},
+        {"action": "add_article", "target_id": "pt1", "text": "DESIGN CRITERIA"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Design the sprinkler system to the hydraulic design criteria indicated on the Drawings.", "status": "imported"},
+        {"action": "add_article", "target_id": "pt3", "text": "INSTALLATION, TESTING, AND CLOSEOUT"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Install sprinkler piping in accordance with NFPA 13.", "status": "imported"}
+      ],
+      "focus": [],
+      "instruction": "Fix placement anywhere this section breaks the three-part convention.",
+      "expected": {
+        "obligations": [
+          {"id": "design_criteria", "part": 1, "all_of": ["design the sprinkler system", "hydraulic design criteria"]},
+          {"id": "installation", "part": 3, "all_of": ["install sprinkler piping", "nfpa 13"]}
+        ],
+        "absent": []
+      },
+      "reviewed_edit": [],
+      "lossy_edits": [
+        {
+          "id": "moves_design_criteria",
+          "expect": "obligation:design_criteria",
+          "append_ops": [
+            {"action": "add_article", "target_id": "pt2", "text": "PERFORMANCE REQUIREMENTS"},
+            {"action": "add_paragraph", "target_id": "pt2.a1", "text": "Design the sprinkler system to the hydraulic design criteria indicated on the Drawings.", "status": "assumed"},
+            {"action": "delete", "target_id": "pt1.a1"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "division01_administrative",
+      "brief": "Division 01 administrative content stays in PART 1; no products or execution are invented.",
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "01 33 00", "text": "SUBMITTAL PROCEDURES"},
+        {"action": "add_article", "target_id": "pt1", "text": "SUBMITTAL PROCEDURES"},
+        {"action": "add_paragraph", "target_id": "pt1.a1", "text": "Submit each submittal through the Owner's web-based project management system.", "status": "assumed"}
+      ],
+      "focus": [],
+      "instruction": "Review this section's structure and fix anything that is out of place.",
+      "expected": {
+        "obligations": [
+          {"id": "procedure", "part": 1, "all_of": ["submit each submittal", "project management system"]}
+        ],
+        "absent": [],
+        "empty_parts": [2, 3]
+      },
+      "reviewed_edit": [],
+      "lossy_edits": [
+        {
+          "id": "invents_execution",
+          "expect": "empty_parts",
+          "append_ops": [
+            {"action": "add_article", "target_id": "pt3", "text": "EXECUTION"},
+            {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Review each submittal before transmittal.", "status": "assumed"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "missing_acceptance_criteria",
+      "brief": "A cited procedure does not set an acceptance limit; none is invented.",
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "21 05 23", "text": "GENERAL-DUTY VALVES FOR FIRE-PROTECTION PIPING"},
+        {"action": "add_article", "target_id": "pt2", "text": "SOURCE QUALITY CONTROL"},
+        {"action": "add_paragraph", "target_id": "pt2.a1", "text": "Factory test each valve in accordance with the manufacturer's standard test procedure.", "status": "assumed"}
+      ],
+      "focus": ["pt2.a1.p1"],
+      "instruction": "Tighten 2.1.A so it is enforceable.",
+      "expected": {
+        "obligations": [
+          {"id": "factory_test", "part": 2, "all_of": ["factory test", "each valve"]}
+        ],
+        "absent": []
+      },
+      "reviewed_edit": [],
+      "lossy_edits": [
+        {
+          "id": "invents_limit",
+          "expect": "invented",
+          "append_ops": [
+            {"action": "replace", "target_id": "pt2.a1.p1", "text": "Factory test each valve at 1.5 times its rated pressure for 5 minutes in accordance with the manufacturer's standard test procedure."}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "preserve_qualifiers",
+      "brief": "An editorial rewrite keeps every actor, condition, exception, qualifier, value, and unit.",
+      "seed": [
+        {"action": "replace", "target_id": "sec", "numbering": "21 13 13", "text": "WET-PIPE SPRINKLER SYSTEMS"},
+        {"action": "add_article", "target_id": "pt3", "text": "INSTALLATION"},
+        {"action": "add_paragraph", "target_id": "pt3.a1", "text": "Except in exposed areas, the Contractor shall install only listed flexible sprinkler hose fittings, maximum 6 ft long, where approved by the Owner's insurer, in accordance with NFPA 13.", "status": "confirmed"}
+      ],
+      "focus": ["pt3.a1.p1"],
+      "instruction": "Rewrite 3.1.A in the imperative without changing what it requires.",
+      "expected": {
+        "obligations": [
+          {"id": "full_requirement", "part": 3, "all_of": ["except in exposed areas", "only listed flexible sprinkler hose", "6 ft", "approved by the owner's insurer", "nfpa 13"]}
+        ],
+        "absent": []
+      },
+      "reviewed_edit": [
+        {"action": "replace", "target_id": "pt3.a1.p1", "text": "Except in exposed areas, install only listed flexible sprinkler hose fittings, maximum 6 ft long, where approved by the Owner's insurer, in accordance with NFPA 13."}
+      ],
+      "lossy_edits": [
+        {
+          "id": "drops_only",
+          "expect": "obligation:full_requirement",
+          "replace_in_reviewed": {"install only listed": "install listed"}
+        },
+        {
+          "id": "drops_condition",
+          "expect": "obligation:full_requirement",
+          "replace_in_reviewed": {", where approved by the Owner's insurer": ""}
+        }
+      ]
+    }
+  ]
+}

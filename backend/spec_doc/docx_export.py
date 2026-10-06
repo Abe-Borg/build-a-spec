@@ -1257,6 +1257,22 @@ def qc_reference_coverage(qc_result: dict) -> tuple[str, str]:
     )
 
 
+def qc_writing_policy_label(qc_result: dict) -> str:
+    """The writing policy a run's lenses and seats judged against.
+
+    Read from the run's own manifest, never the live policy: a report is an
+    audit of what its reviewers read. A report from before the policy was
+    recorded says so rather than borrowing today's version.
+    """
+    manifest = _qc_dict(qc_result.get("input_manifest"))
+    record = _qc_dict(manifest.get("writing_policy"))
+    label = str(record.get("label") or "").strip()
+    if not label:
+        return "Not recorded (report predates the shared writing policy)"
+    digest = str(record.get("review_sha256") or "")[:12]
+    return f"{label} (sha256 {digest})" if digest else label
+
+
 def qc_version_label(value: object) -> str:
     """``3`` → ``v4 (stored index 3)`` — the one document-version wording.
 
@@ -3055,6 +3071,10 @@ def _qc_render_identity(
             # because "was the owner's standard actually in front of the
             # reviewers?" is a question this report has to answer.
             qc_reference_coverage(qc_result)[0],
+        ),
+        (
+            "Writing policy reviewed against",
+            qc_writing_policy_label(qc_result),
         ),
     ]
     for label, value in identities:

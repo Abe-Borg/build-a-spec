@@ -3,7 +3,7 @@
 Ported from Claude-Spec-Critic ``src/research/requirements_research.py``
 with the review-pipeline couplings removed: no tracing hooks, no
 diagnostics object, no GUI context splice (the rendered profile block goes
-into the conversation's dynamic system context instead, trimmed by
+into the chat's cached project block instead, trimmed by
 :func:`research_context_block`), and progress flows through a single
 ``event_sink`` callable (the runner turns events into the SSE stream).
 Deviations from the source: research requests state adaptive thinking
@@ -3458,7 +3458,7 @@ def research_context_block(
     *,
     max_tokens: int = RESEARCH_CONTEXT_MAX_TOKENS,
 ) -> tuple[str, int]:
-    """The rendered profile block for the dynamic system context, capped.
+    """The rendered profile block for the cached project block, capped.
 
     Returns ``(block_text, dropped_item_count)``. When the rendered block
     exceeds ``max_tokens`` (estimated), whole items are dropped from the

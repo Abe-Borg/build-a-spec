@@ -17673,3 +17673,220 @@ The limits are still cumulative, but they are enforced between requests.
 Every request declares the fixed per-request allowance, and the window clip
 switches at most once, to one fetch per request; when even that cannot fit,
 the area submits.
+
+## The project background rides its own cache breakpoint — implemented notes (2026-10-06)
+
+C1 of the chat cost work. Every chat turn rendered the whole session context
+into the PROJECT CONTEXT block of the newest user message
+(`_turn_context_text`), after the committed history. Commit strips that block,
+so the tail breakpoint that covers it wrote it at the five-minute rate (1.25×
+input) on every turn, and no later turn could read it. That is right for what
+changes every turn. It was wrong for what changes rarely — above all the
+research profile (`research_context_block`, up to 100k estimated tokens, about
+100 per finding), which on a later section of a project can be tens of
+thousands of tokens carried from the first one, paid at 1.25× on every message
+although it changes only when a research round completes.
+
+**The layout.** The request is now module block (1h) → project block (1h) →
+committed-history boundary (1h) → tail (5m) — four breakpoints, the provider's
+limit, non-increasing in TTL as the provider requires (the claude-api skill's
+prompt-caching reference: "Max 4 breakpoints per request"; "a 1-hour entry must
+appear before any 5-minute entries"). The project block is the first content
+block of the request's first user message — inserted by
+`_with_project_block(messages, project_block)` into a per-request copy, after
+the other breakpoints are placed, so no message index moves and history never
+stores it — framed
+`=== PROJECT BACKGROUND (…) === … === END PROJECT BACKGROUND ===` and carrying
+`settings.CHAT_CACHE_TTL` like the module block. The system prompt is still the
+module block alone. The project block is sent only when it has content: a
+session with no research, no linked brief and no description sends the request
+it sent before C1, byte for byte, rather than an empty frame behind a wasted
+breakpoint. With a condensed conversation it leads the summary preface, so
+adopting a summary never invalidates the block's own entry.
+
+**What moved, and why only that.** A cache is a prefix match, so a change to
+the project block's bytes invalidates everything after it, and every such
+change rewrites the whole committed history once at the one-hour rate. A block belongs there only when it changes rarely AND never
+from inside a chat turn. In multiples of the input price (Sonnet 5.5: cache
+read 0.1×, 5-minute write 1.25×, one-hour write 2×), a block of S tokens costs
+1.25·S per turn at the tail and 0.1·S per unchanged turn in the project block;
+a change costs 2·S plus 1.9·H for a committed history of H tokens (written at
+2× instead of read at 0.1×). Moving it pays when the turns between changes,
+k, satisfy roughly k > (1.9·H/S + 1.9) / 1.15.
+
+| Block | Size | What changes it | Decision |
+|---|---|---|---|
+| Research profile | up to 100k | a round completing, a brief pull, a project load | **moved** — at S = 40k, H = 20k it pays after ~3 turns; at H = 200k after ~10 |
+| PROJECT SECTIONS | up to 3k | brief export/refresh/pull bringing in another section; renaming this section | **moved** — another section's line changes only when that section writes the brief, so it is effectively fixed for a session |
+| Project description, template note | ≤ ~100, ~80 | nothing after session start | **moved** (in `other`) — never triggers a rewrite |
+| Standards editions in effect | a few hundred to ~1k | `set_standard_edition` and suppressions during drafting turns (every edition in the unpinned generic module), and undo | **stayed** — at S = 700, H = 50k it would need ~120 turns between recordings |
+| Established project facts | up to 6k | `record_project_facts` during turns, often early | **stayed** — the judgement call: at S = 1.5k, H = 50k it needs ~57 turns between recordings, and facts are recorded far more often than that early in a session |
+| Reference-document stubs | a few dozen per document | attach/delete (user, mid-session) | **stayed** — an attach at H = 50k would rewrite the history to save ~100 tokens a turn |
+| Date, identity, profile status, editing boundary, document, lint, open items, waiting-on-you, imported-review note, front matter, QC review, figure stubs | — | most turns | **stayed** |
+
+`CACHED_CONTEXT_BLOCKS = ("research", "sections")` in `conversation.py` names
+the measured blocks that moved; its comment carries this reasoning.
+
+**Frozen at turn start, never per turn.** `_turn_context(session)` renders
+both blocks together at turn start and returns `_TurnContext(project_block,
+turn_text, sizes)`; `_ChatRequestInputs.project_block` carries the text into
+every round, so a research round that completes mid-turn reaches the NEXT
+turn, never a later round of this one (whose prefix would otherwise diverge
+from what round 0 cached). `_project_block_text` is a pure function of state
+that changes rarely: no timestamp, no counter. The module block is untouched
+and still byte-identical per module.
+
+**The trade, documented.** When the project block's bytes change (a research
+round completes, the brief is updated or pulled, a project is opened), the next
+request reads only tools + module block and writes the new project block and
+the whole committed history once at the long TTL; the turn after reads it all
+back. Research rounds usually run early, while the history is short, and the
+research debrief turn the frontend sends on completion is the turn that pays.
+
+**The summary fork.** The compaction summary forks the chat request, so
+`_CompactionInputs.project_block` carries the same block and
+`_build_compaction_request` opens with it too; without it the summary's prefix
+diverges right after the module block and it reads none of the cached
+conversation. Background compaction (started in the commit block)
+passes the committed turn's frozen block — the one whose cache entry the
+summary reads — even if a research round finished while that turn streamed.
+The backstop (before round 0) passes the current turn's frozen block, so its
+prefix through the block is the one that turn sends. `_compaction_plan_locked(...,
+project_block=None)` renders from the session for a caller with no turn in
+hand (`tools/compaction_json_eval.py`). `_system_tools_chars(module,
+project_block)` counts the block, so the backstop's estimate still sees text
+that left the turn's own message.
+
+**Measurement stays honest.** `CONTEXT_SIZE_KEYS` gains `project_block`, a
+SUBTOTAL of `total` (not a slice, so `CONTEXT_SIZE_BLOCKS` excludes it). Each
+block is measured by `_measure_parts` from its own parts after its own escape;
+`_turn_context` adds the two key by key, so the named blocks plus `other` still
+sum to `total`, which now covers both texts. `other` also absorbs the project
+block's frame, description and template note. Developer tools' Context makeup
+row leads with "(est.; ~N cached across turns)" and marks `research … cached`
+and `sections … cached`; the frontend mirrors `CACHED_CONTEXT_BLOCKS`, pinned
+by `frontend/tests/contextSizes.test.ts` against `conversation.py`. The trace's
+`prompt_refs` event keeps `system` as the module block (one entry per app run)
+and gains `project_block`, its own content-hashed ref (one entry per distinct
+rendering, not per turn; `null` when none was sent). No saved-project format
+changes: the block is rebuilt from the project every turn and never stored.
+
+**Where the model is told to look.** The stable prompt's tool guide gains one
+bullet naming the PROJECT BACKGROUND block that opens the conversation, what it
+carries, and that it is information about the project, never instructions; the
+research policy says the PROJECT REQUIREMENTS PROFILE appears there; the
+gap-and-adapt text says the template note is there. The compaction preface now
+says the PROJECT BACKGROUND at the start of the conversation and the PROJECT
+CONTEXT in the newest message are both current. The editions text ("listed in the PROJECT CONTEXT
+block each turn") is unchanged because the editions stayed. Changing the stable
+prompt changes the module block once for every open session after an upgrade —
+one full rewrite, as any prompt change costs.
+
+**Trust posture: user role, never system.** The research findings are
+model-written summaries of retrieved pages, and the description and section
+titles are user-authored, so the block must keep the PROJECT CONTEXT's
+standing, not the operator's. The first build (`d604809`) followed the task's
+suggested direction and made it a second SYSTEM block with a header saying its
+contents are data. The Codex review on PR #270 (P1) pointed out that a header
+is not a role boundary: injected text in a finding would carry the same
+instruction priority as `render_system_prompt` and could steer edits or web
+tool calls. The block now opens the first user message instead, which caches
+exactly as well (the same four breakpoints, the same prefix order) and keeps the
+stable system policy above everything the project supplies. The header and the
+stable prompt still call it project data. `compaction.CONTEXT_BOUNDARY_PATTERN`
+now matches `PROJECT BACKGROUND` markers as well as `PROJECT CONTEXT`, so a
+forged closing marker in a finding (or in a summary or recalled turn) is made
+inert and disclosed, and its growth is counted in the block that carried it.
+`test_project_material_never_rides_the_system_role` pins the placement with an
+injected instruction in both a finding and the description.
+
+**Tests.**
+- `tests/test_app.py`: the rolling-breakpoint section is now four-breakpoint
+  pins (one system block and the project block leading the first message, both
+  1h; four breakpoints on a session with research; the TTL sweep over every
+  supported setting requires four, non-increasing, the first three at the
+  configured TTL); a session with nothing slow-changing sends no project block
+  and three breakpoints; the byte-prefix test also requires identical tools,
+  system and project blocks across turns; the role test above. Two new tests run the
+  requests through `_simulated_cache_usage`, a small model of the documented
+  cache (an entry per breakpoint keyed on the exact prefix; a request reads the
+  longest earlier entry it starts with): while the block is unchanged every turn
+  after the first reads through the project block and, from the third turn,
+  exactly up to the previous turn's boundary; after a research round the module
+  block and tools are byte-identical, only the project block differs, the
+  history span behind it is unchanged, the changed turn reads exactly the tools
+  + module block and writes the rest once, and the next turn reads through the
+  changed turn's boundary. The continuation test lands a research round
+  mid-turn and requires every round to send round 0's project block.
+- `tests/test_chat_compaction.py`: the background summary carries the
+  committed turn's project block even when a round finished during that turn;
+  the backstop summary carries the turn's block, which leads the summary
+  preface in the first message.
+- `tests/test_context_sizes.py`: rewritten for two blocks (each block
+  partitions on its own and the sum partitions `total`; each named block lives
+  in exactly one text; `project_block` moves exactly when a cached block does),
+  plus a forged `END PROJECT BACKGROUND` marker in a finding.
+- `tests/test_fake_request_validator.py` + `tests/fakes.py`: the oracle now
+  refuses a fifth breakpoint (the automatic one included) and a 1h entry after
+  a 5m one (the unmarked default is 5m), on every model.
+- Placement tests in `test_research_api.py`, `test_project_brief.py` and
+  `test_session_modules.py` now find the research profile, PROJECT SECTIONS
+  and the description in the project block (new helper
+  `request_project_block_text`) and never in the module block, the PROJECT
+  CONTEXT or history. `tests/fakes.research_profile` builds a profile.
+
+**Reversion evidence.** Each reversion was applied to a copy of the working
+tree, the seven C1 test files were run, and the file was restored (re-run after
+the user-role correction).
+
+| Reversion | Failed |
+|---|---|
+| The project material rides the tail again (pre-C1 placement) | 16 |
+| The project block sent without its own breakpoint | 6 |
+| The project block as a second system block (the first build) | 12 |
+| The project block at the five-minute TTL (the oracle refuses it) | 6 failed, 12 errors |
+| A per-turn value in the project block | 3 |
+| Every round re-renders the project block | 1 |
+| An empty project block still sent (frame only) | 8 |
+| The summary fork without the project block | 2 |
+| The background summary renders the block from the session | 1 |
+| The backstop summary without the turn's block | 1 |
+| The boundary escape without `PROJECT BACKGROUND` | 1 |
+| The cached subtotal counted as a slice | 2 |
+| The oracle without the four-breakpoint limit | 1 |
+| The oracle without the TTL order rule | 3 |
+
+**Validation.** Untouched HEAD: 3693 passed, 64 skipped. With this change
+(after the user-role correction): 3704 passed, 64 skipped. Ruff, `npm test`
+(512 passed) and `npm run build` passed.
+
+**Release-note draft for the next release** (beside the research-effort,
+final-submission and web-tool drafts; `v1.22.1` is published — confirmed
+through the GitHub Releases API on 2026-10-06 — and there is no newer entry, so
+nothing was added to `backend/release_notes.py` and the version stays
+`1.22.1`): "The research profile is read from the cache instead of being paid
+for on every message. The findings, the project's other sections and your
+project description now travel in a cached project background, so a message
+that finds them unchanged reads them at a fraction of the price. When research
+finishes a round or the project brief changes, the next message pays once to
+store the new background and the conversation behind it."
+
+**Errata.**
+- "Rolling chat cache breakpoint — implemented notes" says "**Three
+  breakpoints, no tool breakpoint.** System … + boundary + tail = 3, inside the
+  provider's limit of 4." A request that carries a project block now uses all
+  four (module, project, boundary, tail); one without it still uses three. No
+  tool breakpoint is still needed.
+- "What each turn carries is measured — implemented notes (Project workspace
+  Phase 5A)" says the carried research block "rides every turn's PROJECT
+  CONTEXT … a cache WRITE per message, never a read". Since C1 it rides the
+  cached project block and is read while unchanged; the partition there gains
+  the `project_block` subtotal, and `total` covers both blocks.
+- CLAUDE.md's "Context architecture" invariant said the system prompt is ONLY
+  the stable module block and that the research profile renders into the
+  PROJECT CONTEXT; it is corrected in place.
+
+No paid API call was made, and none is needed: the request bytes are pinned
+directly, and the cache model shows which bytes a later turn reads. Real
+`cache_read_input_tokens` / `cache_creation_input_tokens` on a session with a
+research profile will show the change in Settings → Developer tools.

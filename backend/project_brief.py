@@ -1532,7 +1532,7 @@ def project_sections_block(
     *,
     max_tokens: int = SECTIONS_CONTEXT_MAX_TOKENS,
 ) -> str:
-    """The other sections of this project, for the PROJECT CONTEXT block.
+    """The other sections of this project, for the cached project block.
 
     ``""`` without a link or when no OTHER section is listed, so an unlinked
     session builds a byte-identical request. Under the cap the article lists

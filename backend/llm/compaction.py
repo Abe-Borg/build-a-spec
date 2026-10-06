@@ -376,8 +376,9 @@ def compaction_payload(record: CompactionRecord | None) -> dict[str, Any] | None
 # The view
 # ---------------------------------------------------------------------------
 
-# The PROJECT CONTEXT markers, as every channel that escapes them finds
-# them: the ONE definition, which the chat engine's own escape
+# The PROJECT CONTEXT markers — and, since C1, the PROJECT BACKGROUND
+# markers of the cached project block — as every channel that escapes them
+# finds them: the ONE definition, which the chat engine's own escape
 # (``conversation._join_and_neutralize``) uses too. The leading ``(?<!=)``
 # is what keeps it linear. Without it, a long run of ``=`` that never
 # completes a marker is re-scanned from every position inside the run:
@@ -388,7 +389,8 @@ def compaction_payload(record: CompactionRecord | None) -> dict[str, Any] | None
 # leftmost match always starts there. It lives here rather than in the
 # engine because this module is the leaf both can import.
 CONTEXT_BOUNDARY_PATTERN = re.compile(
-    r"(?<!=)={2,}\s*(?:END\s+)?PROJECT\s+CONTEXT\b[^\n=]*={2,}", re.IGNORECASE
+    r"(?<!=)={2,}\s*(?:END\s+)?PROJECT\s+(?:CONTEXT|BACKGROUND)\b[^\n=]*={2,}",
+    re.IGNORECASE,
 )
 _FRAME_TAG_PATTERN = re.compile(
     r"<\s*(/?)\s*("
@@ -403,7 +405,7 @@ def neutralize_compaction_frames(text: str) -> str:
 
     The summary quotes the user and a recalled turn IS the user's text, so
     either can hold a string that would close its frame early, or forge the
-    PROJECT CONTEXT markers every request relies on. Disclosed rather than
+    PROJECT CONTEXT or PROJECT BACKGROUND markers every request relies on. Disclosed rather than
     deleted, the ``reference_docs`` posture.
     """
     text = _FRAME_TAG_PATTERN.sub(
@@ -454,9 +456,10 @@ def view_spec_for(record: CompactionRecord | None) -> ViewSpec | None:
         + f"The summary above stands in for turns {covers} of this "
         f"conversation, condensed on {date} so the conversation stays within "
         "the model's context window. It was written from the conversation as "
-        "it stood then: wherever it and the PROJECT CONTEXT in the newest "
-        "message differ, the PROJECT CONTEXT is current. The full text of "
-        "those turns is kept — before relying on an exact detail from them "
+        "it stood then: wherever it differs from the PROJECT BACKGROUND at "
+        "the start of the conversation or the PROJECT CONTEXT in the newest "
+        "message, those are current. The full text of those turns is kept — "
+        "before relying on an exact detail from them "
         "(a number, a wording, the reason for a decision), call "
         "recall_conversation to read it word for word."
     )

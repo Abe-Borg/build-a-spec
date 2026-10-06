@@ -756,28 +756,37 @@ function Dossier() {
           }
           sent={
             <>
-              Three parts: (a) a{" "}
+              Four parts: (a) a{" "}
               <b className="text-ink">fixed instruction block</b> built from the
               active discipline module — byte-identical every turn, so it is
-              cached and billed at a fraction after the first call; (b) the{" "}
+              cached and billed at a fraction after the first call; (b) a{" "}
+              <b className="text-ink">project background block</b> opening the
+              conversation, sent only when there is something to put in it: the
+              project description you gave when the session started, the
+              grounded research profile if any, and, for a section started from
+              a project brief, the list of the project's other sections. It is
+              part of the conversation, not of the instructions, so nothing in a
+              finding or a description carries their authority. It changes only
+              when a research round finishes, the project brief is updated or
+              pulled, or a project is opened, so it is cached too; the message
+              after a change pays once to store it, and the conversation behind
+              it, again; (c) the{" "}
               <b className="text-ink">conversation so far</b> — or, once a long
               conversation has been condensed, a summary of its oldest turns
-              followed by the recent turns word for word; and (c) a{" "}
+              followed by the recent turns word for word; and (d) a{" "}
               <b className="text-ink">PROJECT CONTEXT block</b> attached to your
               newest message, containing the current date and time from your own
               computer’s clock, the standards editions in effect, which
               project-profile fields are still missing, the imported-source
-              boundary if any, the grounded research profile if any, the full
-              text of every provision with its id and status, the deterministic
-              lint report, the open-items list, the list of questions and
-              decisions still waiting on you, the established project facts
-              recorded for this project (statement, reach, status and where
-              each was recorded — and, for a section started from a project
-              brief, the list of the project's other sections), a compact
-              digest of the retained Final QC findings if a review has run
-              (ids, severity, one-line issues, and whether each fix is
-              verified — never the full report), and one-line stubs for
-              figures and reference documents — never their contents. Text you
+              boundary if any, the full text of every provision with its id and
+              status, the deterministic lint report, the open-items list, the
+              list of questions and decisions still waiting on you, the
+              established project facts recorded for this project (statement,
+              reach, status and where each was recorded), a compact digest of
+              the retained Final QC findings if a review has run (ids,
+              severity, one-line issues, and whether each fix is verified —
+              never the full report), and one-line stubs for figures and
+              reference documents — never their contents. Text you
               paste into the composer that holds a line break or runs to 120
               characters goes inside a pair of{" "}
               <b className="text-ink">pasted-content tags</b> with a random id,
@@ -1612,8 +1621,9 @@ function Dossier() {
           }
           sent={
             <>
-              The same request a chat turn sends — the fixed instruction block
-              and the conversation — plus one instruction carrying the
+              The same request a chat turn sends — the fixed instruction block,
+              the project background block and the conversation — plus one
+              instruction carrying the
               established project facts and what is waiting on you, so the
               summary can point at them instead of restating them. It is a fork
               of the last turn&apos;s request, so it reads the cache that turn
@@ -1857,10 +1867,12 @@ function Dossier() {
               is the app’s only unprompted request, and it costs nothing.
             </>,
             <>
-              <b className="text-ink">The fixed instruction block is cached.</b>{" "}
-              After the first turn of a session it is billed at a fraction of the
-              normal input rate; the settings panel shows what caching saved you
-              this session.
+              <b className="text-ink">The fixed instruction block is cached</b>,{" "}
+              and so are the project background (research profile, the
+              project's other sections) and the conversation so far. After
+              the first turn of a session they are billed at a fraction of the
+              normal input rate until one of them changes; the settings panel
+              shows what caching saved you this session.
             </>,
             <>
               <b className="text-ink">Rough relative weight</b>: an ordinary chat

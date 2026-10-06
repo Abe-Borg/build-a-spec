@@ -221,3 +221,70 @@ def test_lowest_thinking_returns_a_fresh_dict():
     assert lowest_thinking(model=settings.MODEL_SONNET_55, effort="medium") == {
         "type": "between_tools"
     }
+
+
+# ---------------------------------------------------------------------------
+# Prompt-caching rules that hold on every model (added with C1, whose chat
+# request uses all four breakpoints): at most four, the automatic one
+# included, and never a longer-lived entry after a shorter-lived one.
+# ---------------------------------------------------------------------------
+
+
+def _marked(ttl=None):
+    control = {"type": "ephemeral"}
+    if ttl:
+        control["ttl"] = ttl
+    return control
+
+
+def _cached_request(system_ttls, message_ttls, *, automatic=None):
+    request = _request(
+        "claude-sonnet-5-5",
+        system=[
+            {"type": "text", "text": f"system {i}", "cache_control": _marked(ttl)}
+            for i, ttl in enumerate(system_ttls)
+        ],
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"turn {i}", "cache_control": _marked(ttl)}
+                ],
+            }
+            for i, ttl in enumerate(message_ttls)
+        ],
+    )
+    if automatic is not None:
+        request["cache_control"] = automatic
+    return request
+
+
+def test_four_breakpoints_longest_lived_first_pass():
+    # The chat's C1 layout: module 1h, project 1h, boundary 1h, tail 5m.
+    assert request_shape_problems(_cached_request(["1h", "1h"], ["1h", "5m"])) == []
+    # The default TTL is the short one, so an unmarked tail is 5m too.
+    assert request_shape_problems(_cached_request(["1h"], ["1h", None])) == []
+
+
+def test_a_fifth_breakpoint_is_refused_the_automatic_one_included():
+    five = _cached_request(["1h", "1h"], ["1h", "5m", "5m"])
+    assert any("maximum of 4" in p for p in request_shape_problems(five))
+    four_plus_automatic = _cached_request(
+        ["1h", "1h"], ["1h", "5m"], automatic={"type": "ephemeral"}
+    )
+    assert any(
+        "maximum of 4" in p for p in request_shape_problems(four_plus_automatic)
+    )
+
+
+@pytest.mark.parametrize(
+    ("system_ttls", "message_ttls"),
+    [
+        (["5m", "1h"], ["5m"]),  # a 1h project block after a 5m module block
+        (["1h"], ["5m", "1h"]),  # a 1h boundary after a 5m entry
+        ([None], ["1h"]),  # the unmarked default is 5m
+    ],
+)
+def test_a_longer_ttl_after_a_shorter_one_is_refused(system_ttls, message_ttls):
+    problems = request_shape_problems(_cached_request(system_ttls, message_ttls))
+    assert any("must not come after" in p for p in problems), problems

@@ -621,21 +621,92 @@ def harvest_refusal(
 def request_context_text(request: dict) -> str:
     """The PROJECT CONTEXT block of a captured chat request.
 
-    The context is the FIRST text block of the turn's user message (the
-    user's own text follows it) — the Sonnet-unleashed context placement.
-    Returns "" when the request has no such block.
+    The context leads the turn's user message (the user's own text follows
+    it) — the Sonnet-unleashed context placement — after the cached project
+    block when the turn's message is also the request's first (C1). Matched
+    by its opening marker, never by a mention: the project block's header
+    names the PROJECT CONTEXT too. Returns "" when the request has none.
     """
     for message in request.get("messages", []):
         if message.get("role") != "user":
             continue
         content = message.get("content")
-        if isinstance(content, list) and content:
-            first = content[0]
-            if isinstance(first, dict) and first.get("type") == "text":
-                text = first.get("text", "")
-                if "PROJECT CONTEXT" in text:
+        if not isinstance(content, list):
+            continue
+        for block in content[:2]:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if text.startswith("=== PROJECT CONTEXT"):
                     return text
     return ""
+
+
+def research_profile(*requirements: str):
+    """A one-dimension, completed research profile with one grounded finding
+    per requirement — enough for the chat to render a PROJECT REQUIREMENTS
+    PROFILE in its cached project block. A new profile with different text
+    stands in for a research round completing: the profile is the only thing
+    a completed round changes that the chat reads."""
+    from backend.research.engine import (
+        DimensionStatus,
+        RequirementsProfile,
+        ResearchItem,
+    )
+
+    return RequirementsProfile(
+        items=[
+            ResearchItem(
+                item_id=f"r-{index:012x}",
+                dimension_id="governing_codes",
+                topic="Governing codes",
+                category="referenced_standard",
+                requirement=text,
+                authority="City AHJ",
+                code_reference="IFC 2021",
+                grounded=True,
+                confidence=0.9,
+            )
+            for index, text in enumerate(requirements)
+        ],
+        dimension_statuses=[
+            DimensionStatus(
+                dimension_id="governing_codes",
+                status="completed",
+                title="Governing codes",
+            )
+        ],
+        research_date="2026-10-01",
+    )
+
+
+def request_project_block(request: dict) -> dict | None:
+    """The cached project block (PROJECT BACKGROUND) of a captured request.
+
+    Since C1 the slow-changing project material — the research profile, the
+    other sections, the session's description and template note — opens the
+    request's first user message, as its first content block. ``None`` when
+    the request sent none.
+    """
+    messages = request.get("messages") or []
+    if not messages or messages[0].get("role") != "user":
+        return None
+    content = messages[0].get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    block = content[0]
+    if (
+        isinstance(block, dict)
+        and block.get("type") == "text"
+        and str(block.get("text", "")).startswith("=== PROJECT BACKGROUND")
+    ):
+        return block
+    return None
+
+
+def request_project_block_text(request: dict) -> str:
+    """The text of :func:`request_project_block`, or ""."""
+    block = request_project_block(request)
+    return str(block.get("text", "")) if block else ""
 
 
 # ---------------------------------------------------------------------------
@@ -760,6 +831,62 @@ def request_shape_problems(request: dict) -> list[str]:
     ):
         problems.append(
             'tool_choice: type "tool" and "any" are not supported for this model'
+        )
+    problems.extend(_cache_breakpoint_problems(request))
+    return problems
+
+
+# Prompt-caching rules that hold on every model (the claude-api skill's
+# prompt-caching reference, "API reference" and "Automatic vs explicit
+# breakpoints"): at most four breakpoints per request, the top-level
+# automatic one included, and a longer-lived entry may never follow a
+# shorter-lived one in tools -> system -> messages order. Added with C1,
+# whose chat request uses all four.
+_MAX_CACHE_BREAKPOINTS = 4
+_CACHE_TTL_RANK = {"5m": 0, "1h": 1}
+
+
+def _cache_breakpoint_problems(request: dict) -> list[str]:
+    controls: list[Any] = []
+    for tool in request.get("tools") or ():
+        if isinstance(tool, dict) and "cache_control" in tool:
+            controls.append(tool["cache_control"])
+    system = request.get("system")
+    if isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict) and "cache_control" in block:
+                controls.append(block["cache_control"])
+    for message in request.get("messages") or ():
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and "cache_control" in block:
+                controls.append(block["cache_control"])
+    automatic = request.get("cache_control")
+    count = len(controls) + (1 if automatic else 0)
+    problems: list[str] = []
+    if count > _MAX_CACHE_BREAKPOINTS:
+        problems.append(
+            f"A maximum of {_MAX_CACHE_BREAKPOINTS} blocks with cache_control "
+            f"may be provided. Found {count}."
+        )
+    # The automatic breakpoint lands on the last cacheable block, so it is
+    # last in render order.
+    ordered = controls + ([automatic] if automatic else [])
+    ranks = [
+        _CACHE_TTL_RANK.get(
+            str((control or {}).get("ttl") or "5m")
+            if isinstance(control, dict)
+            else "5m",
+            0,
+        )
+        for control in ordered
+    ]
+    if any(later > earlier for earlier, later in zip(ranks, ranks[1:])):
+        problems.append(
+            "a ttl='1h' cache_control block must not come after a ttl='5m' "
+            "cache_control block"
         )
     return problems
 

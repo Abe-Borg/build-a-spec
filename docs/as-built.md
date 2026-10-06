@@ -18459,3 +18459,220 @@ frozen app, compiles the installer, and publishes `BuildASpecSetup.exe`
 with its SHA-256 `latest.json`. No paid API call, real-Word visual check,
 interactive Windows installation or previous-version in-app update was
 performed in this Linux workspace. Those manual checks remain unverified.
+
+## The specification gives directions, never notes — implemented notes (2026-10-06)
+
+**The owner's rule.** Abraham, 2026-10-06: the software must never insert
+TBDs, reminders, or anything else written for the user into the
+specification, and what it does write is directives — the Contractor is told
+what to do, never why. Three real drafts prompted it. A waterflow-alarm
+provision opened "Virginia amends IBC 903.4.2 (Alarms) to require…" and
+closed "This amendment applies generally and governs the waterflow alarm and
+fire-alarm actuation linkage for each of this project's sprinkler riser
+rooms". A REFERENCES entry for FM DS 5-32 carried "(edition recorded for this
+Project: …)", a description of the data sheet, the double-interlock design
+decision and a second data sheet. A REFERENCES entry for NFPA 25 carried a
+paragraph of adoption reasoning through the Virginia SFPC and the ICC cycle.
+The owner's corrections are the prompt's worked examples.
+
+**Why the app did it.** By design. `_PROVENANCE` told the model to "Mark any
+unresolved value inline as [TBD: short description]"; `_FOLLOWUP_POLICY`
+routed every unknown that changes a provision's words into the document as a
+`[TBD]` or a needs_input block; `FULL_DRAFT_DIRECTIVE` asked for "[TBD: …] or
+needs_input for anything that genuinely can't be defaulted"; the
+`apply_spec_edits` and `track_followups` descriptions repeated it; the fire
+module's water-supply and seismic defaults named the TBDs to carry; both
+curated starters shipped with them; and the placeholder lint told the model
+to "convert to a tracked [TBD: ...]". Nothing said a provision states a
+requirement rather than explaining it beyond "No narrative prose inside the
+spec", and the standards block handed the model each edition's adoption
+basis with nothing saying it was not document text — which is where entry 14
+came from.
+
+**The plan** (agreed with the owner): four PRs. This is PR 1 — the drafting
+rules and a hard guard. PR 2 adds an advisory lint and a Final QC check for
+explanatory prose and overlong REFERENCES entries; PR 3 moves the export's
+appended assumptions / imported / open-item schedules and QC closing into a
+separate review report downloaded only on request; PR 4 retires needs-input
+from the panel, review queue and tour. Owner decisions: code citations are
+allowed as citations ("IBC §903.4.2 (Alarms)"); hard-stop unknowns are
+written around and asked about.
+
+### What changed
+
+- **`_SPEC_VOICE`** (new, rendered after `_PROVENANCE`): directives only; no
+  placeholders; no notes to the user or design team; write around a missing
+  value and ask; never narrate a code amendment, adoption, research finding,
+  owner standard or insurer requirement; code citations as citations; drop
+  settled conditions; never describe the draft's own bookkeeping (recorded,
+  assumed, basis, override, research item…); cross-references stay. Then the
+  three before/after pairs, labeled as fire-protection examples of a
+  discipline-neutral rule (the block is engine-owned and every module renders
+  it).
+- **`_PROVENANCE`**: statuses are panel state, never words; `assumed` covers
+  a provision written around a value still awaited; `needs_input` is the
+  user's to set. Leftover `[TBD]`s and needs_input blocks are rewritten when
+  touched.
+- **`_FOLLOWUP_POLICY`**: the old words-vs-next-step boundary is replaced —
+  every unknown the draft depends on is tracked in Waiting on you, with
+  `element_id` on the provision written around it.
+- **`_STANDARDS_POLICY`**: one standard per REFERENCES entry, designation,
+  full title, edition, nothing else; the basis is for the chat; a requirement
+  that drifts into an entry belongs in its article.
+- **`_RESEARCH_POLICY`**: a research item is evidence; draft the requirement
+  it imposes, never its wording, its authority or its applicability.
+- **`_GAP_AND_ADAPT`, `_LINT_POLICY`, `_FULL_DRAFT_POLICY`,
+  `_SPEC_CONVENTIONS_ENGINE`, `FULL_DRAFT_DIRECTIVE`,
+  `ADAPT_IMPORTED_DIRECTIVE`**: placeholders, options and specifier notes are
+  rewritten or deleted, never kept or created; the full draft writes around
+  unknowns and drafts in specification voice.
+- **`spec_doc/spec_voice.py`** (new): `check_drafted_edits` /
+  `drafted_edit_problems` over an op list; `drafted_text_hits` /
+  `has_placeholder` over text. The vocabulary is the lint's placeholder and
+  template-marker lists (moved here; `linting` aliases them and uses
+  `scan_markers`) plus `[TBD…]`, bare `TBD`/`TBC`, "to be
+  determined/confirmed/decided", specifier/editor/designer notes and notes to
+  the specifier/designer/engineer/user/reviewer, and any square-bracketed text
+  containing a letter (a master's options; unit conversions and titles take
+  parentheses). Fields checked: `text` on add_article, add_paragraph and
+  replace (including the `sec` title), `title` on set_standard_edition.
+  Statuses outside `model.MODEL_STATUSES` (confirmed, assumed) are refused
+  with a reason each.
+- **Where it runs.** `conversation._run_tool` before `apply_doc_edits` (the
+  refusal is the ordinary `is_error` "Edit batch rejected (nothing was
+  applied)" result, with the outline); `qc.engine._validate_ops` before the
+  dry run (the finding stays advisory with the reason); and
+  `qc.apply.finding_fix_class`, re-checked at every read (see the review
+  corrections below). **Where it does not:** `/api/doc/edit` — the user's
+  text, including a hand-set needs_input.
+- **`apply_spec_edits`**: the add_paragraph and set_status lines list only
+  confirmed | assumed, and the `status` property gains a description saying
+  so. Its enum still lists all four statuses, deliberately: saved histories
+  carry past inputs naming `needs_input`, and the API reference does not
+  establish that a past input outside today's enum validates — the same
+  caution that keeps `suggest_prompts` declared. The guard does the
+  restricting. The description's closing line says to write complete text,
+  that a placeholder batch is rejected, and how to write around.
+  **`track_followups`**: unknowns are tracked there, never in the document.
+- **`standards_context_block`** ends with `_BASIS_IS_NOT_DOCUMENT_TEXT`
+  (both the pinned and unpinned branches).
+- **The per-turn PROJECT CONTEXT** heads open items `LEFTOVER PLACEHOLDERS
+  (open items — never write new ones; rewrite each provision so it stands
+  complete, and ask the user for the missing value with track_followups)`.
+- **Modules**: hyperscale `water_supply` (write around: a flow test not more
+  than 12 months before working-plan submittal per NFPA 13-2025; ask for the
+  data) and `seismic` (bracing for the seismic design category on the
+  structural drawings; ask for it); generic `system_design_criteria`.
+- **Curated starters**: hyperscale 1.2.A/1.2.A.1 and complete-section 1.1.C
+  and 2.1.B rewritten as directives stamped imported; the complete starter's
+  description drops "editable placeholders". Ids and counters unchanged.
+- **Tutorial**: the showcase plants its own open-item examples
+  (`_SHOWCASE_OPEN_ITEM_EXAMPLES`, the two former starter lines) so the tour's
+  open-items chapter keeps its anchors until PR 4 retires it.
+- **AI template generalization**: the prompt asks for neutral wording and to
+  leave existing placeholders where they are; `_template_structure_contract`
+  compares each paragraph's `drafted_text_hits` matches by exact text and
+  order, so a generalized starter can neither gain, lose nor swap one.
+- **Trust explainer** (`TrustDeepDiveModal`): the line saying unresolvable
+  values "become [TBD: …] or needs input" now says they are written around
+  and asked about.
+
+### Costs and compatibility
+
+- The stable prompt and two tool descriptions changed, so every open session
+  rewrites its cached prefix once after upgrade.
+- The QC lens prompt embeds the edit tool's description, and the QC input
+  manifest fingerprints the standards render, so a retained Final QC report
+  reads stale once; the next version bump does that regardless.
+- Saved projects load unchanged. Their `[TBD]`s and needs_input blocks still
+  count as open items and still block readiness; the model is told to rewrite
+  them. Past `apply_spec_edits` inputs naming `needs_input` stay inside the
+  unchanged enum (see above).
+- Unchanged: `open_questions`, readiness, the `.docx` schedules (PR 3), the
+  panel and tour (PR 4).
+
+### Tests
+
+`tests/test_spec_voice.py` (new): the vocabulary both ways (placeholders,
+options, markers, notes found; the owner's corrected provisions, §
+citations, parenthesized units and Part 3 "Verify field dimensions" pass);
+whole-batch refusal naming each op; the refused statuses and their coverage
+of `STATUSES - MODEL_STATUSES`; a chat turn whose first batch carries a TBD
+is refused and the corrected batch lands; the panel's own edit is never
+policed; a QC fix inserting a TBD or stamping needs_input is not a safe fix;
+generalization cannot add a placeholder; the prompt, directives, tool
+descriptions, standards block, playbook defaults and curated starters say
+and carry what they should.
+
+Existing tests that changed with the rule: `test_app.py` (the shared seed
+batch now drafts a directive; the open-item, export-schedule and
+context-block tests seed their `[TBD]` through the panel),
+`test_full_draft.py` (the scripted draft and the directive pins),
+`test_templates.py` (sets a needs_input by hand to keep the rebase
+coverage), `test_followups.py` (the boundary pin), and
+`test_source_capabilities.py` (its metadata-only QC example set status
+`imported`, now refused from any model path; it sets `assumed`, keeping the
+test's point that metadata ops pass an incomplete source scope).
+
+### Reversion evidence
+
+Each guard was removed in turn, its tests run, and the file restored
+(`git diff` unchanged afterwards). All eleven failed as expected:
+
+| Reverted | Failing tests |
+|---|---|
+| `check_drafted_edits` call in `_run_tool` | the chat self-correction test |
+| `check_drafted_edits` call in `_validate_ops` | the QC safe-fix test |
+| contract back to `"[TBD:" in text` | the generalization test |
+| `_SPEC_VOICE` dropped from the render | both modules' prompt tests |
+| status refusal disabled | both refused-status cases |
+| bracket catch-all removed | the bracketed-option and SI-in-brackets cases |
+| basis line removed from the pinned branch | the hyperscale standards-block test |
+| old TBD bullet back in `FULL_DRAFT_DIRECTIVE` | the directive tests here and in `test_full_draft.py` |
+| old TBD water-supply default | the hyperscale prompt test |
+| a curated starter's TBD line restored | the starters test |
+| showcase open-item examples removed | two tutorial coverage tests |
+
+### Validation
+
+Baseline on `master` at `bb4b7c6`: 3784 passed, 64 skipped. With this
+change: 3821 passed, 64 skipped (37 new tests). Only docstring and
+line-wrap edits followed that run; Ruff and the touched test files were
+re-run after them. `npm test` (517) and `npm run build` passed.
+
+### PR #275 review corrections
+
+Codex raised two P2 findings on the first push; both reproduced and both
+are fixed.
+
+- **A retained Final QC report could still apply a placeholder fix.** The
+  guard ran only while producing new reports, and both apply paths trust
+  the persisted `ops_valid`. A report saved before this change, still
+  current against its inputs, could therefore write a `[TBD]` or stamp
+  needs_input. `finding_fix_class` now re-runs `drafted_edit_problems`. It
+  is the single gate behind the panel's Apply, `apply_qc_fixes`, the FINAL
+  QC REVIEW block and the debrief's safe-fix count, so such a fix reads
+  advisory everywhere and applies as `no_ops`. Bumping the QC protocol
+  version was the alternative; it would have discarded every retained
+  report to catch a rare case.
+- **The template contract compared presence, not identity.** A source
+  `[TBD: design density]` regenerated as `[INSERT OWNER]` still read as
+  "has a placeholder". The contract now carries the tuple of matched
+  placeholder texts, in order. The words around a placeholder can still be
+  generalized; the placeholder itself cannot change, be dropped, or gain a
+  sibling.
+
+Both have regression tests in `tests/test_spec_voice.py`. Removing the
+`finding_fix_class` re-check, or returning the contract to a boolean, makes
+its test fail; both probes were restored.
+
+### Release-note draft (for the release after 1.23.0)
+
+"**The specification gives directions, never notes.** The assistant no
+longer writes TBDs, bracketed options or notes to you into the section. When
+it is missing a value, it writes the provision so it stands without it and
+asks you in Waiting on you. Provisions state the requirement — never why it
+applies or where it came from — and REFERENCES entries carry only the
+designation, title and edition."
+
+No paid API call was made.

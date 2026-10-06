@@ -99,8 +99,9 @@ _DRAFT_ROUND_2 = {
         {
             "action": "add_paragraph",
             "target_id": "pt2.a1",
-            "text": "Temperature rating [TBD: rating].",
-            "status": "needs_input",
+            "text": "Provide sprinklers with temperature ratings suited to "
+            "the maximum ceiling temperature at each location.",
+            "status": "assumed",
         },
     ]
 }
@@ -326,11 +327,13 @@ def test_directive_carries_the_provenance_and_batching_obligations():
     # Draft-the-whole-thing obligation.
     assert "COMPLETE section" in text
     assert "every PART" in text and "every article" in text
-    # Provenance discipline: all three stamps + the TBD marker.
+    # Provenance discipline: both stamps the model may use, and an unknown
+    # is written around and asked about — never held in the text.
     assert "confirmed" in text
     assert "assumed" in text
-    assert "needs_input" in text
-    assert "[TBD" in text
+    assert "needs_input" not in text
+    assert "track_followups" in text
+    assert "never a [TBD]" in text
     # Use established facts + research provenance link.
     assert "project profile" in text
     assert "source_item_id" in text
@@ -399,7 +402,7 @@ def test_directive_drives_a_streaming_multi_round_draft(monkeypatch):
     assert pt1_p1["status"] == "assumed"
     pt2 = doc["parts"][1]["articles"][0]["paragraphs"]
     assert pt2[0]["status"] == "confirmed"
-    assert pt2[1]["status"] == "needs_input"
+    assert pt2[1]["status"] == "assumed"
 
     # One undo unwinds the entire multi-round pass — back to the pre-draft
     # page, which still holds the prerequisites the draft was anchored on.

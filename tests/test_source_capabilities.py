@@ -1056,11 +1056,13 @@ def test_incomplete_source_scope_denies_body_but_allows_metadata_everywhere(
         title="Confirm reviewed status",
         issue="The imported requirement was reviewed.",
         rationale="Metadata remains independent from body XML.",
+        # Any status the model may stamp: a QC fix passes the same drafting
+        # guard as a chat edit, which refuses imported and needs_input.
         proposed_ops=[
             {
                 "action": "set_status",
                 "target_id": "pt1.a1.p1",
-                "status": "imported",
+                "status": "assumed",
             }
         ],
     )

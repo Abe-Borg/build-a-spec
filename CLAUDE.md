@@ -57,8 +57,16 @@ file is the working reference for AI-assisted development sessions.
   research agents land right after the core drafting loop works.
 - NFPA 13 default edition is **2025** (current edition). Jurisdiction-adopted
   earlier editions override when known — never silently, always with the
-  adoption basis stated. This mirrors Spec Critic's pinned-edition philosophy
+  adoption basis stated. "Stated" means recorded in the app
+  (`set_standard_edition`'s basis) and said in chat — never written into the
+  specification text. This mirrors Spec Critic's pinned-edition philosophy
   (`code_cycles.StandardEdition`), which will be ported in Phase 3.
+- The specification carries specification text and nothing else (owner
+  rule, 2026-10-06): no `[TBD]` or other placeholders, no notes or reminders
+  addressed to the user, no explanation of why a requirement applies. An
+  unknown is written around, stamped `assumed`, and asked about with
+  `track_followups`. See "The specification gives directions, never notes"
+  below.
 - Keep `README.md`, `requirements.txt`, and this file current when the
   implementation, dependencies, or conventions change.
 - New as-built notes are appended to `docs/as-built.md`, not to CLAUDE.md.
@@ -85,7 +93,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `qc_dispositions` | `outcomes` | apply_qc_fixes committed audit dispositions with this turn (v1.11.0): `{finding_id: applied\|stale\|no_ops\|already_applied\|not_open\|unknown}`. Emitted from the frozen post-commit payload ONLY when the turn commits with staged dispositions — a rolled-back turn never emits it; the frontend refreshes QC state + readiness on it |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
-| `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
+| `open_questions` | `items` | open-item list (TBD markers + needs_input blocks — leftovers only since 2026-10-06: the model can write neither); emitted when a turn changed the doc |
 | `lint` | `items`, `standards` | advisory lint issues + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
 | `turn_complete` | `stop_reason`, `usage` | turn ended; history + doc version committed server-side. `usage` aggregates the turn's billed tokens across every round (input/output/cache/thinking + web-tool request counts) — raw material for the future cost meter. A turn stopped mid-stream adds `estimated_output_tokens` + `usage_estimated: true` (see "Disclosed stopped-turn output estimate"); `output_tokens` stays exactly what the provider reported |
 | `error` | `message` | turn failed; history untouched and doc rolled back (retry is safe) |
@@ -608,6 +616,76 @@ one request, a drafting turn two.
 Never let a chip reach `text_delta`, history-derived display text, or a
 cached block. The full record, reversion evidence and release-note draft are
 in `docs/as-built.md` under the same heading. No paid API call was made.
+
+## The specification gives directions, never notes — implemented notes (2026-10-06)
+
+Owner rule (Abraham): the software never writes TBDs, reminders, or anything
+addressed to the user into the specification, and provisions direct rather
+than explain. Until now the engine asked for the opposite (`[TBD: …]` inline,
+`needs_input` placeholder blocks). This is PR 1 of 4: the drafting rules and
+the hard guard. An advisory lint and Final QC check for explanatory prose,
+the separate review report replacing the export's appended schedules, and
+retiring needs-input from the panel and tour follow.
+
+- **The prompt.** `render_system_prompt` gains `_SPEC_VOICE` after
+  `_PROVENANCE`, carrying the owner's three before/after examples (the
+  waterflow alarm, and the NFPA 25 and FM DS 5-32 REFERENCES entries).
+  `_PROVENANCE`, `_FOLLOWUP_POLICY`, `_STANDARDS_POLICY`, `_RESEARCH_POLICY`,
+  `_GAP_AND_ADAPT`, `_FULL_DRAFT_POLICY`, `FULL_DRAFT_DIRECTIVE` and
+  `ADAPT_IMPORTED_DIRECTIVE` stop asking for `[TBD]`/needs_input: an unknown
+  is written around, stamped assumed, and asked with `track_followups`
+  (`element_id` → the provision). Code citations stay ("IBC §903.4.2
+  (Alarms)"); a REFERENCES entry is designation, title, and edition only.
+- **The guard.** `spec_doc/spec_voice.check_drafted_edits` runs on every
+  model `apply_spec_edits` batch (`_run_tool`) and on every Final QC
+  finding's `proposed_ops` (`_validate_ops`, so such a fix stays advisory).
+  It refuses the whole batch when new text in add_article / add_paragraph /
+  replace / set_standard_edition `title` carries `[TBD…]`, a bare TBD/TBC,
+  the lint's placeholder or template-marker vocabulary, "to be
+  determined/confirmed/decided", a specifier/designer note, or any
+  square-bracketed text containing a letter; or when a status falls outside
+  `model.MODEL_STATUSES` (confirmed, assumed). The vocabulary is
+  high-precision on purpose: a refusal costs a round, and explanatory prose
+  is left to the prompt (and, next, the lint and QC).
+- **Not guarded, deliberately.** The panel's manual edits
+  (`/api/doc/edit`, `apply_doc_edits` directly): what the user types is
+  theirs, including a hand-set needs_input.
+- **Retained QC reports are re-checked** (PR #275 review): a report saved
+  before the guard can carry `ops_valid` on a fix that writes a `[TBD]`, so
+  `qc/apply.finding_fix_class` — the one gate behind the panel's Apply,
+  `apply_qc_fixes`, the FINAL QC REVIEW block and the debrief counts —
+  re-runs `drafted_edit_problems` instead of trusting the flag. Such a fix
+  reads advisory and applies as `no_ops`. No QC protocol bump.
+- **Bytes that changed once.** The stable prompt, `apply_spec_edits`'
+  description (plus a description on its `status` property), and
+  `track_followups`' description: every open session rewrites its cached
+  prefix once after upgrade. The `status` enum still lists every status on
+  purpose — saved histories name `needs_input` in past inputs, and the API
+  reference does not establish that a past input outside today's enum
+  validates (the `suggest_prompts` precedent). `standards_context_block` ends with `_BASIS_IS_NOT_DOCUMENT_TEXT`,
+  and the QC manifest fingerprints that render, so a retained Final QC
+  report reads stale once (as any version bump also makes it).
+- **Context and lint.** The per-turn OPEN ITEMS block is now LEFTOVER
+  PLACEHOLDERS, saying to rewrite them. The placeholder and template-marker
+  vocabularies and `scan_markers` moved to `spec_voice` (linting aliases
+  them), and the placeholder lint message no longer says "convert to a
+  tracked [TBD: ...]".
+- **Modules, templates, tutorial.** The hyperscale water-supply and seismic
+  defaults and the generic system-criteria default write around; both
+  curated starters lost their TBD and needs_input lines. The tutorial
+  showcase plants its two open-item examples itself
+  (`tutorial._SHOWCASE_OPEN_ITEM_EXAMPLES`) until the tour's open-item
+  chapter is retired. AI template generalization asks for neutral wording,
+  and its structure contract compares each paragraph's placeholders by
+  exact text and order (`drafted_text_hits`) instead of `"[TBD:" in text`,
+  so one cannot be dropped, invented or swapped (PR #275 review).
+- **Unchanged.** `open_questions`, readiness `no_open_items`, the export
+  schedules, and the frontend.
+
+Never add a model-authored path that writes document text without
+`check_drafted_edits`. Tests: `tests/test_spec_voice.py`. The full record,
+reversion evidence and the release-note draft are in `docs/as-built.md`
+under the same heading. No paid API call was made.
 
 ## As-built history
 

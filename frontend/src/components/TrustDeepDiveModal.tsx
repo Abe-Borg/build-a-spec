@@ -576,9 +576,10 @@ function Dossier() {
               "What Claude knows about specification practice, products, and standards from its training. Used for defaults the playbook does not cover, and for language.",
               <>
                 Stamped <Tag>assumed</Tag>, and the model is instructed to say
-                in one line what it assumed. Unresolvable values become{" "}
-                <Mono>[TBD: …]</Mono> or <Tag>needs input</Tag> instead of an
-                invented number.
+                in one line what it assumed. A value it does not have is
+                never invented and never held in the text as a{" "}
+                <Mono>[TBD: …]</Mono>: the provision is written so it stands
+                without it, and the question goes to Waiting on you.
               </>,
             ],
             [

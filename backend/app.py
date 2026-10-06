@@ -280,6 +280,7 @@ from .spec_doc.source_package import (
     read_upload_bounded,
     sanitize_source_filename,
 )
+from .spec_doc.spec_voice import drafted_text_hits
 from .templates import (
     MAX_TEMPLATE_BYTES,
     TEMPLATE_DOCUMENT_TOOL_NAME,
@@ -3085,7 +3086,7 @@ def _template_structure_contract(section: SpecSection) -> dict[str, Any]:
     relying only on the prompt: no blocks can appear/disappear/reparent, IDs
     remain stable, and unresolved decisions stay unresolved at the same IDs.
     """
-    nodes: list[tuple[str, str, int, bool, bool]] = []
+    nodes: list[tuple[str, str, int, bool, tuple[str, ...]]] = []
     for part in section.parts:
         for article in part.articles:
             nodes.append((article.uid, part.uid, -1, False, False))
@@ -3098,7 +3099,15 @@ def _template_structure_contract(section: SpecSection) -> dict[str, Any]:
                             parent,
                             depth,
                             paragraph.status == "needs_input",
-                            "[TBD:" in paragraph.text,
+                            # Every placeholder, option, marker or note, by
+                            # its exact text and in order — not just whether
+                            # a [TBD:] is present — so a generalized starter
+                            # can neither drop one, invent "[INSERT OWNER]",
+                            # nor swap one for another.
+                            tuple(
+                                hit["match"]
+                                for hit in drafted_text_hits(paragraph.text)
+                            ),
                         )
                     )
                     visit(paragraph.children, paragraph.uid, depth + 1)
@@ -3130,9 +3139,13 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
         "section number, section title, discipline, and project type. "
         "Generalize client, site, "
         "location, quantity, and project-specific body wording without adding "
-        "new requirements. Clear project_profile, edition_overrides, "
-        "suppressed_standards, and every source_item_id. Keep needs_input and "
-        "[TBD: ...] items. Do not invent citations, standards, research, or QC.\n\n"
+        "new requirements. Generalize with neutral specification wording "
+        "(\"the Owner\", \"the Project\", \"as indicated on the Drawings\"), "
+        "never with placeholders, bracketed options, blanks, or notes. Clear "
+        "project_profile, edition_overrides, suppressed_standards, and every "
+        "source_item_id. Leave any needs_input status or placeholder text "
+        "the document already carries exactly where it is. Do not invent "
+        "citations, standards, research, or QC.\n\n"
         + encoded
     )
     try:

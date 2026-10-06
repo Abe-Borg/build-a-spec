@@ -135,6 +135,7 @@ from ..spec_doc.source_patch import (
     SourcePatchError,
     validate_source_transition,
 )
+from ..spec_doc.spec_voice import check_drafted_edits
 from ..spec_modules import SpecModule
 from ..standards import standards_context_block
 from ..usage_ledger import (
@@ -8117,9 +8118,11 @@ def _validate_ops(
     """Dry-run the finding's proposed_ops against a fresh snapshot copy.
 
     Each finding is validated independently — copy per finding so they never
-    see each other's effects. For an imported DOCX, any resulting body change
-    must also pass the same final-state preservation guard as a real session
-    edit; projection-preserving metadata remains independent of source XML.
+    see each other's effects. The operations must also pass the drafting
+    guard every model edit passes (``spec_voice.check_drafted_edits``). For
+    an imported DOCX, any resulting body change must also pass the same
+    final-state preservation guard as a real session edit;
+    projection-preserving metadata remains independent of source XML.
     Invalid ops keep the finding advisory and record why; they are never
     trusted raw.
     """
@@ -8127,6 +8130,10 @@ def _validate_ops(
         finding.ops_valid = False
         return
     try:
+        # A fix is model-drafted text like any chat edit: one that would put
+        # a placeholder, an option or a note into the specification (or
+        # stamp needs_input) is never a safe fix — it stays advisory.
+        check_drafted_edits(finding.proposed_ops)
         candidate, _applied = apply_edits(
             copy.deepcopy(snapshot), finding.proposed_ops
         )

@@ -140,6 +140,7 @@ from ..spec_doc.source_patch import (
     validate_source_map_identity,
     validate_source_transition,
 )
+from ..spec_doc.spec_voice import check_drafted_edits
 from ..compliance import AuditRunner
 from ..qc import QCRunner, qc_version_fingerprint
 from ..qc.apply import (
@@ -2737,7 +2738,14 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
         measured["lint"] = len(parts) - 1
     open_items = open_questions(doc)
     if open_items:
-        lines = ["OPEN ITEMS (resolve as answers arrive):"]
+        # You no longer write these (spec_voice refuses them), so any here
+        # came from a legacy project, a starter, or the user's own hand
+        # edit — the header says so, and says what to do with them.
+        lines = [
+            "LEFTOVER PLACEHOLDERS (open items — never write new ones; "
+            "rewrite each provision so it stands complete, and ask the user "
+            "for the missing value with track_followups):"
+        ]
         for item in open_items:
             lines.append(
                 f"- {item.get('ref')} [{item.get('kind')}] "
@@ -2747,10 +2755,11 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
         parts.append(open_items_block)
         measured["open_items"] = len(parts) - 1
     # What the model is waiting on the USER for — model-authored, and
-    # deliberately rendered right after the document's own OPEN ITEMS so
-    # the pair reads as "gaps in the spec, then gaps in what you have been
-    # told". The header says WAITING ON THE USER and never "open items":
-    # conflating the two would have the model filing paragraph TBDs here.
+    # deliberately rendered right after the document's leftover placeholders
+    # so the pair reads as "gaps left in the spec, then what you are asking
+    # the user". Since 2026-10-06 every new unknown lands HERE and nowhere in
+    # the document; the header still says WAITING ON THE USER and never
+    # "open items", so the two lists are never conflated.
     try:
         followup_block = session.followups.context_block(
             message_index=assistant_bubble_count(session.history)
@@ -4458,6 +4467,10 @@ def _run_tool(
         )
     edits = (block.get("input") or {}).get("edits")
     try:
+        # The model's batches, and only the model's: the panel's manual edits
+        # reach apply_doc_edits without this check, because what the user
+        # types is theirs (spec_voice).
+        check_drafted_edits(edits)
         applied = session.apply_doc_edits(edits)
     except SpecEditError as exc:
         _trace.tool_dispatch(

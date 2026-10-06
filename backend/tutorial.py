@@ -230,6 +230,25 @@ def analyze_tutorial_coverage(session: SessionState) -> TutorialCoverage:
     return TutorialCoverage(not gaps, tuple(gaps), anchors, counts, session.doc.index)
 
 
+# The open-items chapter of the tour teaches a needs-input block and a
+# [TBD: ...] marker, and coverage requires one of each. The curated starter
+# carried them until 2026-10-06, when the owner's no-placeholders rule
+# rewrote it as plain specification text (and the model stopped writing
+# either). Until that chapter is retired in favour of Waiting on you, the
+# showcase plants its own labeled examples here — demo content in a practice
+# project, never anything the model or a starter writes.
+_SHOWCASE_OPEN_ITEM_EXAMPLES: dict[str, str] = {
+    "pt1.a1.p3": (
+        "Confirm the final limits of work for [TBD: coordinated project "
+        "scope]."
+    ),
+    "pt2.a1.p2": (
+        "Final performance criteria: [TBD: discipline-specific rating and "
+        "capacity]."
+    ),
+}
+
+
 def build_showcase_session() -> SessionState:
     """Return the bundled, transparently pre-generated tutorial project."""
     curated = Path(__file__).resolve().parent / "templates" / "curated"
@@ -243,6 +262,10 @@ def build_showcase_session() -> SessionState:
     for _part, _article, paragraph, _depth, _ref in iter_paragraphs(section):
         if paragraph.status == "imported":
             paragraph.status = "assumed"
+        example = _SHOWCASE_OPEN_ITEM_EXAMPLES.get(paragraph.uid)
+        if example is not None:
+            paragraph.text = example
+            paragraph.status = "needs_input"
     session = SessionState()
     session.module = get_module("generic")
     session.doc.seed_template(section)

@@ -20,6 +20,7 @@ from typing import Any
 from .. import settings
 from ..spec_doc.model import SpecSection, apply_edits
 from ..spec_doc import SpecEditError
+from ..spec_doc.spec_voice import drafted_edit_problems
 from ..spec_doc.source_mapping import SourceBodyMap
 from ..spec_doc.source_patch import (
     SourcePatchError,
@@ -209,11 +210,18 @@ def finding_fix_class(finding) -> str:
     needs a human or an ordinary drafting edit. Disposition status (open /
     applied / dismissed) is deliberately NOT part of the class: it describes
     what happened to the finding, not what its fix is.
+
+    The drafting guard is re-checked here rather than trusted from the
+    persisted ``ops_valid``: a report retained from before the guard existed
+    can carry a fix that writes a ``[TBD]`` or stamps needs_input, and this
+    one gate is what the panel's Apply, the chat's apply_qc_fixes, the model's
+    FINAL QC REVIEW block and the debrief counts all read.
     """
     if (
         getattr(finding, "ops_semantic_status", "") == "approved"
         and getattr(finding, "ops_valid", False)
         and getattr(finding, "proposed_ops", None)
+        and not drafted_edit_problems(finding.proposed_ops)
     ):
         return FIX_CLASS_SAFE
     return FIX_CLASS_ADVISORY

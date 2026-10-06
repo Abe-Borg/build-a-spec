@@ -66,7 +66,11 @@ def test_exact_preview_strips_project_state_and_rebases_external_starter_statuse
     paragraphs = [item[2] for item in iter_paragraphs(section)]
     paragraphs[0].status = "confirmed"
     paragraphs[0].source_item_id = "research-provenance-that-must-not-transfer"
+    # The curated starter carries no needs_input block since 2026-10-06; a
+    # user can still set one by hand, and the rebase must keep it.
+    paragraphs[1].status = "needs_input"
     needs_input_ids = {p.uid for p in paragraphs if p.status == "needs_input"}
+    assert needs_input_ids
 
     token, preview = catalog.preview(
         section,

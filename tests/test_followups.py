@@ -649,6 +649,7 @@ def test_the_stable_prompt_carries_the_policy():
     prompt = render_system_prompt(HYPERSCALE_FIRE)
     assert "Waiting on you" in prompt
     assert "track_followups" in prompt
-    # The rule the owner asked for, and the boundary against Open items.
+    # The rule the owner asked for, and the boundary against Open items:
+    # every unknown is tracked here, never held in the document.
     assert "[NEXT]" in prompt
-    assert "needs_input" in prompt
+    assert "tracked HERE, never in the document" in prompt

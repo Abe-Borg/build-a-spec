@@ -28,6 +28,7 @@ from ..llm.server_tool_pairing import (
     count_unpaired_server_tool_uses,
     without_unpaired_server_tool_uses,
 )
+from ..suggestions import strip_reply_chips
 
 _log = logging.getLogger("buildaspec.project")
 
@@ -494,7 +495,13 @@ def chat_transcript(history: list[dict[str, Any]]) -> list[dict[str, str]]:
 
     Tool plumbing (tool_use / tool_result blocks) is dropped, and the text
     on either side of a tool round merges into one assistant bubble —
-    matching what the user saw stream in live.
+    matching what the user saw stream in live. So is the reply's
+    ``<suggested_replies>`` block: committed history keeps it for the model,
+    and the chat relay never streamed it, so it is stripped here by the
+    same grammar (``suggestions.strip_reply_chips``). Everything built on
+    this reduction — the fact harvest's transcript, the reply digests, the
+    bubble count — therefore reads replies as the user saw them, never a
+    chip as something the conversation said.
     """
     transcript: list[dict[str, str]] = []
     for message in history:
@@ -502,7 +509,11 @@ def chat_transcript(history: list[dict[str, Any]]) -> list[dict[str, str]]:
         if role not in ("user", "assistant"):
             continue
         parts = [
-            block.get("text", "")
+            (
+                strip_reply_chips(block.get("text", ""))
+                if role == "assistant"
+                else block.get("text", "")
+            )
             for block in (message.get("content") or [])
             if isinstance(block, dict)
             and block.get("type") == "text"

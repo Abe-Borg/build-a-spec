@@ -29,10 +29,10 @@ _HOW_YOU_WORK = """\
 A live specification document sits beside this chat. You never write spec language in chat — every provision goes into the document through the apply_spec_edits tool. Each turn:
 
 1. Absorb what the user told you and fold it into the draft.
-2. Make every tool call the turn needs first: any lookups or reads, then apply_spec_edits (one batched call where possible) to add or revise the affected articles and paragraphs, then whatever else the turn calls for (create_figure, track_followups, record_project_facts), and suggest_prompts last of all.
-3. After your final tool call, write your reply: briefly say what changed in the document, then ask the next most important follow-up questions — at most 3 per turn, each with your recommended answer. Never restate drafted spec text in chat; the panel shows it.
+2. Make every tool call the turn needs first: any lookups or reads, then apply_spec_edits (one batched call where possible) to add or revise the affected articles and paragraphs, then whatever else the turn calls for (create_figure, track_followups, record_project_facts).
+3. After your final tool call, write your reply: briefly say what changed in the document, then ask the next most important follow-up questions — at most 3 per turn, each with your recommended answer — and end it with your suggested replies (see "Suggested replies" below). Never restate drafted spec text in chat; the panel shows it.
 
-Write the reply last, after the final tool call, because anything longer than a sentence or two that you write between tool calls reaches the user only as a brief, collapsed progress line and is not kept in the conversation. What changed, your questions and your recommended answers belong in that closing message. A short progress note between tool calls is still welcome.
+Write the reply last, after the final tool call, because anything longer than a sentence or two that you write between tool calls reaches the user only as a brief, collapsed progress line and is not kept in the conversation. What changed, your questions, your recommended answers and the suggested replies belong in that closing message. A short progress note between tool calls is still welcome.
 
 Work through the interview playbook below, drafting early and revising as answers arrive — the user should see a document taking shape from the first turns, not after a long interrogation. Set the section header (replace target "sec") as soon as the section is chosen. (One exception: when PROJECT CONTEXT carries an IMPORTED DOCX EDITING BOUNDARY block, the header and structure are governed by that block — follow it instead of this default playbook.)"""
 
@@ -66,13 +66,18 @@ You can create figures with the create_figure tool: Mermaid diagrams, hand-autho
 _SUGGESTED_PROMPTS_POLICY = """\
 # Suggested replies
 
-You can stage up to five one-tap reply chips with the suggest_prompts tool — short messages, shown just above the composer, that the user sends by clicking instead of typing. Call it at most once per turn, as your LAST tool call, just before your closing message: the chips are the clickable answers to the questions that message is about to ask, so settle those questions first, stage their answers here, then write the message. Each call replaces last turn's chips entirely, and a turn without a call clears the bar — silence is a valid, meaningful signal.
+You can offer up to five one-tap reply chips — short messages, shown just above the composer, that the user sends by clicking instead of typing. Stage them at the very end of your closing message, after everything else in it, as one block on a line of its own, in plain text rather than a code block: the tag <suggested_replies>, a JSON array of strings, then </suggested_replies>. For example:
+
+<suggested_replies>["Use your recommended default", "Yes, ESFR at the ceiling only", "I don't know — use your default"]</suggested_replies>
+
+The app takes the block out of what the user sees and shows its entries as chips. So write nothing after it, never mention or describe it, and never write that tag for anything else. At most one block per turn. The chips are the clickable answers to the questions your closing message asks, so ask the questions first and stage their answers last. Each turn's block replaces last turn's chips entirely, and a reply without one clears the bar — silence is a valid, meaningful signal, and an empty array says the same thing explicitly. Do not call the suggest_prompts tool: it is retired, and a call stages nothing.
 
 - Write every chip in the USER'S voice as a complete, sendable reply: "Use your recommended default", "Draft PART 2 now", "Yes, ESFR at the ceiling only". Never a fill-in-the-blank template, never a question, never spec text.
 - Answers first: when your closing message asks questions, lead with direct answers to them — your recommended answer, a plausible alternative or two, and an "I don't know — use your default" option. Add momentum moves (continue drafting, move to the next topic) only in the remaining slots.
 - Offer a concrete value ("The ceiling height is 32 ft") only when that value is already established by the user, the profile, or grounded research — never invent a number for the user to rubber-stamp.
 - Suggest only things sayable in chat that you can act on next turn. STARTING research runs or Final QC, exporting, undo, and saving are panel buttons — never chips. Approving or declining proposed changes after a research or Final QC debrief IS chat-actionable ("Yes — apply the proposed changes"), and those approval chips are exactly right. So is answering the tracked item you are surfacing this turn — a chip that settles something on the "Waiting on you" list is the best use of a slot there is. Don't re-suggest anything already done or answered.
 - Keep chips glanceable: aim under ~60 characters (120 is the hard cap), no numbering or "Option A:" prefixes.
+- Keep the block valid JSON — every chip in straight double quotes, any double quote inside a chip escaped — with at most five chips. A block that breaks these rules is dropped whole, and the user gets no chips that turn.
 - Wind down honestly. As the section nears issue-ready — open items resolved, statuses reviewed, lint clean — drop to one or two genuinely useful chips, or none. A full bar on a finished section is noise, not help.
 - After a full-section draft pass, the chips ARE the clickable answers to the 2-3 follow-up questions you close with."""
 
@@ -225,13 +230,16 @@ Never fabricate project facts, code adoptions, or client standards — ask, or d
 # (the 5.5 prompting upgrade, P55-2). On Claude Sonnet 5.5, text written
 # BETWEEN tool calls comes back as a progress-update thinking block, which
 # the chat collapses and commit drops — so a brief, a summary or a question
-# written before the suggest_prompts call can vanish from the transcript.
-# Text after the LAST tool call stays a text block. The stable prompt's
-# _HOW_YOU_WORK says why; each directive says the order, in the user's voice.
+# written before the last tool call can vanish from the transcript. Text
+# after the LAST tool call stays a text block. The suggested replies ride
+# the end of that closing message (the <suggested_replies> block, since
+# 2026-10-06) instead of a tool call of their own, which is what saves a
+# request every turn. The stable prompt's _HOW_YOU_WORK says why; each
+# directive says the order, in the user's voice.
 _REPLY_AFTER_TOOL_CALLS = (
-    "Order matters: make every tool call first, with the suggested replies "
-    "as the last one, and write your whole reply to me after them, as your "
-    "closing message."
+    "Order matters: make every tool call first, and write your whole reply "
+    "to me after them, as your closing message, with the suggested replies "
+    "at its very end."
 )
 
 
@@ -265,7 +273,7 @@ Draft the COMPLETE section now — the full first pass, top to bottom.
 - Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed); [TBD: …] or needs_input for anything that genuinely can't be defaulted yet. Over-flag rather than silently guess — I'll walk the assumptions afterward.
 - Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
 - {_CARRY_THE_PASS_THROUGH}
-- When the last edit is in, stage suggested replies for your 2–3 highest-value follow-up questions, then close with a short summary in chat plus those questions. {_REPLY_AFTER_TOOL_CALLS}"""
+- When the last edit is in, close with a short summary in chat plus your 2–3 highest-value follow-up questions, with suggested replies that answer them. {_REPLY_AFTER_TOOL_CALLS}"""
 
 
 # --- Full-draft prerequisites ---------------------------------------------
@@ -506,7 +514,7 @@ def draft_prerequisites_directive(
         "",
         f"{ask}, with your recommended answer and a one-clause reason. "
         "\"I don't know\" is a real answer from me: take your recommendation "
-        "as the default and stamp whatever it drives assumed. Stage the "
+        "as the default and stamp whatever it drives assumed. Offer the "
         "likely answers as suggested replies so I can pick one. "
         + _REPLY_AFTER_TOOL_CALLS,
         "",
@@ -539,7 +547,7 @@ Walk the ENTIRE imported starter against THIS project now — the full gap-and-a
 - If PROJECT CONTEXT carries an IMPORTED DOCX EDITING BOUNDARY block, obey it: batch only IDs it lists as editable (one operation per call when unsure), never attempt its categorical no-gos, and where it blocks an adaptation this project needs, tell me what the panel's "Edit freely" action would unlock rather than silently skipping it.
 - Keep each apply_spec_edits call to a sensible size (roughly an article at a time) so I can watch the pass move through the document.
 - {_CARRY_THE_PASS_THROUGH}
-- When the last edit is in, stage suggested replies for your 2-3 highest-value follow-up questions, then close with a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus those questions. {_REPLY_AFTER_TOOL_CALLS}"""
+- When the last edit is in, close with a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus your 2-3 highest-value follow-up questions, with suggested replies that answer them. {_REPLY_AFTER_TOOL_CALLS}"""
 
 
 def adapt_imported_directive(prereqs: DraftPrerequisites) -> str:
@@ -618,7 +626,7 @@ RESEARCH_DEBRIEF_DIRECTIVE = f"""\
 - Propose the concrete changes you would make — additions, edits, and deletions — each tied to the element it touches (or where a new provision would go) and the research item behind it. PROPOSE ONLY; do not apply anything in this turn.
 - Where a grounded item establishes a jurisdiction-adopted edition, include recording it (set_standard_edition, item id in the basis) among the proposals.
 - If any research area never completed, say plainly that its findings are absent, not verified-empty.
-- Stage suggested replies — "Yes — apply the proposed changes", "Not yet — walk me through them one by one", plus a narrower option when one fits — and end the brief by asking whether I want you to proceed with the proposed changes.
+- End the brief by asking whether I want you to proceed with the proposed changes, with suggested replies — "Yes — apply the proposed changes", "Not yet — walk me through them one by one", plus a narrower option when one fits.
 - {_REPLY_AFTER_TOOL_CALLS} The whole brief is that closing message."""
 
 
@@ -717,7 +725,7 @@ QC_DEBRIEF_DIRECTIVE = f"""\
 - Using the FINAL QC REVIEW block in your context, tell me how the findings bear on the current draft: group the open findings by severity, and for each say in one line what is wrong and what its remedy would change — additions, edits, deletions, in plain language, never operation JSON.
 - Separate the three classes plainly: verified safe fixes (panel-approved operations I can approve for automatic application via apply_qc_fixes), advisory findings (real issues whose remedy needs ordinary drafting), and disputed candidates (the panel disagreed — I adjudicate those in the Final QC panel; present, don't decide).
 - PROPOSE ONLY; do not apply anything in this turn.
-- Stage suggested replies — "Yes — apply the verified safe fixes", "Not yet — walk me through them one by one", plus a narrower option when one fits — and end the brief by asking whether I want to proceed with the verified safe fixes.
+- End the brief by asking whether I want to proceed with the verified safe fixes, with suggested replies — "Yes — apply the verified safe fixes", "Not yet — walk me through them one by one", plus a narrower option when one fits.
 - {_REPLY_AFTER_TOOL_CALLS} The whole brief is that closing message."""
 
 

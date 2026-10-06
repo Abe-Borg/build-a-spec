@@ -234,7 +234,6 @@ def test_a_read_reference_doc_call_without_ref_id_names_the_key():
     [
         ("apply_spec_edits", "'edits'"),
         ("create_figure", "'kind'"),
-        ("suggest_prompts", "'prompts'"),
         ("track_followups", "'add'"),
         ("record_project_facts", "'record'"),
         ("apply_qc_fixes", "finding_ids"),
@@ -245,7 +244,9 @@ def test_every_chat_tool_names_the_key_an_empty_call_is_missing(name, key):
     at all answers with an ``is_error`` naming what it expected. Only
     ``read_reference_doc`` needed a fix (above); these already did, and this
     keeps them doing it. (``recall_conversation`` names its keys too, but
-    only once something is condensed — its own tests cover that.)"""
+    only once something is condensed — its own tests cover that. The retired
+    ``suggest_prompts`` answers every call by naming the reply block instead:
+    ``test_suggested_prompts.py`` covers it.)"""
     result, _ = conversation._run_tool(
         sessions.get_session(),
         {"type": "tool_use", "id": "toolu_e", "name": name, "input": {}},

@@ -5,11 +5,13 @@ after the last tool call" is the record), findings F1 and F7.
 On Claude Sonnet 5.5, a note of more than a sentence or two written BETWEEN
 tool calls comes back as a progress-update ``thinking`` block: the chat
 collapses it and commit drops it. So the stable prompt and every directive
-that stages reply chips now say the same thing — make every tool call first,
-``suggest_prompts`` last, and write the reply after it, where it stays a
-``text`` block. And the web-lookup policy carries the Sonnet 5.5 guide's
-"even when you feel confident" sentence without the old line that read as
-"don't search".
+that stages reply chips now say the same thing — make every tool call first
+and write the reply after the last one, where it stays a ``text`` block.
+Since 2026-10-06 the chips ride the END of that reply as a
+``<suggested_replies>`` block instead of a ``suggest_prompts`` call of their
+own (the round that call cost is gone). And the web-lookup policy carries
+the Sonnet 5.5 guide's "even when you feel confident" sentence without the
+old line that read as "don't search".
 """
 from __future__ import annotations
 
@@ -60,32 +62,50 @@ def test_the_stable_prompt_makes_tool_calls_first_and_replies_last(module):
 
 
 @pytest.mark.parametrize("module", _modules(), ids=lambda m: m.module_id)
-def test_suggest_prompts_is_the_last_tool_call_before_the_closing_message(module):
+def test_the_suggested_replies_ride_the_end_of_the_closing_message(module):
     prompt = render_system_prompt(module)
-    # P55-2.2, in the step list and in the policy that owns the tool.
-    assert "and suggest_prompts last of all" in prompt
+    # Step 3 ends the reply with the chips; step 2 no longer makes them a
+    # tool call (the P55-2.2 "suggest_prompts last of all" is gone).
+    assert "and end it with your suggested replies" in prompt
+    assert "suggest_prompts last of all" not in prompt
+    assert "as your LAST tool call" not in prompt
     assert (
-        "Call it at most once per turn, as your LAST tool call, just before "
-        "your closing message"
+        "What changed, your questions, your recommended answers and the "
+        "suggested replies belong in that closing message."
     ) in prompt
+    # The policy teaches the exact block the relay parses, and the rules
+    # that keep it out of prose.
+    assert (
+        "Stage them at the very end of your closing message, after everything "
+        "else in it, as one block on a line of its own"
+    ) in prompt
+    assert (
+        '<suggested_replies>["Use your recommended default", '
+        '"Yes, ESFR at the ceiling only", "I don\'t know — use your default"]'
+        "</suggested_replies>"
+    ) in prompt
+    assert "write nothing after it, never mention or describe it" in prompt
+    # A fenced block would leave the fence lines behind once stripped.
+    assert "in plain text rather than a code block" in prompt
+    assert "a reply without one clears the bar" in prompt
+    assert "Do not call the suggest_prompts tool: it is retired" in prompt
+    assert "is dropped whole, and the user gets no chips that turn" in prompt
     assert "near the end of your reply" not in prompt
     assert "once your questions for the turn are on the table" not in prompt
-    # The chips answer what the closing message is about to ask, not
-    # questions already written out before the call.
+    # The chips answer what the closing message asks.
     assert "when your closing message asks questions, lead with direct" in prompt
     assert "when you asked questions this turn" not in prompt
 
 
-def test_the_suggest_prompts_tool_description_says_the_same_order():
-    """The tool's own description rides ahead of the system prompt; left on
-    "near the end of your reply", it would contradict the policy."""
+def test_the_retired_tool_description_says_not_to_call_it():
+    """The tool stays declared (saved histories name it) and rides ahead of
+    the system prompt; it must point at the block, never invite a call."""
     description = SUGGEST_PROMPTS_TOOL["description"]
-    assert "as your LAST tool call, and write your closing message after it" in (
-        description
-    )
-    assert "the questions your closing message asks" in description
+    assert description.startswith("Retired — do not call this tool.")
+    assert "<suggested_replies>[...]</suggested_replies>" in description
+    assert "a call stages nothing" in description
+    assert "LAST tool call" not in description
     assert "near the end of your reply" not in description
-    assert "questions you just asked" not in description
 
 
 @pytest.mark.parametrize("module", _modules(), ids=lambda m: m.module_id)
@@ -187,8 +207,8 @@ _DIRECTIVES = {
 
 @pytest.mark.parametrize("build", _DIRECTIVES.values(), ids=_DIRECTIVES.keys())
 def test_every_chip_staging_directive_stages_first_and_closes_after(build):
-    """P55-2.3: each directive asks for suggested replies AND says they come
-    before the closing message, in the one shared sentence."""
+    """P55-2.3: each directive asks for suggested replies AND says they ride
+    the end of the closing message, in the one shared sentence."""
     text = build()
     assert "suggested replies" in text
     assert _ORDER in text
@@ -197,10 +217,20 @@ def test_every_chip_staging_directive_stages_first_and_closes_after(build):
 
 def test_the_shared_ordering_sentence_says_what_the_prompt_says():
     assert _ORDER == (
-        "Order matters: make every tool call first, with the suggested "
-        "replies as the last one, and write your whole reply to me after "
-        "them, as your closing message."
+        "Order matters: make every tool call first, and write your whole "
+        "reply to me after them, as your closing message, with the suggested "
+        "replies at its very end."
     )
+
+
+@pytest.mark.parametrize("build", _DIRECTIVES.values(), ids=_DIRECTIVES.keys())
+def test_no_directive_makes_the_chips_a_step_of_their_own(build):
+    """The old wording staged the chips first ("Stage suggested replies …,
+    then close"), which read as a tool call before the reply."""
+    text = build()
+    assert "stage suggested replies" not in text.casefold()
+    assert "Stage the likely answers" not in text
+    assert "suggest_prompts" not in text
 
 
 @pytest.mark.parametrize(
@@ -212,7 +242,7 @@ def test_a_debrief_brief_is_the_closing_message(text):
     """A debrief's whole brief — the part most at risk of arriving as a
     collapsed progress note — is named as the closing message."""
     assert "The whole brief is that closing message." in text
-    assert "end the brief by asking whether I want" in text
+    assert "End the brief by asking whether I want" in text
     # The old order put the question first and the chips as an afterthought.
     assert "Close by asking whether I want" not in text
 
@@ -223,5 +253,6 @@ def test_a_debrief_brief_is_the_closing_message(text):
     ids=["full draft", "adapt"],
 )
 def test_a_whole_section_pass_closes_after_its_last_edit(text):
-    assert "When the last edit is in, stage suggested replies" in text
+    assert "When the last edit is in, close with a short summary in chat" in text
+    assert "with suggested replies that answer them" in text
     assert "When you're done, give me a short summary" not in text

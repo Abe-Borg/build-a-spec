@@ -18,7 +18,7 @@ is headed ``WAITING ON THE USER`` for exactly that reason.
 
 A store, not a latest-only set
 ------------------------------
-``suggest_prompts`` replaces its whole list every turn (silence = clear).
+The suggested replies replace their whole list every turn (silence = clear).
 That rule is precisely wrong here: an item the model forgets to restate must
 NOT vanish, since forgetting is the failure this feature exists to prevent.
 So the tool is additive plus resolving, and the store persists across turns
@@ -36,8 +36,8 @@ document-store philosophy): a rolled-back id is skipped, not recycled.
 Token posture
 -------------
 The payload is small (a title, a sentence of detail), so nothing is elided:
-the ``tool_use`` input rides committed history verbatim, as with
-``suggest_prompts``. What IS bounded is the context block — only the open
+the ``tool_use`` input rides committed history verbatim, as the reply's
+suggested-replies block does in its text. What IS bounded is the context block — only the open
 items and a short tail of recently settled ones reach the model, so a long
 session cannot grow its own per-turn bill without limit.
 """

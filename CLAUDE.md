@@ -29,7 +29,7 @@ file is the working reference for AI-assisted development sessions.
   optional `--control` run is one more request, made only on demand. The
   third, `tools/prompt55_progress_update_canary.py --run` (the 5.5 prompting
   upgrade, P55-2), runs ONE real interview turn through the production
-  engine — typically three or four requests, each re-sent with
+  engine — typically two or three requests, each re-sent with
   `thinking.display: "updates"` (beta `thinking-display-updates-2026-08-18`)
   and `max_tokens` capped — and checks that the reply lands after the last
   tool call as closing text that asks the questions, with no question left
@@ -78,7 +78,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `web_search` | `query` | the model ran a server-side web search this round — emitted LIVE (Batch 2) the instant the server-tool block's input completes, not derived post-hoc |
 | `web_fetch` | `url` | the model fetched a page/document server-side this round — emitted live on the block's completion |
 | `figure` | `figure` | the model created a figure (diagram/schematic/table) via `create_figure` this round — the full serialized `Figure` for inline chat rendering + downloads (Batch 8). Emitted live on the tool dispatch. Source is client-sanitized before render; it lives only in the figure store, never in history/traces/the re-billed doc context |
-| `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips via `suggest_prompts` this round (Batch 8→9), shown above the composer; emitted live on the tool dispatch. Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (not calling the tool = clear, which is the wind-down; a failed turn keeps the prior set). Tiny payload — rides committed history verbatim (no elision, no PROJECT CONTEXT stub) |
+| `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips (Batch 8→9), shown above the composer. Since 2026-10-06 they ride a `<suggested_replies>[…JSON array…]</suggested_replies>` block at the END of the closing message, not the retired `suggest_prompts` tool: the relay (`_stream_events` + `suggestions.ReplyChipFilter`) holds the markup back from `text_delta`, and emits this event when the block closes and passes `validate_prompts` (a malformed block = no event, logged). Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (no block = clear, which is the wind-down; an unclosed block from a stop or `max_tokens` stages nothing, so the bar clears; a failed turn keeps the prior set). A complete block stays verbatim in the committed reply text (how the model sees its last chips); `chat_transcript` and recall strip it |
 | `followups` | `followups` | the model raised or settled tracked items via `track_followups` this round (v1.16.0) — the full "Waiting on you" list, emitted live on the tool dispatch. ACCUMULATING, not latest-only: the store persists across turns, so silence means nothing changed rather than "clear". Turn-atomic through the store's own begin/commit/rollback |
 | `project_facts` | `project_facts` | the model recorded or superseded established project facts via `record_project_facts` this round (v1.17.0) — the full ledger snapshot, emitted live on the tool dispatch. Same accumulating, turn-atomic posture as `followups`; the store also persists into the project file and rides a project brief into the next section |
 | `compaction` | `compaction` | the view this turn sends carries a summary of the oldest turns (compaction Phase 3): `{covers_turns, created_at, tokens_before, tokens_after, trigger, summary_chars}` — never the text (`GET /api/chat/compaction` returns it). Emitted at turn start, after `_prepare_turn_view`, whenever the turn's view has a record — including one adopted or written at that moment — so the chat's divider moves at once. Not persisted; the doc payload's `compaction` re-syncs it, and a summary adopted after a turn's stream has closed reaches the chat through the payload's `compaction_pending` + `GET /api/chat/compaction/status` |
@@ -333,7 +333,10 @@ already resolved and does nothing). 409 when nothing is running.
   drop (only required within their own turn), and fetched-PDF payloads
   are elided wholesale (`elide_all_pdf_sources` — a PDF left in history
   would be re-billed forever and balloon the project file). Server-tool
-  blocks (search results, citations) stay.
+  blocks (search results, citations) stay. A reply's complete
+  `<suggested_replies>` block stays too (the model's view of its last chips);
+  an UNCLOSED one is cut, and a text block it empties is dropped
+  (`strip_unclosed_reply_chips` — the API refuses whitespace-only text).
 - **Adaptive thinking** is stated explicitly (`thinking: {type:
   "adaptive"}` + `output_config: {effort: settings.INTERVIEW_EFFORT}`,
   default `medium`; research runs `RESEARCH_EFFORT`, default `medium`.
@@ -531,6 +534,43 @@ wrote it at 1.25× on every turn and no later turn read it.
 
 Full record, economics, reversion evidence and the release-note draft:
 `docs/as-built.md` under the same heading. No paid API call was made.
+
+## Suggested replies ride the reply — implemented notes (2026-10-06)
+
+On Sonnet 5.5 the reply must follow the last tool call (P55-2), so the
+`suggest_prompts` tool cost every turn one extra full-context request whose
+only news was `{"suggested": N}`. The chips now end the closing message as
+`<suggested_replies>["…", "…"]</suggested_replies>`: a question-only turn is
+one request, a drafting turn two.
+
+- **One grammar, three places** (`backend/suggestions.py`). An exact,
+  case-sensitive tag; complete blocks anywhere are removed, and an unclosed
+  one removes everything after its opening tag. The relay's
+  `ReplyChipFilter` streams exactly what `strip_reply_chips` gives
+  `chat_transcript`, however the deltas split (fuzz-pinned). Commit keeps
+  complete blocks and cuts only unclosed fragments.
+- **Strict, uncorrectable validation.** `parse_reply_chips` = `json.loads` +
+  `validate_prompts`. A failure stages nothing and is logged
+  (`buildaspec.chat`), never retried: a retry would be the round this
+  removes. Latest valid block in a turn wins.
+- **The stop button still works mid-block.** Held text yields throttled
+  `writing` status frames (`_HELD_TEXT_TICK_S`, rendered as nothing), so the
+  turn loop's stop check keeps running.
+- **Neutralized where frames already are:** the PROJECT CONTEXT and project
+  background (`_CONTEXT_ESCAPE_PATTERN`, one alternation with the boundary
+  markers, still linear), the `read_reference_doc` result (chat-side only),
+  and compaction's frames. Recall and the harvest read replies without
+  their chips.
+- **`suggest_prompts` stays declared and retired.** The API reference does
+  not establish that a history naming an undeclared tool validates, and
+  saved projects carry such calls. Its description says not to call it, and
+  a call gets an `is_error` naming the block. Remove it in a later release.
+  The tool list's bytes changed once (the description), as did the stable
+  prompt.
+
+Never let a chip reach `text_delta`, history-derived display text, or a
+cached block. The full record, reversion evidence and release-note draft are
+in `docs/as-built.md` under the same heading. No paid API call was made.
 
 ## As-built history
 

@@ -1309,18 +1309,21 @@ function Dossier() {
         <Runtime
           n={9}
           title="The suggested reply chips"
-          trigger="They appear above the composer after a turn."
+          trigger="They appear above the composer as a reply finishes."
           runs={
             <>
-              The model stages up to five short messages written in{" "}
-              <em>your</em> voice. Clicking one sends that exact text as your
-              message — nothing more. They cannot act, cannot start research or
-              QC, and cannot edit the document. A turn that stages none clears the
-              bar, which is how the row winds down as a section approaches
+              The model ends its reply with up to five short messages written
+              in <em>your</em> voice. The application reads them off the end of
+              the reply, checks them, and shows them as chips — the markup
+              itself never appears in the chat, and a set that fails the checks
+              is dropped. Clicking one sends that exact text as your message —
+              nothing more. They cannot act, cannot start research or QC, and
+              cannot edit the document. A reply that offers none clears the bar,
+              which is how the row winds down as a section approaches
               issue-ready.
             </>
           }
-          sent="A tiny payload of text, replaced wholesale each turn."
+          sent="A tiny payload of text at the end of the reply, replaced wholesale each turn. It stays with that reply in the stored conversation, so the model sees what it offered last time."
           model="Claude Sonnet 5.5, inside the turn."
           bounds="Panel actions — research, QC, export, undo, save — are deliberately excluded from what a chip may propose."
         />
@@ -1672,8 +1675,8 @@ function Dossier() {
             ],
             [
               "Suggest replies",
-              "Stage up to five one-tap messages for you.",
-              "Text only. Clicking one sends it as your message.",
+              "End its reply with up to five one-tap messages for you.",
+              "Text only, carried at the end of the reply rather than by a tool call, and checked by the application before it is shown. Clicking one sends it as your message.",
             ],
             [
               "Read a reference document",

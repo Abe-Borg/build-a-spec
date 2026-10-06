@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from ..suggestions import neutralize_reply_chip_tags, strip_reply_chips
+
 COMPACTION_RECORD_VERSION = 1
 
 # The frame the summary rides in, and the frame recall results ride in. Both
@@ -406,8 +408,11 @@ def neutralize_compaction_frames(text: str) -> str:
     The summary quotes the user and a recalled turn IS the user's text, so
     either can hold a string that would close its frame early, or forge the
     PROJECT CONTEXT or PROJECT BACKGROUND markers every request relies on. Disclosed rather than
-    deleted, the ``reference_docs`` posture.
+    deleted, the ``reference_docs`` posture. The reply-chip tag goes inert
+    too (``suggestions.neutralize_reply_chip_tags``): a summary or a recalled
+    turn must not hand the model a ready-made ``<suggested_replies>`` block.
     """
+    text = neutralize_reply_chip_tags(text)
     text = _FRAME_TAG_PATTERN.sub(
         lambda m: f"[escaped tag: {m.group(1)}{m.group(2)}]", text
     )
@@ -667,8 +672,8 @@ def summary_instruction(
         "there are none.\n\n"
         f"<{LEDGERS_FRAME_TAG}>\n{neutralize_compaction_frames(ledgers)}\n"
         f"</{LEDGERS_FRAME_TAG}>\n\n"
-        "Do not call any tools while writing this summary; respond with text "
-        "only."
+        "Do not call any tools while writing this summary, and do not end it "
+        "with a suggested-replies block; respond with text only."
     )
 
 
@@ -801,7 +806,10 @@ def recall_turns(history: list[Any], hidden_turns: int) -> list[RecallTurn]:
         for message in history[start + 1:end]:
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 continue
-            text = message_text(message)
+            # What the user read: a reply's suggested-replies block is chips
+            # offered, not something the conversation said, and a search for
+            # "32 ft" must not find a chip the user never sent.
+            text = strip_reply_chips(message_text(message)).strip()
             if text:
                 replies.append(text)
             for block in _content_list(message):

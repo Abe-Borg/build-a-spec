@@ -162,3 +162,22 @@ test("the report modal's methodology states the memo's rule sentence verbatim", 
     "QCReportModal's methodology must carry the same rule sentence the Word memo renders",
   );
 });
+
+test("chip copy says the chips ride the end of the reply, not a tool call", () => {
+  // Since 2026-10-06 the reply chips are a <suggested_replies> block at the
+  // end of the model's closing message (backend/suggestions.py); the
+  // suggest_prompts tool is retired and says so. The dossier describes what
+  // the model may touch, so it must not keep describing a tool call.
+  const suggestions = readFileSync(
+    new URL("../../backend/suggestions.py", import.meta.url),
+    "utf8",
+  );
+  assert.match(suggestions, /^REPLY_CHIPS_TAG = "suggested_replies"$/m);
+  assert.match(suggestions, /"Retired — do not call this tool\. /);
+  const text = fold(dossier);
+  assert.match(text, /The model ends its reply with up to five short messages/);
+  assert.match(text, /the markup itself never appears in the chat/);
+  assert.match(text, /carried at the end of the reply rather than by a tool call/);
+  assert.doesNotMatch(text, /The model stages up to five short messages/);
+  assert.doesNotMatch(text, /Stage up to five one-tap messages/);
+});

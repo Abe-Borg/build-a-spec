@@ -974,10 +974,17 @@ def test_the_measurement_is_invisible(monkeypatch) -> None:
     ]
 
     def run_both() -> tuple:
-        # The same scripted objects both times, so the two runs differ in
+        # The same scripted turns both times, so the two runs differ in
         # nothing but the measurement (a fake's ids are minted per build).
-        research_client, profile = _research_run(research_turns, continuation_cache=True)
-        qc_client, result = _qc_run(qc_turns, continuation_cache=True, store=store)
+        # Each run gets its own deep copy: a request re-sends a response's
+        # very ``content`` list, so with shared objects a measurement that
+        # changed a response would show in both runs' requests alike.
+        research_client, profile = _research_run(
+            copy.deepcopy(research_turns), continuation_cache=True
+        )
+        qc_client, result = _qc_run(
+            copy.deepcopy(qc_turns), continuation_cache=True, store=store
+        )
         return research_client, profile, qc_client, result
 
     measured = run_both()
@@ -987,7 +994,16 @@ def test_the_measurement_is_invisible(monkeypatch) -> None:
     silent = run_both()
 
     for index in (0, 2):
-        assert _canonical(measured[index].requests) == _canonical(silent[index].requests)
+        # Research areas and Final QC lenses each run on their own worker
+        # thread (the staggered launch releases research's followers
+        # together), so the order requests reach the fake is the
+        # scheduler's, and compared in arrival order two identical runs
+        # failed intermittently. Every request's bytes and their count are
+        # still compared, and a conversation's own order is in those bytes:
+        # each continuation re-sends every message the request before it did.
+        assert sorted(map(_canonical, measured[index].requests)) == sorted(
+            map(_canonical, silent[index].requests)
+        )
     assert _canonical(_comparable(measured[1].to_dict())) == _canonical(
         _comparable(silent[1].to_dict())
     )

@@ -35,7 +35,9 @@ The vocabulary is high-precision on purpose. A refused batch costs the model
 a round, so the guard only matches what is never specification language.
 Explanatory prose ("Virginia amends…", "This amendment applies…") is too
 fuzzy to block on without trapping legitimate provisions in a rejection
-loop; the prompt, the lint and Final QC handle that.
+loop; the prompt, the lint and Final QC handle that. The lint's half lives
+at the end of this module (:data:`EXPLANATORY_PROSE_PATTERNS`,
+:func:`reference_entry_problems`): it reports, it never refuses.
 """
 from __future__ import annotations
 
@@ -46,13 +48,19 @@ from .model import MODEL_STATUSES, SpecEditError
 
 __all__ = [
     "DRAFTING_ONLY_PATTERNS",
+    "EXPLANATORY_PROSE_PATTERNS",
     "MODEL_STATUSES",
     "PLACEHOLDER_PATTERNS",
+    "REFERENCES_ARTICLE_RE",
+    "REFERENCE_ENTRY_MAX_CHARS",
+    "REFERENCE_ENTRY_PATTERNS",
     "TEMPLATE_MARKER_PATTERNS",
     "check_drafted_edits",
     "drafted_edit_problems",
     "drafted_text_hits",
+    "explanatory_prose_hits",
     "has_placeholder",
+    "reference_entry_problems",
     "scan_markers",
 ]
 
@@ -130,6 +138,15 @@ def scan_markers(
     skipped, so one placeholder is reported once, under its most specific
     label. An uncompilable pattern (a module's extra) is ignored.
     """
+    for _start, matched, label in _scan_spans(text, patterns):
+        yield {"match": matched, "label": label}
+
+
+def _scan_spans(
+    text: str,
+    patterns: Iterable[tuple[str, str]],
+) -> Iterable[tuple[int, str, str]]:
+    """:func:`scan_markers` with each hit's start offset, same claiming."""
     seen_spans: list[tuple[int, int]] = []
     for source, label in patterns:
         try:
@@ -141,7 +158,7 @@ def scan_markers(
             if any(s <= span[0] and span[1] <= e for s, e in seen_spans):
                 continue
             seen_spans.append(span)
-            yield {"match": match.group(0), "label": label}
+            yield match.start(), match.group(0), label
 
 
 def drafted_text_hits(text: str) -> list[dict[str, str]]:
@@ -236,3 +253,185 @@ def check_drafted_edits(edits: Any) -> None:
         "setting element_id to that provision. Write unit conversions and "
         "titles in parentheses, not square brackets."
     )
+
+
+# ---------------------------------------------------------------------------
+# Advisory: explanatory prose and overlong REFERENCES entries (PR 2)
+#
+# The guard above blocks what is never specification language. What follows
+# only REPORTS — through the lint, which the panel shows and every chat turn
+# carries — because explanation is a matter of degree and a refused batch
+# would trap a legitimate provision in a rejection loop. The phrase list is
+# the owner's (2026-10-06), with three phrases narrowed so ordinary spec
+# language stays clean: "governs" only when it governs something ("the more
+# stringent requirement governs" is a directive), "incorporates" only in the
+# adoption sense (a controller may incorporate a switch), and "consistent
+# with the" only beside an edition, code or adoption. Each label is the
+# advice the lint message gives.
+# ---------------------------------------------------------------------------
+
+_NARRATES = "narrates where the requirement comes from"
+_REASON = "gives a reason — state only the requirement"
+_APPLIES = "explains where it applies"
+_TALKS = "talks about the document instead of directing"
+_APP_TERMS = "uses the app's own bookkeeping terms"
+_DESIGN_TEAM = "addresses the design team"
+_HEDGES = "hedges — state the requirement"
+
+#: Phrases that mark a provision explaining instead of directing. Matching
+#: ignores case; earlier patterns claim their span first (``scan_markers``).
+EXPLANATORY_PROSE_PATTERNS: tuple[tuple[str, str], ...] = (
+    # Amendment and adoption narration.
+    (r"(?i)\b(?:this|the)\s+amendment\b", _NARRATES),
+    (r"(?i)\bamends\b", _NARRATES),
+    (r"(?i)\bhas\s+adopted\b", _NARRATES),
+    (r"(?i)\badopts\b", _NARRATES),
+    (
+        r"(?i)\bincorporat\w*\b[^.;]{0,80}?\b(?:codes?|standards?|editions?|"
+        r"by\s+reference|I[BF]C)\b",
+        _NARRATES,
+    ),
+    (r"(?i)\bby\s+reference\b", _NARRATES),
+    (r"(?i)\bis\s+understood\s+to\b", _NARRATES),
+    (r"(?i)\bcorroborat\w*", _NARRATES),
+    (
+        r"(?i)\bconsistent\s+with\s+the\b[^.;]{0,40}?\b(?:editions?|codes?|"
+        r"adoptions?|amendments?)\b",
+        _NARRATES,
+    ),
+    # Reasons and applicability.
+    (r"(?i)\bbecause\b", _REASON),
+    (r"(?i)\bin\s+order\s+to\b", "'in order to' gives a reason — state only the requirement"),
+    (r"(?i)\bthe\s+intent\b", _REASON),
+    (r"(?i)\b(?:is|are)\s+intended\s+to\b", _REASON),
+    (r"(?i)(?<!for )\bthe\s+purpose\s+of\b", _REASON),
+    (r"(?i)\bthis\s+ensures\b", _REASON),
+    (r"(?i)\bgoverns\s+(?:the|this|each|all)\b", _APPLIES),
+    (r"(?i)\bapplies\s+generally\b", _APPLIES),
+    (r"(?i)\b(?:this|the)\s+(?:provision|requirement)\s+applies\b", _APPLIES),
+    (r"(?i)\bapplies\s+to\s+this\s+project\b", _APPLIES),
+    # Talking about the document.
+    (r"(?i)\bthis\s+(?:provision|requirement|paragraph)\b", _TALKS),
+    # The app's own bookkeeping terms.
+    (r"(?i)\brecorded\s+for\s+this\s+project\b", _APP_TERMS),
+    (r"(?i)\bedition\s+recorded\b", _APP_TERMS),
+    (r"(?i)\brecorded\s+edition\b", _APP_TERMS),
+    (r"(?i)\badoption\s+basis\b", _APP_TERMS),
+    (r"(?i)\bbasis\s*:", _APP_TERMS),
+    (r"(?i)\bresearch\s+items?\b", _APP_TERMS),
+    (r"(?i)\bper\s+research\b", _APP_TERMS),
+    (r"(?i)\bresearch\s+shows\b", _APP_TERMS),
+    (r"(?i)\bproject\s+(?:profile|facts?)\b", _APP_TERMS),
+    (r"(?i)\bopen\s+items?\b", _APP_TERMS),
+    (r"(?i)\bmodel-proposed\b", _APP_TERMS),
+    (r"(?i)\bunverified\b", _APP_TERMS),
+    (r"(?i)\bdesign\s+baseline\b", _APP_TERMS),
+    # Addressed to the design team.
+    (r"(?i)\bthe\s+(?:specifier|designer|design\s+team|user)\b", _DESIGN_TEAM),
+    # Hedging and non-mandatory language.
+    (r"(?i)\bit\s+is\s+recommended\b", _HEDGES),
+    (r"(?i)\bwe\s+recommend\b", _HEDGES),
+    (r"(?i)\bshould\b", "'should' — use 'shall' or the imperative"),
+    (r"(?i)\blikely\b", _HEDGES),
+    (r"(?i)\bprobably\b", _HEDGES),
+    (r"(?i)\bmay\s+need\s+to\b", _HEDGES),
+    (
+        r"(?i)\bpending\b",
+        "'pending' — leave it only if it is a real condition of the work",
+    ),
+)
+
+#: Words that put prose into a REFERENCES entry. Case-sensitive on purpose
+#: except where marked: description is lower-case prose, while standard
+#: titles are Title Case ("Wall Coverings", "Standard for … Primary …").
+REFERENCE_ENTRY_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"(?i)\balso\s+referenced\b", "names a second standard"),
+    (r"(?i)\bsee\s+also\b", "names a second standard"),
+    (r"—(?=\s*[a-z])", "an em-dash description"),
+    (r"\bcovering\b", "describes the standard"),
+    (r"\bfor\s+general\b", "describes the standard"),
+    (r"\bprimary\b", "describes the standard"),
+    (r"\bper\s+the\b", "carries a project decision"),
+    (r"\bspecified\s+for\b", "carries a project decision"),
+    (r"\bvia\b", "carries adoption reasoning"),
+    (r"(?i)\bbecause\b", "carries adoption reasoning"),
+    (r"\brecorded\b", "carries adoption reasoning"),
+    (r"\bincorporates\b", "carries adoption reasoning"),
+    (r"\bunderstood\b", "carries adoption reasoning"),
+    (r"\bcorroborated\b", "carries adoption reasoning"),
+)
+
+#: An entry longer than this is carrying more than a designation, a title
+#: and an edition: the owner's NFPA 25 entry is ~115 characters, and long
+#: ASTM titles run ~160.
+REFERENCE_ENTRY_MAX_CHARS = 220
+
+#: An article holding the section's reference standards.
+REFERENCES_ARTICLE_RE = re.compile(
+    r"\bREFERENCE(?:S|D\s+STANDARDS|\s+STANDARDS)\b", re.IGNORECASE
+)
+
+# Words that end in a period without ending a sentence ("No. 4", "U.S.").
+_ABBREVIATIONS = frozenset(
+    {
+        "no", "nos", "inc", "std", "rev", "vol", "ed", "eds", "corp", "co",
+        "ltd", "st", "sec", "pt", "pub", "div", "dept", "assn", "fig", "ch",
+        "art", "app", "vs", "etc", "approx", "min", "max", "e.g", "i.e",
+    }
+)
+_SENTENCE_BREAK_RE = re.compile(r"[.;](?=\s+[A-Z(\"“])")
+_WORD_BEFORE_RE = re.compile(r"([A-Za-z.]+)$")
+
+
+def explanatory_prose_hits(text: str) -> list[dict[str, str]]:
+    """Every phrase in ``text`` that explains instead of directing.
+
+    In reading order, so the lint message quotes them as the provision does.
+    """
+    if not isinstance(text, str) or not text:
+        return []
+    return [
+        {"match": matched, "label": label}
+        for _start, matched, label in sorted(
+            _scan_spans(text, EXPLANATORY_PROSE_PATTERNS),
+            key=lambda hit: hit[0],
+        )
+    ]
+
+
+def _sentence_count(text: str) -> int:
+    """Sentences in ``text``, not counting abbreviation periods."""
+    breaks = 0
+    for match in _SENTENCE_BREAK_RE.finditer(text):
+        before = _WORD_BEFORE_RE.search(text[: match.start()])
+        word = (before.group(1) if before else "").lower().rstrip(".")
+        # "No.", a lone initial, or a dotted abbreviation ("U.S.", "e.g.").
+        if match.group(0) == "." and (
+            word in _ABBREVIATIONS
+            or (len(word) == 1 and word.isalpha())
+            or "." in word
+        ):
+            continue
+        breaks += 1
+    return breaks + 1 if text.strip() else 0
+
+
+def reference_entry_problems(text: str) -> list[str]:
+    """Why a REFERENCES entry carries more than designation, title, edition."""
+    if not isinstance(text, str) or not text.strip():
+        return []
+    problems: list[str] = []
+    if _sentence_count(text) > 1:
+        problems.append("more than one sentence")
+    if len(text.strip()) > REFERENCE_ENTRY_MAX_CHARS:
+        problems.append(f"over {REFERENCE_ENTRY_MAX_CHARS} characters")
+    grouped: dict[str, list[str]] = {}
+    for hit in scan_markers(text, REFERENCE_ENTRY_PATTERNS):
+        quoted = f"'{hit['match'].strip()}'"
+        matches = grouped.setdefault(hit["label"], [])
+        if quoted not in matches:
+            matches.append(quoted)
+    problems.extend(
+        f"{label} ({', '.join(matches)})" for label, matches in grouped.items()
+    )
+    return problems

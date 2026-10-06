@@ -18676,3 +18676,121 @@ applies or where it came from — and REFERENCES entries carry only the
 designation, title and edition."
 
 No paid API call was made.
+
+## Explanatory prose and overlong REFERENCES entries are linted — implemented notes (2026-10-06)
+
+PR 2 of 4 for the owner's specification-voice rule (PR 1: "The specification
+gives directions, never notes" above). PR 1 blocks placeholders outright;
+explanation is a matter of degree, so this half reports instead of refusing.
+
+**The owner's list.** Proposed in chat and approved by Abraham on
+2026-10-06, with his calls on the borderline terms: "should" and "in order
+to" are flagged (neither belongs in a spec); "pending" is flagged as a look
+only, because "pending AHJ approval" can be a real condition; "as amended
+by", "generally" and "typically" are not flagged, because each is sometimes
+legitimate.
+
+### What changed
+
+- **`spec_voice.EXPLANATORY_PROSE_PATTERNS`** — amendment and adoption
+  narration ("amends", "this/the amendment", "has adopted", "adopts",
+  "incorporates …", "by reference", "is understood to", "corroborat…",
+  "consistent with the …"), reasons ("because", "in order to", "the
+  intent", "is/are intended to", "the purpose of" except "for the purpose
+  of", "this ensures"), applicability ("governs the/this/each/all",
+  "applies generally", "this provision/requirement applies", "applies to
+  this Project"), talk about the document ("this provision/requirement/
+  paragraph"), the app's bookkeeping terms ("recorded for this Project",
+  "edition recorded", "recorded edition", "adoption basis", "basis:",
+  "research item", "per research", "research shows", "project
+  profile/fact", "open item", "model-proposed", "unverified", "design
+  baseline"), the design team ("the specifier/designer/design team/user"),
+  hedging ("it is recommended", "we recommend", "likely", "probably", "may
+  need to"), "should", and "pending". Each pattern's label is the advice the
+  lint message gives.
+- **Three phrases narrowed** after the list was approved, so ordinary spec
+  language stays clean while the owner's examples are still caught:
+  "governs" only before the/this/each/all ("the more stringent requirement
+  governs" is a directive), "incorporates" only within 80 characters of a
+  code, standard, edition, IBC/IFC or "by reference" ("shall incorporate a
+  supervisory switch" is a directive), and "consistent with the" only
+  before an edition, code, adoption or amendment ("finishes consistent with
+  the existing building" is a directive).
+- **`reference_entry_problems`** — more than one sentence (a period after
+  an abbreviation, a lone initial or a dotted abbreviation such as "U.S."
+  does not end one), more than `REFERENCE_ENTRY_MAX_CHARS` (220; the
+  owner's NFPA 25 entry is ~115 and long ASTM titles ~160), an em dash
+  followed by lower-case prose (an em-dash title such as "NFPA 13 —
+  Standard for…" is fine), and `REFERENCE_ENTRY_PATTERNS`: "also
+  referenced", "see also" (a second standard), "covering", "for general",
+  "primary" (describing the standard), "per the", "specified for" (a
+  project decision), "via", "because", "recorded", "incorporates",
+  "understood", "corroborated" (adoption reasoning). Case-sensitive except
+  "also referenced", "see also" and "because", since descriptions are
+  lower-case prose and standard titles are Title Case ("Wall Coverings").
+  Repeated reasons are grouped.
+- **The lint** (`linting.lint_document`) adds `explanatory_prose` (every
+  provision) and `reference_entry_shape` (leaf provisions of an article
+  whose title matches `REFERENCES_ARTICLE_RE` — REFERENCES, REFERENCE
+  STANDARDS, REFERENCED STANDARDS; a lead-in with entries under it is not
+  checked). One issue per provision per rule naming every hit, in reading
+  order; severity `warn`. Neither reads a locked (preserved) block — the
+  model cannot retype one — nor an `unstructured_import`, whose prose was
+  never meant to direct a Contractor.
+- **`scan_markers`** now wraps `_scan_spans` (identical claiming, plus each
+  hit's start) so `explanatory_prose_hits` sorts by position; its own
+  output is unchanged.
+- **Prompt.** `_SPEC_VOICE`: never "should" (write "shall" or the
+  imperative), never "in order to". `_LINT_POLICY`: both rules are
+  specification-voice breaches to rewrite when touched and sweep on a
+  cleanup pass, and "pending" is a look only.
+- **Final QC.** The `enforceability_language` brief adds the
+  specification-voice and REFERENCES checklist, says code citations such as
+  "IBC §903.4.2 (Alarms)" are fine, and asks for the directive rewrite with
+  the reason left to chat.
+
+### Costs
+
+The stable prompt changed: every open session rewrites its cached prefix
+once. Lens briefs are part of the Final QC input manifest, so every
+retained report reads stale once and needs a re-run (the owner was told
+before the work started). The lint adds about 45 regex scans per provision;
+every pattern is anchored on a word boundary and the two windowed ones are
+bounded at 80 and 40 characters. `tests/test_lint_cost.py` still passes.
+
+### Tests and reversion evidence
+
+`tests/test_spec_voice_lint.py` (59): the owner's three drafts flagged and
+his corrections clean; every approved phrase flagged; eighteen ordinary
+provisions (including the three he ruled out and the three narrowed
+phrases) clean; the advice on "should", "in order to" and "pending"; one
+issue per provision in reading order; seven well-formed entries (ASTM, UL
+"Ed.", "U.S.", an em-dash title, a Title-Case "Coverings") pass; only leaf
+entries of a REFERENCES article are shape-checked; locked blocks and
+non-spec imports are skipped; the prompt and the QC brief say what they
+should.
+
+Each of twelve pieces was removed in turn, the file's tests run, and the
+file restored: the explanatory issue, the leaf-only condition, the locked
+skip, the non-spec skip, each of the three narrowings, "should", the
+dotted-abbreviation rule, the reading-order sort, the QC checklist and the
+prompt line. Every one failed its tests. (The first QC probe left the brief
+text intact and passed; it was a broken probe, and the corrected one
+failed.)
+
+### Validation
+
+`master` at `ad71449`: 3823 passed, 64 skipped. With this change: 3882
+passed, 64 skipped (59 new). Ruff passed; `npm test` (517) passed. No
+frontend change: the Issues drawer renders any rule id.
+
+### Release-note draft (for the release after 1.23.0)
+
+"**Explanations are flagged.** A provision that explains instead of
+directing — a reason, a code amendment or adoption story, 'should', 'in
+order to' — shows in Issues, and the assistant rewrites it when it next
+touches that provision. So does a REFERENCES entry that carries anything
+beyond the designation, title and edition. Final QC checks the same things.
+Saved Final QC results need one re-run."
+
+No paid API call was made.

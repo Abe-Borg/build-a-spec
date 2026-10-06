@@ -46,6 +46,21 @@ Rules (stable ids consumers can branch on):
   never rewritten by the appearance-preserving export (that is the whole
   contract), so adapting a master leaves the old identifier printed on every
   page unless someone is told. Advisory, and the remedy is in Word.
+- ``explanatory_prose`` — (2026-10-06, the owner's specification-voice rule)
+  a provision that explains instead of directing: amendment or adoption
+  narration, a reason ("because", "in order to"), where it applies, talk
+  about the document, the app's own bookkeeping terms, a note to the design
+  team, hedging, "should", "pending". One issue per provision, naming every
+  phrase found (``spec_voice.EXPLANATORY_PROSE_PATTERNS``).
+- ``reference_entry_shape`` — a leaf provision in a REFERENCES article that
+  carries more than one standard's designation, title and edition: a second
+  sentence, more than ``REFERENCE_ENTRY_MAX_CHARS`` characters, an em-dash
+  description, adoption reasoning, a project decision, a second standard.
+  Lead-in paragraphs (those with entries under them) are not checked.
+
+Neither specification-voice rule reads a preserved (locked) block — the
+model cannot retype one — nor a document imported as something other than
+a spec section, whose prose was never meant to direct a Contractor.
 """
 from __future__ import annotations
 
@@ -63,7 +78,10 @@ from ..standards import (
 from .model import SpecSection, iter_paragraphs
 from .spec_voice import (
     PLACEHOLDER_PATTERNS,
+    REFERENCES_ARTICLE_RE,
     TEMPLATE_MARKER_PATTERNS,
+    explanatory_prose_hits,
+    reference_entry_problems,
     scan_markers as _scan_markers,
 )
 
@@ -76,6 +94,8 @@ RULE_DUPLICATE_ARTICLE_TITLE = "duplicate_article_title"
 RULE_DUPLICATE_PROVISION = "duplicate_provision"
 RULE_MISSING_SECTION_HEADER = "missing_section_header"
 RULE_STALE_DOCUMENT_IDENTIFIER = "stale_document_identifier"
+RULE_EXPLANATORY_PROSE = "explanatory_prose"
+RULE_REFERENCE_ENTRY = "reference_entry_shape"
 
 #: A MasterFormat section number as it appears in running text: three or
 #: four pairs of digits, space- or dot-separated ("23 05 48", "23 05 48.13").
@@ -732,6 +752,47 @@ def lint_document(
                 f"{hit['label']} left in the draft.",
                 hit["match"],
             )
+
+    # --- specification voice (advisory) -------------------------------------
+    # One issue per provision per rule, naming everything found: a paragraph
+    # like the owner's NFPA 25 entry trips half a dozen phrases, and six
+    # issues for one rewrite would bury the rest of the report.
+    if not unstructured_import:
+        for _part, article, paragraph, _depth, ref in iter_paragraphs(section):
+            if paragraph.locked:
+                continue
+            hits = explanatory_prose_hits(paragraph.text)
+            if hits:
+                found = "; ".join(
+                    f"'{hit['match']}' ({hit['label']})" for hit in hits
+                )
+                add(
+                    RULE_EXPLANATORY_PROSE,
+                    paragraph.uid,
+                    ref,
+                    f"Explains instead of directing: {found}. Rewrite it as "
+                    "a directive to the Contractor; the reason or basis "
+                    "belongs in chat and the provision's source link, not "
+                    "the text.",
+                    hits[0]["match"],
+                )
+            if (
+                REFERENCES_ARTICLE_RE.search(article.title)
+                and not paragraph.children
+            ):
+                problems = reference_entry_problems(paragraph.text)
+                if problems:
+                    add(
+                        RULE_REFERENCE_ENTRY,
+                        paragraph.uid,
+                        ref,
+                        "REFERENCES entry carries more than designation, "
+                        f"title, and edition: {'; '.join(problems)}. Keep "
+                        "one standard per entry with only its designation, "
+                        "full title, and edition; move any requirement into "
+                        "its own article and any basis into chat.",
+                        paragraph.text[:120],
+                    )
 
     # --- duplicate sibling provisions --------------------------------------
     # Advisory backstop for Chunk 5.2: cross-lens consolidation stops QC

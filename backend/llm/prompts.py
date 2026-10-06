@@ -139,6 +139,7 @@ _LINT_POLICY = """\
 
 - The PROJECT CONTEXT includes a LINT REPORT of deterministic advisory findings with element ids. Stale-edition citations are drafting errors: fix them whenever you touch the affected block, and sweep the rest when the user asks for a cleanup pass.
 - Placeholders, template markers, and empty/duplicate articles flagged there must never survive to an issued draft — rewrite each placeholder as a complete provision (asking the user for the missing value with track_followups) as the relevant topics come up.
+- explanatory_prose and reference_entry_shape findings are specification-voice breaches: rewrite the provision as a directive (or the REFERENCES entry as designation, title, and edition) whenever you touch it, and sweep them when the user asks for a cleanup pass. "pending" is flagged for a look only — leave it where it is a real condition of the work.
 - Lint is advisory: fold fixes into edits you are already making rather than derailing the interview to chase minor findings mid-topic."""
 
 _PROVENANCE = """\
@@ -167,6 +168,7 @@ _SPEC_VOICE = """\
 The document is the specification and nothing else. The Contractor reads every word of it as a requirement, so it is never a place to talk to the user, explain yourself, or hold a place for something unknown.
 
 - Directives only. Each provision tells the Contractor what to provide, install, submit, test, or coordinate ("Provide…", "Install…", "Submit…", "… shall …"). State the requirement — never the reason for it, the history behind it, or who decided it.
+- Never "should" — write "shall" or the imperative — and never "in order to": a reason does not belong in the text.
 - No placeholders, ever: no [TBD: …], TBD, [INSERT …], [VERIFY …], bracketed options, blanks (___), "to be determined", or "pending". The app refuses any edit whose text carries one.
 - No notes to the user or the design team: nothing addressed to the designer, specifier, engineer, or reviewer, no "confirm with the Owner", no reminders. Those belong in chat or on the Waiting on you list.
 - When a value is missing, write around it: a performance requirement, a reference to the Drawings or to a submittal, or the clause left out until the answer arrives. Then ask for the value with track_followups.

@@ -19,6 +19,8 @@ from tests.fakes import (
     chat_search_blocks,
     raw_turn,
     request_context_text,
+    request_project_block_text,
+    research_profile,
     text_block,
     text_turn,
     thinking_block,
@@ -112,9 +114,10 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
     assert history[1]["role"] == "assistant"
     assert history[1]["content"][0]["text"] == "PART 1 - GENERAL"
 
-    # The request: cached stable system prompt (nothing else in system),
-    # the PROJECT CONTEXT block riding the user message, the document +
-    # web tools, and explicit adaptive thinking at the configured effort.
+    # The request: cached stable system prompt (and nothing else in system:
+    # a fresh session has nothing slow-changing for a project block), the
+    # PROJECT CONTEXT block riding the user message, the document + web
+    # tools, and explicit adaptive thinking at the configured effort.
     request = fake.messages.last_request
     assert len(request["system"]) == 1
     assert request["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
@@ -1014,7 +1017,8 @@ def test_chat_carries_the_container_through_a_turn_and_drops_it_next_turn(
 
 
 # ---------------------------------------------------------------------------
-# Rolling committed-history cache breakpoint (Chunk 4.2)
+# Rolling committed-history cache breakpoint (Chunk 4.2), and the cached
+# project block (C1)
 # ---------------------------------------------------------------------------
 #
 # A tail breakpoint alone cannot cache across turns: its entry is keyed on a
@@ -1022,6 +1026,11 @@ def test_chat_carries_the_container_through_a_turn_and_drops_it_next_turn(
 # those bytes. The committed-history boundary is keyed on the stripped form
 # every later turn re-sends, so each turn's entry is a byte-prefix of the
 # next turn's request.
+#
+# Since C1 the slow-changing project material (the research profile, the
+# other sections, the session's description) rides a SECOND system block
+# with its own long-lived breakpoint: module block (1h) -> project block
+# (1h) -> committed-history boundary (1h) -> tail (5m), the provider's four.
 
 
 def _one_turn_request(client, monkeypatch, message: str) -> dict:
@@ -1030,6 +1039,12 @@ def _one_turn_request(client, monkeypatch, message: str) -> dict:
     _patch_client(monkeypatch, fake)
     client.post("/api/chat", json={"message": message})
     return fake.messages.last_request
+
+
+def _with_research(*findings: str) -> None:
+    """Give the session a research profile, as a completed round would — so
+    its requests carry the cached project block."""
+    sessions.get_session().research.profile_result = research_profile(*findings)
 
 
 def _marked_messages(request: dict) -> list[int]:
@@ -1043,7 +1058,7 @@ def _marked_messages(request: dict) -> list[int]:
 
 
 def _cache_controls(request: dict) -> list[dict]:
-    """Every breakpoint value in the request, system block included."""
+    """Every breakpoint value in the request, system blocks included."""
     blocks = [
         block
         for message in request["messages"]
@@ -1066,14 +1081,92 @@ def _unannotated(messages: list) -> str:
     return json.dumps(stripped, sort_keys=True)
 
 
+def _units(request: dict) -> list[tuple[str, bool]]:
+    """The request in provider render order (tools -> system -> messages) as
+    ``(canonical bytes, is a breakpoint)`` per block, annotations removed."""
+
+    def unit(prefix: str, block) -> tuple[str, bool]:
+        if not isinstance(block, dict):
+            return prefix + json.dumps(block), False
+        marked = "cache_control" in block
+        bare = {k: v for k, v in block.items() if k != "cache_control"}
+        return prefix + json.dumps(bare, sort_keys=True), marked
+
+    units = [unit("tool:", tool) for tool in request["tools"]]
+    units += [unit("system:", block) for block in request["system"]]
+    for message in request["messages"]:
+        for block in message.get("content") or []:
+            units.append(unit(message["role"] + ":", block))
+    return units
+
+
+def _simulated_cache_usage(requests: list[dict]) -> list[dict[str, int]]:
+    """What a prompt cache would read and write for each request, in chars.
+
+    A model of the provider's documented behaviour, nothing more: every
+    breakpoint writes an entry keyed on the exact bytes of the prefix that
+    ends with its block, and a request reads the longest earlier entry that
+    is a prefix of it, then writes everything from there to its last
+    breakpoint. Lookback and lifetime are left out — these requests are
+    seconds apart and a few blocks long — so it answers one question: which
+    bytes a later turn can read back. The fakes accept any request, so
+    without this nothing would notice a layout that caches nothing.
+    """
+    entries: set[str] = set()
+    usage: list[dict[str, int]] = []
+    for request in requests:
+        units = _units(request)
+        prefixes, running = [], ""
+        for text, _marked in units:
+            running += text + "\x00"
+            prefixes.append(running)
+        read = 0
+        for index in range(len(units) - 1, -1, -1):
+            if prefixes[index] in entries:
+                read = len(prefixes[index])
+                break
+        last_mark = max(
+            (index for index, (_t, marked) in enumerate(units) if marked),
+            default=-1,
+        )
+        written = max(0, len(prefixes[last_mark]) - read) if last_mark >= 0 else 0
+        for index, (_t, marked) in enumerate(units):
+            if marked:
+                entries.add(prefixes[index])
+        usage.append({"read": read, "write": written, "total": len(running)})
+    return usage
+
+
+def _chars_through_system(request: dict) -> int:
+    """Simulated size of tools + both system blocks — the system-level prefix."""
+    return sum(
+        len(text) + 1
+        for text, _marked in _units(request)[
+            : len(request["tools"]) + len(request["system"])
+        ]
+    )
+
+
+def _chars_through_message(request: dict, index: int) -> int:
+    """Simulated size of the prefix that ends with message ``index``."""
+    blocks = sum(
+        len(message.get("content") or []) for message in request["messages"][: index + 1]
+    )
+    head = len(request["tools"]) + len(request["system"])
+    return sum(len(text) + 1 for text, _marked in _units(request)[: head + blocks])
+
+
 def test_the_committed_history_breakpoint_rolls_forward_each_turn(monkeypatch):
     client = _client()
+    _with_research("The AHJ adopted the 2021 IFC.")
 
     first = _one_turn_request(client, monkeypatch, "one")
-    # Nothing is committed yet, so the tail is the only breakpoint there is
-    # to place — one message, marked once.
+    # Nothing is committed yet, so the tail is the only message breakpoint
+    # there is to place — one message, marked once — beside the two system
+    # blocks.
     assert len(first["messages"]) == 1
     assert _marked_messages(first) == [0]
+    assert len(_cache_controls(first)) == 3
 
     second = _one_turn_request(client, monkeypatch, "two")
     # History is now [user, assistant]: the boundary marks the assistant
@@ -1085,10 +1178,12 @@ def test_the_committed_history_breakpoint_rolls_forward_each_turn(monkeypatch):
     assert len(third["messages"]) == 5
     assert _marked_messages(third) == [3, 4]
 
-    # Three breakpoints per request (two here + the system block), inside
-    # the provider's limit of four and leaving no room wasted on a
-    # separate tool breakpoint — the system block already closes tools.
-    assert len(_cache_controls(third)) == 3
+    # Four breakpoints per request — the module block, the project block,
+    # the boundary and the tail — exactly the provider's limit, with none
+    # spent on a separate tool breakpoint (the module block closes tools).
+    assert len(third["system"]) == 2
+    assert all("cache_control" in block for block in third["system"])
+    assert len(_cache_controls(third)) == 4
 
     # Each marks the LAST block of its message; a breakpoint anywhere else
     # would cache a partial message.
@@ -1096,6 +1191,21 @@ def test_the_committed_history_breakpoint_rolls_forward_each_turn(monkeypatch):
         content = third["messages"][index]["content"]
         assert "cache_control" in content[-1]
         assert not any("cache_control" in block for block in content[:-1])
+
+
+def test_a_session_with_nothing_slow_changing_sends_no_project_block(monkeypatch):
+    """No research, no linked brief, no description: the request is the
+    three-breakpoint one it always was — the module block alone in system,
+    byte for byte — rather than an empty frame behind a wasted breakpoint."""
+    client = _client()
+    _one_turn_request(client, monkeypatch, "one")
+    request = _one_turn_request(client, monkeypatch, "two")
+
+    assert len(request["system"]) == 1
+    assert request_project_block_text(request) == ""
+    assert len(_cache_controls(request)) == 3
+    # The policy text may NAME the block; no frame is ever sent.
+    assert "=== PROJECT BACKGROUND" not in json.dumps(request)
 
 
 def test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request(
@@ -1108,6 +1218,7 @@ def test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request(
     fresh input — which is the regression this chunk exists to fix.
     """
     client = _client()
+    _with_research("The AHJ adopted the 2021 IFC.")
     _one_turn_request(client, monkeypatch, "one")
     second = _one_turn_request(client, monkeypatch, "two")
     third = _one_turn_request(client, monkeypatch, "three")
@@ -1116,7 +1227,10 @@ def test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request(
         boundary = _marked_messages(request)[0]
         return request["messages"][: boundary + 1]
 
-    # What turn 2's boundary wrote, and the same span of turn 3's request.
+    # What turn 2's boundary wrote, and the same span of turn 3's request —
+    # behind the same tools and the same two system blocks.
+    assert third["tools"] == second["tools"]
+    assert third["system"] == second["system"]
     written = _unannotated(cached_prefix(second))
     assert written == _unannotated(third["messages"][:2])
 
@@ -1125,6 +1239,101 @@ def test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request(
     extended = _unannotated(cached_prefix(third))
     assert extended != written
     assert _unannotated(third["messages"][:2]) == written
+
+
+def test_an_unchanged_project_block_is_read_back_with_the_history(monkeypatch):
+    """C1's expected outcome, measured on a model of the cache: while the
+    project block is unchanged, a turn READS it — and the whole committed
+    history behind it — and writes only the newest exchange and the tail.
+
+    Before C1 the research profile rode the tail and was written fresh on
+    every turn; here its bytes land in the read, every turn after the first.
+    """
+    client = _client()
+    _with_research(
+        *(f"Finding {n}: the AHJ requires a {n}-hour fire barrier." for n in range(40))
+    )
+    requests = [
+        _one_turn_request(client, monkeypatch, message)
+        for message in ("one", "two", "three", "four")
+    ]
+    background = request_project_block_text(requests[0])
+    assert "Finding 39" in background
+    assert all(r["system"] == requests[0]["system"] for r in requests)
+
+    usage = _simulated_cache_usage(requests)
+    # Turn 1 wrote everything once — the project block included.
+    assert usage[0]["read"] == 0
+    assert usage[0]["write"] > len(background)
+    # Every later turn reads at least both system blocks, so the project
+    # block is in the read and never in the write...
+    for turn in (1, 2, 3):
+        assert usage[turn]["read"] >= _chars_through_system(requests[turn]), turn
+    # ...and from the third turn on, the committed history behind it too,
+    # exactly as far as the previous turn's boundary (turn 2 could not: turn
+    # 1's only message entry ended in its PROJECT CONTEXT, which commit
+    # stripped).
+    for turn in (2, 3):
+        boundary = _marked_messages(requests[turn - 1])[0]
+        assert usage[turn]["read"] == _chars_through_message(
+            requests[turn], boundary
+        ), turn
+        assert usage[turn]["read"] > _chars_through_system(requests[turn]), turn
+    # What a turn writes is what it adds — never the block again.
+    for turn in (1, 2, 3):
+        assert usage[turn]["write"] == usage[turn]["total"] - usage[turn]["read"]
+
+
+def test_a_completed_research_round_changes_only_the_project_block(monkeypatch):
+    """A round completing changes the project block's bytes and nothing in
+    the module block, the tools or the committed history — so the next turn
+    rewrites everything after the module block exactly once, and the turn
+    after it reads all of it back again."""
+    client = _client()
+    _with_research("Round 1: the AHJ adopted the 2021 IFC.")
+    _one_turn_request(client, monkeypatch, "one")
+    before = _one_turn_request(client, monkeypatch, "two")
+
+    _with_research(
+        "Round 1: the AHJ adopted the 2021 IFC.",
+        "Round 2: the insurer requires FM Global data sheets.",
+    )
+    after = _one_turn_request(client, monkeypatch, "three")
+    later = _one_turn_request(client, monkeypatch, "four")
+
+    # The module block is byte-identical: it never sees the session.
+    assert after["system"][0] == before["system"][0]
+    assert after["tools"] == before["tools"]
+    # Only the project block changed — and it carries the new round.
+    assert after["system"][1] != before["system"][1]
+    assert "Round 2" in request_project_block_text(after)
+    assert "Round 2" not in request_project_block_text(before)
+    # The research never rides the per-turn PROJECT CONTEXT or the history.
+    assert "Round 2" not in request_context_text(after)
+    assert "Round 2" not in json.dumps(after["messages"])
+    # The committed history is untouched: turn 2's cached span is still the
+    # head of turn 3's messages.
+    assert _unannotated(after["messages"][:2]) == _unannotated(before["messages"][:2])
+    # Still four breakpoints, longest-lived first.
+    assert len(_cache_controls(after)) == 4
+
+    usage = _simulated_cache_usage([before, after, later])
+    # The changed turn reads only the tools and the module block, and
+    # rewrites everything from the project block on — the new block and the
+    # whole committed history behind it: the one rewrite...
+    module_prefix = sum(
+        len(text) + 1
+        for text, _m in _units(after)[: len(after["tools"]) + 1]
+    )
+    assert usage[1]["read"] == module_prefix
+    assert usage[1]["write"] == usage[1]["total"] - module_prefix
+    # ...and the next turn, with the block unchanged again, reads it and the
+    # history back (through the boundary the changed turn wrote).
+    assert later["system"] == after["system"]
+    assert usage[2]["read"] == _chars_through_message(
+        later, _marked_messages(after)[0]
+    )
+    assert usage[2]["read"] > _chars_through_system(later)
 
 
 def _ttl_rank(ttl: str) -> int:
@@ -1158,6 +1367,7 @@ def test_the_tail_is_written_at_the_short_ttl_the_boundary_at_the_long_one(
     nothing uses, on a block the size of the whole document.
     """
     client = _client()
+    _with_research("The AHJ adopted the 2021 IFC.")
     _one_turn_request(client, monkeypatch, "one")
     request = _one_turn_request(client, monkeypatch, "two")
 
@@ -1170,11 +1380,13 @@ def test_the_tail_is_written_at_the_short_ttl_the_boundary_at_the_long_one(
         "type": "ephemeral",
         "ttl": "5m",
     }
-    # The system block is read by every later turn: it takes the long one.
-    assert request["system"][0]["cache_control"] == {
-        "type": "ephemeral",
-        "ttl": "1h",
-    }
+    # Both system blocks are read by every later turn: they take the long
+    # one, the project block too, since a turn that finds it lapsed would
+    # rewrite the whole history behind it.
+    assert [block["cache_control"] for block in request["system"]] == [
+        {"type": "ephemeral", "ttl": "1h"},
+        {"type": "ephemeral", "ttl": "1h"},
+    ]
 
 
 def test_no_setting_can_build_an_out_of_order_request(monkeypatch):
@@ -1185,29 +1397,33 @@ def test_no_setting_can_build_an_out_of_order_request(monkeypatch):
     nonretryable 400 — the exact failure PR #82's review caught in the QC
     fan-out. The tail is pinned to the shortest supported TTL rather than
     being configurable, so the order is non-increasing by construction.
-    The fakes accept any request dict, so nothing but this catches an
-    out-of-order request before a provider does.
+    ``tests/fakes.py`` refuses an out-of-order request (and a fifth
+    breakpoint) the way the provider would; this sweeps every setting with
+    the full four-breakpoint layout.
     """
     from backend import settings
 
     for configured in settings.SUPPORTED_CACHE_TTLS:
         monkeypatch.setattr(settings, "CHAT_CACHE_TTL", configured)
         client = _client()
+        _with_research("The AHJ adopted the 2021 IFC.")
         _one_turn_request(client, monkeypatch, "one")
         request = _one_turn_request(client, monkeypatch, "two")
 
         ttls = _ordered_ttls(request)
-        assert len(ttls) == 3, ttls
+        assert len(ttls) == 4, ttls
         ranks = [settings._cache_ttl_rank(ttl) for ttl in ttls]
         assert ranks == sorted(ranks, reverse=True), (configured, ttls)
-        # The tail never outlives what precedes it, whatever is configured.
+        # The tail never outlives what precedes it, whatever is configured,
+        # and every cross-turn breakpoint takes the configured TTL.
         assert ttls[-1] == settings.CHAT_TAIL_CACHE_TTL
-        assert ttls[0] == configured
+        assert ttls[:3] == [configured] * 3
 
 
 def test_continuation_rounds_keep_their_own_tail_breakpoint(monkeypatch):
     """A tool round extends the previous round's entry rather than rewriting."""
     client = _client()
+    _with_research("The AHJ adopted the 2021 IFC.")
     fake = FakeClient(
         [
             tool_turn(
@@ -1226,12 +1442,26 @@ def test_continuation_rounds_keep_their_own_tail_breakpoint(monkeypatch):
         ]
     )
     _patch_client(monkeypatch, fake)
+
+    class _RoundCompletesMidTurn:
+        """A research round that lands while the turn is streaming."""
+
+        def __init__(self, inner):
+            self.inner = inner
+
+        def stream(self, **request):
+            _with_research("A newer round, after the turn started.")
+            return self.inner.stream(**request)
+
+    real = fake.messages
+    fake.messages = _RoundCompletesMidTurn(real)
     client.post("/api/chat", json={"message": "draft it"})
+    fake.messages = real
 
     # The second round's request ends with the tool_result user message,
     # and that message carries the tail breakpoint — at the short TTL,
     # since these rounds are the only readers it will ever have.
-    request = fake.messages.last_request
+    first_round, request = real.requests
     assert _marked_messages(request)[-1] == len(request["messages"]) - 1
     assert request["messages"][-1]["content"][-1]["cache_control"] == {
         "type": "ephemeral",
@@ -1239,17 +1469,29 @@ def test_continuation_rounds_keep_their_own_tail_breakpoint(monkeypatch):
     }
     ranks = [_ttl_rank(ttl) for ttl in _ordered_ttls(request)]
     assert ranks == sorted(ranks, reverse=True)
+    # The project block was frozen at turn start: a round that completed
+    # mid-turn reaches the NEXT turn, never this turn's later rounds, whose
+    # prefix would otherwise diverge from the one round 0 cached.
+    assert request["system"] == first_round["system"]
+    assert "A newer round" not in json.dumps(request["system"])
+    assert len(_cache_controls(request)) <= 4
 
 
 def test_no_breakpoint_survives_into_history_or_a_saved_project(monkeypatch):
     client = _client()
+    _with_research("The AHJ adopted the 2021 IFC.")
     _seed_doc_via_chat(client, monkeypatch)
     _one_turn_request(client, monkeypatch, "another")
 
-    assert "cache_control" not in json.dumps(sessions.get_session().history)
+    history = json.dumps(sessions.get_session().history)
+    assert "cache_control" not in history
+    # The project block is rendered per request and never stored: the saved
+    # project keeps the structured profile, not the frame around it.
+    assert "PROJECT BACKGROUND" not in history
     saved = client.get("/api/project/save")
     assert saved.status_code == 200
     assert "cache_control" not in saved.text
+    assert "PROJECT BACKGROUND" not in saved.text
 
 
 def test_the_cache_ttl_setting_validates_and_degrades_loudly(monkeypatch, caplog):

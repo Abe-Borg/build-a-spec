@@ -483,6 +483,7 @@ def turn_prompts(
     user_text: str,
     context_sizes: dict[str, int] | None = None,
     effort: str = "",
+    project_block_text: str = "",
 ) -> None:
     """Record the turn's prompt material as one ``prompt_refs`` event.
 
@@ -491,11 +492,19 @@ def turn_prompts(
     distinct text (the stable system block therefore costs one entry per
     app run); deep mode inlines the text into the event itself.
 
-    ``context_sizes`` is the PROJECT CONTEXT block's composition — estimated
-    tokens per block (``conversation.CONTEXT_SIZE_KEYS``, Project workspace
-    Phase 5A). Numbers, never text, so they ride the event itself at every
-    capture level: a trace reader sees what each turn carried without
-    resolving a single prompt ref.
+    The system prompt is two blocks since C1, and each gets its own ref:
+    ``system`` is the stable module block, ``project_block`` the cached
+    project block (``None`` when the turn sent none). Kept apart so the
+    stable block still costs one entry per app run, and the project block —
+    up to the whole research profile — one entry per distinct rendering
+    rather than one per turn.
+
+    ``context_sizes`` is the composition of both session-context blocks —
+    estimated tokens per block (``conversation.CONTEXT_SIZE_KEYS``, Project
+    workspace Phase 5A), with ``project_block`` the cached block's share.
+    Numbers, never text, so they ride the event itself at every capture
+    level: a trace reader sees what each turn carried without resolving a
+    single prompt ref.
 
     ``effort`` is the adaptive-thinking effort every round of the turn was
     sent at (the 5.5 prompting upgrade, P55-3): ``conversation.turn_effort``
@@ -511,6 +520,11 @@ def turn_prompts(
             handle,
             "prompt_refs",
             system=recorder.prompt_ref("system", system_text),
+            project_block=(
+                recorder.prompt_ref("project_block", project_block_text)
+                if project_block_text
+                else None
+            ),
             project_context=recorder.prompt_ref("project_context", context_text),
             user=recorder.prompt_ref("user", user_text),
             context_sizes=dict(context_sizes or {}),

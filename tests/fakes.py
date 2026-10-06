@@ -638,6 +638,63 @@ def request_context_text(request: dict) -> str:
     return ""
 
 
+def research_profile(*requirements: str):
+    """A one-dimension, completed research profile with one grounded finding
+    per requirement — enough for the chat to render a PROJECT REQUIREMENTS
+    PROFILE in its cached project block. A new profile with different text
+    stands in for a research round completing: the profile is the only thing
+    a completed round changes that the chat reads."""
+    from backend.research.engine import (
+        DimensionStatus,
+        RequirementsProfile,
+        ResearchItem,
+    )
+
+    return RequirementsProfile(
+        items=[
+            ResearchItem(
+                item_id=f"r-{index:012x}",
+                dimension_id="governing_codes",
+                topic="Governing codes",
+                category="referenced_standard",
+                requirement=text,
+                authority="City AHJ",
+                code_reference="IFC 2021",
+                grounded=True,
+                confidence=0.9,
+            )
+            for index, text in enumerate(requirements)
+        ],
+        dimension_statuses=[
+            DimensionStatus(
+                dimension_id="governing_codes",
+                status="completed",
+                title="Governing codes",
+            )
+        ],
+        research_date="2026-10-01",
+    )
+
+
+def request_project_block_text(request: dict) -> str:
+    """The cached project block (PROJECT BACKGROUND) of a captured request.
+
+    The slow-changing project material — the research profile, the other
+    sections, the session's description and template note — rides the
+    SECOND system block, after the stable module block, since C1. Returns ""
+    when the request sent no such block.
+    """
+    system = request.get("system")
+    if not isinstance(system, list) or len(system) < 2:
+        return ""
+    block = system[1]
+    if isinstance(block, dict) and block.get("type") == "text":
+        text = block.get("text", "")
+        if text.startswith("=== PROJECT BACKGROUND"):
+            return text
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Request shapes the current models refuse. The fakes accept any dict, so a
 # request the provider would answer with a 400 used to pass the suite: the
@@ -760,6 +817,62 @@ def request_shape_problems(request: dict) -> list[str]:
     ):
         problems.append(
             'tool_choice: type "tool" and "any" are not supported for this model'
+        )
+    problems.extend(_cache_breakpoint_problems(request))
+    return problems
+
+
+# Prompt-caching rules that hold on every model (the claude-api skill's
+# prompt-caching reference, "API reference" and "Automatic vs explicit
+# breakpoints"): at most four breakpoints per request, the top-level
+# automatic one included, and a longer-lived entry may never follow a
+# shorter-lived one in tools -> system -> messages order. Added with C1,
+# whose chat request uses all four.
+_MAX_CACHE_BREAKPOINTS = 4
+_CACHE_TTL_RANK = {"5m": 0, "1h": 1}
+
+
+def _cache_breakpoint_problems(request: dict) -> list[str]:
+    controls: list[Any] = []
+    for tool in request.get("tools") or ():
+        if isinstance(tool, dict) and "cache_control" in tool:
+            controls.append(tool["cache_control"])
+    system = request.get("system")
+    if isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict) and "cache_control" in block:
+                controls.append(block["cache_control"])
+    for message in request.get("messages") or ():
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and "cache_control" in block:
+                controls.append(block["cache_control"])
+    automatic = request.get("cache_control")
+    count = len(controls) + (1 if automatic else 0)
+    problems: list[str] = []
+    if count > _MAX_CACHE_BREAKPOINTS:
+        problems.append(
+            f"A maximum of {_MAX_CACHE_BREAKPOINTS} blocks with cache_control "
+            f"may be provided. Found {count}."
+        )
+    # The automatic breakpoint lands on the last cacheable block, so it is
+    # last in render order.
+    ordered = controls + ([automatic] if automatic else [])
+    ranks = [
+        _CACHE_TTL_RANK.get(
+            str((control or {}).get("ttl") or "5m")
+            if isinstance(control, dict)
+            else "5m",
+            0,
+        )
+        for control in ordered
+    ]
+    if any(later > earlier for earlier, later in zip(ranks, ranks[1:])):
+        problems.append(
+            "a ttl='1h' cache_control block must not come after a ttl='5m' "
+            "cache_control block"
         )
     return problems
 

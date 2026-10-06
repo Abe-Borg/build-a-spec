@@ -16,6 +16,7 @@ from backend.spec_doc.project import load_project
 from tests.fakes import (
     FakeClient,
     request_context_text,
+    request_project_block_text,
     text_turn,
 )
 
@@ -373,7 +374,12 @@ def test_bodyless_reset_clears_project_context():
     assert sessions.get_session().discipline == "Electrical"
 
 
-def test_project_context_rides_context_not_stable_for_any_module(monkeypatch):
+def test_project_context_rides_the_project_block_not_stable_for_any_module(
+    monkeypatch,
+):
+    """The description is fixed for the session, so it rides the cached
+    project block (C1) — never the stable module block, which must stay
+    byte-identical per module, and never the per-turn PROJECT CONTEXT."""
     client = _client()
     client.post(
         "/api/session/reset",
@@ -387,8 +393,9 @@ def test_project_context_rides_context_not_stable_for_any_module(monkeypatch):
     _patch_client(monkeypatch, fake)
     client.post("/api/chat", json={"message": "Hi"})
     request = fake.messages.last_request
-    assert "A 12-story office tower." in request_context_text(request)
-    # Never in the cached stable prompt.
+    assert "A 12-story office tower." in request_project_block_text(request)
+    assert "A 12-story office tower." not in request_context_text(request)
+    # Never in the stable module block.
     assert "PROJECT DESCRIPTION" not in request["system"][0]["text"]
 
     # Curated module — project_context is NOT gated by open_catalog.
@@ -402,7 +409,7 @@ def test_project_context_rides_context_not_stable_for_any_module(monkeypatch):
     fake2 = FakeClient([text_turn(["Ok."])])
     _patch_client(monkeypatch, fake2)
     client.post("/api/chat", json={"message": "Hi"})
-    assert "A hyperscale campus." in request_context_text(
+    assert "A hyperscale campus." in request_project_block_text(
         fake2.messages.last_request
     )
 

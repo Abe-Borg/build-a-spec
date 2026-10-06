@@ -163,6 +163,51 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — the research profile is read from the cache, not rewritten every message
+
+No release entry yet: v1.22.1 is published and there is no newer entry, so
+the release-note draft is in docs/as-built.md ("The project background rides
+its own cache breakpoint").
+
+Every message used to re-send the research profile inside the block of live
+project state attached to your newest message. That block is rebuilt on every
+turn, so the profile — up to about 100,000 tokens on a later section that
+carries the first section's research — was paid for as a fresh cache write on
+every message and never read back.
+
+- **The slow-changing part of the project now rides the system prompt, cached.**
+  The research profile, the list of the project's other sections (a section
+  started from a project brief), and the project description you gave when
+  the session started travel in a **project background** block right after
+  the fixed instructions, behind its own one-hour cache breakpoint. A message
+  that finds it unchanged reads it — and the conversation behind it — from
+  the cache at a tenth of the input price instead of writing it at 1.25×.
+- **What changes with your work stays in the per-message block**: the date and
+  time, the standards editions in effect, the project facts, the whole draft,
+  the lint report, open items, what is waiting on you, the Final QC review, and
+  the figure and reference-document stubs. The editions and the facts change
+  during drafting turns, and the reference stubs are a few dozen tokens each, so
+  caching them would cost more than it saves (docs/as-built.md has the
+  arithmetic).
+- **The trade, once per change.** When the background changes — a research
+  round finishes, the project brief is updated or pulled, or a project is
+  opened — the next message stores the new background and the whole
+  conversation behind it again, once, at the one-hour rate. Research usually
+  runs early, while the conversation is short, and the message after that
+  reads it all back again.
+- **The model reads the same information**, earlier in the prompt. Its
+  instructions say where each part now lives. A section with no research, no
+  linked brief and no description sends exactly the request it always did.
+- **Condensing a long conversation still reads the chat's cache.** The summary
+  call sends the same project background the last message sent, so its prefix
+  is the one already cached.
+- Nothing about saved projects changes; the background is rebuilt from the
+  project every time and never stored as text.
+
+**Settings → Developer tools → Session state → Context makeup** now leads with
+how much of each message was cached across turns and marks the blocks that ride
+the cached background (`research … cached`, `sections … cached`).
+
 ## Current Status — room for the paper (the panel tray)
 
 No release entry yet: which release carries it is the owner's call, and the
@@ -654,34 +699,44 @@ recorded against), and a saved section records how far its last harvest read.
 
 Every message you send re-sends the project's current state to the model —
 the research profile, the project facts, the whole draft, the lint report,
-the Final QC review — as one block that is rebuilt on each turn, so it is paid
-for as a fresh write every time rather than read back from the cache. A later
-section that carries a large research profile from the first one pays for all
-of it on every message. Phase 5 would render that profile with the findings
-most relevant to the current section first, but only if a real session shows
-it is worth building; part A is the measurement that decides.
+the Final QC review. When this shipped it was one block rebuilt on each turn,
+so all of it was paid for as a fresh write every time rather than read back
+from the cache, and a later section that carried a large research profile from
+the first one paid for all of it on every message. Since the change above
+("the research profile is read from the cache"), the research profile and the
+other sections ride a cached project background instead, and only the rest is
+rewritten each turn. Phase 5 would render that profile with the findings most
+relevant to the current section first, but only if a real session shows it is
+worth building; part A is the measurement that decides.
 
 - **Settings → Developer tools → Session state → Context makeup** shows the
-  last turn's block piece by piece: its total, the research profile's share
-  (and how many findings the profile's cap left out, when it did), then the
-  document, the lint report, the open items, the Final QC review, the project
-  facts, the other sections and the reference-document stubs, largest first,
-  and the small fixed remainder (the date, the standards, the project identity
-  and profile lines). Estimated tokens — the same estimate the History makeup
-  row uses — and sizes only, never text. It sits beside the Context gauge and
-  describes the same turn: a turn whose request never reached the model
-  leaves both where they were, and a new session or an opened project clears
-  both.
+  last turn's context piece by piece: its total and how much of it rode the
+  cached background, the research profile's share (and how many findings the
+  profile's cap left out, when it did), then the document, the lint report,
+  the open items, the Final QC review, the project facts, the other sections
+  and the reference-document stubs, largest first, and the small fixed
+  remainder (the date, the standards, the project identity and profile lines,
+  the project description and both blocks' frames). Blocks that ride the cached
+  background are marked `cached`. Estimated tokens — the same estimate the
+  History makeup row uses — and sizes only, never text. It sits beside the
+  Context gauge and describes the same turn: a turn whose request never
+  reached the model leaves both where they were, and a new session or an
+  opened project clears both.
 - **Every turn's reading is in the trace too.** Each turn's `prompt_refs`
   event carries `context_sizes`: Developer tools → Recent activity (filtered
   to `prompt_refs`) shows the latest turns, and *Open trace viewer* every turn
-  of the sitting, so you can see how the block changed as you worked.
-- Nothing about what the model is sent changes.
+  of the sitting, so you can see how the block changed as you worked. The
+  cached background has its own prompt ref (`project_block`) beside the fixed
+  instructions' (`system`), stored once per distinct version rather than once
+  per turn.
+- Measuring changes nothing about what the model is sent.
 
 `/api/diagnostics`'s session block gains `last_context_sizes` (null until a
 turn commits): `research`, `research_dropped_items` (a count of findings, not
 tokens), `facts`, `sections`, `references`, `document`, `lint`,
-`open_items`, `qc_review`, `other` and `total`; the blocks sum to `total`.
+`open_items`, `qc_review`, `other`, `project_block` and `total`; the blocks
+sum to `total`, and `project_block` (how much of `total` rode the cached
+background) is a subtotal, not a block.
 
 Part B — rendering the research relevance-first — is not built. It waits on
 that measurement, taken on a real second section of a hyperscale project. Its
@@ -2613,7 +2668,10 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   is a person reading and typing. The request tail keeps a short-lived
   entry instead: it can only ever be read by continuation rounds inside
   the same turn, so buying it an hour would be paying for a lifetime
-  nothing uses.
+  nothing uses. (Since then the research profile and the project's other
+  sections have moved out of that block into a cached project background
+  after the fixed instructions — see "the research profile is read from
+  the cache" above.)
 - **Adaptive thinking, wired properly.** Requests state
   `thinking: adaptive` explicitly with effort knobs (interview `medium`
   since 2026-09-29, `high` before it; the two whole-section passes —
@@ -2920,9 +2978,11 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          + the full-draft directive
     conversation.py      streaming turn loop: apply_spec_edits dispatch,
                          web_search/web_fetch with pause_turn continuation,
-                         adaptive thinking, the per-turn PROJECT CONTEXT
-                         block (full document + lint + research), incremental
-                         history caching, per-turn usage aggregation
+                         adaptive thinking, the cached project background
+                         (research + other sections) and the per-turn
+                         PROJECT CONTEXT block (full document + lint),
+                         incremental history caching, per-turn usage
+                         aggregation
     history_hygiene.py   keeps stale document outlines out of saved history
                          (at commit and when an older project is opened) and
                          measures what a history is made of, sizes only
@@ -3114,9 +3174,9 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |
 | `BUILD_A_SPEC_HARVEST_MAX_TOKENS` | `64000` (or `BUILD_A_SPEC_MAX_TOKENS`, if lower) | Output ceiling for the fact harvest's one call (floor 4096, or `BUILD_A_SPEC_MAX_TOKENS` if that is lower still, so a lower global cap keeps binding the harvest). The Sonnet 5.5 guide: set it high enough for the thinking and the JSON but no higher than one attempt is worth; a reply that reaches it is refused as cut off (`harvest_cut_off`), never shown as a partial list. |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
-| `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the system block and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
+| `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the fixed instruction block, the project background block (research profile, other sections, project description) and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
 | `BUILD_A_SPEC_CHAT_COMPACTION` | `1` | Routine conversation condensing: once the committed conversation passes the threshold below, a summary of its oldest turns is written **in the background after a reply** — a real, **billed** model call with no click behind it — and every later message sends the summary instead of those turns. **On by default** since the owner decided it on 2026-09-23 (without the paid recall check the compaction plan had named as the gate); `0` switches it off. The backstop (condense before a message that would not fit in ~85% of the context window) runs either way and is not configurable. |
-| `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD` | `600000` | Estimated tokens of committed conversation — the history as later requests send it, not the per-turn PROJECT CONTEXT, which condensing cannot shrink — at which routine condensing starts (owner decision D1). Floor 10,000. |
+| `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD` | `600000` | Estimated tokens of committed conversation — the history as later requests send it, not the per-turn PROJECT CONTEXT or the cached project background, which condensing cannot shrink — at which routine condensing starts (owner decision D1). Floor 10,000. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS` | `3` | How many of the most recent turns stay word for word when the conversation is condensed (D1). Floor 1. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |
 | `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |

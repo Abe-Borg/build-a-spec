@@ -19276,3 +19276,30 @@ refusal. Three new tests in `tests/test_writing_policy_qc.py` (a status
 downgrade; an anchor and a source link elsewhere in the document) each fail
 against the guard as first pushed and pass now; every fixture, the other
 relocation tests and the assessor are unchanged and green.
+
+## Release 1.24.0 — 2026-10-06
+
+Release preparation covers all merged work after the published `v1.23.0`
+through `d7d3a76`: specification voice and placeholder guards, explanatory
+prose and REFERENCES lint, the separate review report, the retirement of
+new needs-input stamps and the updated panel and tour, and the shared
+writing policy for drafting and Final QC, including the corrected
+relocation checks for values, source links and provenance status.
+
+The backend, frontend package and lockfile, and README headline advance
+together to `1.24.0`. The new bundled notes feed the What's-new modal,
+update manifest and release page through the existing renderer. They also
+tell users that saved Final QC results need a re-run and the guided tour
+restarts once after its steps changed.
+
+The version/tag gate, Ruff, release-note rendering since `v1.23.0`, frontend
+tests and production build, and materialization of all 18 DOCX corpus
+cases passed during preparation. Full backend validation runs in CI on
+Python 3.11 and 3.12 and again in the Windows release workflow, following
+the owner's preference recorded in CLAUDE.md.
+
+The existing tag-triggered Windows workflow builds and smoke-tests the
+frozen app, compiles the installer, and publishes `BuildASpecSetup.exe`
+with its SHA-256 `latest.json`. No paid API call, real-Word visual check,
+interactive Windows installation or previous-version in-app update was
+performed in this Linux workspace. Those manual checks remain unverified.

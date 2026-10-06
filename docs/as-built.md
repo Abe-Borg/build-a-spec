@@ -18541,9 +18541,10 @@ written around and asked about.
 - **Where it runs.** `conversation._run_tool` before `apply_doc_edits` (the
   refusal is the ordinary `is_error` "Edit batch rejected (nothing was
   applied)" result, with the outline); `qc.engine._validate_ops` before the
-  dry run (the finding stays advisory with the reason). **Where it does not:**
-  `/api/doc/edit` (the user's text, including a hand-set needs_input) and
-  `qc/apply.py`'s apply-time dry run (the ops were checked at validation).
+  dry run (the finding stays advisory with the reason); and
+  `qc.apply.finding_fix_class`, re-checked at every read (see the review
+  corrections below). **Where it does not:** `/api/doc/edit` — the user's
+  text, including a hand-set needs_input.
 - **`apply_spec_edits`**: the add_paragraph and set_status lines list only
   confirmed | assumed, and the `status` property gains a description saying
   so. Its enum still lists all four statuses, deliberately: saved histories
@@ -18570,8 +18571,8 @@ written around and asked about.
   open-items chapter keeps its anchors until PR 4 retires it.
 - **AI template generalization**: the prompt asks for neutral wording and to
   leave existing placeholders where they are; `_template_structure_contract`
-  compares `has_placeholder(text)` per paragraph, so a generalized starter
-  can neither gain nor lose one.
+  compares each paragraph's `drafted_text_hits` matches by exact text and
+  order, so a generalized starter can neither gain, lose nor swap one.
 - **Trust explainer** (`TrustDeepDiveModal`): the line saying unresolvable
   values "become [TBD: …] or needs input" now says they are written around
   and asked about.
@@ -18638,6 +18639,32 @@ Baseline on `master` at `bb4b7c6`: 3784 passed, 64 skipped. With this
 change: 3821 passed, 64 skipped (37 new tests). Only docstring and
 line-wrap edits followed that run; Ruff and the touched test files were
 re-run after them. `npm test` (517) and `npm run build` passed.
+
+### PR #275 review corrections
+
+Codex raised two P2 findings on the first push; both reproduced and both
+are fixed.
+
+- **A retained Final QC report could still apply a placeholder fix.** The
+  guard ran only while producing new reports, and both apply paths trust
+  the persisted `ops_valid`. A report saved before this change, still
+  current against its inputs, could therefore write a `[TBD]` or stamp
+  needs_input. `finding_fix_class` now re-runs `drafted_edit_problems`. It
+  is the single gate behind the panel's Apply, `apply_qc_fixes`, the FINAL
+  QC REVIEW block and the debrief's safe-fix count, so such a fix reads
+  advisory everywhere and applies as `no_ops`. Bumping the QC protocol
+  version was the alternative; it would have discarded every retained
+  report to catch a rare case.
+- **The template contract compared presence, not identity.** A source
+  `[TBD: design density]` regenerated as `[INSERT OWNER]` still read as
+  "has a placeholder". The contract now carries the tuple of matched
+  placeholder texts, in order. The words around a placeholder can still be
+  generalized; the placeholder itself cannot change, be dropped, or gain a
+  sibling.
+
+Both have regression tests in `tests/test_spec_voice.py`. Removing the
+`finding_fix_class` re-check, or returning the contract to a boolean, makes
+its test fail; both probes were restored.
 
 ### Release-note draft (for the release after 1.23.0)
 

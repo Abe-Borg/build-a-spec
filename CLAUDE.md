@@ -649,9 +649,13 @@ retiring needs-input from the panel and tour follow.
   is left to the prompt (and, next, the lint and QC).
 - **Not guarded, deliberately.** The panel's manual edits
   (`/api/doc/edit`, `apply_doc_edits` directly): what the user types is
-  theirs, including a hand-set needs_input. QC apply (`qc/apply.py`)
-  re-runs `apply_edits` only — the ops were checked when the review
-  validated them.
+  theirs, including a hand-set needs_input.
+- **Retained QC reports are re-checked** (PR #275 review): a report saved
+  before the guard can carry `ops_valid` on a fix that writes a `[TBD]`, so
+  `qc/apply.finding_fix_class` — the one gate behind the panel's Apply,
+  `apply_qc_fixes`, the FINAL QC REVIEW block and the debrief counts —
+  re-runs `drafted_edit_problems` instead of trusting the flag. Such a fix
+  reads advisory and applies as `no_ops`. No QC protocol bump.
 - **Bytes that changed once.** The stable prompt, `apply_spec_edits`'
   description (plus a description on its `status` property), and
   `track_followups`' description: every open session rewrites its cached
@@ -672,8 +676,9 @@ retiring needs-input from the panel and tour follow.
   showcase plants its two open-item examples itself
   (`tutorial._SHOWCASE_OPEN_ITEM_EXAMPLES`) until the tour's open-item
   chapter is retired. AI template generalization asks for neutral wording,
-  and its structure contract compares `has_placeholder` per paragraph
-  instead of `"[TBD:" in text`.
+  and its structure contract compares each paragraph's placeholders by
+  exact text and order (`drafted_text_hits`) instead of `"[TBD:" in text`,
+  so one cannot be dropped, invented or swapped (PR #275 review).
 - **Unchanged.** `open_questions`, readiness `no_open_items`, the export
   schedules, and the frontend.
 

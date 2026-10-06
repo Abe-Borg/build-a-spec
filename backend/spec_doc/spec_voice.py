@@ -24,8 +24,12 @@ Three consumers share one vocabulary:
   :data:`TEMPLATE_MARKER_PATTERNS` and :func:`scan_markers` for its
   advisory rules, which also cover text the guard never sees (an imported
   office master, a legacy project).
-- The AI template generalization contract uses :func:`has_placeholder`, so a
-  generalized starter can neither gain nor lose a placeholder at any id.
+- The AI template generalization contract compares
+  :func:`drafted_text_hits` by exact text, so a generalized starter can
+  neither gain, lose nor swap a placeholder at any id.
+- ``qc.apply.finding_fix_class`` re-runs :func:`drafted_edit_problems`, so
+  a Final QC report retained from before this guard cannot apply a
+  placeholder fix its stored ``ops_valid`` still vouches for.
 
 The vocabulary is high-precision on purpose. A refused batch costs the model
 a round, so the guard only matches what is never specification language.

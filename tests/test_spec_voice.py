@@ -341,6 +341,55 @@ def test_a_qc_fix_that_would_insert_a_placeholder_is_never_a_safe_fix():
     assert directive.ops_valid is True
 
 
+def test_a_retained_qc_fix_that_writes_a_placeholder_is_not_applyable():
+    """A report saved before the guard existed can carry ops_valid=True."""
+    from types import SimpleNamespace
+
+    from backend.qc.apply import (
+        FIX_CLASS_ADVISORY,
+        FIX_CLASS_SAFE,
+        finding_fix_class,
+        select_apply_candidates,
+    )
+
+    def retained(finding_id, ops):
+        return SimpleNamespace(
+            finding_id=finding_id,
+            ops_semantic_status="approved",
+            ops_valid=True,
+            proposed_ops=ops,
+            status="open",
+        )
+
+    placeholder = retained(
+        "qc-old-tbd",
+        [{"action": "replace", "target_id": "pt1.a1.p1", "text": "Density: [TBD]."}],
+    )
+    flagged = retained(
+        "qc-old-flag",
+        [{"action": "set_status", "target_id": "pt1.a1.p1", "status": "needs_input"}],
+    )
+    directive = retained(
+        "qc-directive",
+        [{"action": "set_status", "target_id": "pt1.a1.p1", "status": "confirmed"}],
+    )
+    assert finding_fix_class(placeholder) == FIX_CLASS_ADVISORY
+    assert finding_fix_class(flagged) == FIX_CLASS_ADVISORY
+    assert finding_fix_class(directive) == FIX_CLASS_SAFE
+
+    by_id = {f.finding_id: f for f in (placeholder, flagged, directive)}
+    result = SimpleNamespace(finding=by_id.get)
+    outcomes, skipped, eligible = select_apply_candidates(
+        result, ["qc-old-tbd", "qc-old-flag", "qc-directive"]
+    )
+    assert outcomes == {"qc-old-tbd": "no_ops", "qc-old-flag": "no_ops"}
+    assert [finding_id for finding_id, _reason, _note in skipped] == [
+        "qc-old-tbd",
+        "qc-old-flag",
+    ]
+    assert [finding_id for finding_id, _ops in eligible] == ["qc-directive"]
+
+
 def test_ai_template_generalization_cannot_introduce_a_placeholder():
     section, _ = apply_edits(
         SpecSection.empty(),
@@ -364,6 +413,37 @@ def test_ai_template_generalization_cannot_introduce_a_placeholder():
     original = _template_structure_contract(section)
     assert _template_structure_contract(neutral) == original
     assert _template_structure_contract(bracketed) != original
+
+
+def test_ai_template_generalization_keeps_each_placeholder_exactly():
+    section, _ = apply_edits(
+        SpecSection.empty(),
+        [
+            {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Design density for the Acme campus: [TBD: design density].",
+            },
+        ],
+    )
+
+    def generalized(text):
+        candidate = copy.deepcopy(section)
+        candidate.parts[0].articles[0].paragraphs[0].text = text
+        return _template_structure_contract(candidate)
+
+    original = _template_structure_contract(section)
+    # Generalizing the words around it is the point…
+    assert generalized("Design density for the Project: [TBD: design density].") == original
+    # …but the placeholder itself is the user's unresolved decision.
+    for drift in (
+        "Design density for the Project: [INSERT OWNER].",
+        "Design density for the Project: [TBD: density].",
+        "Design density for the Project: [TBD: design density] [TBD: area].",
+        "Design density for the Project.",
+    ):
+        assert generalized(drift) != original, drift
 
 
 # ---------------------------------------------------------------------------

@@ -883,7 +883,15 @@ function Dossier() {
               standards</b>, and{" "}
               <b className="text-ink">site and environmental factors</b> — or
               only the areas you chose or asked to retry, in which case the
-              others are not researched again at all. Each is
+              others are not researched again at all. They read identical
+              tools, instructions and project material ahead of their own
+              briefs, so one of them starts a few seconds first and the
+              others wait until it begins answering (after at most 45
+              seconds; a Stop, or a first agent whose request ends or fails,
+              releases them at once), then read its cached copy instead of
+              each paying to store their own — the requests are unchanged,
+              only when they are sent, and a waiting agent’s card says whom
+              it is waiting on. Each is
               a separate conversation with server-side web search and fetch
               enabled and your project’s own location attached to the search
               tool, so results are local rather than generic. Each must finish by

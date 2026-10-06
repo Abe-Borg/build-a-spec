@@ -1173,6 +1173,12 @@ export interface ResearchEvent {
   /** On `dimension_started`: the dimension's web-tool budgets. */
   max_searches?: number;
   max_fetches?: number;
+  /** On `dimension_waiting` (a staggered launch): the lead area this one
+   *  waits on before it starts, so it can read the lead's cached copy of the
+   *  prompt they share, and the longest that wait can last, in seconds. Its
+   *  own `dimension_started` follows once it is released. */
+  lead_id?: string;
+  max_wait_s?: number;
   /** On `dimension_activity`: what that agent is doing right now. */
   kind?: "thinking" | "searching" | "fetching" | "writing";
   /** On `dimension_search` / `dimension_fetch`: the live query / URL. */

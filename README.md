@@ -1340,6 +1340,63 @@ to check.
   copy, whether they were released by the first output (`warm`), the time
   limit (`timeout`) or a Stop (`stopped`), and how long they waited.
 
+### Research's four areas reuse one cached copy too (staggered launch, on by default)
+
+Added after the Tier 1 program closed, the research counterpart of the
+stage above. The four research areas of a round send the same opening
+material ahead of their own briefs: the same web-search and page-reading
+tools (since research's tools stopped changing between requests, below),
+the same research instructions, and the same project block — today's date,
+the project line, your attached documents and your established project
+facts. The provider caches that material after the first area reads it, but
+a cached copy can only be read once the request that stores it has started
+answering, and the four used to start at the same instant, so each one paid
+to store its own copy. Now the first area starts first, and the other three
+wait for it to begin answering and then read its copy. An area that is sent
+different tools (a module that gives one area a smaller per-step allowance
+than the others) has a copy of its own, so it never waits.
+
+- **What changes:** only when each request is sent. The requests are byte
+  for byte what they were, and the search and page budgets, how sources are
+  checked, how rounds merge and how an area hands in its findings are all
+  unchanged. A round starts a few seconds later. While they wait, the three
+  cards on the research board say whom they are waiting on ("Waiting for
+  Governing building and fire codes to start, to share its cached copy…"),
+  and each one says it started only once it really has; the agent's
+  activity view records the wait too.
+- **When the wait ends:** as soon as the first area produces its first
+  output, or its first request ends, or one of its attempts fails (a rate
+  limit, a dropped connection or a failed size check wrote nothing worth
+  waiting for), or you press Stop (the waiting areas are then recorded as
+  cancelled without sending anything), or after
+  `BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS` (45 s by default). An area that
+  still finds nothing to read simply stores its own copy, as before.
+- **What it saves:** the price of storing the shared copy, less the price
+  of reading it, three times over. At Claude Sonnet 5.5's rates ($2.50 per
+  million tokens to store a 5-minute copy, $0.20 to read one) that is about
+  a cent a round with nothing attached (the shared copy is then only the
+  instructions and tools, about 2,000 tokens), and up to about $0.25 a round
+  when attached documents and project facts fill their limits (about 35,000
+  tokens). Unmeasured on real runs. To measure it, run
+  `tools\research_cost_profile.py` over projects researched before and after
+  this change: on each new round, three of the four areas should show cache
+  reads where they used to show a cache write of the shared copy.
+- **No cost self-check watches it,** unlike the two savings below. It sends
+  no extra request and changes no request, so there is nothing it could
+  lose money on; the worst case is the wait itself, at most 45 s per round.
+  Final QC's stage above has no self-check for the same reason.
+- **Switching it off:** `BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS=0` starts
+  every area at once again. In PowerShell:
+  `$env:BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS = "0"`; in Command Prompt:
+  `set BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS=0`. It is research's own
+  switch: `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` leaves research alone, and
+  this one leaves Final QC alone.
+- **Where to see it:** each wait writes one line to the activity log
+  (Settings → Developer tools → Activity log tail): how many areas share the
+  copy, which one went first, whether the others were released by its first
+  output (`warm`), the time limit (`timeout`) or a Stop (`stopped`), and how
+  long they waited.
+
 ### Final QC's batched review can warm its own copy first (Chunk 3, on by default)
 
 Final QC's verifying reviewers run as a Message Batches request at half
@@ -2750,7 +2807,7 @@ Shipped in v0.5.0 (Phase 5) and still current:
 Shipped in v0.4.0 (Phase 4) and still current (the near-verbatim port of Spec Critic's requirements-research fan-out, pointed at drafting):
 
 - **Project profile, conversationally.** As you state the project's city/state/country/client in the interview, the model records them with a `set_project_profile` operation (normalized against the ported US-state/CA-province tables, riding the same undo/save machinery as document text). A complete profile arms the research phase.
-- **Grounded requirements research, on demand.** A "Research requirements" button in the panel launches four parallel streaming web-search agents — governing codes & amendments, AHJ requirements (including the water purveyor), client/insurer standards, site environment — each searching as the project's own locale, with pause-turn continuation, per-dimension search budgets, a 2× runaway ceiling, and a fetched-PDF elision guard so a 600-page code PDF can't 400 its own continuation. Research never auto-triggers: dozens of web searches are real spend, so you pull the trigger. **You watch it work, live**: the panel opens onto a per-agent board where each of the four agents narrates in real time — what it's doing ("Searching the web…", "Reading a source…"), the actual search queries and source URLs as they happen, running search/source counts, and retry notices — until each card settles into its findings summary.
+- **Grounded requirements research, on demand.** A "Research requirements" button in the panel launches four parallel streaming web-search agents — governing codes & amendments, AHJ requirements (including the water purveyor), client/insurer standards, site environment — each searching as the project's own locale (the first starts a few seconds ahead so the other three can read its cached copy of the instructions and project material they share), with pause-turn continuation, per-dimension search budgets, a 2× runaway ceiling, and a fetched-PDF elision guard so a 600-page code PDF can't 400 its own continuation. Research never auto-triggers: dozens of web searches are real spend, so you pull the trigger. **You watch it work, live**: the panel opens onto a per-agent board where each of the four agents narrates in real time — what it's doing ("Searching the web…", "Reading a source…"), the actual search queries and source URLs as they happen, running search/source counts, and retry notices — until each card settles into its findings summary.
 - **Research limits preserve gathered findings.** Each area's search and fetch budgets count across its whole conversation and are checked before every request. Each request itself may run at most 8 searches and 4 fetches (fewer if the area declares less), the same on every request of the conversation, so the tool definitions at the head of the prompt cache never change and a continuation can read what it re-sends from the cache; the request that crosses a budget can finish up to 7 searches or 3 fetches past it, all metered. Each request reserves context space for the answer and the sources it may add; when the full allowance no longer fits, the area switches once to one fetch per request. When a search, fetch, continuation, reminder or context guard is reached, the agent gets one final submission request with web tools removed. Its original retrieved sources and billed usage remain available for grounding and accounting. The request is shaped for the research model: on the default Claude Sonnet 5.5 it runs at the model's lowest thinking setting (`between_tools`) and lets the model choose the output tool itself, because Sonnet 5.5 refuses disabled thinking and a forced tool choice; if that reply records nothing, the agent is asked once more before the area fails. Claude Sonnet 5 (and Claude Opus 5 at effort `high` or below) keep disabled thinking and the forced tool, exactly as before. Claude Opus 5.5 cannot turn thinking off, so its submission keeps adaptive thinking and asks the API to drop the thinking the removed web tools invalidated.
 - **Rounds append; nothing is overwritten.** Run research again — after the interview turns up a new concern, or to retry a dimension that failed — and the new findings are added to what you already have. A requirement found again is confirmed in place (citations union, grounding and confidence take the better of the two) rather than duplicated, so item ids stay stable for the ◆ provenance chips your provisions already cite. Once a session has more than one round, every finding carries the date of the round that last **grounded** it in a retrieved source — a round that merely re-states an item without grounding it confirms nothing and does not re-date it — and the report breaks out what each round added versus re-confirmed. A round that fails or is stopped costs only that round; the earlier ones are untouched, and the message says so. Rounds survive save/resume and keep counting.
 - **Citations or it didn't happen.** Every reported item is validated accepted-vs-cited: a URL the model cites must match one the server tools actually retrieved, or the item renders **[UNVERIFIED]** (kept as a lead, never a fact). Process/schedule facts render **[PROCESS]** and never become spec text. One dimension failing never cancels the others; partial profiles are flagged; total failure aborts clean. A **View report** button opens the full findings report in a modal — every agent's items grouped by dimension, with each dimension's completion status and search/fetch telemetry, requirement, authority, code reference, confidence, and grounded sources.
@@ -2900,6 +2957,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          research dimensions                       [Batch 10, native]
   research/
     engine.py            the fan-out: parallel streaming web-search dimensions,
+                         staggered behind one lead area's first output so the
+                         rest read its cached prefix,
                          pause_turn continuations, up to two reminders for an
                          area that ends its turn without its output tool,
                          budget ceilings, grounding,
@@ -3193,6 +3252,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_CONTEXT_WINDOW` | `BUILD_A_SPEC_CONTEXT_WINDOW` (`1000000`) | Research model's context window. Each request is estimated with a supported equivalent at the free provider token counter, plus server-tool overhead, output and web-result reserves; pair this override with a research model whose window differs. |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `medium` | Adaptive-thinking effort for research dimensions, following Sonnet 5.5's recalibrated scale and migration guidance for multistep tool use. Set `BUILD_A_SPEC_RESEARCH_EFFORT=high` to restore the previous default. In PowerShell: `$env:BUILD_A_SPEC_RESEARCH_EFFORT = "high"`; in Command Prompt: `set BUILD_A_SPEC_RESEARCH_EFFORT=high`. |
+| `BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS` | `45` | Staggered research launch: the areas of a round read the same tools, instructions and project block (your attached documents and project facts included), so one area is sent first and the others wait for it to start answering, then read its cached copy instead of each paying to store their own. This is the longest they wait, in seconds; a wait that runs out, a Stop, or a first area whose request ends or fails releases them at once. An area sent different tools never waits. Changes no request, only when it is sent; budgets, grounding and findings are unchanged. Research's own switch, separate from `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`. `0` starts every area at once, as before. In PowerShell: `$env:BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS = "0"`; in Command Prompt: `set BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS=0`. Floor 0. |
 | `BUILD_A_SPEC_CONTINUATION_CACHE` | `1` | Continuation caching (Chunk 4 of the cost program, on by default since the Tier 1 finish program's session CT-3): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. Watched by the cost self-checks: a resume the provider refuses because of the breakpoint is sent once more without it, and the breakpoint switches off for that engine (research or Final QC) until the app restarts; six or more measured resumes that together cost more than they saved switch it off the same way (Settings → Developer tools → Cost self-checks). `0` switches it off: no request carries it. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`. |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Global QC output/thinking ceiling. Caps every phase, including explicit phase overrides. |

@@ -390,6 +390,24 @@ RESEARCH_CONTEXT_WINDOW = _int_env(
 # so thinking billed as output compounds across their continuation requests.
 # BUILD_A_SPEC_RESEARCH_EFFORT=high restores the previous default.
 RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "medium")
+# Staggered launch for research (the counterpart of Final QC's
+# ``QC_WARM_WAIT_SECONDS``). A round's areas declare the same web tools, the
+# same module system prompt and the same project-level shared block (date,
+# project header, attached references, project facts), so their opening
+# requests are byte-identical up to the shared block's cache breakpoint. But
+# a cache entry becomes readable only once the response that writes it begins
+# streaming, so areas sent together each pay to write their own copy. One
+# area therefore goes first, and the others wait for its first streamed
+# output, up to this many seconds: a lead whose request ends or fails, or
+# whose task ends, releases them at once, and a Stop during the wait sends
+# nothing more. A follower that still finds nothing readable writes its own
+# copy, exactly as before, so the wait can cost time but never money, and it
+# changes no request byte. Research's own knob rather than QC's, so either
+# stagger can be switched off alone. 0 switches it off: every area starts at
+# once, as before.
+RESEARCH_WARM_WAIT_SECONDS = _int_env(
+    "BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS", 45, minimum=0
+)
 
 # --- Final QC (the pre-issue review pass, on Opus 5.5) -----------------------
 

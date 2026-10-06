@@ -141,7 +141,11 @@ max_searches, max_fetches}, `dimension_activity` {kind: thinking|searching|
 fetching|writing, on change only}, `dimension_search` {query} /
 `dimension_fetch` {url} (detected live from the raw stream, chat-loop
 style), and `dimension_retry` {attempt, max_attempts, reason, backoff_s,
-mode: resume|restart (Research/QC cost Tier 1, Chunk 5)}.
+mode: resume|restart (Research/QC cost Tier 1, Chunk 5)}. A staggered
+launch adds one COORDINATOR event per follower, `dimension_waiting`
+{title, lead_id, max_wait_s}, emitted when its lead is sent and always
+before the follower's own `dimension_started`, which a follower emits only
+once released (see "The research launch is staggered" below).
 The `stream_end` sentinel is still exactly `{type, status}` — `status` may
 now be `superseded` when a NEWER run takes the runner over mid-stream
 (`sse_events` binds to the run token at call time, the QC shape). Every
@@ -530,6 +534,39 @@ wrote it at 1.25× on every turn and no later turn read it.
   (`_simulated_cache_usage`).
 
 Full record, economics, reversion evidence and the release-note draft:
+`docs/as-built.md` under the same heading. No paid API call was made.
+
+## The research launch is staggered — implemented notes (2026-10-06)
+
+Since PR #269 a round's areas are byte-identical up to the shared block's
+breakpoint, but four requests sent together each wrote that entry: a cache
+entry is readable only once its response begins streaming. The fan-out now
+submits one lead per lineage first (`research.engine._launch_staggered`,
+copy-adapted from Final QC's) and the rest when the lead's `first_output`
+fires — first non-`message_start` frame, end of any request, any failed
+attempt (a failed token count included), or the task's end via a
+done-callback — or after `RESEARCH_WARM_WAIT_SECONDS` (default 45, `0` =
+off), or on a Stop (followers are then submitted, see the Stop before
+sending, and return cancelled). The wait runs on the coordinator thread in
+1-second slices.
+
+- Its own knob, not `QC_WARM_WAIT_SECONDS`, so either stagger switches off
+  alone. Pinned once per round; the runner passes nothing new.
+- The lineage key hashes what precedes the breakpoint (tools, system
+  prompt, shared block, model, effort) from the request builders
+  (`_research_tools`, `_per_request_allowance`), so an area with different
+  tool bytes is its own lineage and never waits. A key that cannot be built
+  makes that area unstaggered, never a failed round.
+- Events stay truthful: a follower gets `dimension_waiting` when its lead is
+  sent, and its `dimension_started` comes from its own worker only once
+  released. The board shows "Waiting for {lead} to start, to share its
+  cached copy…" (`lib/researchAgents.queuedLabel`).
+- No cost self-check: the stagger sends no extra request and changes no
+  byte, so it cannot lose money; Final QC's lens stagger has none either.
+- Request bytes, budgets, grounding, the merge and the submission are
+  unchanged (pinned by `tests/test_research_warm_launch.py`).
+
+Full record, reversion evidence and the release-note draft are in
 `docs/as-built.md` under the same heading. No paid API call was made.
 
 ## As-built history

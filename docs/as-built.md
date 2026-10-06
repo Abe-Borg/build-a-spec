@@ -18784,6 +18784,32 @@ failed.)
 passed, 64 skipped (59 new). Ruff passed; `npm test` (517) passed. No
 frontend change: the Issues drawer renders any rule id.
 
+### PR #276 review corrections
+
+Codex raised three P2 findings on the first push; all three reproduced and
+are fixed.
+
+- **Two standards joined by "and" passed.** The second-standard check only
+  knew the cue phrases. `reference_entry_problems` now also flags two
+  distinct designations (`_DESIGNATION_RE`: NFPA, ASTM, UL/ULC, ASME,
+  ANSI, AWWA, ASCE, ASHRAE, CSA, ISO, IEEE, NEMA, AWS, SMACNA, MSS SP, FM
+  Data Sheet / FM DS, each with its number) or, failing that, two
+  "edition"s. "ASTM A53/A53M" and "ANSI/UL 199" stay one designation each.
+- **The sentence count was wrong both ways.** A semicolon counted as a
+  break, so a title carrying one was flagged, while a second sentence
+  opening with a number ("… 2020 edition. 2021 IFC …") was missed. Only a
+  period now ends a sentence, before a capital, digit, bracket or quote.
+- **The prompt contradicted itself on "pending".** PR 1's Specification
+  voice bullet listed "pending" among the placeholders and said the app
+  refuses them — the guard never refused "pending", and PR 2 tells the
+  model to leave a real condition. The bullet now lists only what the guard
+  refuses and says "pending" stays only as a real condition of the work.
+
+Regression tests in `tests/test_spec_voice_lint.py` (63 now). Removing the
+designation check, restoring the semicolon break, dropping the digit
+lookahead, or restoring the old bullet each fails its tests; all four
+probes were restored.
+
 ### Release-note draft (for the release after 1.23.0)
 
 "**Explanations are flagged.** A provision that explains instead of

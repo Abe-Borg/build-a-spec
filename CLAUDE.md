@@ -387,6 +387,16 @@ cd frontend && npm run build           # tsc --noEmit && vite build -> dist/
 python main.py                         # run the app (serves dist/)
 ```
 
+**Who runs the full suite (owner preference, 2026-10-06).** CI
+(`.github/workflows/ci.yml`) runs Ruff, the full backend suite on Python
+3.11 and 3.12, and the frontend `npm test` and build on every push to a PR.
+A session therefore does not run the full backend suite (about eleven
+minutes) before pushing. It runs Ruff and the test files its change touches
+or adds (seconds), plus any reversion probes, which CI cannot do; then it
+pushes and lets CI run everything. A red CI run is fixed like any other.
+Run the full suite locally only to chase a failure CI reports. `npm test`
+still runs locally after touching UI (next paragraph).
+
 `npm test` is not optional after touching UI: it is what enforces the
 capability-coverage contract (`frontend/tests/tour.test.ts`). A new control
 without a `data-capability`, a capability without a tour step, or a step
@@ -706,13 +716,18 @@ checklist in Final QC's `enforceability_language` lens, and two prompt lines.
   order, `match` = the first.
 - **`reference_entry_shape`** — leaf provisions of an article whose title
   matches `REFERENCES_ARTICLE_RE` (REFERENCES / REFERENCE(D) STANDARDS):
-  more than one sentence (abbreviation, initial and dotted-abbreviation
-  periods excluded), more than `REFERENCE_ENTRY_MAX_CHARS` (220), a
+  more than one sentence (a period before a capital, digit, bracket or
+  quote; abbreviation, initial and dotted-abbreviation periods excluded;
+  semicolons never count, since titles carry them), more than
+  `REFERENCE_ENTRY_MAX_CHARS` (220), two distinct designations
+  (`_DESIGNATION_RE`: NFPA, ASTM, UL, FM Data Sheet…) or two editions, a
   lower-case em-dash description, or `REFERENCE_ENTRY_PATTERNS` (case-
   sensitive except "also referenced", "see also", "because", since titles
   are Title Case). A lead-in paragraph with entries under it is not checked.
 - Neither rule reads a locked (preserved) block or an `unstructured_import`.
-- **Prompt.** `_SPEC_VOICE` says never "should" and never "in order to";
+- **Prompt.** `_SPEC_VOICE` says never "should" and never "in order to",
+  and no longer lists "pending" among the refused placeholders (the guard
+  never refused it): it stays only as a real condition of the work.
   `_LINT_POLICY` names both rules and the "pending" exception. The stable
   prompt changed, so every open session rewrites its cache once.
 - **Final QC.** The `enforceability_language` brief gains the voice and

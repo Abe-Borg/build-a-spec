@@ -250,6 +250,9 @@ def test_one_issue_per_provision_names_every_phrase():
         "Zinc-Coated (Galvanized) Welded and Seamless Steel Pipe for Fire "
         "Protection Use, 2021 edition.",
         "UL 199, Automatic Sprinklers for Fire-Protection Service, Ed. 12.",
+        "ANSI/UL 199, Automatic Sprinklers for Fire-Protection Service, Ed. 12.",
+        "NFPA 25, Inspection, Testing, and Maintenance; Water-Based Systems, "
+        "2020 edition.",
         "U.S. Department of Labor, OSHA 29 CFR 1910, Occupational Safety and "
         "Health Standards.",
         "NFPA 13 — Standard for the Installation of Sprinkler Systems, 2025 "
@@ -260,6 +263,29 @@ def test_one_issue_per_provision_names_every_phrase():
 )
 def test_well_formed_reference_entries_pass(entry):
     assert reference_entry_problems(entry) == []
+
+
+def test_two_standards_in_one_entry_are_flagged_without_cue_words():
+    """PR #276 review: "and" joins two standards as surely as "Also referenced"."""
+    two = (
+        "NFPA 13, Standard for the Installation of Sprinkler Systems, 2022 "
+        "edition and NFPA 14, Standard for Standpipes, 2019 edition."
+    )
+    assert reference_entry_problems(two) == ["more than one standard (NFPA 13, NFPA 14)"]
+    assert reference_entry_problems(
+        "Standard for Sprinkler Systems, 2022 edition, and Standpipes, 2019 edition."
+    ) == ["more than one edition"]
+
+
+def test_a_second_sentence_is_counted_however_it_starts():
+    """PR #276 review: a digit can open a sentence; a semicolon ends none."""
+    assert reference_entry_problems(
+        "NFPA 25, Standard, 2020 edition. 2021 IFC references it."
+    ) == ["more than one sentence"]
+    assert reference_entry_problems(
+        "NFPA 25, Inspection, Testing, and Maintenance; Water-Based Systems, "
+        "2020 edition."
+    ) == []
 
 
 def test_only_leaf_entries_of_a_references_article_are_shape_checked():
@@ -304,6 +330,10 @@ def test_preserved_blocks_and_non_spec_imports_are_not_voice_checked():
 @pytest.mark.parametrize("module", [HYPERSCALE_FIRE, GENERIC], ids=lambda m: m.module_id)
 def test_the_prompt_names_the_owners_calls_and_the_new_rules(module):
     prompt = render_system_prompt(module)
+    # PR #276 review: "pending" is not a refused placeholder (the guard never
+    # refused it), and the voice section says when it may stay.
+    assert '"to be determined", or "pending". The app refuses' not in prompt
+    assert '"Pending" stays only where it is a real condition of the work' in prompt
     assert 'Never "should"' in prompt
     assert 'never "in order to"' in prompt
     assert "explanatory_prose and reference_entry_shape" in prompt

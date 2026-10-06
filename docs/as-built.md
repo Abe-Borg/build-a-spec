@@ -18151,3 +18151,15 @@ look and work the same; they now appear as the reply finishes."
 No paid API call was made. The saving is structural: a committed turn's
 trace has one `round_end` fewer, and Settings → Developer tools shows the
 turn's usage with one fewer full cache read.
+
+**PR #272 review correction (Codex).** A reply that was nothing but its
+block stripped to empty text, so `chat_transcript` dropped the assistant
+entry. The user's next message (typically the chip itself) then merged into
+the one before it on reload, shifting the bubble count, reply digests and
+harvest turn numbers away from the live chat, which always shows one
+assistant bubble per turn. `chat_transcript` now keeps an empty assistant
+entry for an assistant message whose text was only a block. Later text in the
+same turn merges into it without a stray separator. A text-less message that
+never carried a block is reduced exactly as before.
+`test_a_chip_only_reply_keeps_its_turn_in_the_transcript` pins it, and
+fails with the entry removed.

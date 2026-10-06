@@ -508,22 +508,32 @@ def chat_transcript(history: list[dict[str, Any]]) -> list[dict[str, str]]:
         role = message.get("role")
         if role not in ("user", "assistant"):
             continue
-        parts = [
-            (
-                strip_reply_chips(block.get("text", ""))
-                if role == "assistant"
-                else block.get("text", "")
-            )
+        raw = [
+            block.get("text", "")
             for block in (message.get("content") or [])
             if isinstance(block, dict)
             and block.get("type") == "text"
             and isinstance(block.get("text"), str)
         ]
+        parts = [strip_reply_chips(p) for p in raw] if role == "assistant" else raw
         text = "\n\n".join(p for p in parts if p).strip()
         if not text:
+            # A reply that was nothing but its suggested-replies block still
+            # took its turn: the chat showed an (empty) assistant bubble for
+            # it. Keeping the entry keeps the turn boundary — without it the
+            # user's next message (often a chip) would merge into the one
+            # before, and the bubble count, reply digests and harvest turn
+            # numbers would all shift (caught by Codex review on PR #272).
+            if (
+                role == "assistant"
+                and any(p.strip() for p in raw)
+                and not (transcript and transcript[-1]["role"] == "assistant")
+            ):
+                transcript.append({"role": "assistant", "text": ""})
             continue
         if transcript and transcript[-1]["role"] == role:
-            transcript[-1]["text"] += "\n\n" + text
+            previous = transcript[-1]["text"]
+            transcript[-1]["text"] = f"{previous}\n\n{text}" if previous else text
         else:
             transcript.append({"role": role, "text": text})
     return transcript

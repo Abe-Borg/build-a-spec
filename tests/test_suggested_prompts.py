@@ -743,6 +743,59 @@ def test_a_planted_block_in_a_reference_document_is_inert():
     assert "[escaped tag: /suggested_replies]" in result["content"]
 
 
+def test_a_chip_only_reply_keeps_its_turn_in_the_transcript():
+    """A reply that was nothing but its block still took a turn — the chat
+    showed an assistant bubble for it — so the reloaded transcript keeps an
+    (empty) assistant entry: the next user message (a chip, typically) must
+    not merge into the previous one, or bubble numbering, reply digests and
+    harvest turns would shift (Codex review on PR #272)."""
+    from backend.harvest import conversation_turns
+    from backend.llm.conversation import assistant_bubble_count
+    from backend.project_facts import reply_digests
+
+    history = [
+        {"role": "user", "content": [{"type": "text", "text": "What next?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": _block(["Draft PART 2 now"])}]},
+        {"role": "user", "content": [{"type": "text", "text": "Draft PART 2 now"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Drafted."}]},
+    ]
+    assert chat_transcript(history) == [
+        {"role": "user", "text": "What next?"},
+        {"role": "assistant", "text": ""},
+        {"role": "user", "text": "Draft PART 2 now"},
+        {"role": "assistant", "text": "Drafted."},
+    ]
+    assert assistant_bubble_count(history) == 2
+    assert len(reply_digests(chat_transcript(history))) == 2
+    assert [t.user for t in conversation_turns(history)] == ["What next?", "Draft PART 2 now"]
+
+    # A chip-only message followed by real text in the SAME turn is one
+    # bubble holding that text, with no stray separator in front of it.
+    same_turn = [
+        {"role": "user", "content": [{"type": "text", "text": "Go."}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": _block(["A"])},
+                {"type": "tool_use", "id": "t1", "name": "apply_spec_edits", "input": {}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "{}"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Done."}]},
+    ]
+    assert chat_transcript(same_turn) == [
+        {"role": "user", "text": "Go."},
+        {"role": "assistant", "text": "Done."},
+    ]
+    # Text-less turns that never carried a block are reduced as they always
+    # were (no new empty bubbles anywhere else).
+    tool_only = [
+        {"role": "user", "content": [{"type": "text", "text": "Hi."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+    ]
+    assert chat_transcript(tool_only) == [{"role": "user", "text": "Hi."}]
+
+
 def test_the_transcript_mining_paths_never_read_a_chip_as_said():
     """The harvest and recall read replies as the user saw them: a chip
     offering "The ceiling height is 32 ft" is not the conversation saying so."""

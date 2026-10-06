@@ -537,7 +537,7 @@ def test_docx_export_smoke(monkeypatch):
     document = Document(io.BytesIO(report.content))
     texts = [p.text for p in document.paragraphs]
     assert texts[:2] == ["REVIEW REPORT", "SECTION 21 13 13 - WET-PIPE SPRINKLER SYSTEMS"]
-    assert texts[2].startswith("Document version 2 | Generated ")
+    assert texts[2].startswith("Document version v3 (stored index 2) | Generated ")
     assert "ASSUMPTIONS SCHEDULE" in texts
 
     # The assumed block is scheduled with its numbering; the TBD is an

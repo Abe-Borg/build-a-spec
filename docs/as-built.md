@@ -18847,8 +18847,10 @@ redline export carried them. A blank header printed `SECTION [TBD]` and
   a from-scratch redline against the empty document.
 - `build_review_report(...)` holds the moved blocks unchanged in substance,
   in the old order, after a header: REVIEW REPORT; `SECTION n - TITLE` when
-  either is set; `Document version N | Generated YYYY-MM-DD` (UTC date,
-  injectable); one sentence saying the report accompanies the section and is
+  either is set; `Document version vN+1 (stored index N) | Generated
+  YYYY-MM-DD` (UTC date, injectable; the version through `qc_version_label`,
+  the Final QC report's wording — the PR #278 review caught the first push
+  printing the bare 0-based index, which reads one behind the panel); one sentence saying the report accompanies the section and is
   not part of it. The first schedule no longer starts with a page break.
   Filename: the export name plus ` - REVIEW REPORT`.
 - `GET /api/export/review-report` captures the detached tree, version index,

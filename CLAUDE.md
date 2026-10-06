@@ -759,7 +759,8 @@ PR 3 of 4 for the specification-voice rule.
   assumptions schedule, IMPORTED PROVISIONS NOT YET REVIEWED, OPEN ITEMS,
   then the compact Final QC closing or the compliance-audit closing — under
   a header (REVIEW REPORT, `SECTION n - TITLE` when set, `Document version
-  N | Generated YYYY-MM-DD`). `review_report_filename` appends
+  vN+1 (stored index N) | Generated YYYY-MM-DD` — `qc_version_label`, the
+  QC report's wording, per the PR #278 review). `review_report_filename` appends
   ` - REVIEW REPORT`.
 - **`GET /api/export/review-report`** captures under `session_state_guard`
   and renders outside it (the `/api/export/docx` shape). The QC closing

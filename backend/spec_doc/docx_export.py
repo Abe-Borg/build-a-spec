@@ -172,7 +172,9 @@ def build_review_report(
         _centered(document, heading)
     facts = []
     if version_index is not None:
-        facts.append(f"Document version {version_index}")
+        # The panel's 1-based number beside the stored index — the one
+        # document-version wording the Final QC report already uses.
+        facts.append(f"Document version {qc_version_label(version_index)}")
     facts.append(
         "Generated "
         + (generated_on or datetime.now(timezone.utc).date().isoformat())
@@ -1284,7 +1286,7 @@ def _qc_version_display(value: object) -> str:
 def _qc_version_phrase(value: object) -> str:
     """The same number, shaped for the middle of a sentence.
 
-    The closing summaries appended to the ISSUED SPEC read as prose, so they
+    The closing summaries in the review report read as prose, so they
     take the display number without the stored index — a data field's
     parenthetical mid-sentence is noise. What they share with
     :func:`qc_version_label` is the VALIDATION, which is where the bug was:

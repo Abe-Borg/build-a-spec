@@ -87,7 +87,9 @@ def test_the_review_report_carries_everything_written_for_the_reviewer():
     assert texts[:3] == [
         "REVIEW REPORT",
         "SECTION 21 13 13 - WET-PIPE SPRINKLER SYSTEMS",
-        "Document version 4 | Generated 2026-10-06",
+        # The panel's v5 is stored index 4 (PR #278 review): both, the QC
+        # report's wording.
+        "Document version v5 (stored index 4) | Generated 2026-10-06",
     ]
     for heading in (
         "ASSUMPTIONS SCHEDULE",

@@ -163,6 +163,50 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — suggested replies ride the reply (one request fewer every turn)
+
+No release entry yet: v1.22.1 is published and there is no newer entry, so
+the release-note draft is in docs/as-built.md ("Suggested replies ride the
+reply").
+
+The one-tap reply chips above the chat box used to come from a tool call of
+their own. Since the 5.5 prompting upgrade the assistant writes its reply
+after its last tool call, so every turn paid for one more request whose only
+news was "the chips are staged". That request re-read the whole conversation,
+the whole draft and every instruction: about two cents at 100,000 tokens of
+context, about twelve cents at 600,000, plus a second or two of waiting.
+
+- **The chips now ride the end of the reply.** The assistant ends its
+  closing message with a short tagged list of the chips,
+  `<suggested_replies>["…", "…"]</suggested_replies>`. The app reads it off
+  the reply, checks it with the same rules as before (at most five, each
+  under 120 characters, written as your reply), and shows the chips. A
+  question-only turn is now one request instead of two, and a drafting turn
+  is two instead of three.
+- **You never see the markup.** The chat holds back the block while the reply
+  streams, so the chips simply appear as the reply finishes. They used to
+  appear just before it started. Either way they only become clickable once
+  the turn is done. A reloaded project shows the reply exactly as it
+  streamed.
+- **The bar behaves as it always did.** Each reply's chips replace the last
+  set. A reply without chips clears the bar, which is how it winds down as
+  the section finishes. A failed turn keeps the previous chips. Stopping the
+  reply while the chips are still being written, or a reply cut off at its
+  length limit, clears the bar instead of leaving the last turn's answers
+  under a new question. A list that breaks the rules (six chips, say, or one
+  that is not valid JSON) is dropped whole and noted in the app's log. There
+  is no second request to fix it, because saving that request is the point.
+- **The assistant still sees what it offered.** The block stays at the end
+  of that reply in the saved conversation, so next turn the assistant knows
+  which chips it offered. The fact harvest, the reloaded chat and the
+  condensed conversation's search all read the reply without its chips, so a
+  suggestion is never mistaken for something the conversation settled.
+- **Saved projects open and continue as before.** Their old chip tool calls
+  stay valid: the tool is still declared, with a description saying not to
+  use it, and a call stages nothing. It will be removed in a later release.
+  The first message after updating writes the conversation's cache once more,
+  because the instructions changed.
+
 ## Current Status — the research profile is read from the cache, not rewritten every message
 
 No release entry yet: v1.22.1 is published and there is no newer entry, so
@@ -2126,17 +2170,21 @@ default, a plausible alternative, an "I don't know — use your default"), or
 momentum moves like *"Draft PART 2 now."* Clicking a chip sends it as your
 next message, so an interview is mostly tapping, not typing.
 
-- **The model decides the set, every turn, via a new `suggest_prompts` chat
-  tool.** It rides the one chat/tool loop and streams a live `suggested_prompts`
-  event the instant it's called — the same thin-tool pattern as Batch 8's
-  figures. Chips are always complete, sendable replies in your voice (never
+- **The model decides the set, every turn, at the end of its reply.** It
+  shipped as a `suggest_prompts` chat tool. Since 2026-10-06 the chips ride a
+  `<suggested_replies>[…]</suggested_replies>` block at the very end of the
+  closing message instead, which saves a whole request every turn (see
+  "Current Status — suggested replies ride the reply" above). The app strips
+  the block from the chat and streams a live `suggested_prompts` event when it
+  closes. Chips are always complete, sendable replies in your voice (never
   fill-in-the-blank templates, never panel-button actions like "Run research").
-- **It winds down as the section finishes.** Not calling the tool clears the
+- **It winds down as the section finishes.** A reply without chips clears the
   bar, so as open items resolve and the draft nears issue-ready the model
   naturally offers fewer chips — one or two, then none. An empty section of
   chips is a real signal, not a bug.
 - **Turn-atomic and honest.** A committed turn replaces the set (a stopped
-  turn keeps whatever it staged); a failed turn leaves the previous chips
+  turn keeps whatever it staged, and a block a stop cut off stages nothing);
+  a failed turn leaves the previous chips
   untouched and the bar restores itself on the next refresh. The current set
   rides the project file, so a saved-and-resumed session comes back with its
   chips.
@@ -2767,8 +2815,8 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   before drafting them, even when it feels confident, which can add a few
   web searches per session. The Research button still owns the systematic
   jurisdiction/AHJ/client/insurer sweep. The same upgrade tells the model to
-  make every tool call first (`suggest_prompts` last) and write its reply to
-  the user after the final one: on Claude Sonnet 5.5 anything longer than a
+  make every tool call first and write its reply to the user after the final
+  one, ending it with the suggested-replies block: on Claude Sonnet 5.5 anything longer than a
   sentence or two written between tool calls comes back as a progress-update
   thinking block, which the chat collapses and commit drops, so the reply's
   substance belongs after the last tool call, where it stays text.
@@ -3359,7 +3407,7 @@ that trim is on by default (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
 ```
 
 The third paid check, also opt-in, runs ONE real interview turn (typically
-three or four requests, well under a dollar at list prices) to see whether
+two or three requests, well under a dollar at list prices) to see whether
 the chat's reply really lands after its last tool call on Claude Sonnet 5.5
 (the 5.5 prompting upgrade, P55-2). On that model, anything longer than a
 sentence or two written between tool calls comes back as a progress-update
@@ -3367,8 +3415,9 @@ thinking block, which the chat collapses and saved history drops. The
 canary drives the production engine on a fresh in-memory session and
 re-sends each request with `thinking.display: "updates"` (a beta) so
 progress notes can be told apart from reasoning. It prints every progress
-note and a pass/fail verdict: it passes when the turn ends in closing text
-that asks the questions and no progress note asks one. The app itself keeps
+note, what the reply's suggested-replies block held (reported, not judged),
+and a pass/fail verdict: it passes when the turn ends in closing text that
+asks the questions and no progress note asks one. The app itself keeps
 `thinking.display: "summarized"`; running this is optional and nothing waits
 on it:
 

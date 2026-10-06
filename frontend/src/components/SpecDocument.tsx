@@ -1,12 +1,13 @@
 /**
  * SectionFormat rendering of the server-owned document tree on the paper
  * surface: PART headings, numbered articles, lettered/numbered paragraph
- * levels, provenance badges, inline [TBD] highlighting, and a tint on
- * blocks changed during the latest turn.
+ * levels, provenance badges, highlighting of leftover [TBD] markers, and a
+ * tint on blocks changed during the latest turn.
  *
  * WI2 adds direct manual editing: hover a paragraph or article title to
- * reveal ✏️ (inline edit), ✓ (confirm an assumed/imported block), and 🗑
- * (delete). All affordances are disabled while a model turn streams.
+ * reveal ✏️ (inline edit), ✓ (confirm an assumed/imported block, or a
+ * leftover needs-input one), ≈ (mark a leftover needs-input block assumed),
+ * and 🗑 (delete). All affordances are disabled while a model turn streams.
  */
 import {
   Fragment,
@@ -70,6 +71,29 @@ const TemplateSeedContext = createContext<{
   ids: ReadonlySet<string>;
 }>({ name: "", ids: new Set() });
 
+/**
+ * A blank header field, shown the way an empty input shows its hint: greyed,
+ * in sentence case, and never as document text. The export prints a blank
+ * number as a bare `SECTION` and a blank title as an empty line, so the panel
+ * no longer writes the `[TBD]` the specification itself may never carry
+ * (owner rule, 2026-10-06).
+ */
+function HeaderPlaceholder({ children }: { children: string }) {
+  return (
+    <span
+      className="font-normal tracking-normal normal-case text-paper-dim/70 italic select-none"
+      data-header-placeholder=""
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Leftover `[TBD: …]` markers stay highlighted: nothing writes a new one, but
+ * an older document, a starter or the user's own typing can still carry one,
+ * and the Leftover placeholders list and readiness keep counting it.
+ */
 function TbdText({ text }: { text: string }) {
   const pieces = text.split(TBD_SPLIT);
   return (
@@ -79,6 +103,7 @@ function TbdText({ text }: { text: string }) {
           <mark
             key={i}
             className="rounded-sm bg-[#f2e3b3] px-0.5 text-[#6d5310]"
+            title="Leftover placeholder — rewrite this as a complete provision"
           >
             {piece}
           </mark>
@@ -90,14 +115,22 @@ function TbdText({ text }: { text: string }) {
   );
 }
 
-const badgeStyles: Record<string, { css: string; label: string }> = {
+const badgeStyles: Record<
+  string,
+  { css: string; label: string; title?: string }
+> = {
   assumed: {
     css: "border-[#d4a04c]/60 bg-[#f6ead2] text-[#8a6414]",
     label: "assumed",
   },
+  // Retired 2026-10-06: nothing stamps it any more, so a block that carries
+  // it is a leftover from an older document — still red, still counted,
+  // and one click from confirmed or assumed.
   needs_input: {
     css: "border-[#c65b4e]/50 bg-[#f7e2df] text-[#a03d31]",
-    label: "needs input",
+    label: "needs input · leftover",
+    title:
+      "Leftover from an older document: nothing marks a provision needs input any more. Rewrite it as a complete provision, or mark it confirmed or assumed.",
   },
   imported: {
     css: "border-[#5b7db8]/50 bg-[#e3eaf6] text-[#3a5a94]",
@@ -127,7 +160,7 @@ function StatusBadge({
       title={
         fromTemplate
           ? `Reusable starter: ${templateSeed.name || "personal template"}`
-          : undefined
+          : style.title
       }
     >
       {style.label}
@@ -369,6 +402,7 @@ function DragHandle({
 /** Hover toolbar for a paragraph: confirm / edit / delete. */
 function RowActions({
   canConfirm,
+  canMarkAssumed = false,
   busy,
   locked = false,
   replaceCapability,
@@ -379,12 +413,15 @@ function RowActions({
   statusCapability,
   confirming,
   onConfirm,
+  onMarkAssumed = () => {},
   onEdit,
   onDelete,
   onMove,
   onCancelDelete,
 }: {
   canConfirm: boolean;
+  /** A leftover needs-input block: its one-click way to assumed. */
+  canMarkAssumed?: boolean;
   busy: boolean;
   /** Preserved Word content: no retype control, everything else stays. */
   locked?: boolean;
@@ -396,6 +433,7 @@ function RowActions({
   statusCapability: SourceOperationCapability;
   confirming: boolean;
   onConfirm: () => void;
+  onMarkAssumed?: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onMove: (position: number) => void;
@@ -449,6 +487,20 @@ function RowActions({
           )}
         >
           ✓
+        </CapabilityButton>
+      )}
+      {canMarkAssumed && (
+        <CapabilityButton
+          className={actionBtn}
+          onClick={onMarkAssumed}
+          disabled={busy || !statusCapability.allowed}
+          title={sourceCapabilityTitle(
+            statusCapability,
+            "Mark this leftover block assumed (a default still to confirm)",
+          )}
+          aria-label="Mark assumed"
+        >
+          ≈
         </CapabilityButton>
       )}
       {locked ? null : (
@@ -719,7 +771,12 @@ function ParagraphNode({
               />
             )}
             <RowActions
-              canConfirm={p.status === "assumed" || p.status === "imported"}
+              canConfirm={
+                p.status === "assumed" ||
+                p.status === "imported" ||
+                p.status === "needs_input"
+              }
+              canMarkAssumed={p.status === "needs_input"}
               busy={busy}
               locked={locked}
               replaceCapability={replaceCapability}
@@ -732,6 +789,11 @@ function ParagraphNode({
               onConfirm={() => {
                 submit([
                   { action: "set_status", target_id: p.id, status: "confirmed" },
+                ]);
+              }}
+              onMarkAssumed={() => {
+                submit([
+                  { action: "set_status", target_id: p.id, status: "assumed" },
                 ]);
               }}
               onEdit={startEdit}
@@ -1633,14 +1695,14 @@ function DiffElementRow({ e }: { e: ElementDiff }) {
               {e.number_cur && <span className="diff-ins">{e.number_cur}</span>}
             </>
           ) : (
-            e.number_cur || "[TBD]"
+            e.number_cur || <HeaderPlaceholder>number not set</HeaderPlaceholder>
           )}
         </p>
         <p className="mt-1 rounded text-[13px] font-semibold tracking-wide uppercase">
           {e.kind === "changed" && e.runs ? (
             <DiffRunSpans runs={e.runs} />
           ) : (
-            e.cur_text || "[TBD: section title]"
+            e.cur_text || <HeaderPlaceholder>title not set</HeaderPlaceholder>
           )}
         </p>
       </div>
@@ -1838,9 +1900,11 @@ export function SectionHeader({
 
   return (
     <div className="group">
-      <p className={headingClass}>SECTION {number || "[TBD]"}</p>
+      <p className={headingClass}>
+        SECTION {number || <HeaderPlaceholder>number not set</HeaderPlaceholder>}
+      </p>
       <p className={`mt-1 uppercase ${headingClass}`}>
-        {title || "[TBD: section title]"}
+        {title || <HeaderPlaceholder>title not set</HeaderPlaceholder>}
         <ReadOnlyBadge capability={capability} sourceExpected={sourceExpected} />
         <CapabilityButton
           className={`${actionBtn} ml-1 hidden group-hover:inline-block`}
@@ -1910,11 +1974,11 @@ export default function SpecDocument({
     "sec",
     "replace_text",
   );
-  // An unstructured import has no header to show — printing "SECTION [TBD]"
-  // over a memo asserts a section the file never had. The placeholders are
-  // still right for a spec being drafted from scratch, and they come back the
-  // moment a header exists, so this turns on the document's own state rather
-  // than latching at import.
+  // An unstructured import has no header to show — printing a SECTION
+  // heading over a memo asserts a section the file never had. The greyed
+  // "not set" hints are still right for a spec being drafted from scratch,
+  // and they come back the moment a header exists, so this turns on the
+  // document's own state rather than latching at import.
   const hasHeader = Boolean(doc.section.number || doc.section.title);
   const bareImport = unstructuredImport && !hasHeader;
   const editorBusy = busy || editInFlight;

@@ -93,7 +93,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `qc_dispositions` | `outcomes` | apply_qc_fixes committed audit dispositions with this turn (v1.11.0): `{finding_id: applied\|stale\|no_ops\|already_applied\|not_open\|unknown}`. Emitted from the frozen post-commit payload ONLY when the turn commits with staged dispositions — a rolled-back turn never emits it; the frontend refreshes QC state + readiness on it |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
-| `open_questions` | `items` | open-item list (TBD markers + needs_input blocks — leftovers only since 2026-10-06: the model can write neither); emitted when a turn changed the doc |
+| `open_questions` | `items` | open-item list (TBD markers + needs_input blocks — leftovers only since 2026-10-06: the model can write neither, and since PR 4 the user's edit API refuses a needs_input stamp too; the panel titles them Leftover placeholders); emitted when a turn changed the doc |
 | `lint` | `items`, `standards` | advisory lint issues + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
 | `turn_complete` | `stop_reason`, `usage` | turn ended; history + doc version committed server-side. `usage` aggregates the turn's billed tokens across every round (input/output/cache/thinking + web-tool request counts) — raw material for the future cost meter. A turn stopped mid-stream adds `estimated_output_tokens` + `usage_estimated: true` (see "Disclosed stopped-turn output estimate"); `output_tokens` stays exactly what the provider reported |
 | `error` | `message` | turn failed; history untouched and doc rolled back (retry is safe) |
@@ -662,7 +662,8 @@ retiring needs-input from the panel and tour follow.
   is left to the prompt (and, next, the lint and QC).
 - **Not guarded, deliberately.** The panel's manual edits
   (`/api/doc/edit`, `apply_doc_edits` directly): what the user types is
-  theirs, including a hand-set needs_input.
+  theirs. PR 4 (below) removed the one exception this bullet used to name:
+  a hand-set needs_input is now refused (`check_user_edits`).
 - **Retained QC reports are re-checked** (PR #275 review): a report saved
   before the guard can carry `ops_valid` on a fix that writes a `[TBD]`, so
   `qc/apply.finding_fix_class` — the one gate behind the panel's Apply,
@@ -686,14 +687,15 @@ retiring needs-input from the panel and tour follow.
 - **Modules, templates, tutorial.** The hyperscale water-supply and seismic
   defaults and the generic system-criteria default write around; both
   curated starters lost their TBD and needs_input lines. The tutorial
-  showcase plants its two open-item examples itself
-  (`tutorial._SHOWCASE_OPEN_ITEM_EXAMPLES`) until the tour's open-item
-  chapter is retired. AI template generalization asks for neutral wording,
+  showcase planted its two open-item examples itself
+  (`tutorial._SHOWCASE_OPEN_ITEM_EXAMPLES`) until PR 4 retired the tour's
+  open-item chapter and the plants with it. AI template generalization asks for neutral wording,
   and its structure contract compares each paragraph's placeholders by
   exact text and order (`drafted_text_hits`) instead of `"[TBD:" in text`,
   so one cannot be dropped, invented or swapped (PR #275 review).
 - **Unchanged.** `open_questions`, readiness `no_open_items`, the export
-  schedules (moved to the review report by PR 3, below), and the frontend.
+  schedules (moved to the review report by PR 3, below), and the frontend
+  (reworked by PR 4, below).
 
 Never add a model-authored path that writes document text without
 `check_drafted_edits`. Tests: `tests/test_spec_voice.py`. The full record,
@@ -782,6 +784,58 @@ Tests: `tests/test_review_report.py`, plus updates wherever a test read the
 schedules or QC/audit closing out of the spec export. Full record and
 reversion evidence in `docs/as-built.md` under the same heading. No paid
 API call was made.
+
+## Needs input and TBDs are retired from the panel, tour and tutorial — implemented notes (2026-10-06)
+
+PR 4 of 4 for the specification-voice rule: the interface stops presenting
+`[TBD]` and needs_input as a way to work. Owner decisions (2026-10-06,
+asked first): retire needs_input fully, and fold the tour's open-items
+chapter into Waiting on you. (The planned "status picker" never existed:
+the panel's only status control was ✓ Confirm on assumed/imported rows.)
+
+- **The guard.** `model.RETIRED_STATUSES = ("needs_input",)` (still in
+  `STATUSES`: older documents carry it). `spec_voice.check_user_edits` runs
+  in `/api/doc/edit` inside its rollback-guarded try and refuses, all or
+  nothing, any op whose `status` is retired (`set_status`, `replace`,
+  `add_paragraph`). An op without `status` keeps the block's stamp, so a
+  retype is not a new one; the panel's ✏️ still sends `confirmed` (text the
+  user writes is confirmed, on every row), so retyping there clears it.
+  Text is still unchecked on this path. The
+  prompt's `_PROVENANCE` line, `apply_spec_edits`' `status` description and
+  `_STATUS_REFUSALS["needs_input"]` say "retired", not "the user's to set".
+- **Readiness.** `no_open_items` keeps its id and rule; its detail says
+  "leftover placeholder(s)".
+- **Panel.** A blank header shows a greyed "number not set" / "title not
+  set" (`HeaderPlaceholder`, live and Compare). The needs_input badge reads
+  "needs input · leftover"; its row gets ✓ Confirm and ≈ Mark assumed.
+  `TBD_SPLIT` highlighting stays. `EditOp.status` is `EditableStatus`.
+- **Strip and tray.** "Leftover placeholders — N to rewrite", rows
+  "needs-input block —" / "[TBD] marker —"; tray label and folded count
+  follow. Unchanged ids: panel `open-items` (saved layouts), the
+  `open_questions` payload/SSE, `data-tour="open-items"`,
+  `document.open-items`.
+- **Tour.** `TOUR_VERSION` 9 (a step was removed). The open-items step is
+  gone; the Waiting on you step carries `document.open-items` and teaches
+  the rule plus one sentence on leftovers. The `first-needs-input` resolver
+  and the `openItems` drawer nonce are removed.
+- **Tutorial.** No plants, no `needs_input_content` / `tbd_content` gaps,
+  no `first_needs_input` / `tbd_paragraph` anchors. The status-key figure,
+  checklist row, transcript and a suggested reply were reworded. The lint
+  lesson's `[VERIFY: …] TODO:` stays (it shows the lint catching leftovers;
+  neither is an open item).
+- **Bytes.** The stable prompt and the edit tool's bytes changed once (PRs
+  1–3 already changed both since 1.23.0). Final QC echoes only the tool's
+  top-level description, which did not change: retained reports stay
+  current.
+- **Unchanged.** `open_questions` counting, the review report's OPEN ITEMS
+  table, the per-turn LEFTOVER PLACEHOLDERS block, importer and template
+  rebasing of legacy needs_input, the QC lens briefs.
+
+Never add a path that stamps a retired status. Tests:
+`tests/test_spec_voice.py`, `tests/test_tutorial.py`,
+`frontend/tests/leftoverPlaceholders.test.ts`. Full record, reversion
+evidence and the release-note draft are in `docs/as-built.md` under the
+same heading. No paid API call was made.
 
 ## As-built history
 

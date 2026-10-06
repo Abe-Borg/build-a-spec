@@ -1,7 +1,7 @@
 /**
  * The document panel's panel tray: the collapsible panels stacked under the
- * paper (Review, Research, Final QC, Issues, Open items, Waiting on you,
- * Project, Project facts, Standards, Documents).
+ * paper (Review, Research, Final QC, Issues, Leftover placeholders, Waiting
+ * on you, Project, Project facts, Standards, Documents).
  *
  * Stacked, they can take the whole panel — ten bars run to ~360px before a
  * single one is opened, and two that open themselves when something first
@@ -41,7 +41,7 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   research: "Research",
   qc: "Final QC",
   issues: "Issues",
-  "open-items": "Open items",
+  "open-items": "Leftover placeholders",
   followups: "Waiting on you",
   project: "Project",
   "project-facts": "Project facts",
@@ -159,6 +159,7 @@ export function effectivePanelTray(
 export interface PanelAttention {
   /** Imported + assumed blocks still to review. */
   review: number;
+  /** Leftover [TBD] markers and needs-input blocks (the open-items list). */
   openItems: number;
   /** Open "Waiting on you" items. */
   waiting: number;
@@ -184,7 +185,9 @@ export function foldedAttention(
   add(
     "open-items",
     attention.openItems,
-    attention.openItems === 1 ? "open item" : "open items",
+    attention.openItems === 1
+      ? "leftover placeholder"
+      : "leftover placeholders",
   );
   add("followups", attention.waiting, "waiting on you");
   return phrases;

@@ -18,7 +18,9 @@ import type { DocParagraph, SpecDoc } from "../types";
 export type ReviewMode = "all" | "imported" | "assumptions";
 
 /** The statuses a reviewer walks. `confirmed` / `needs_input` are not here:
- *  confirmed is done, needs_input is an open item (answered via the chat). */
+ *  confirmed is done, and needs_input is a retired status that only leftover
+ *  blocks from older documents carry — they sit in the Leftover placeholders
+ *  list, to be rewritten via the chat or switched from the panel row. */
 const REVIEWABLE = new Set(["imported", "assumed"]);
 
 export interface QueueEntry {

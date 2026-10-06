@@ -152,5 +152,5 @@ test("the tour step points at the panel inside the paper chapter", () => {
   );
   // Right after the project-facts step, as the spec places it.
   assert.ok(chapter.indexOf('id: "project-facts"') < chapter.indexOf('id: "project-panel"'));
-  assert.match(tour, /TOUR_VERSION = 8;/);
+  assert.match(tour, /TOUR_VERSION = 9;/);
 });

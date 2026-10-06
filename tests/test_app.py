@@ -71,23 +71,27 @@ _SEED_EDITS = {
     ]
 }
 
-# A [TBD] and a needs_input block reach the document only through the user's
-# own panel edit since the model stopped writing them (spec_voice); the
-# open-item plumbing still has to carry them, so the tests that cover it seed
-# one this way.
-_LEFTOVER_OPEN_ITEM_OPS = [
-    {
-        "action": "replace",
-        "target_id": "pt1.a1.p2",
-        "text": "Design density: [TBD: density] over remote area.",
-        "status": "needs_input",
-    }
-]
-
-
 def _add_leftover_open_item(client: TestClient) -> None:
-    resp = client.post("/api/doc/edit", json={"ops": _LEFTOVER_OPEN_ITEM_OPS})
-    assert resp.status_code == 200 and resp.json()["ok"] is True
+    """Reopen the session as an older project still carrying a leftover.
+
+    Since 2026-10-06 nothing writes a [TBD] or stamps needs_input — not the
+    model (spec_voice) and, since PR 4, not the user's own edit API
+    (check_user_edits) — so a needs_input block reaches a document only in a
+    file saved before then. The open-item plumbing still has to carry one,
+    so the tests that cover it load one the way it really arrives.
+    """
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
+    current = project["doc"]["versions"][project["doc"]["index"]]
+    paragraph = current["parts"][0]["articles"][0]["paragraphs"][1]
+    assert paragraph["id"] == "pt1.a1.p2"
+    paragraph["text"] = "Design density: [TBD: density] over remote area."
+    paragraph["status"] = "needs_input"
+    resp = client.post("/api/project/load", json=project)
+    assert resp.status_code == 200
+    assert [item["kind"] for item in resp.json()["open_questions"]] == [
+        "needs_input",
+        "tbd",
+    ]
 
 
 def _seed_doc_via_chat(client: TestClient, monkeypatch) -> None:
@@ -525,8 +529,8 @@ def test_docx_export_smoke(monkeypatch):
     assert [t for t in texts if t.strip()][-1] == "END OF SECTION 21 13 13"
     assert "ASSUMPTIONS SCHEDULE" not in texts
     assert document.tables == []
-    # (The seeded leftover [TBD] is the user's own panel edit, so it stays in
-    # its provision; the export adds none of its own.)
+    # (The seeded leftover [TBD] came in with an older project file, so it
+    # stays in its provision; the export adds none of its own.)
 
     report = client.get("/api/export/review-report")
     assert report.status_code == 200
@@ -537,7 +541,8 @@ def test_docx_export_smoke(monkeypatch):
     document = Document(io.BytesIO(report.content))
     texts = [p.text for p in document.paragraphs]
     assert texts[:2] == ["REVIEW REPORT", "SECTION 21 13 13 - WET-PIPE SPRINKLER SYSTEMS"]
-    assert texts[2].startswith("Document version v3 (stored index 2) | Generated ")
+    # The leftover arrived by reopening an older file, not by a third edit.
+    assert texts[2].startswith("Document version v2 (stored index 1) | Generated ")
     assert "ASSUMPTIONS SCHEDULE" in texts
 
     # The assumed block is scheduled with its numbering; the TBD is an

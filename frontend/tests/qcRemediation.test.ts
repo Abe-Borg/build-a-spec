@@ -118,8 +118,8 @@ test("bucket classification uses only explicit project-decision signals", () => 
     text: "[TBD]",
   });
   assert.deepEqual(signals, [
-    "the current provision is marked needs input",
-    "the current provision contains a [TBD]",
+    "the current provision is a leftover needs-input block",
+    "the current provision contains a leftover [TBD]",
     "the proposed change would remain marked needs input",
     "the proposed change contains a [TBD]",
     "the proposed change would remain an unconfirmed assumption",
@@ -153,7 +153,7 @@ test("an actionable verified fix remains ready even on an unresolved provision",
       bucket: "ready",
       decisionSignals: [
         "the current provision is an unconfirmed assumption",
-        "the current provision contains a [TBD]",
+        "the current provision contains a leftover [TBD]",
       ],
     },
   );

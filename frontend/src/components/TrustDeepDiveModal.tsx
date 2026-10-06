@@ -1035,7 +1035,8 @@ function Dossier() {
               Refuted findings are kept and shown in the report rather than
               quietly deleted. The verifiers also judge the proposed fix as
               untrusted input, and must reject one that is partial, ambiguous,
-              contradictory, scope-changing, or that would create a new TBD.
+              contradictory, scope-changing, or that would write a placeholder
+              into the specification.
               <br />
               <br />
               <b className="text-ink">3 · Fix validation — no model.</b> Each
@@ -1773,7 +1774,8 @@ function Dossier() {
             </>,
             <>
               <b className="text-ink">Readiness is arithmetic, not judgment.</b>{" "}
-              “Ready to issue” is a checklist with fixed rules: no open items, no
+              “Ready to issue” is a checklist with fixed rules: no leftover
+              placeholders ([TBD] markers or needs-input blocks), no
               unreviewed imported or assumed blocks, lint clean, research
               complete, a QC result matching the current document, complete QC
               coverage, and no open critical findings. Anything still waiting on

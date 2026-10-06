@@ -137,6 +137,13 @@ export interface UsageSummary {
 /* --- Document model (mirrors backend/spec_doc/model.py serialization) --- */
 
 export type BlockStatus = "confirmed" | "assumed" | "needs_input" | "imported";
+/**
+ * What a manual edit may stamp. `needs_input` is retired (2026-10-06): older
+ * documents still carry it and it still renders, but `/api/doc/edit`
+ * refuses a new stamp (`spec_voice.check_user_edits`), so no op the panel
+ * builds can name it.
+ */
+export type EditableStatus = Exclude<BlockStatus, "needs_input">;
 
 export interface DocParagraph {
   id: string;
@@ -230,7 +237,7 @@ export interface EditOp {
     | "set_standard_suppressed";
   target_id: string;
   text?: string;
-  status?: BlockStatus;
+  status?: EditableStatus;
   source_item_id?: string;
   /** replace on target_id "sec": the section number (e.g. "21 13 13").
    * `text` carries the section title on the same op. */
@@ -259,6 +266,13 @@ export interface EditOp {
   suppressed?: boolean;
 }
 
+/**
+ * A leftover placeholder in the document: a `[TBD: …]` marker or a block
+ * still stamped `needs_input`. Nothing writes either since 2026-10-06, so
+ * every entry comes from an older document, a starter or the user's own
+ * typing. The wire name (`open_questions`) and the readiness check id
+ * (`no_open_items`) stay as they were.
+ */
 export interface OpenItem {
   id: string;
   element_id: string;
@@ -271,9 +285,11 @@ export interface OpenItem {
  * One thing the model is waiting on the user for.
  *
  * Model-authored session state, and deliberately NOT an `OpenItem`: those
- * are a projection over the document tree ([TBD] markers and needs-input
- * blocks), while these are conversation-level questions, decisions and
- * to-dos that live nowhere in the paragraph tree.
+ * are a projection over the document tree (leftover [TBD] markers and
+ * needs-input blocks, which nothing writes any more), while these are
+ * conversation-level questions, decisions and to-dos that live nowhere in
+ * the paragraph tree — and, since 2026-10-06, where every gap the draft
+ * still has is tracked.
  */
 export interface FollowUp {
   fid: string;

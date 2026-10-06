@@ -22,7 +22,7 @@ import {
  * with instructions that no longer match the active scenario. A bump simply
  * discards stale records, which is the correct outcome.
  */
-export const TOUR_VERSION = 8;
+export const TOUR_VERSION = 9;
 
 export interface StarterPrompt {
   label: string;
@@ -84,7 +84,6 @@ export type TourResolver =
   | "section-header"
   | "first-paragraph"
   | "first-assumed"
-  | "first-needs-input"
   | "first-sourced"
   | "reorderable-article"
   | "reorderable-paragraph"
@@ -101,7 +100,6 @@ export interface TourStep {
     | "review"
     | "research"
     | "qc"
-    | "openItems"
     | "followups"
     | "projectFacts"
     | "projectPanel";
@@ -252,7 +250,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Name the section",
         body:
-          "An unnamed section reads SECTION [TBD]. Hovering the header reveals an inline edit that sets the number and title by hand; stating them in chat has the assistant record the same change. Either way it is one undoable version, and the number is what the export filename, the module scope check, and Final QC all read.",
+          "An unnamed section shows SECTION with a greyed hint where the number and title go — never a placeholder in the specification itself. Hovering the header reveals an inline edit that sets the number and title by hand; stating them in chat has the assistant record the same change. Either way it is one undoable version, and the number is what the export filename, the module scope check, and Final QC all read.",
       },
     ],
   },
@@ -271,7 +269,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "Structured content, honest provenance",
         body:
-          "This visibly labeled disposable practice state is used only for the paper chapter and is discarded when you leave it. It contains a real three-PART tree plus intentional issues, including a temporarily blank header, so every structural, provenance, and lint behavior can be shown. Amber is assumed, red needs input, blue is imported, and confirmed is user-stated or approved.",
+          "This visibly labeled disposable practice state is used only for the paper chapter and is discarded when you leave it. It contains a real three-PART tree plus intentional issues, including a temporarily blank header, so every structural, provenance, and lint behavior can be shown. Amber is assumed, blue is imported, and confirmed is user-stated or approved. A red needs-input badge appears only on a leftover from an older document: nothing marks a provision that way any more, and its row confirms it or marks it assumed in one click.",
       },
       {
         id: "insert-edit",
@@ -298,26 +296,15 @@ export const TOUR: readonly TourChunk[] = [
           "Articles drag within a PART and paragraphs move among their siblings. The keyboard path is Space to pick up, Up/Down to move, Space or Enter to drop, Escape to cancel; arrow buttons are the fallback. IDs and subtrees stay intact and numbering recomputes; cross-PART moves and reparenting are deliberately blocked.",
       },
       {
-        id: "open-items",
-        capabilities: ["document.open-items"],
-        mode: "explanatory",
-        anchor: "open-items",
-        drawer: "openItems",
-        placement: "top",
-        title: "Open decisions stay counted",
-        body:
-          "TBD markers and needs-input blocks collect in a jumpable inventory, are listed in the review report, and are one of the readiness checklist's gating conditions. Each entry links to the block that raised it.",
-      },
-      {
         id: "followups",
-        capabilities: ["followups.track"],
+        capabilities: ["followups.track", "document.open-items"],
         mode: "explanatory",
         anchor: "followups",
         drawer: "followups",
         placement: "top",
         title: "Nothing the assistant needs from you gets lost",
         body:
-          "Open items above are gaps in the spec. This list is the other half: the questions the assistant raised, the decisions only you can make, and the to-dos either side owes. It keeps them after the chat has scrolled past, marks the ones the draft cannot be right without, and checks each off the moment it is settled — by the assistant when it reads your answer, or by you with the tick. Every reply surfaces one of them, so a decision cannot quietly go missing.",
+          "The specification never holds a place for something it does not know yet: no [TBD], no placeholder, no note to you. Where a value is missing, the assistant writes the provision so it stands complete without it, marks it assumed, and asks here instead. This list holds the questions the assistant raised, the decisions only you can make, and the to-dos either side owes. It keeps them after the chat has scrolled past, marks the ones the draft cannot be right without, and checks each off the moment it is settled — by the assistant when it reads your answer, or by you with the tick. Every reply surfaces one of them, so a decision cannot quietly go missing. An older document can still carry [TBD] markers or needs-input blocks from before; those collect in a Leftover placeholders list beside this one, each linked to its block, to be rewritten as complete provisions. Until they are gone, they are listed in the review report and hold back the readiness checklist. This practice copy has none.",
       },
       {
         id: "project-facts",
@@ -364,7 +351,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Room for the paper",
         body:
-          "Every panel in this chapter lives in one tray under the paper, and its bar folds the whole tray away, giving that height back to the specification. A folded bar still counts what is waiting to be reviewed, the issues, the open items, and what is waiting on you. Choose… leaves out the panels you never use, and an open tray never takes more than half the panel — an opened panel scrolls inside it. The layout is remembered between launches. The tour keeps every panel open so each step can point at one, and your layout comes back when it ends.",
+          "Every panel in this chapter lives in one tray under the paper, and its bar folds the whole tray away, giving that height back to the specification. A folded bar still counts what is waiting to be reviewed, the issues, any leftover placeholders, and what is waiting on you. Choose… leaves out the panels you never use, and an open tray never takes more than half the panel — an opened panel scrolls inside it. The layout is remembered between launches. The tour keeps every panel open so each step can point at one, and your layout comes back when it ends.",
       },
     ],
   },
@@ -548,7 +535,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Findings become a guided remediation plan",
         body:
-          "Open findings are separated into verified fixes ready to apply, project facts that need your decision, and items for professional review. Selected safe fixes preview their deduplication and conflicts before one undoable batch is confirmed; findings can also be applied and dismissed individually. TBD and assumption items prefill a focused chat request, while the complete rationale, evidence, inconclusive candidates, and refutations stay available.",
+          "Open findings are separated into verified fixes ready to apply, project facts that need your decision, and items for professional review. Selected safe fixes preview their deduplication and conflicts before one undoable batch is confirmed; findings can also be applied and dismissed individually. Items that need your decision prefill a focused chat request, while the complete rationale, evidence, inconclusive candidates, and refutations stay available.",
       },
       {
         id: "qc-report",
@@ -560,7 +547,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "An auditable report and deterministic go/no-go",
         body:
-          "The complete QC record is viewable in-app and downloadable as DOCX or JSON. Readiness makes no model call: it reflects open items, unreviewed blocks, lint, research currency, and Final QC status, and updates as you resolve them.",
+          "The complete QC record is viewable in-app and downloadable as DOCX or JSON. Readiness makes no model call: it reflects leftover placeholders, unreviewed blocks, lint, research currency, and Final QC status, and updates as you resolve them.",
       },
     ],
   },
@@ -584,7 +571,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Choose the output guarantee deliberately",
         body:
-          "For an imported document, Export Word - Tracked Changes ON keeps your file's formatting, records every edit since import as a Word tracked change, and leaves tracking on for further Word edits. Earlier pending revisions are accepted in the export copy, matching the imported view; Reject All restores that accepted view and the retained original stays unchanged. Open in Word does the same into a temporary file and opens it. Redline on your original is that same file of yours with every change since the import shown as a Word tracked change: in Word, Accept All gives exactly the formatted export and Reject All gives your original back, and the app checks both before it hands the file over. A master that already carries tracked changes is refused with the fix named (accept or reject them in Word, save, and import it again). Open redline in Word writes it to a temporary file and opens it in Word to review there. The Build-a-Spec styled DOCX uses automatic Word numbering. Every specification export ends at END OF SECTION: the assumptions schedule, imported provisions not yet reviewed, open items and the Final QC summary are a separate review report, downloaded only from Download review report. The redline of extracted provisions compares committed semantic versions in Build-a-Spec's own styles. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
+          "For an imported document, Export Word - Tracked Changes ON keeps your file's formatting, records every edit since import as a Word tracked change, and leaves tracking on for further Word edits. Earlier pending revisions are accepted in the export copy, matching the imported view; Reject All restores that accepted view and the retained original stays unchanged. Open in Word does the same into a temporary file and opens it. Redline on your original is that same file of yours with every change since the import shown as a Word tracked change: in Word, Accept All gives exactly the formatted export and Reject All gives your original back, and the app checks both before it hands the file over. A master that already carries tracked changes is refused with the fix named (accept or reject them in Word, save, and import it again). Open redline in Word writes it to a temporary file and opens it in Word to review there. The Build-a-Spec styled DOCX uses automatic Word numbering. Every specification export ends at END OF SECTION: the assumptions schedule, imported provisions not yet reviewed, any leftover placeholders and the Final QC summary are a separate review report, downloaded only from Download review report. The redline of extracted provisions compares committed semantic versions in Build-a-Spec's own styles. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
         details: SOURCE_OUTPUT_GUIDANCE,
         optionalReason: "The tour points at the real menu but never downloads anything.",
       },
@@ -700,9 +687,6 @@ export function anchorSelector(step: TourStep, doc: SpecDoc | null): string | nu
       break;
     case "first-assumed":
       id = allParagraphs.find((item) => item.status === "assumed")?.id;
-      break;
-    case "first-needs-input":
-      id = allParagraphs.find((item) => item.status === "needs_input")?.id;
       break;
     case "first-sourced":
       id = allParagraphs.find((item) => !!item.source_item_id)?.id;

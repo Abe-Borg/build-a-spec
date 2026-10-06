@@ -1061,7 +1061,7 @@ export default function QCDrawer({
       id: "needs_decision",
       title: "Needs your decision",
       description:
-        "Unresolved project facts, [TBD] values, or assumptions. Supply the fact; the program can do the drafting.",
+        "Unresolved project facts, leftover placeholders, or assumptions. Supply the fact; the program can do the drafting.",
       entries: decisionEntries,
       tone: "border-warn/40 bg-warn/5 text-warn",
     },

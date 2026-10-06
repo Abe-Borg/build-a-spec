@@ -282,7 +282,7 @@ from .spec_doc.source_package import (
     read_upload_bounded,
     sanitize_source_filename,
 )
-from .spec_doc.spec_voice import drafted_text_hits
+from .spec_doc.spec_voice import check_user_edits, drafted_text_hits
 from .templates import (
     MAX_TEMPLATE_BYTES,
     TEMPLATE_DOCUMENT_TOOL_NAME,
@@ -2453,10 +2453,16 @@ def _readiness_payload(
             # DOCUMENT open items — [TBD] markers and needs_input blocks.
             # Deliberately not QC findings, which `no_open_qc_findings`
             # owns; the two were easy to confuse when only one existed.
+            # Since 2026-10-06 nothing writes either, so every one is a
+            # leftover (an older document, a starter, the user's typing):
+            # the id stays, the wording says what they now are.
             "ok": len(open_items) == 0,
-            "detail": "No open document items ([TBD]/needs-input)."
+            "detail": "No leftover placeholders ([TBD] markers or "
+            "needs-input blocks) in the document."
             if not open_items
-            else f"{len(open_items)} open document item(s) ([TBD]/needs-input).",
+            else f"{len(open_items)} leftover placeholder(s) in the document "
+            "([TBD] markers or needs-input blocks) — rewrite each as a "
+            "complete provision.",
             "advisory": False,
         },
         {
@@ -4866,6 +4872,9 @@ def create_app(
                     edit_error = ""
                     committed = False
                     try:
+                        # What the user types is theirs (no drafting guard
+                        # here), but nothing stamps needs_input any more.
+                        check_user_edits(body.ops)
                         applied = session.apply_doc_edits(body.ops)
                     except SpecEditError as exc:
                         edit_error = str(exc)

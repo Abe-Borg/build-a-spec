@@ -1931,8 +1931,8 @@ function Dossier() {
               It is <b className="text-ink">not a licensed professional</b>. It
               does not seal or certify anything and it accepts no liability.
               Everything it produces is a draft for a qualified reviewer, and the
-              export schedules every assumption precisely so that review is
-              possible in one pass.
+              review report schedules every assumption precisely so that review
+              is possible in one pass.
             </>,
             <>
               A grounded research item is{" "}

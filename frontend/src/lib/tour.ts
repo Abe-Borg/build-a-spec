@@ -306,7 +306,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Open decisions stay counted",
         body:
-          "TBD markers and needs-input blocks collect in a jumpable inventory, remain scheduled in exports, and are one of the readiness checklist's gating conditions. Each entry links to the block that raised it.",
+          "TBD markers and needs-input blocks collect in a jumpable inventory, are listed in the review report, and are one of the readiness checklist's gating conditions. Each entry links to the block that raised it.",
       },
       {
         id: "followups",
@@ -576,6 +576,7 @@ export const TOUR: readonly TourChunk[] = [
           "export.redline-source",
           "export.redline-original",
           "export.open-in-word",
+          "export.review-report",
           "project.brief-export",
         ],
         mode: "optional",
@@ -583,7 +584,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Choose the output guarantee deliberately",
         body:
-          "For an imported document, Export Word - Tracked Changes ON keeps your file's formatting, records every edit since import as a Word tracked change, and leaves tracking on for further Word edits. Earlier pending revisions are accepted in the export copy, matching the imported view; Reject All restores that accepted view and the retained original stays unchanged. Open in Word does the same into a temporary file and opens it. Redline on your original is that same file of yours with every change since the import shown as a Word tracked change: in Word, Accept All gives exactly the formatted export and Reject All gives your original back, and the app checks both before it hands the file over. A master that already carries tracked changes is refused with the fix named (accept or reject them in Word, save, and import it again). Open redline in Word writes it to a temporary file and opens it in Word to review there. The Build-a-Spec styled DOCX uses automatic Word numbering and includes the assumption/open-item schedules. The redline of extracted provisions compares committed semantic versions in Build-a-Spec's own styles. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
+          "For an imported document, Export Word - Tracked Changes ON keeps your file's formatting, records every edit since import as a Word tracked change, and leaves tracking on for further Word edits. Earlier pending revisions are accepted in the export copy, matching the imported view; Reject All restores that accepted view and the retained original stays unchanged. Open in Word does the same into a temporary file and opens it. Redline on your original is that same file of yours with every change since the import shown as a Word tracked change: in Word, Accept All gives exactly the formatted export and Reject All gives your original back, and the app checks both before it hands the file over. A master that already carries tracked changes is refused with the fix named (accept or reject them in Word, save, and import it again). Open redline in Word writes it to a temporary file and opens it in Word to review there. The Build-a-Spec styled DOCX uses automatic Word numbering. Every specification export ends at END OF SECTION: the assumptions schedule, imported provisions not yet reviewed, open items and the Final QC summary are a separate review report, downloaded only from Download review report. The redline of extracted provisions compares committed semantic versions in Build-a-Spec's own styles. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
         details: SOURCE_OUTPUT_GUIDANCE,
         optionalReason: "The tour points at the real menu but never downloads anything.",
       },

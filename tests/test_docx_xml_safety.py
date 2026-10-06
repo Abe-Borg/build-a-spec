@@ -10,6 +10,7 @@ from lxml import etree
 from backend.spec_doc.diffing import diff_sections
 from backend.spec_doc.docx_export import (
     build_docx,
+    build_review_report,
     build_qc_memo,
     export_filename,
     redline_filename,
@@ -71,23 +72,24 @@ def test_clean_and_audit_closing_escape_illegal_xml_without_mutating_inputs() ->
         ],
     }
 
-    payload = build_docx(section, audit_result=audit)
-    parts = _assert_all_package_xml_is_parseable(payload)
-    document_xml = parts["word/document.xml"]
+    # The audit closing lives in the review report since the specification
+    # export ends at END OF SECTION; both writers sanitize their inputs.
+    document_xml = _assert_all_package_xml_is_parseable(build_docx(section))[
+        "word/document.xml"
+    ]
+    report_xml = _assert_all_package_xml_is_parseable(
+        build_review_report(section, audit_result=audit)
+    )["word/document.xml"]
 
-    for escaped in (
-        rb"\u0000",
-        rb"\u000B",
-        rb"\uD800",
-        rb"\uFFFE",
-        rb"\u0001",
-        rb"\u0002",
-        rb"\u0008",
-        rb"\u000C",
-    ):
+    for escaped in (rb"\u0000", rb"\u000B", rb"\uD800", rb"\uFFFE", rb"\u0001"):
         assert escaped in document_xml
+    # The report names the section and quotes the assumed provision.
+    for escaped in (rb"\u0000", rb"\u000B", rb"\u0001"):
+        assert escaped in report_xml
+    for escaped in (rb"\u0002", rb"\u0008", rb"\u000C"):
+        assert escaped in report_xml
     assert rb"SUMMARY\u0001BAD\uFFFE" in document_xml
-    assert rb"COVERED\u0004BAD" in document_xml
+    assert rb"COVERED\u0004BAD" in report_xml
 
     # Export is a projection only: the live document and saved audit retain
     # their exact original values for diagnostics and subsequent edits.

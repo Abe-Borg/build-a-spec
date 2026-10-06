@@ -392,8 +392,8 @@ def test_confirming_removes_block_from_assumptions_schedule(monkeypatch):
     client = _client()
     _seed(client, monkeypatch)
 
-    # Before: the assumed block is scheduled.
-    doc = Document(io.BytesIO(client.get("/api/export/docx").content))
+    # Before: the assumed block is scheduled (in the review report).
+    doc = Document(io.BytesIO(client.get("/api/export/review-report").content))
     assert "ASSUMPTIONS SCHEDULE" in [p.text for p in doc.paragraphs]
     rows_before = [
         cell.text for t in doc.tables for row in t.rows for cell in row.cells
@@ -405,7 +405,7 @@ def test_confirming_removes_block_from_assumptions_schedule(monkeypatch):
         "/api/doc/edit",
         json={"ops": [{"action": "set_status", "target_id": "pt1.a1.p1", "status": "confirmed"}]},
     )
-    doc2 = Document(io.BytesIO(client.get("/api/export/docx").content))
+    doc2 = Document(io.BytesIO(client.get("/api/export/review-report").content))
     rows_after = [
         cell.text for t in doc2.tables for row in t.rows for cell in row.cells
     ]

@@ -121,7 +121,10 @@ The Batch 5 redline/compare surface is REST-only, adds NO SSE event: `GET
 baseline_index}`; 400 out-of-range or base==cur), and `GET
 /api/export/docx?redline=master|version&base=N` streams a tracked-changes
 `.docx` (400 when `redline=master` and no baseline; filename gains
-` - REDLINE`). The clean `GET /api/export/docx` is byte-identical to before.
+` - REDLINE`). Every specification export ends at END OF SECTION (owner
+rule, 2026-10-06); the schedules and QC/audit closing that used to follow it
+are `GET /api/export/review-report` (`<section> - REVIEW REPORT.docx`, REST
+only, no SSE event).
 
 Onboarding is frontend-only and adds no REST or SSE surface. It is a passive
 overlay over the current project and never sends chat, edit, research, or QC
@@ -690,7 +693,7 @@ retiring needs-input from the panel and tour follow.
   exact text and order (`drafted_text_hits`) instead of `"[TBD:" in text`,
   so one cannot be dropped, invented or swapped (PR #275 review).
 - **Unchanged.** `open_questions`, readiness `no_open_items`, the export
-  schedules, and the frontend.
+  schedules (moved to the review report by PR 3, below), and the frontend.
 
 Never add a model-authored path that writes document text without
 `check_drafted_edits`. Tests: `tests/test_spec_voice.py`. The full record,
@@ -740,6 +743,44 @@ checklist in Final QC's `enforceability_language` lens, and two prompt lines.
 Tests: `tests/test_spec_voice_lint.py`. Full record, reversion evidence and
 the release-note draft in `docs/as-built.md` under the same heading. No
 paid API call was made.
+
+## The specification ends at END OF SECTION; the review trail is its own file — implemented notes (2026-10-06)
+
+PR 3 of 4 for the specification-voice rule.
+
+- **`build_docx(section, redline=None, redline_date=None)`** renders the
+  specification only; its `audit_result` / `qc_result` parameters are gone.
+  A blank section number prints `SECTION`, a blank title an empty line —
+  never `[TBD]` — and `_render_redline_section` mirrors it (the space travels
+  with the number, an empty side emits no run), so Accept All / Reject All
+  still reproduce the clean export of each side.
+- **`build_review_report(section, audit_result, qc_result, *,
+  version_index, generated_on)`** holds the moved content verbatim — the
+  assumptions schedule, IMPORTED PROVISIONS NOT YET REVIEWED, OPEN ITEMS,
+  then the compact Final QC closing or the compliance-audit closing — under
+  a header (REVIEW REPORT, `SECTION n - TITLE` when set, `Document version
+  N | Generated YYYY-MM-DD`). `review_report_filename` appends
+  ` - REVIEW REPORT`.
+- **`GET /api/export/review-report`** captures under `session_state_guard`
+  and renders outside it (the `/api/export/docx` shape). The QC closing
+  keeps its gate, now `_review_report_qc_result`: the retained report only
+  when the `qc_current` and `qc_audit_complete` readiness checks both pass.
+  `_ExportInputs` lost its `audit_result` / `qc_result` fields, so the spec
+  export no longer computes readiness at all. Trace event `export` with
+  `kind="review_report"`.
+- **Frontend.** Export → Download review report
+  (`api.REVIEW_REPORT_URL`, capability `export.review-report`, in the
+  export tour step); every menu tooltip, the tour, Help and the trust
+  explainer stop saying the Word export carries the schedules.
+- Unchanged: the source-preserving and appearance-preserving exports (they
+  never appended schedules), the redline on the original, the full Final QC
+  Word report, and the importer's handling of older exports that still end
+  in an ASSUMPTIONS SCHEDULE.
+
+Tests: `tests/test_review_report.py`, plus updates wherever a test read the
+schedules or QC/audit closing out of the spec export. Full record and
+reversion evidence in `docs/as-built.md` under the same heading. No paid
+API call was made.
 
 ## As-built history
 

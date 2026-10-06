@@ -9,7 +9,7 @@ from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from backend.spec_doc.docx_export import build_docx
+from backend.spec_doc.docx_export import build_docx, build_review_report
 from backend.spec_doc.importer import (
     ImportResult,
     MasterImportError,
@@ -114,8 +114,11 @@ def test_import_round_trip_through_store_and_export(tmp_path):
     restored = SpecSection.from_dict(store.doc.to_dict())
     assert restored.parts[1].articles[0].paragraphs[0].status == "imported"
 
-    # Export carries the imported-provisions schedule.
-    payload = build_docx(store.doc)
+    # The review report carries the imported-provisions schedule; the
+    # specification export does not.
+    texts = [p.text for p in Document(io.BytesIO(build_docx(store.doc))).paragraphs]
+    assert "IMPORTED PROVISIONS NOT YET REVIEWED" not in texts
+    payload = build_review_report(store.doc)
     document = Document(io.BytesIO(payload))
     texts = [p.text for p in document.paragraphs]
     assert "IMPORTED PROVISIONS NOT YET REVIEWED" in texts

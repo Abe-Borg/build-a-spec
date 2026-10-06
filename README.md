@@ -247,9 +247,21 @@ generally and governs…" where the specification needed "Provide…".
 - **Final QC's spec-language review** checks the same things and proposes the
   directive rewrite. Because its instructions changed, a saved Final QC
   result shows as out of date once; re-run it.
-- **Still to come:** the Word export still appends the assumptions,
-  imported-provision and open-item schedules after END OF SECTION; they move
-  to a separate review report you download only when you want it.
+- **The specification ends at END OF SECTION; the review trail is its own
+  document.** Every Word export of the specification — clean, Build-a-Spec
+  styled, and the redlines — now stops at END OF SECTION. The material that
+  used to follow it is written for the reviewer, not the Contractor, so it
+  moved to a separate **review report**: Export → **Download review report**
+  gives `<section> - REVIEW REPORT.docx` with a short header (section,
+  document version, date), the assumptions schedule, imported provisions not
+  yet reviewed, open items, and the Final QC summary — included only when
+  the review is current and complete, the same rule as before — or the
+  compliance-audit summary. Nothing downloads it unless you ask. A section
+  with no number or title yet prints `SECTION` and a blank title line, never
+  `[TBD]`, and the redlines follow suit, so Accept All still gives exactly the
+  clean export. The full Final QC Word report (from the Final QC panel) and
+  the formatting-preserving exports of an imported master are unchanged; the
+  latter never carried the schedules.
 
 The first message after updating writes the conversation's cache once more,
 because the instructions and the edit tool's description changed.
@@ -2624,10 +2636,12 @@ actions.
   token counts, request counts, the pricing basis and the batch billing
   multiplier. Questions about what the review architecture actually costs are
   settled from a saved export, not from a model of it. The software records the review but does
-  not itself approve or seal the specification. The main spec export includes
-  the QC closing only when the export-time `qc_current` and
-  `qc_audit_complete` readiness checks both pass; otherwise it omits that
-  closing and falls back to the compliance audit when one exists.
+  not itself approve or seal the specification. The review report (Export →
+  Download review report; it moved out of the main spec export, which now
+  ends at END OF SECTION) includes the QC closing only when the export-time
+  `qc_current` and `qc_audit_complete` readiness checks both pass; otherwise
+  it omits that closing and falls back to the compliance audit when one
+  exists.
 - **A failed rerun never erases either side of the history.** The latest
   attempt has its own run id, status, timing, error and report/activity record;
   the last successful report is retained separately. Readiness turns red when
@@ -2970,7 +2984,7 @@ What worked before (Phase 2) and still does:
 - Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export. (After v1.23.0 the model writes neither; open items are leftovers from older drafts, starters, or your own hand edits.)
 - Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
 - Version stepper: one snapshot per turn that changed the document; undo/redo from the panel header.
-- `.docx` export via python-docx — SectionFormat styling plus an **assumptions schedule** (every `assumed` block with its numbering, for one-pass senior review) and an open-items schedule.
+- `.docx` export via python-docx — SectionFormat styling plus an **assumptions schedule** (every `assumed` block with its numbering, for one-pass senior review) and an open-items schedule. (After v1.23.0 the schedules are the separate review report; the specification ends at END OF SECTION.)
 - Project save/resume: a native `.baspec` package bundling the conversation,
   full document version history, import report, and exact source DOCX when one
   exists—undo and source-preserving export still work after resume. Legacy JSON
@@ -3170,10 +3184,10 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     diffing.py           deterministic version diff (uid join, word-level runs,
                          status changes) powering the redline export + compare view;
                          opt-in move detection for the redline on your original
-    docx_export.py       fresh normalized .docx rendering +
-                         assumptions/imported/open-items
-                         schedules + QC/compliance closing + the full Final QC
-                         Word report +
+    docx_export.py       fresh normalized .docx rendering (ends at END OF
+                         SECTION) + the review report (assumptions/imported/
+                         open-items schedules + QC/compliance closing) + the
+                         full Final QC Word report +
                          the tracked-changes (redline) body writer
     project.py           semantic project payload + legacy JSON compatibility
     project_package.py   bounded, hashed native .baspec container carrying the

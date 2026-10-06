@@ -110,9 +110,13 @@ def test_noop_source_export_is_byte_identical_and_normalized_is_explicit(
     assert normalized.status_code == 200
     assert normalized.content != source
     assert_valid_docx_package(normalized.content)
-    assert "ASSUMPTIONS SCHEDULE" in [
+    normalized_texts = [
         paragraph.text for paragraph in Document(io.BytesIO(normalized.content)).paragraphs
     ]
+    # The specification ends at END OF SECTION; the schedules are the review
+    # report's.
+    assert "ASSUMPTIONS SCHEDULE" not in normalized_texts
+    assert [t for t in normalized_texts if t.strip()][-1].startswith("END OF SECTION")
 
 
 def test_app_only_edits_do_not_dirty_the_source_docx(tmp_path):

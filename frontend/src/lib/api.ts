@@ -143,6 +143,12 @@ export function exportDocxUrl(query: ExportDocxQuery): string {
 /** The exact DOCX package that was imported, unchanged. */
 export const ORIGINAL_UPLOAD_URL = "/api/import/original";
 
+/** The review report: the assumptions schedule, imported provisions not yet
+ *  reviewed, open items, and the Final QC or compliance-audit summary — a
+ *  separate Word document, because the specification itself ends at END OF
+ *  SECTION and carries nothing written for the reviewer. */
+export const REVIEW_REPORT_URL = "/api/export/review-report";
+
 export async function getHealth(): Promise<Health> {
   const resp = await fetch("/api/health");
   if (!resp.ok) throw new Error(`health ${resp.status}`);

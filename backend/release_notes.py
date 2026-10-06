@@ -89,6 +89,146 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.23.0",
+        date="2026-10-05",
+        headline="Faster replies, leaner research, and safer saved work",
+        summary=(
+            "Suggested replies arrive with the answer, without an extra "
+            "round trip. Research and drafting reuse more of your project "
+            "background, and research can hand in its findings when it "
+            "reaches a limit. Saved projects survive importer updates, "
+            "fact harvests keep their paid results when closed, and "
+            "template dialogs keep saving and deleting under your control."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Chat and research",
+                items=(
+                    ReleaseItem(
+                        title="Suggested replies arrive with the answer",
+                        body=(
+                            "The ready-to-click replies now travel with the "
+                            "answer instead of needing a separate model "
+                            "request, reducing waiting and repeated context. "
+                            "A reply made only of suggested choices still "
+                            "shows its message bubble."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Your project background is reused across turns",
+                        body=(
+                            "Research findings and shared project background "
+                            "now have their own cached copy, so ordinary "
+                            "drafting turns can reuse them instead of storing "
+                            "them again with every message."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Research shares a cached starting point",
+                        body=(
+                            "Research areas with the same background let one "
+                            "start first so the others can reuse its cached "
+                            "copy. The board explains the short wait, and "
+                            "reading another page no longer changes the "
+                            "request in a way that discards its cache."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Research hands in what it found at a limit",
+                        body=(
+                            "When an area reaches its search, page, "
+                            "continuation or context allowance, it gets a "
+                            "final chance to submit its findings instead of "
+                            "discarding them. That final request now uses a "
+                            "format accepted by the selected model, including "
+                            "Claude Sonnet 5.5. A failed submission is still "
+                            "reported as a failure."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Research starts at medium thinking effort",
+                        body=(
+                            "Research now defaults to medium effort, following "
+                            "Claude Sonnet 5.5's updated effort scale. Set "
+                            "BUILD_A_SPEC_RESEARCH_EFFORT=high before starting "
+                            "the app to restore the previous thinking depth. "
+                            "Actual cost and quality differences have not "
+                            "been measured in a live comparison."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="Reviewers use allowances suited to their job",
+                        body=(
+                            "Final QC's short verdicts now have smaller "
+                            "response allowances, and verifier page reads "
+                            "have a tighter size limit. Specialist reviews "
+                            "keep their larger allowance."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Smaller reviews share a warmed copy too",
+                        body=(
+                            "Batched Final QC now sends a reviewer first when "
+                            "eight or more seats share the same copy, so the "
+                            "rest can read its cached copy. If that costs more "
+                            "than it saves, the app pauses it for that model, "
+                            "tool kind and group size until restart; larger "
+                            "groups keep their leads after a small group loses."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Projects and templates",
+                items=(
+                    ReleaseItem(
+                        title="Saved projects survive importer updates",
+                        body=(
+                            "A saved section no longer refuses to open just "
+                            "because a newer importer recognizes its Word "
+                            "numbering or nesting differently. Your saved "
+                            "document, history and retained original stay "
+                            "together, with the source integrity checks kept."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Close a fact harvest and come back to its result",
+                        body=(
+                            "Close the fact harvest while it runs and reopen "
+                            "it to check progress or review the finished sheet. "
+                            "Reopening reuses that harvest and keeps your "
+                            "selections and edits, even after a guided tour; "
+                            "a new session or opened project starts fresh."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The save prompt stays above the template window",
+                        body=(
+                            "Starting a template or the next section with "
+                            "unsaved work now puts the save prompt on top, "
+                            "where Save, Don't save and Cancel work with "
+                            "both the mouse and keyboard."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A new template gets its own delete confirmation",
+                        body=(
+                            "Deleting a template and importing it again no "
+                            "longer leaves the imported copy one click from "
+                            "deletion. Its confirmation starts fresh, and "
+                            "Manage shows its own name and description."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.22.1",
         date="2026-10-01",
         headline="Pick how reviewers report back and keep Word changes tracked",
@@ -116,17 +256,6 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "environment override locks the choice. Changing it "
                             "applies to the next review and makes a retained "
                             "result read out of date."
-                        ),
-                    ),
-                    ReleaseItem(
-                        title="Smaller reviews share a warmed copy too",
-                        body=(
-                            "Batched Final QC now sends a reviewer first when "
-                            "eight or more seats share the same copy, so the "
-                            "rest can read its cached copy. If that costs more "
-                            "than it saves, the app pauses it for that model, "
-                            "tool kind and group size until restart; larger "
-                            "groups keep their leads after a small group loses."
                         ),
                     ),
                 ),
@@ -186,16 +315,6 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
             ReleaseSection(
                 title="Projects",
                 items=(
-                    ReleaseItem(
-                        title="Close a fact harvest and come back to its result",
-                        body=(
-                            "Close the fact harvest while it runs and reopen "
-                            "it to check progress or review the finished sheet. "
-                            "Reopening reuses that harvest and keeps your "
-                            "selections and edits, even after a guided tour; "
-                            "a new session or opened project starts fresh."
-                        ),
-                    ),
                     ReleaseItem(
                         title="The next-section receipt gets to the point",
                         body=(

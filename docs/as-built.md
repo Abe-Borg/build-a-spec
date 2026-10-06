@@ -18436,3 +18436,26 @@ release-note item.
   deep copy). Full suite: 3725 passed, 64 skipped; after merging master at
   `4fd48d2`, 3784 passed, 64 skipped, and 20 more isolated passes. Ruff
   passed. No paid API call was made.
+
+## Release 1.23.0 — 2026-10-05
+
+Release preparation covers all merged work after the published `v1.22.1`
+through `cb98f58`: suggested replies in the closing answer, cached project
+background, stable research tool declarations and staggered launches,
+medium research effort and model-compatible final submissions, QC response
+and page allowances and eight-seat warm leads, retained fact harvests,
+saved-project importer compatibility, and the template save/delete fixes.
+
+The backend, frontend package and lockfile versions advance together to
+`1.23.0`. The new bundled release entry feeds the What's-new modal, the
+update manifest and the release page through the existing renderer. The
+warm-lead and retained-harvest items added to `1.22.1` after publication move
+into `1.23.0`; the older entry matches what that installer actually shipped.
+The version/tag gate, Ruff, release-note rendering since `v1.22.1`, and
+materialization of all 18 DOCX corpus cases passed during preparation.
+
+The existing tag-triggered Windows workflow builds and smoke-tests the
+frozen app, compiles the installer, and publishes `BuildASpecSetup.exe`
+with its SHA-256 `latest.json`. No paid API call, real-Word visual check,
+interactive Windows installation or previous-version in-app update was
+performed in this Linux workspace. Those manual checks remain unverified.

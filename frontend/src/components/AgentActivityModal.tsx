@@ -18,6 +18,7 @@ import {
   RETRY_REASONS,
   foldAgentDetail,
   labelFromId,
+  queuedLabel,
   trimUrl,
   type AgentTimelineEntry,
 } from "../lib/researchAgents";
@@ -50,6 +51,13 @@ const PILLS: Record<string, { label: string; cls: string }> = {
 
 function entryContent(entry: AgentTimelineEntry) {
   switch (entry.kind) {
+    case "waiting":
+      return (
+        <span className="min-w-0 break-words text-ink-faint">
+          Waiting for {entry.leadTitle} to start, to share its cached copy
+          {entry.maxWaitS > 0 ? ` (at most ${entry.maxWaitS} s)` : ""}
+        </span>
+      );
     case "started":
       return (
         <span className="min-w-0 break-words text-ink-dim">
@@ -203,7 +211,7 @@ export default function AgentActivityModal({
               {detail.round > 0 && <span>round {detail.round}</span>}
             </p>
             <p className="mt-1 text-[11px] text-ink-faint tabular-nums">
-              {state === "queued" && "Waiting for an agent…"}
+              {state === "queued" && (dim ? queuedLabel(dim) : "Waiting for an agent…")}
               {state === "running" && dim && (
                 <>
                   {dim.searches} search{dim.searches === 1 ? "" : "es"}

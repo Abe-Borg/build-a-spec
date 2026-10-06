@@ -26,6 +26,15 @@ export const RETRY_REASONS: Record<string, string> = {
 /** Most-recent live queries/URLs shown per agent card. */
 export const RECENT_CAP = 3;
 
+/** What a queued card waits on: a staggered launch's lead area (from
+ *  `dimension_waiting`), its title resolved from the roster, and the longest
+ *  the wait can last. */
+export interface WaitingOn {
+  id: string;
+  title: string;
+  maxWaitS: number;
+}
+
 export interface DimLive {
   id: string;
   title: string;
@@ -38,6 +47,10 @@ export interface DimLive {
   /** Newest-first live queries/URLs, capped at RECENT_CAP. */
   recent: { kind: "search" | "fetch"; text: string; seq: number }[];
   retry: { attempt: number; max: number; reason: string } | null;
+  /** Set while a queued area waits for the lead area of a staggered launch
+   *  to start answering (so it can read the lead's cached copy of the
+   *  prompt they share); null otherwise, and cleared the moment it starts. */
+  waitingOn: WaitingOn | null;
   itemCount: number;
   groundedCount: number;
   billedSearches: number;
@@ -94,6 +107,7 @@ export function foldResearchBoard(events: ResearchEvent[]): ResearchBoard {
         fetches: 0,
         recent: [],
         retry: null,
+        waitingOn: null,
         itemCount: 0,
         groundedCount: 0,
         billedSearches: 0,
@@ -112,9 +126,23 @@ export function foldResearchBoard(events: ResearchEvent[]): ResearchBoard {
     }
     if (!e.dimension_id) continue;
     switch (e.type) {
+      case "dimension_waiting": {
+        // Only a card that has not started can be waiting; a replayed or
+        // late frame never drags a running card back.
+        const dim = ensure(e.dimension_id, e.title);
+        if (dim.state === "queued" && e.lead_id) {
+          dim.waitingOn = {
+            id: e.lead_id,
+            title: dims.get(e.lead_id)?.title || labelFromId(e.lead_id),
+            maxWaitS: e.max_wait_s ?? 0,
+          };
+        }
+        break;
+      }
       case "dimension_started": {
         const dim = ensure(e.dimension_id, e.title);
         dim.state = "running";
+        dim.waitingOn = null;
         break;
       }
       case "dimension_activity": {
@@ -165,6 +193,7 @@ export function foldResearchBoard(events: ResearchEvent[]): ResearchBoard {
         dim.billedFetches = e.web_fetch_requests ?? 0;
         dim.error = e.error ?? "";
         dim.retry = null;
+        dim.waitingOn = null;
         break;
       }
     }
@@ -180,8 +209,17 @@ export function foldResearchBoard(events: ResearchEvent[]): ResearchBoard {
   };
 }
 
+/** The queued card's one line: who it is waiting on, when it is waiting on
+ *  a staggered launch's lead, and otherwise for a free agent. */
+export function queuedLabel(dim: DimLive): string {
+  return dim.waitingOn
+    ? `Waiting for ${dim.waitingOn.title} to start, to share its cached copy…`
+    : "Waiting for an agent…";
+}
+
 /** One row of an agent's full activity feed (the modal's timeline). */
 export type AgentTimelineEntry = { seq: number; ts: string } & (
+  | { kind: "waiting"; leadTitle: string; maxWaitS: number }
   | { kind: "started"; maxSearches: number; maxFetches: number }
   | { kind: "activity"; activity: string }
   | { kind: "search"; query: string }
@@ -233,13 +271,25 @@ export function foldAgentDetail(
     timeline: [],
   };
   if (!dimensionId) return detail;
-  detail.dim =
-    foldResearchBoard(events).dims.find((d) => d.id === dimensionId) ?? null;
+  const board = foldResearchBoard(events);
+  detail.dim = board.dims.find((d) => d.id === dimensionId) ?? null;
   for (const e of events) {
     if (e.round) detail.round = e.round;
     if (e.dimension_id !== dimensionId) continue;
     const base = { seq: e.seq, ts: e.ts };
     switch (e.type) {
+      case "dimension_waiting": {
+        const lead = e.lead_id ?? "";
+        detail.timeline.push({
+          ...base,
+          kind: "waiting",
+          leadTitle:
+            board.dims.find((d) => d.id === lead)?.title ||
+            (lead ? labelFromId(lead) : "the first area"),
+          maxWaitS: e.max_wait_s ?? 0,
+        });
+        break;
+      }
       case "dimension_started":
         detail.maxSearches = e.max_searches ?? 0;
         detail.maxFetches = e.max_fetches ?? 0;

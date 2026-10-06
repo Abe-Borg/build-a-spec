@@ -17891,6 +17891,232 @@ directly, and the cache model shows which bytes a later turn reads. Real
 `cache_read_input_tokens` / `cache_creation_input_tokens` on a session with a
 research profile will show the change in Settings → Developer tools.
 
+## The research launch is staggered — implemented notes (2026-10-06)
+
+"Research web tools keep their bytes" (PR #269) gave every area of a round
+identical tool bytes. The system prompt is module-level and the shared block
+(date, project header, attached references up to ~25k tokens, project facts
+up to ~8k) is project-level with its own breakpoint
+(`_dimension_user_content`), so the four opening requests are byte-identical
+up to that breakpoint
+(`test_research_engine.test_the_four_areas_open_with_one_shared_cached_prefix`).
+But `run_requirements_research` still submitted all four `_run_dimension`
+calls at once, and a cache entry becomes readable only once the response
+that writes it begins streaming. Anthropic's caching reference, read
+2026-10-06 (bundled `claude-api` skill, `shared/prompt-caching.md`
+"Concurrent-request timing"): "N parallel requests with identical prefixes
+all pay full price — none can read what the others are still writing. For
+fan-out patterns: send 1 request, await the first streamed token (not the
+full response), then fire the remaining N-1." Each round therefore wrote the
+shared prefix four times.
+
+**What changed.** The fan-out now launches the way Final QC launches its lens
+stage (`QC_WARM_WAIT_SECONDS`, `qc.engine._launch_staggered`; "Final QC's
+first stage reuses what it paid for"). `research.engine` gains copy-adapted
+`_opening_lineage_key`, `_await_leads` and `_launch_staggered` (copied, not
+imported: the engines keep their own copies of what they share).
+
+- Areas are grouped by a lineage key: SHA-256 over what precedes the shared
+  block's breakpoint, in render order — the tools, the system prompt, the
+  shared block — plus model and effort. It is computed from the builders
+  the requests use: `_research_tools` (new; `_run_dimension`'s `_web_tools`
+  now calls it) over `_per_request_allowance` (new; the one place the
+  per-request allowance is computed), `build_research_system_prompt` and
+  `build_dimension_user_message`'s shared half. A module whose area declares
+  less than the per-request allowance therefore gives that area different
+  tool bytes, a lineage of its own, and no wait. A key that raises makes its
+  area a lineage of its own (`unkeyed:<id>`), logged at DEBUG; its worker
+  builds the same message and reports any failure itself, so a key can
+  never fail a round.
+- A lineage of two or more gets a lead: its first area in declaration order
+  (governing codes in both shipped modules). The lead is submitted with a
+  fresh `threading.Event` as `_run_dimension(first_output=...)`; single-area
+  lineages the pool can start at once go next; the coordinator waits; each
+  lineage's followers are submitted the moment its lead releases them; any
+  single-area lineage the pool could not start goes last (Final QC's
+  PR #210 capacity rule, kept for a module that ever declares more areas
+  than the pool's four workers).
+- The lead releases (idempotently) on: its first stream frame that is not
+  `message_start` (`_relay_stream_activity`); the end of any request,
+  raised or not (a `finally` around `_open_stream`); any failed attempt, the
+  token count before the stream included (the `except` path, before the
+  backoff sleep); and its task's end for any reason (a done-callback on its
+  future, which also covers a Stop before its first request). So a lead that
+  fails fast — a 429, a dropped connection, a failed count, a non-retryable
+  error — never holds the others through its backoff, and no follower waits
+  longer than the lead's first request.
+- The wait (`_await_leads`) runs on the coordinator thread, never in the
+  pool, in `_WARM_WAIT_SLICE_SECONDS` (1 s) slices: released at once when
+  the event fires, `stopped` within one slice of a Stop, `timeout` at the
+  bound. On a Stop the followers are still submitted; each emits its
+  `dimension_started`, checks `should_stop` before sending anything and
+  returns "Cancelled by user." with zero usage — the existing cancellation
+  path, unchanged (and the runner's run token drops post-Stop events
+  anyway). One INFO line per lineage on `buildaspec.research`: "Research
+  round: N areas share a cached prefix (lead <id>); the N−1 waiting were
+  released (<warm|timeout|stopped>) after <ms> ms." Area ids and numbers
+  only.
+
+**Decision: research's own knob.** `settings.RESEARCH_WARM_WAIT_SECONDS`
+(`BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS`, default 45, floor 0; 0 = every
+area at once, exactly the old launch). Reusing `QC_WARM_WAIT_SECONDS` was
+rejected: the name would mislead, and switching off one engine's stagger
+(to diagnose it, say) would silently switch off the other's. 45 matches
+Final QC's bound, so the two read alike; it is far above a lead's expected
+time to first output (prefill of a prefix of at most ~35k tokens) and small
+against a research area's minutes-long conversation. It is pinned once per
+round beside the clock and the continuation-tail switch, and
+`run_requirements_research(warm_wait_seconds=None)` reads it — the runner
+passes nothing new.
+
+**Decision: no cost self-check.** `backend/cost_checks.py` exists to switch
+OFF a saving that can cost money: the continuation tail (a write premium if
+the re-sent content misses) and the warm lead (list price instead of the
+batch rate, read by an undocumented transport). The stagger sends no extra
+request and changes no request byte; a follower that finds nothing readable
+writes exactly the entry it always wrote. Its only cost is time, bounded by
+the wait. A latch could only ever give up the saving to save nothing, so
+none was added — the same reason Final QC's lens stagger has none. The
+INFO line and `tools/research_cost_profile.py` are how to see it.
+
+**Rejected alternative: a `max_tokens: 0` pre-warm.** The caching reference's
+pre-warming protocol would write the prefix with a zero-output request and
+then launch all four. That is one extra billed request (the write) per
+round, and the four still had to wait for it; leading with a real area costs
+nothing extra.
+
+**Live events stay truthful.** A follower's `dimension_started` comes from
+its own worker, so it is emitted only once the follower has been released
+(before this change all four fired at once). One new coordinator event per
+follower, `dimension_waiting` {dimension_id, title, lead_id, max_wait_s},
+emitted when its lead is sent and always before the follower's own
+`dimension_started`; the lead gets none, and a zero wait or a single-area
+lineage emits none. The terminal-after-live ordering is unchanged (the
+coordinator still emits terminals after each future resolves). Traces mirror
+it generically (`research_progress`). Frontend: `lib/researchAgents`
+folds it into `DimLive.waitingOn` {id, title, maxWaitS} — set only on a
+still-queued card, cleared by `dimension_started` and by any terminal event,
+so a replayed late frame cannot re-queue a running card — and `queuedLabel`
+gives the card and the agent modal "Waiting for {lead title} to start, to
+share its cached copy…" instead of "Waiting for an agent…" (which stays for
+a card with no lead to wait on). `foldAgentDetail` adds a `waiting` timeline
+row (lead title, bound); `AgentActivityModal` renders it. `types.ts` gains
+`lead_id` and `max_wait_s`. No new control, so no capability or tour step.
+
+**Unchanged:** every request byte (pinned by comparing the canonical request
+multiset of a staggered and an unstaggered round, a pause continuation
+included); the cumulative budgets and per-request allowance;
+`dimension_started`'s payload; grounding; the profile merge (statuses and
+grounded items compared); the final submission; the retry policy; the
+continuation tail and its self-checks; the runner and the REST/SSE surface
+(beyond the additive event). Final QC is untouched.
+
+**What it saves (estimate, unmeasured).** Per round, three followers read the
+shared prefix instead of writing it: 3 × prefix × ($2.50 − $0.20) per MTok at
+Sonnet 5.5's 5-minute write and read rates (`settings.PRICING`). With nothing
+attached the prefix is about 1.7k tokens (system ≈ 690, tools ≈ 970, header
+≈ 20, by a len/4 estimate before server-tool framing) — about $0.01 a round.
+At the reference (25k) and fan-out facts (8k) caps it is about 35k tokens —
+about $0.24 a round. Sonnet 5.5's documented minimum cacheable prefix is 512
+tokens, so even an unbriefed round's prefix caches. No paid request was
+made. The owner's check is `tools/research_cost_profile.py` over rounds made
+before and after: on a new round, three of the four areas should show cache
+reads of roughly the lead's cache write where they used to show a write of
+their own.
+
+**Risk stated.** A round starts later by the lead's time to first output
+(seconds, typically); at worst by 45 s if the provider is slow to stream and
+the lead neither outputs nor fails. A follower released by the bound writes
+its own entry, as before.
+
+**Tests.** `tests/test_research_warm_launch.py` (new, 20 tests), modelled on
+`tests/test_qc_warm_launch.py` and hermetic on `SequencedFakeClient`: every
+wait is an event, a condition or `_SteppedClock`, never a real sleep. When:
+followers start only after the lead's first frame (and are announced
+before); a lead whose first request fails before streaming, a lead whose
+token count fails, and a lead that fails outright each release the others;
+a Stop during the wait sends no follower request and records them cancelled
+with zero usage; the bound releases a lead that never outputs; a zero wait
+and a zero setting launch everything at once; the setting reaches the round
+and the QC knob does not touch it. Which: an area with a smaller allowance is
+its own lineage and never waits; the key changes with each field that
+precedes the breakpoint and with nothing after it; an unbuildable key leaves
+that area unstaggered. Launcher: capacity order, the done-callback release,
+no lineage = no announcement; the relay releases on the first output, not on
+`message_start`; a request that streams no frames still releases when it
+ends. What: identical canonical requests and identical merged findings and
+statuses. Switch: the default and floor read from source with `ast`.
+One existing test changed: `tests/test_stop.py::
+test_a_stopped_research_round_still_meters_what_it_already_spent` holds all
+four areas at a barrier inside `stream()` and stops the run once all four
+arrive. With the stagger on only the lead arrives, so it failed (the barrier
+never filled). Its subject is runner metering with every area in flight, so
+it now pins that premise with `RESEARCH_WARM_WAIT_SECONDS=0`; a new twin,
+`test_a_stop_while_research_areas_wait_on_their_lead_meters_only_the_lead`,
+runs the staggered round through the runner: one request reaches the
+provider and only the lead's paid response is metered.
+`frontend/tests/researchAgents.test.ts` gains three fold tests;
+`frontend/tests/verificationCopy.test.ts` pins the dossier's and README's
+45 s to the settings default.
+
+**Reversion evidence**, each run against the six research test files
+(`test_research_warm_launch`, `test_research_engine`, `test_research_budget`,
+`test_retry_resume`, `test_prompt55_missing_tool_reminder`,
+`test_research_api`) or the two frontend files, and restored:
+
+| Reversion | Failed |
+|---|---|
+| No stagger (every area submitted at once) | 10 |
+| The relay never releases (only a request's end does) | 3 |
+| The relay releases on `message_start` | 1 |
+| No release when a request ends | 1 |
+| No release when an attempt fails (a failed token count holds the others through its backoff) | 1 |
+| No done-callback on the lead's future | 1 |
+| The wait ignores a Stop | 1 |
+| The wait ignores its bound | 1 |
+| No `dimension_waiting` event | 4 |
+| The lineage key ignores the tools | 2 |
+| The round reads `QC_WARM_WAIT_SECONDS` | 2 |
+| Single-area lineages ignore pool capacity | 1 |
+| A key that raises fails the round | 1 |
+| Frontend: `dimension_started` keeps the wait | 1 |
+| Frontend: a late `dimension_waiting` re-queues a running card | 1 |
+| Frontend: the queued label ignores the wait | 1 |
+| Frontend: the timeline drops the wait | 1 |
+| Frontend: the dossier quotes a bound other than the setting's | 1 |
+
+Every backend reversion was restored byte for byte (compared against a saved
+copy) before the next ran.
+
+**Validation.** Untouched HEAD (a298dab): 3693 passed, 64 skipped. With this
+change: 3714 passed, 64 skipped (the 20 tests of
+`tests/test_research_warm_launch.py` and the new `tests/test_stop.py` twin),
+in the same wall time as HEAD (646 s both; no research test is among the
+30 slowest). Ruff passed; `npm test` 514 passed (510 before); `npm run
+build` passed.
+
+**Release-note draft for the next release** (beside the research-effort,
+final-submission and web-tool drafts; `v1.22.1` is published and there is no
+newer entry, so nothing was added to `backend/release_notes.py` and the
+version stays `1.22.1`): "Research rounds reuse one cached copy. The four
+research areas read the same instructions, tools and project material, so
+one now starts a few seconds ahead and the others wait for it to begin
+answering (at most 45 seconds), then read its cached copy instead of each
+paying to store their own. Nothing they are asked or find changes, and a
+waiting card says whom it is waiting on. Set
+`BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS=0` to start every area at once."
+
+**Errata.**
+
+- "Research web tools keep their bytes" says "The launch is still parallel,
+  so concurrent openings cannot yet read one another's entries. Staggering it
+  the way Final QC staggers its lenses (`QC_WARM_WAIT_SECONDS`) is left for
+  later." The launch is now staggered, with its own setting.
+- The trust dossier's reference-documents copy ("written to the prompt cache
+  once and re-read from there by every agent in the run") did not hold for
+  research's four areas, which each wrote their own copy; it now holds
+  whenever the lead starts answering within the wait.
+
 ## Suggested replies ride the reply — implemented notes (2026-10-06)
 
 The reply chips above the composer were a `suggest_prompts` tool call. Since
@@ -18119,8 +18345,8 @@ branch's runs. One branch run also failed
 the CPU; it passed 3 of 3 in isolation and in the final full run.
 
 **Release-note draft for the next release** (beside the research-effort,
-final-submission, web-tool and project-background drafts; `v1.22.1` is
-published and there is no newer entry, so nothing was added to
+final-submission, web-tool, project-background and research-stagger drafts;
+`v1.22.1` is published and there is no newer entry, so nothing was added to
 `backend/release_notes.py` and the version stays `1.22.1`): "Replies arrive
 sooner and cost less. The one-tap reply suggestions now come at the end of
 the assistant's reply instead of in a separate step, so a question takes one

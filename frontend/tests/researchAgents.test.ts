@@ -6,6 +6,7 @@ import {
   foldAgentDetail,
   foldResearchBoard,
   labelFromId,
+  queuedLabel,
   trimUrl,
 } from "../src/lib/researchAgents.ts";
 import type { ResearchEvent } from "../src/types.ts";
@@ -288,4 +289,123 @@ test("trimUrl shows host/path and passes junk through; labelFromId title-cases",
   assert.equal(trimUrl("https://example.com/"), "example.com");
   assert.equal(trimUrl("not a url"), "not a url");
   assert.equal(labelFromId("governing_codes"), "Governing Codes");
+});
+
+/* --- The staggered launch: a follower waits on the lead's first output --- */
+
+const WAITING: [string, Partial<ResearchEvent>] = [
+  "dimension_waiting",
+  {
+    dimension_id: "ahj_requirements",
+    title: "AHJ requirements",
+    lead_id: "governing_codes",
+    max_wait_s: 45,
+  },
+];
+
+test("a follower stays queued while it waits, and says on whom", () => {
+  const events = log([
+    ROSTER,
+    [
+      "dimension_started",
+      { dimension_id: "governing_codes", max_searches: 40, max_fetches: 12 },
+    ],
+    WAITING,
+  ]);
+  const board = foldResearchBoard(events);
+  const follower = board.dims.find((d) => d.id === "ahj_requirements")!;
+  // Waiting is not running: the card stays queued and is not counted done.
+  assert.equal(follower.state, "queued");
+  assert.deepEqual(follower.waitingOn, {
+    id: "governing_codes",
+    title: "Governing building and fire codes",
+    maxWaitS: 45,
+  });
+  assert.equal(
+    queuedLabel(follower),
+    "Waiting for Governing building and fire codes to start, to share its cached copy…",
+  );
+  assert.equal(board.doneCount, 0);
+  // The lead never waits.
+  const lead = board.dims.find((d) => d.id === "governing_codes")!;
+  assert.equal(lead.state, "running");
+  assert.equal(lead.waitingOn, null);
+  // An area with no lead to wait on is waiting for a free agent, as before.
+  const plain = foldResearchBoard(log([ROSTER])).dims[1];
+  assert.equal(queuedLabel(plain), "Waiting for an agent…");
+});
+
+test("a follower's wait clears the moment it starts, and a late frame never re-queues it", () => {
+  const started = foldResearchBoard(
+    log([
+      ROSTER,
+      WAITING,
+      [
+        "dimension_started",
+        { dimension_id: "ahj_requirements", max_searches: 32, max_fetches: 10 },
+      ],
+    ]),
+  ).dims.find((d) => d.id === "ahj_requirements")!;
+  assert.equal(started.state, "running");
+  assert.equal(started.waitingOn, null);
+
+  const replayed = foldResearchBoard(
+    log([
+      ROSTER,
+      [
+        "dimension_started",
+        { dimension_id: "ahj_requirements", max_searches: 32, max_fetches: 10 },
+      ],
+      WAITING,
+    ]),
+  ).dims.find((d) => d.id === "ahj_requirements")!;
+  assert.equal(replayed.state, "running");
+  assert.equal(replayed.waitingOn, null);
+
+  // A follower cancelled by a Stop during the wait settles as failed.
+  const cancelled = foldResearchBoard(
+    log([
+      ROSTER,
+      WAITING,
+      ["dimension_started", { dimension_id: "ahj_requirements" }],
+      [
+        "dimension_failed",
+        { dimension_id: "ahj_requirements", error: "Cancelled by user." },
+      ],
+    ]),
+  ).dims.find((d) => d.id === "ahj_requirements")!;
+  assert.equal(cancelled.state, "failed");
+  assert.equal(cancelled.waitingOn, null);
+});
+
+test("the agent's timeline records the wait, with the lead's title and bound, before it started", () => {
+  const detail = foldAgentDetail(
+    log([
+      ROSTER,
+      WAITING,
+      [
+        "dimension_started",
+        { dimension_id: "ahj_requirements", max_searches: 32, max_fetches: 10 },
+      ],
+    ]),
+    "ahj_requirements",
+  );
+  assert.deepEqual(
+    detail.timeline.map((t) => t.kind),
+    ["waiting", "started"],
+  );
+  assert.deepEqual(detail.timeline[0], {
+    seq: 1,
+    ts: "12:00:01",
+    kind: "waiting",
+    leadTitle: "Governing building and fire codes",
+    maxWaitS: 45,
+  });
+  // The lead's own timeline has no wait in it.
+  assert.ok(
+    foldAgentDetail(
+      log([ROSTER, WAITING]),
+      "governing_codes",
+    ).timeline.every((t) => t.kind !== "waiting"),
+  );
 });

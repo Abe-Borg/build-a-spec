@@ -379,8 +379,29 @@ _ABBREVIATIONS = frozenset(
         "art", "app", "vs", "etc", "approx", "min", "max", "e.g", "i.e",
     }
 )
-_SENTENCE_BREAK_RE = re.compile(r"[.;](?=\s+[A-Z(\"“])")
+# A period followed by a capital, a digit, a bracket or a quote. Semicolons
+# do not end sentences: a standard's title may carry one.
+_SENTENCE_BREAK_RE = re.compile(r"\.(?=\s+[A-Z0-9(\"“])")
 _WORD_BEFORE_RE = re.compile(r"([A-Za-z.]+)$")
+
+
+# A standard's designation: issuing body plus its number ("NFPA 13",
+# "ASTM A795/A795M", "UL 199", "FM Global Property Loss Prevention Data
+# Sheet 5-32"). Two different ones in an entry are two standards, whatever
+# words join them; so are two editions.
+_DESIGNATION_RE = re.compile(
+    r"\b(?:NFPA|ASTM|ULC?|ASME|ANSI|AWWA|ASCE|ASHRAE|CSA|ISO|IEEE|NEMA|AWS|"
+    r"SMACNA|MSS\s+SP|FM\s+DS|FM\s+Global\s+(?:Property\s+Loss\s+Prevention\s+)?"
+    r"Data\s+Sheet)[\s-]*[A-Z]?\d[\w.\-]*"
+)
+_EDITION_RE = re.compile(r"\bedition\b", re.IGNORECASE)
+
+
+def _designations(text: str) -> set[str]:
+    return {
+        " ".join(match.group(0).split()).upper()
+        for match in _DESIGNATION_RE.finditer(text)
+    }
 
 
 def explanatory_prose_hits(text: str) -> list[dict[str, str]]:
@@ -406,7 +427,7 @@ def _sentence_count(text: str) -> int:
         before = _WORD_BEFORE_RE.search(text[: match.start()])
         word = (before.group(1) if before else "").lower().rstrip(".")
         # "No.", a lone initial, or a dotted abbreviation ("U.S.", "e.g.").
-        if match.group(0) == "." and (
+        if (
             word in _ABBREVIATIONS
             or (len(word) == 1 and word.isalpha())
             or "." in word
@@ -425,6 +446,13 @@ def reference_entry_problems(text: str) -> list[str]:
         problems.append("more than one sentence")
     if len(text.strip()) > REFERENCE_ENTRY_MAX_CHARS:
         problems.append(f"over {REFERENCE_ENTRY_MAX_CHARS} characters")
+    designations = sorted(_designations(text))
+    if len(designations) > 1:
+        problems.append(
+            "more than one standard (" + ", ".join(designations) + ")"
+        )
+    elif len(_EDITION_RE.findall(text)) > 1:
+        problems.append("more than one edition")
     grouped: dict[str, list[str]] = {}
     for hit in scan_markers(text, REFERENCE_ENTRY_PATTERNS):
         quoted = f"'{hit['match'].strip()}'"

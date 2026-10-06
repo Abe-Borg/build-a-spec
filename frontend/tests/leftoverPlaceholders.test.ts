@@ -78,6 +78,18 @@ test("a legacy needs-input row reads as a leftover and switches in one click", (
   assert.match(actions, /disabled=\{busy \|\| !statusCapability\.allowed\}/);
 });
 
+test("the docs say what the panel's ✏️ does to a legacy row: it confirms it", () => {
+  // PR #279 review (Codex P2): the README said retyping kept the badge, but
+  // the pencil has always sent `confirmed` for text the user writes, on
+  // every row. Pin the op and the sentence together so they cannot drift.
+  const replaceOp = /const replaceOp: EditOp = \{[\s\S]*?\};/.exec(specDocument)?.[0];
+  assert.ok(replaceOp, "the paragraph row must build its replace op");
+  assert.match(replaceOp, /status: "confirmed"/);
+  const readme = read("../../README.md").replace(/\s+/g, " ");
+  assert.match(readme, /Rewriting its text with \*\*✏️\*\* still works and confirms it/);
+  assert.doesNotMatch(readme, /keeps the badge until you switch it/);
+});
+
 test("no op the panel builds can stamp needs_input", () => {
   assert.match(types, /export type EditableStatus = Exclude<BlockStatus, "needs_input">;/);
   const editOp = /export interface EditOp \{[\s\S]*?\n\}/.exec(types)?.[0];

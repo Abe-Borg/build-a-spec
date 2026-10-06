@@ -798,7 +798,9 @@ the panel's only status control was ✓ Confirm on assumed/imported rows.)
   in `/api/doc/edit` inside its rollback-guarded try and refuses, all or
   nothing, any op whose `status` is retired (`set_status`, `replace`,
   `add_paragraph`). An op without `status` keeps the block's stamp, so a
-  retype is not a new one. Text is still unchecked on this path. The
+  retype is not a new one; the panel's ✏️ still sends `confirmed` (text the
+  user writes is confirmed, on every row), so retyping there clears it.
+  Text is still unchecked on this path. The
   prompt's `_PROVENANCE` line, `apply_spec_edits`' `status` description and
   `_STATUS_REFUSALS["needs_input"]` say "retired", not "the user's to set".
 - **Readiness.** `no_open_items` keeps its id and rule; its detail says

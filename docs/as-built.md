@@ -18968,7 +18968,9 @@ to choose, the owner took both recommendations:
   rollback-guarded try, so a refusal is the usual all-or-nothing 400 and the
   document is untouched. Any op carrying `status: "needs_input"` counts
   (`set_status`, `replace`, `add_paragraph`); an op that omits `status`
-  never changes one, so retyping a legacy block's text keeps its stamp. The
+  never changes one, so a status-less API retype keeps a legacy block's
+  stamp. The panel's ✏️ is unchanged and still sends `confirmed` (text the
+  user writes is confirmed, on every row), so retyping there clears it. The
   drafting guard (`check_drafted_edits`) is not applied to user edits: typed
   text is still theirs. Model and QC paths were already refusing the status
   (PR 1). Switching a legacy block to confirmed or assumed is an ordinary
@@ -19071,7 +19073,7 @@ no gap, and no `[TBD` or needs_input in the showcase or any practice copy).
 `tests/test_app.py`'s `_add_leftover_open_item` now seeds the leftover by
 reopening the session as an older project file — the one way one arrives —
 so the export smoke test's review-report header reads v2, not v3.
-`frontend/tests/leftoverPlaceholders.test.ts` (6, registered in
+`frontend/tests/leftoverPlaceholders.test.ts` (7 with the review pin below, registered in
 `package.json`) pins the header hint, the highlight, the legacy row's two
 actions, `EditableStatus`, the strip and tray copy, and the tour fold;
 `panelTray.test.ts`, `qcRemediation.test.ts` and `projectPanel.test.ts`
@@ -19095,8 +19097,20 @@ the edit tool, the drafting guard or the tutorial (`test_app`,
 `test_spec_voice`, `test_tutorial`, `test_review_report`, `test_templates`,
 `test_spec_doc`, `test_source_capabilities`, `test_full_draft`,
 `test_docs_consistency`, `test_followups`, `test_manual_edit` and 21 more),
-`npm test` (523) and `npm run build` passed locally; the full backend suite
+`npm test` (524 after the review pin) and `npm run build` passed locally; the full backend suite
 is CI's (see Commands in CLAUDE.md). No paid API call was made.
+
+### PR #279 review correction
+
+Codex (P2) caught the README saying a legacy needs-input row "keeps the
+badge" when retyped. That is true of a status-less `replace` sent to the
+API, not of the panel: `ParagraphNode`'s ✏️ builds its `replace` with
+`status: "confirmed"`, as it always has for every row, so saving clears the
+badge. The behavior stays (the user wrote the text; a `[TBD]` left in it is
+still counted, and ≈ is there for a guess), and the README, this record and
+CLAUDE.md now say so. `leftoverPlaceholders.test.ts` pins the ✏️ op's
+`confirmed` status and the README's sentence together; restoring the old
+README sentence, or dropping the status from the op, fails it.
 
 ### Errata for the PR 1 record above
 

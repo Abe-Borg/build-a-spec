@@ -188,8 +188,9 @@ always a **leftover** from an older document to rewrite.
 - **A leftover *needs input* paragraph clears in one click.** Its badge now
   reads **needs input · leftover**, and hovering the row offers **✓**
   (confirm) and **≈** (mark assumed). Before, the only ways out were
-  retyping the text or asking in chat. Retyping still works and keeps the
-  badge until you switch it.
+  retyping the text or asking in chat. Rewriting its text with **✏️** still
+  works and confirms it, as it does for any provision you write yourself; a
+  `[TBD]` you leave in the text is still counted.
 - **Leftover placeholders.** The strip under the paper that listed "Open
   items — N unresolved" is now **Leftover placeholders — N to rewrite**, each
   row a "[TBD] marker" or a "needs-input block" that jumps to its provision.

@@ -1814,11 +1814,12 @@ export type QcEvent =
       total_candidates?: number;
       total_seats?: number;
       max_workers?: number;
-      /** How phase 2 is being executed. "batch" submits every seat to the
-       *  Message Batches API at half price and therefore emits no per-seat
-       *  activity frames; "stream" is the live-relay path. The review is
-       *  identical either way — this only tells the board what kind of
-       *  progress it can honestly show. */
+      /** How phase 2 is being executed. "stream" (the default) is the
+       *  live-relay path, one seat per cache group sent first and the rest
+       *  once it is answering; "batch" submits every seat to the Message
+       *  Batches API at half token price and therefore emits no per-seat
+       *  activity frames. The review is identical either way — this only
+       *  tells the board what kind of progress it can honestly show. */
       transport?: "batch" | "stream";
     })
   /** Progress of one batched verification round, reported from the

@@ -100,7 +100,12 @@ def _scripts(findings: list[dict]) -> dict[str, list]:
     return scripts
 
 
-def _run(client: object, *, continuation_cache: bool = False) -> QCResult:
+def _run(
+    client: object,
+    *,
+    continuation_cache: bool = False,
+    warm_wait_seconds: float | None = None,
+) -> QCResult:
     store = _store()
     return run_final_qc(
         store.doc,
@@ -112,6 +117,9 @@ def _run(client: object, *, continuation_cache: bool = False) -> QCResult:
         version_index=store.index,
         started_at="2026-07-25T10:00:00-07:00",
         finished_at="2026-07-25T10:01:00-07:00",
+        # None keeps the streamed stagger at its setting; a test whose client
+        # synchronizes on a full pool of simultaneous seats passes 0.
+        warm_wait_seconds=warm_wait_seconds,
         # Streaming transport: these clients drive the fan-out by overriding
         # `stream`, and the shared-failure circuit breaker they exercise is a
         # property of a bounded submission pool — it caps calls by declining
@@ -340,7 +348,11 @@ def test_invalid_request_circuit_breaker_caps_calls_and_preserves_every_seat() -
     findings = [_finding(f"Circuit finding {index}") for index in range(8)]
     client = _SynchronizedInvalidRequestVerifierClient(_scripts(findings))
 
-    result = _run(client)
+    # The client releases a FULL pool of seats together, like a provider 400
+    # landing on every in-flight request at once, so the stagger is off:
+    # with it on, one leader goes first and the breaker trips after a single
+    # request (tests/test_qc_streamed_stagger.py pins that cheaper failure).
+    result = _run(client, warm_wait_seconds=0)
 
     assert client.verifier_request_count == settings.QC_MAX_WORKERS
     assert result.execution_status == "partial"

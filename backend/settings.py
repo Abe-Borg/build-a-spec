@@ -537,10 +537,32 @@ if QC_VERIFIERS_STANDARD < 2:
 #      the batch is cancelled and the unfinished seats are recorded as failed
 #      (which makes the run partial and blocks readiness — never a silent pass).
 #
-# Off falls back to the streaming ThreadPoolExecutor path, which is retained
-# verbatim and is still what phase 1 uses. The flag is recorded in the hashed
-# input manifest, so a report always states which transport produced it.
-QC_BATCH_VERIFICATION = _bool_env("BUILD_A_SPEC_QC_BATCH_VERIFICATION", True)
+# OFF BY DEFAULT since the streamed stagger (docs/as-built.md, "Final QC
+# streams its verifier seats, leaders first"). The batch was on by default
+# while its 50% rate was assumed to come on top of a shared cached prefix.
+# The first measured run said otherwise: every seat carries the same ~54k-token
+# prefix (the section, the attached dossier, the facts), cache hits inside a
+# concurrent batch are best-effort, and only 39% of the batched seats read
+# the copy the warm lead had stored — the rest each wrote it again at the
+# one-hour rate, which was 76% of the phase's $11.62. A one-hour write only
+# beats plain input above a 51% hit rate, so at that rate batching the
+# prefix cost MORE than not caching it. The streamed path now sends one seat
+# per cache lineage first and the rest once it is answering, the way phase 1
+# already does, so it reads the prefix on nearly every seat; modelled on
+# that run it costs about half of what the batch did, with live seat
+# activity and an immediate Stop thrown in. Batch stays available for
+# anyone whose runs show the batch reading the shared copy.
+#
+# On falls back to the batched path, retained verbatim. Either way the flag
+# is recorded in the hashed input manifest, so a report always states which
+# transport produced it — and a retained batched result reads stale once
+# after this default flip, as any transport change does. The GUI and
+# qc_preferences read the shipped default from QC_BATCH_VERIFICATION_DEFAULT;
+# a choice someone saved before the flip is theirs and is kept.
+QC_BATCH_VERIFICATION_DEFAULT = False
+QC_BATCH_VERIFICATION = _bool_env(
+    "BUILD_A_SPEC_QC_BATCH_VERIFICATION", QC_BATCH_VERIFICATION_DEFAULT
+)
 
 
 def qc_batch_verification_override() -> bool | None:

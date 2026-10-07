@@ -1,7 +1,11 @@
 """Machine-local QC transport, independent of projects and panel layout.
 
-Lenient reads fall back to batch. Writes are strict and atomic, using the
-same config directory and temp-file replacement as onboarding_state.
+Lenient reads fall back to the shipped default
+(``settings.QC_BATCH_VERIFICATION_DEFAULT`` — streamed since the cost
+program's streamed stagger; batched before it). Writes are strict and
+atomic, using the same config directory and temp-file replacement as
+onboarding_state. A saved choice is the user's and is never rewritten by a
+default change: someone who chose Batch keeps Batch until they pick again.
 """
 from __future__ import annotations
 
@@ -24,15 +28,16 @@ def default_preferences_path() -> Path:
 
 
 def load_batch_verification(path: str | Path | None = None) -> bool:
+    default = settings.QC_BATCH_VERIFICATION_DEFAULT
     try:
         target = Path(path) if path is not None else default_preferences_path()
         if target.stat().st_size > MAX_FILE_BYTES:
-            return True
+            return default
         raw = json.loads(target.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
-        return True
+        return default
     value = raw.get("batch_verification") if isinstance(raw, dict) else None
-    return value if isinstance(value, bool) else True
+    return value if isinstance(value, bool) else default
 
 
 def save_batch_verification(value: bool, path: str | Path | None = None) -> None:

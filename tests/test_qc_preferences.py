@@ -23,7 +23,9 @@ def prefs_path(tmp_path, monkeypatch):
     monkeypatch.delenv(ENV, raising=False)
     monkeypatch.setattr(app_paths, "app_config_dir", lambda: tmp_path)
     # create_app samples the GUI regime; restore the setting after each test.
-    monkeypatch.setattr(settings, "QC_BATCH_VERIFICATION", True)
+    monkeypatch.setattr(
+        settings, "QC_BATCH_VERIFICATION", settings.QC_BATCH_VERIFICATION_DEFAULT
+    )
     return qc_preferences.default_preferences_path()
 
 
@@ -42,9 +44,12 @@ def draft():
     return store
 
 
-def test_default_is_batch_without_creating_a_file(prefs_path):
+def test_default_is_streamed_without_creating_a_file(prefs_path):
+    """Streamed since the cost program's streamed stagger (docs/as-built.md,
+    "Final QC streams its verifier seats, leaders first"); batched before."""
+    assert settings.QC_BATCH_VERIFICATION_DEFAULT is False
     assert client().get("/api/ui/qc-preferences").json() == {
-        "ok": True, "batch_verification": True, "locked": False,
+        "ok": True, "batch_verification": False, "locked": False,
     }
     assert not prefs_path.exists()
     assert prefs_path.parent == onboarding_state.default_onboarding_path().parent
@@ -77,9 +82,17 @@ def test_present_environment_locks_and_does_not_overwrite_saved_choice(prefs_pat
 
 
 @pytest.mark.parametrize("raw", ['oops', '[]', '{}', '{"batch_verification":"false"}', '{"batch_verification":0}', 'x' * (qc_preferences.MAX_FILE_BYTES + 1)])
-def test_bad_files_read_as_batch(prefs_path, raw):
+def test_bad_files_read_as_the_shipped_default(prefs_path, raw):
     prefs_path.write_text(raw)
+    assert qc_preferences.load_batch_verification() is settings.QC_BATCH_VERIFICATION_DEFAULT
+    assert qc_preferences.load_batch_verification() is False
+
+
+def test_a_choice_saved_before_the_default_flipped_is_kept(prefs_path):
+    """The default moved from Batch to Stream; a saved Batch is the user's."""
+    prefs_path.write_text('{"version": 1, "batch_verification": true}')
     assert qc_preferences.load_batch_verification() is True
+    assert client().get("/api/ui/qc-preferences").json()["batch_verification"] is True
 
 
 def test_bom_is_read_and_layout_and_onboarding_saves_are_independent(prefs_path):
@@ -142,10 +155,10 @@ def test_start_resolves_transport_for_this_run_only(prefs_path, monkeypatch, env
 def test_settings_change_uses_existing_manifest_staleness(prefs_path):
     c = client()
     store = draft()
-    manifest = build_qc_input_manifest(store.doc, None, DEFAULT_MODULE, version_index=store.index, batch_verification=True, consolidation_enabled=settings.QC_CONSOLIDATION, model=settings.QC_MODEL, max_tokens=settings.QC_MAX_TOKENS)
+    manifest = build_qc_input_manifest(store.doc, None, DEFAULT_MODULE, version_index=store.index, batch_verification=settings.QC_BATCH_VERIFICATION, consolidation_enabled=settings.QC_CONSOLIDATION, model=settings.QC_MODEL, max_tokens=settings.QC_MAX_TOKENS)
     result = QCResult(version_index=store.index, version_fingerprint=qc_version_fingerprint(store.doc), input_manifest=manifest, input_fingerprint=qc_input_fingerprint(manifest))
     assert result.matches_inputs(store.index, store.doc, None, DEFAULT_MODULE)
-    c.put("/api/ui/qc-preferences", json={"batch_verification": False})
+    c.put("/api/ui/qc-preferences", json={"batch_verification": not settings.QC_BATCH_VERIFICATION_DEFAULT})
     assert not result.matches_inputs(store.index, store.doc, None, DEFAULT_MODULE)
 
 

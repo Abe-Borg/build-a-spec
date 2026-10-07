@@ -683,9 +683,11 @@ def test_a_qc_continuation_carries_the_automatic_breakpoint_when_on(
     """With the switch on, a paused compliance lens and a paused streamed seat
     each resume with one top-level 5-minute breakpoint, and nothing else.
 
-    The seat is the case the ordering rule is about: its explicit markers are
-    1-hour, and the tail is 5 minutes — a shorter-lived breakpoint AFTER
-    longer-lived ones, which is allowed (the reverse would be the 400). First
+    A streamed seat's explicit markers keep the 5-minute default since the
+    streamed stagger (its followers start seconds after their leader), so
+    its tail is the same TTL as its markers. The mixed order the rule is
+    about — 1-hour markers, then a 5-minute tail — is now the batched phase's
+    streamed lead seat, pinned in tests/test_qc_batch_warm_lead.py. First
     requests carry no tail, and neither does any call that never paused.
     """
     import backend.qc.engine as engine
@@ -720,7 +722,8 @@ def test_a_qc_continuation_carries_the_automatic_breakpoint_when_on(
     assert seat_continuation["messages"][-1]["role"] == "assistant"
     assert seat_continuation["cache_control"] == {"type": "ephemeral"}
     assert "ttl" not in seat_continuation["cache_control"]
-    assert _explicit_ttls(seat_continuation) == ["1h", "1h", "1h"]
+    assert _explicit_ttls(seat_continuation) == [None, None, None]
+    assert _explicit_ttls(seat_first) == [None, None, None]
     assert set(seat_first) == _TODAYS_QC_REQUEST_KEYS
 
     for lens in QC_LENSES:

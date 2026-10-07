@@ -366,9 +366,30 @@ already resolved and does nothing). 409 when nothing is running.
   Sonnet 5.5 recalibrated its effort scale; Anthropic's migration guidance
   starts multistep tool use at `medium`. Whole-section drafting/adaptation
   still uses `DRAFT_PASS_EFFORT`, default `high`.
+  Fact harvesting independently selects `HARVEST_MODEL` (Claude Haiku 5.5,
+  overridden by `BUILD_A_SPEC_HARVEST_MODEL`) and `HARVEST_EFFORT` (`medium`).
+  Haiku supports strict tool schemas, but its single-shot output choice stays
+  automatic: forced tool choice suppresses all thinking on this model.
+  Template AI Generalize keeps `INTERVIEW_MODEL`; conversation condensing
+  also keeps the chat model, whose cached prefix it reuses.
   Thinking blocks are preserved **verbatim** across continuation rounds —
   the API requires them during tool use; `_serialize` round-trips every
   block type exactly (SDK `model_dump`, `vars()` for test fakes).
+- **Usage pricing keeps sampling boundaries.** Haiku 5.5's prompt tier is
+  selected from each sampling prompt's complete input (uncached input,
+  cache reads, and cache writes): at most 100,000 tokens uses the base rates;
+  anything above uses the premium rates for that sampling step's token
+  charges. A server-tool response's top-level usage is cumulative, so use
+  its `usage.iterations` message entries only when their counters reconcile
+  to those totals. Missing or unreconciled iteration data that prevents
+  classification keeps a conservative estimate marked by
+  `pricing_unclassified_request_count`. Preserve `annotate_request_usage`
+  metadata when merging responses; aggregate totals cannot reconstruct
+  mixed price tiers.
+  Use the shared estimator for live and saved pricing snapshots, including
+  cache-write TTLs and the batch multiplier. Sonnet 5.5 cache reads are
+  $0.10/M since 2026-10-07. Full Haiku rates are in README's Configuration
+  section and the 2026-10-07 as-built note.
 - The tool loop in `stream_user_turn` follows Spec Critic's streaming
   continuation pattern (`requirements_research.py`): stream → on
   `tool_use`, apply edits + emit `doc_patch` + send tool_result → stream
@@ -476,15 +497,18 @@ missed it because the fakes accepted any dict and every test ran Sonnet 5.
 
 - **Thinking** comes from `research.schema.lowest_thinking(model, effort)`:
   `between_tools` on Sonnet 5.5 at effort `high` or below (alone in its
-  dict, no beta header); `disabled` on Sonnet 5, Opus 4.8, and Opus 5 at
-  `high` or below; otherwise `adaptive`. Thinking turned off still runs
-  `budget.without_thinking` (notes become text, signatures are omitted).
-  Adaptive (Opus 5.5, Fable, unknown overrides, Sonnet 5.5 above `high`)
-  replays every thinking block unchanged and always carries
+  dict, no beta header); `disabled` on Sonnet 5 and Opus 4.8, and on Opus 5
+  or Haiku 5.5 at `high` or below; otherwise `adaptive`. Thinking turned off
+  still runs `budget.without_thinking` (notes become text, signatures are
+  omitted).
+  Adaptive (Opus 5.5, Fable, unknown overrides; Sonnet 5.5, Opus 5, or Haiku
+  5.5 above `high`) replays every thinking block unchanged and always carries
   `with_drop_block`, because removing the web tools edits the bound prefix.
 - **Tool choice** comes from `single_output_tool_kwargs`: forced, with
   `disable_parallel_tool_use`, on Sonnet 5, Opus 5 and Fable 5 only.
-  Elsewhere the request carries no `tool_choice`. Automatic choice does
+  Elsewhere the request carries no `tool_choice`. Haiku 5.5's automatic
+  choice preserves thinking at a higher effort override; its forced tool
+  choice would suppress thinking at every effort. Automatic choice does
   not guarantee a call, so a completed reply with neither the tool call nor
   the tagged-JSON fallback gets `_SUBMISSION_RESENDS` (1) more append-only
   submission request, then fails as before. Pause/refusal/truncation stay
@@ -501,7 +525,8 @@ The full record, release-note draft and reversion evidence are in
 PR #262 (after `v1.22.1`, never shipped) rebuilt research's web tools before
 every request with `max_uses` set to the remaining allowance. Tools lead the
 cached prefix, so after an area's first fetch every continuation rewrote the
-whole conversation at 1.25× instead of reading it at 0.1×. The continuation
+whole conversation at 1.25× instead of reading it at the cache-read rate
+(now 0.05× for Sonnet 5.5). The continuation
 tail could not pay off, and each change set `thinking_edited`.
 
 - Every request of an area's conversation now declares the same tools:

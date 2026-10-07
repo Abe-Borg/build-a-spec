@@ -157,6 +157,7 @@ REQUIREMENTS_RESEARCH_SCHEMA: dict[str, Any] = {
 _STRICT_CAPABLE_MODELS = frozenset(
     {
         settings.MODEL_SONNET_55,
+        settings.MODEL_HAIKU_55,
         settings.MODEL_SONNET_5,
         settings.MODEL_OPUS_48,
         settings.MODEL_OPUS_5,
@@ -169,6 +170,8 @@ _STRICT_CAPABLE_MODELS = frozenset(
 # Forced tool choice under adaptive thinking is a separate capability from
 # strict schemas. Only explicitly confirmed models belong here: Sonnet 5.5
 # and Opus 5.5 reject forcing, and unknown overrides keep automatic choice.
+# Haiku 5.5 accepts forcing but suppresses thinking when forced. Keep its
+# output choice automatic so extraction can reason at the requested effort.
 # See docs/as-built.md's "Single-shot outputs finish before they are accepted" note.
 _FORCED_OUTPUT_TOOL_MODELS = frozenset(
     {settings.MODEL_SONNET_5, settings.MODEL_OPUS_5, settings.MODEL_FABLE_5}
@@ -195,14 +198,17 @@ def single_output_tool_kwargs(*, model: str, tool_name: str) -> dict[str, Any]:
 # reference: Sonnet 5.5 rejects ``{"type": "disabled"}`` with a 400 and
 # offers ``{"type": "between_tools"}`` instead, at effort ``high`` or below
 # and with no other field inside ``thinking``; no other model accepts
-# ``between_tools``. Sonnet 5 and Opus 4.8 accept ``disabled``, Opus 5 only
-# at effort ``high`` or below. Opus 5.5 and Fable reject both, as does
-# anything unlisted here, which keeps the adaptive thinking the conversation
+# ``between_tools``. Sonnet 5 and Opus 4.8 accept ``disabled``; Opus 5 and
+# Haiku 5.5 accept it only at effort ``high`` or below. Opus 5.5 and Fable
+# reject both, as does anything unlisted here, which keeps the adaptive
+# thinking the conversation
 # already ran on — the one setting the model is known to accept.
 _THINKING_OFF_EFFORTS = frozenset({"low", "medium", "high"})
 _BETWEEN_TOOLS_MODELS = frozenset({settings.MODEL_SONNET_55})
 _DISABLED_THINKING_MODELS = frozenset({settings.MODEL_SONNET_5, settings.MODEL_OPUS_48})
-_DISABLED_THINKING_AT_HIGH_OR_BELOW = frozenset({settings.MODEL_OPUS_5})
+_DISABLED_THINKING_AT_HIGH_OR_BELOW = frozenset(
+    {settings.MODEL_OPUS_5, settings.MODEL_HAIKU_55}
+)
 
 
 def lowest_thinking(*, model: str, effort: str) -> dict[str, str]:

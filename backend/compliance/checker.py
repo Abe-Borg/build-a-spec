@@ -530,7 +530,7 @@ def run_compliance_audit(
             continue
 
         for key, value in usage_to_dict(
-            getattr(response, "usage", None)
+            getattr(response, "usage", None), model=request_kwargs["model"]
         ).items():
             usage_totals[key] = usage_totals.get(key, 0) + value
         if classify_stop_reason(getattr(response, "stop_reason", None)) == (

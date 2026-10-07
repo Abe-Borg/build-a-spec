@@ -733,8 +733,10 @@ def request_project_block_text(request: dict) -> str:
 _NO_DISABLED_THINKING = frozenset(
     {"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"}
 )
-# Claude Opus 5 accepts ``disabled`` only at effort ``high`` or below.
-_DISABLED_THINKING_AT_HIGH_OR_BELOW = frozenset({"claude-opus-5"})
+# Claude Opus 5 and Haiku 5.5 accept ``disabled`` at ``high`` or below.
+_DISABLED_THINKING_AT_HIGH_OR_BELOW = frozenset(
+    {"claude-opus-5", "claude-haiku-5-5"}
+)
 # ``between_tools`` exists on Claude Sonnet 5.5 alone, at ``high`` or below.
 _BETWEEN_TOOLS_MODELS = frozenset({"claude-sonnet-5-5"})
 _THINKING_OFF_EFFORTS = frozenset({"low", "medium", "high"})
@@ -770,6 +772,27 @@ def request_shape_problems(request: dict) -> list[str]:
     """
     problems: list[str] = []
     model = request.get("model")
+    if model == "claude-haiku-5-5":
+        # Haiku's migration guide defines these independently of the app's
+        # capability tables. Omit sampling knobs. A trailing assistant turn
+        # can be the documented pause_turn replay, so request shape alone
+        # cannot distinguish a prohibited prefill from a valid continuation.
+        if "temperature" in request and request["temperature"] != 1:
+            problems.append("Haiku 5.5 requires default temperature")
+        if "top_p" in request and request["top_p"] != 0.99:
+            problems.append("Haiku 5.5 requires default top_p")
+        if "top_k" in request:
+            problems.append("Haiku 5.5 does not support top_k")
+        if "temperature" in request and "top_p" in request:
+            problems.append("Haiku 5.5 cannot combine temperature and top_p")
+        if any(
+            tool.get("type") == "computer_20250124"
+            for tool in request.get("tools") or []
+            if isinstance(tool, dict)
+        ):
+            problems.append("Haiku 5.5 requires the computer toolset")
+        if "fallbacks" in dict(request.get("extra_body") or {}):
+            problems.append("Haiku 5.5 does not support server-side fallback")
     output_config = request.get("output_config")
     effort = (
         output_config.get("effort", "high")

@@ -61,6 +61,121 @@ USAGE_ESTIMATED_KEY = "usage_estimated"
 # keys, so this can never be charged for.
 UNCOLLECTED_BATCH_REQUESTS_KEY = "uncollected_batch_requests"
 
+# Additive pricing metadata, never additional billed tokens. The request
+# count distinguishes a sum of short requests from an unclassified request;
+# the subtotals are slices of their ordinary provider counters.
+PRICING_REQUEST_COUNT_KEY = "pricing_request_count"
+PRICING_UNCLASSIFIED_REQUEST_COUNT_KEY = "pricing_unclassified_request_count"
+PRICED_TOKEN_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_creation_1h_input_tokens",
+    "cache_read_input_tokens",
+    ESTIMATED_OUTPUT_TOKENS_KEY,
+)
+LONG_CONTEXT_USAGE_KEYS = tuple("long_context_" + key for key in PRICED_TOKEN_KEYS)
+PRICING_USAGE_KEYS = (
+    PRICING_REQUEST_COUNT_KEY,
+    PRICING_UNCLASSIFIED_REQUEST_COUNT_KEY,
+    *LONG_CONTEXT_USAGE_KEYS,
+)
+
+
+def input_token_count(usage: Mapping[str, Any]) -> int:
+    """One prompt's complete input, counting cache creation only once."""
+    return sum(
+        max(0, int(usage.get(key, 0) or 0))
+        for key in (
+            "input_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        )
+    )
+
+
+def _sampling_iterations(
+    iterations: Any, usage: Mapping[str, int], *, model: str
+) -> list[dict[str, int]] | None:
+    """Complete sampling usage that reconciles to the provider's totals.
+
+    ``usage.iterations`` describes each prompt in a server-tool loop. Its
+    compaction/advisor entries are billed separately and are not slices of
+    top-level usage, so only message entries can classify these counters.
+    """
+    if not isinstance(iterations, (list, tuple)):
+        return None
+    sampled: list[dict[str, int]] = []
+    provider_keys = PRICED_TOKEN_KEYS[:-1]
+    for entry in iterations:
+        kind = _get(entry, "type")
+        if kind in ("advisor_message", "compaction"):
+            continue
+        served_model = _get(entry, "model")
+        if kind != "message" or (served_model is not None and served_model != model):
+            return None
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ):
+            value = _get(entry, key)
+            if value is None and key.startswith("cache_"):
+                continue
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                return None
+        sampled.append(usage_to_dict(entry))
+    if not sampled or any(
+        sum(entry.get(key, 0) for entry in sampled) != usage.get(key, 0)
+        for key in provider_keys
+    ):
+        return None
+    return sampled
+
+
+def annotate_request_usage(
+    model: str, usage: Mapping[str, int], *, iterations: Any = None
+) -> dict[str, int]:
+    """Classify ONE response's sampling prompts before usage is summed."""
+    out = dict(usage)
+    tier = settings.LONG_CONTEXT_PRICING.get(model)
+    if not tier or not out or PRICING_REQUEST_COUNT_KEY in out:
+        return out
+    out[PRICING_REQUEST_COUNT_KEY] = 1
+    if iterations is not None:
+        sampled = _sampling_iterations(iterations, out, model=model)
+        if sampled is not None:
+            for entry in sampled:
+                if input_token_count(entry) > tier["input_threshold_tokens"]:
+                    for key, long_key in zip(
+                        PRICED_TOKEN_KEYS, LONG_CONTEXT_USAGE_KEYS
+                    ):
+                        if entry.get(key):
+                            out[long_key] = out.get(long_key, 0) + entry[key]
+            # Unreported stopped output belongs to the LAST sample's
+            # prompt, rather than the sum of the loop's input counters.
+            if (
+                out.get(ESTIMATED_OUTPUT_TOKENS_KEY)
+                and input_token_count(sampled[-1]) > tier["input_threshold_tokens"]
+            ):
+                out["long_context_estimated_output_tokens"] = out[
+                    ESTIMATED_OUTPUT_TOKENS_KEY
+                ]
+            return out
+        out[PRICING_UNCLASSIFIED_REQUEST_COUNT_KEY] = 1
+    elif input_token_count(out) > tier["input_threshold_tokens"] and (
+        out.get("web_search_requests") or out.get("web_fetch_requests")
+    ):
+        # Without the loop's samples, their combined input is only an
+        # upper bound on any prompt's size. Disclose the approximation.
+        out[PRICING_UNCLASSIFIED_REQUEST_COUNT_KEY] = 1
+    if input_token_count(out) > tier["input_threshold_tokens"]:
+        for key, long_key in zip(PRICED_TOKEN_KEYS, LONG_CONTEXT_USAGE_KEYS):
+            if out.get(key):
+                out[long_key] = out[key]
+    return out
+
 
 def _get(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
@@ -68,7 +183,9 @@ def _get(obj: Any, key: str) -> Any:
     return getattr(obj, key, None)
 
 
-def usage_to_dict(usage: Any) -> dict[str, int]:
+def usage_to_dict(
+    usage: Any, *, model: str | None = None, estimated_output_tokens: int = 0
+) -> dict[str, int]:
     """Flatten an SDK ``usage`` object (or a dict) into plain token counts.
 
     Mirrors the interview loop's ``_merge_usage`` for the research/audit
@@ -81,8 +198,10 @@ def usage_to_dict(usage: Any) -> dict[str, int]:
     an addition to it — see :func:`estimate_usage_cost`.
     """
     out: dict[str, int] = {}
-    if usage is None:
+    if usage is None and not estimated_output_tokens:
         return out
+    if estimated_output_tokens:
+        out[ESTIMATED_OUTPUT_TOKENS_KEY] = estimated_output_tokens
     for key in (
         "input_tokens",
         "output_tokens",
@@ -107,7 +226,11 @@ def usage_to_dict(usage: Any) -> dict[str, int]:
         value = _get(server, key) if server is not None else None
         if isinstance(value, (int, float)) and value:
             out[key] = int(value)
-    return out
+    return (
+        annotate_request_usage(model, out, iterations=_get(usage, "iterations"))
+        if model
+        else out
+    )
 
 
 # Which model each spend category runs on — resolved live so an env override
@@ -126,8 +249,8 @@ def _category_models() -> dict[str, str]:
         "template": settings.INTERVIEW_MODEL,
         # The fact harvest's one call (Project workspace Phase 4). Its own
         # bucket rather than "interview" so the Settings table says what the
-        # spend was for; same model, same rates.
-        "harvest": settings.INTERVIEW_MODEL,
+        # spend was for. Its independent model can be overridden separately.
+        "harvest": settings.HARVEST_MODEL,
         # Condensing a long conversation into a summary (compaction plan
         # Phase 3). It forks the chat request — same model, so it can read
         # the chat's cache — and is billed at the interview model's rates.
@@ -146,7 +269,7 @@ def _rates(model: str) -> dict[str, float]:
     return settings.PRICING.get(model, settings.PRICING[settings.MODEL_SONNET_55])
 
 
-def model_rates(model: str) -> dict[str, float]:
+def model_rates(model: str, usage: Mapping[str, int] | None = None) -> dict[str, float]:
     """Per-token list rates for ``model``: ``input``, ``output``,
     ``cache_read``, ``cache_write`` (the 5-minute entry) and
     ``cache_write_1h``.
@@ -156,7 +279,84 @@ def model_rates(model: str) -> dict[str, float]:
     cost self-checks read it (``cost_checks.observe_continuation``) rather
     than keeping a table of their own that could drift from this one.
     """
+    tier = settings.LONG_CONTEXT_PRICING.get(model)
+    if (
+        tier
+        and usage is not None
+        and input_token_count(usage) > tier["input_threshold_tokens"]
+    ):
+        return dict(tier["rates_per_token"])
     return dict(_rates(model))
+
+
+def pricing_usage_slices(
+    usage: Mapping[str, int], *, threshold: int | None = None
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Return disjoint ordinary/premium usage, preserving request boundaries.
+
+    Unannotated usage is one request. Aggregators of a tiered model MUST
+    annotate each response before merging; their sum alone cannot recover
+    the individual prompts' price tiers.
+    """
+    if threshold is None:
+        return dict(usage), {}
+    if usage.get(PRICING_REQUEST_COUNT_KEY, 0):
+        long = {
+            key: max(0, min(usage.get(long_key, 0), usage.get(key, 0)))
+            for key, long_key in zip(PRICED_TOKEN_KEYS, LONG_CONTEXT_USAGE_KEYS)
+        }
+    elif input_token_count(usage) > threshold:
+        long = {key: usage.get(key, 0) for key in PRICED_TOKEN_KEYS}
+    else:
+        long = {}
+    short = dict(usage)
+    for key, value in long.items():
+        short[key] = short.get(key, 0) - value
+    return short, long
+
+
+def estimate_cost_from_rates(
+    usage: Mapping[str, int],
+    rates: Mapping[str, float],
+    *,
+    long_context_pricing: Mapping[str, Any] | None = None,
+    multiplier: float = 1.0,
+    web_search_rate: float = 0.0,
+    web_fetch_rate: float = 0.0,
+) -> float:
+    """Price additive usage with supplied immutable rates (live or saved)."""
+    short, long = pricing_usage_slices(
+        usage,
+        threshold=(
+            long_context_pricing["input_threshold_tokens"]
+            if long_context_pricing
+            else None
+        ),
+    )
+    total = 0.0
+    for counts, token_rates in (
+        (short, rates),
+        (
+            long,
+            long_context_pricing["rates_per_token"] if long_context_pricing else rates,
+        ),
+    ):
+        five_minute, one_hour = cache_write_split(counts)
+        total += (
+            counts.get("input_tokens", 0) * token_rates["input"]
+            + (
+                counts.get("output_tokens", 0)
+                + counts.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0)
+            )
+            * token_rates["output"]
+            + counts.get("cache_read_input_tokens", 0) * token_rates["cache_read"]
+            + five_minute * token_rates["cache_write"]
+            + one_hour * token_rates.get("cache_write_1h", token_rates["cache_write"])
+        )
+    # Tool fees stay outside the token tier and are charged exactly once.
+    total += usage.get("web_search_requests", 0) * web_search_rate
+    total += usage.get("web_fetch_requests", 0) * web_fetch_rate
+    return round(multiplier * total, 6)
 
 
 def cache_write_split(usage: Mapping[str, Any]) -> tuple[int, int]:
@@ -204,20 +404,12 @@ def estimate_usage_cost(
     rate — a token the model wrote costs the same whether or not the
     provider got to tell us about it.
     """
-    rates = _rates(model)
-    five_minute, one_hour = cache_write_split(usage)
-    return round(
-        multiplier
-        * (
-            usage.get("input_tokens", 0) * rates["input"]
-            + usage.get("output_tokens", 0) * rates["output"]
-            + usage.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0) * rates["output"]
-            + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
-            + five_minute * rates["cache_write"]
-            + one_hour * rates.get("cache_write_1h", rates["cache_write"])
-            + usage.get("web_search_requests", 0) * settings.WEB_SEARCH_COST
-        ),
-        6,
+    return estimate_cost_from_rates(
+        usage,
+        _rates(model),
+        long_context_pricing=settings.LONG_CONTEXT_PRICING.get(model),
+        multiplier=multiplier,
+        web_search_rate=settings.WEB_SEARCH_COST,
     )
 
 
@@ -227,7 +419,7 @@ def usage_pricing_snapshot(model: str) -> dict[str, Any]:
         model if model in settings.PRICING else settings.MODEL_SONNET_55
     )
     rates = _rates(model)
-    return {
+    snapshot = {
         "currency": "USD",
         "requested_model": model,
         "rate_model": rate_model,
@@ -251,6 +443,19 @@ def usage_pricing_snapshot(model: str) -> dict[str, Any]:
             "authoritative."
         ),
     }
+    tier = settings.LONG_CONTEXT_PRICING.get(model)
+    if tier:
+        snapshot["long_context_pricing"] = {
+            "input_threshold_tokens": tier["input_threshold_tokens"],
+            "rates_per_token": dict(tier["rates_per_token"]),
+        }
+        snapshot["authority"] += (
+            " Price tiers follow individual sampling prompts when complete "
+            "usage.iterations reconcile to the reported totals. Responses "
+            "marked pricing_unclassified_request_count use their combined "
+            "input as a conservative approximation."
+        )
+    return snapshot
 
 
 @dataclass
@@ -283,7 +488,12 @@ class UsageLedger:
         ``estimated_output_tokens`` instead (see :meth:`snapshot`), which
         cannot drift from the number it describes.
         """
-        data = usage if isinstance(usage, dict) else usage_to_dict(usage)
+        model = _category_models().get(category, settings.INTERVIEW_MODEL)
+        data = (
+            {**usage_to_dict(usage), **usage}
+            if isinstance(usage, dict)
+            else usage_to_dict(usage, model=model)
+        )
         data = {
             k: int(v)
             for k, v in data.items()
@@ -291,6 +501,7 @@ class UsageLedger:
         }
         if not data:
             return
+        data = annotate_request_usage(model, data, iterations=_get(usage, "iterations"))
         with self._lock:
             bucket = self.categories.setdefault(category, {})
             for key, value in data.items():
@@ -326,18 +537,24 @@ class UsageLedger:
         """Estimated savings from cache reads vs paying full input price."""
         saved = 0.0
         for category, bucket in self.categories.items():
-            rates = _rates(
-                _category_models().get(category, settings.INTERVIEW_MODEL)
+            model = _category_models().get(category, settings.INTERVIEW_MODEL)
+            tier = settings.LONG_CONTEXT_PRICING.get(model)
+            short, long = pricing_usage_slices(
+                bucket, threshold=tier["input_threshold_tokens"] if tier else None
             )
             # Discounted usage saved a discounted amount: the counterfactual
             # is paying full INPUT price on the same batched request, not
             # list price. Scaling both sides keeps the comparison honest.
             multiplier = _category_multipliers().get(category, 1.0)
-            saved += (
-                multiplier
-                * bucket.get("cache_read_input_tokens", 0)
-                * (rates["input"] - rates["cache_read"])
-            )
+            for counts, rates in (
+                (short, _rates(model)),
+                (long, tier["rates_per_token"] if tier else _rates(model)),
+            ):
+                saved += (
+                    multiplier
+                    * counts.get("cache_read_input_tokens", 0)
+                    * (rates["input"] - rates["cache_read"])
+                )
         return round(saved, 6)
 
     def snapshot(self) -> dict[str, Any]:
@@ -362,6 +579,17 @@ class UsageLedger:
                 # the number it discloses can never disagree.
                 "includes_uncollected_charges": bool(
                     totals.get(UNCOLLECTED_BATCH_REQUESTS_KEY, 0)
+                ),
+                # Detached snapshots predating tier metadata cannot recover
+                # request sizes. Disclose that their premium is approximate.
+                "includes_estimated_pricing": any(
+                    _category_models().get(category, settings.INTERVIEW_MODEL)
+                    in settings.LONG_CONTEXT_PRICING
+                    and (
+                        not bucket.get(PRICING_REQUEST_COUNT_KEY)
+                        or bool(bucket.get(PRICING_UNCLASSIFIED_REQUEST_COUNT_KEY))
+                    )
+                    for category, bucket in self.categories.items()
                 ),
             }
 
@@ -388,6 +616,15 @@ class UsageLedger:
                     and value >= 0
                 }
                 if bucket:
+                    model = _category_models().get(category, settings.INTERVIEW_MODEL)
+                    if model in settings.LONG_CONTEXT_PRICING and not bucket.get(
+                        PRICING_REQUEST_COUNT_KEY
+                    ):
+                        # Boundaries are unavailable: retain a conservative
+                        # one-request approximation, and disclose it even
+                        # after later exact usage is added to this bucket.
+                        bucket = annotate_request_usage(model, bucket)
+                        bucket[PRICING_UNCLASSIFIED_REQUEST_COUNT_KEY] = 1
                     categories[category] = bucket
         turns = (
             int(raw_turns)

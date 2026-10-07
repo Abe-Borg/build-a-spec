@@ -3391,48 +3391,16 @@ def _build_chat_request(
     return kwargs
 
 
-def _merge_usage(totals: dict[str, int], usage: Any) -> None:
-    """Accumulate one response's billed usage into the turn totals.
+def _merge_usage(
+    totals: dict[str, int], usage: Any, *, model: str | None = None
+) -> None:
+    """Accumulate one response, classifying its price tier before summing.
 
-    The chat loop aggregates across continuation rounds itself rather than
-    calling ``usage_ledger.usage_to_dict``, so the provider's per-TTL cache
-    subtotal has to be read here too — otherwise every one-hour cache write
-    an interview turn makes is priced at the five-minute rate.
-    ``cache_creation_1h_input_tokens`` is a SLICE of
-    ``cache_creation_input_tokens``, never an addition to it.
+    Per-TTL cache creation and long-context subtotals are slices of provider
+    counters, never additional billed tokens.
     """
-    if usage is None:
-        return
-    for key in (
-        "input_tokens",
-        "output_tokens",
-        "cache_creation_input_tokens",
-        "cache_read_input_tokens",
-    ):
-        value = getattr(usage, key, None)
-        if isinstance(value, (int, float)) and value:
-            totals[key] = totals.get(key, 0) + int(value)
-    creation = getattr(usage, "cache_creation", None)
-    one_hour = (
-        getattr(creation, "ephemeral_1h_input_tokens", None)
-        if creation is not None
-        else None
-    )
-    if isinstance(one_hour, (int, float)) and one_hour:
-        totals["cache_creation_1h_input_tokens"] = (
-            totals.get("cache_creation_1h_input_tokens", 0) + int(one_hour)
-        )
-    details = getattr(usage, "output_tokens_details", None)
-    thinking = getattr(details, "thinking_tokens", None) if details else None
-    if isinstance(thinking, (int, float)) and thinking:
-        totals["thinking_tokens"] = totals.get("thinking_tokens", 0) + int(
-            thinking
-        )
-    server = getattr(usage, "server_tool_use", None)
-    for key in ("web_search_requests", "web_fetch_requests"):
-        value = getattr(server, key, None) if server else None
-        if isinstance(value, (int, float)) and value:
-            totals[key] = totals.get(key, 0) + int(value)
+    for key, value in usage_to_dict(usage, model=model).items():
+        totals[key] = totals.get(key, 0) + value
 
 
 def _context_tokens(usage: Any) -> int | None:
@@ -5694,7 +5662,9 @@ def stream_user_turn(
             container_id = response_container_id(final) or container_id
             _log_input_transformations(final, round_index=_round)
 
-            _merge_usage(usage_totals, getattr(final, "usage", None))
+            _merge_usage(
+                usage_totals, getattr(final, "usage", None), model=request["model"]
+            )
             final_usage = getattr(final, "usage", None)
             content = _content_blocks_to_dicts(final.content)
             stop_reason = "user_stop" if stopped_mid_stream else final.stop_reason
@@ -5704,6 +5674,7 @@ def stream_user_turn(
             # own counter. Only here: a round that ended normally carries an
             # exact provider count, which always wins.
             shortfall = 0
+            long_shortfall = 0
             if stopped_mid_stream:
                 reported = getattr(final_usage, "output_tokens", None)
                 shortfall = estimated_output_shortfall(
@@ -5715,6 +5686,17 @@ def stream_user_turn(
                         usage_totals.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0)
                         + shortfall
                     )
+                    estimated = usage_to_dict(
+                        final_usage,
+                        model=request["model"],
+                        estimated_output_tokens=shortfall,
+                    )
+                    long_shortfall = estimated.get(
+                        "long_context_estimated_output_tokens", 0
+                    )
+                    if long_shortfall:
+                        key = "long_context_estimated_output_tokens"
+                        usage_totals[key] = usage_totals.get(key, 0) + long_shortfall
                     usage_totals[USAGE_ESTIMATED_KEY] = True
 
             round_context = _context_tokens(final_usage)
@@ -5736,9 +5718,11 @@ def stream_user_turn(
             # One round_end trace event per streaming round — which round
             # stalled, where the tokens went — including pause_turn rounds.
             round_usage: dict[str, int] = {}
-            _merge_usage(round_usage, final_usage)
+            _merge_usage(round_usage, final_usage, model=request["model"])
             if shortfall:
                 round_usage[ESTIMATED_OUTPUT_TOKENS_KEY] = shortfall
+                if long_shortfall:
+                    round_usage["long_context_estimated_output_tokens"] = long_shortfall
                 round_usage[USAGE_ESTIMATED_KEY] = True
             _trace.turn_round(
                 trace_handle,

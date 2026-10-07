@@ -1,7 +1,8 @@
 """Runtime settings for Build-a-Spec.
 
 Model ids mirror Spec Critic's current stack (``api_config.py`` in the
-Claude-Spec-Critic repo): Sonnet 5 for interactive interview/drafting turns.
+Claude-Spec-Critic repo): Sonnet 5.5 for interactive interview/drafting turns,
+Opus 5.5 for Final QC, and Haiku 5.5 for bounded project-fact extraction.
 Every value is env-overridable with the same degrade-gracefully posture as
 Spec Critic — a bad value falls back to the default rather than crashing.
 
@@ -28,6 +29,9 @@ MODEL_SONNET_5 = "claude-sonnet-5"
 # Sonnet 5 stays in PRICING and the strict-capable list so an env override on
 # it, and retained records, are still priced and strict.
 MODEL_SONNET_55 = "claude-sonnet-5-5"
+# Haiku's extraction worker shares the 5.5 tokenizer and output/context
+# ceilings, but has its own prompt-length pricing tiers (see PRICING).
+MODEL_HAIKU_55 = "claude-haiku-5-5"
 # Opus 4.8 is not a default anywhere; it is reachable only through the model
 # env overrides (BUILD_A_SPEC_QC_MODEL / _RESEARCH_MODEL / _INTERVIEW_MODEL)
 # and stays in PRICING and the strict-capable model list so an override on
@@ -299,6 +303,11 @@ TEMPLATE_EFFORT = _effort_env("BUILD_A_SPEC_TEMPLATE_EFFORT", "medium")
 # project facts already settled in them, each with the line it rests on. It
 # drafts nothing and adjudicates nothing, so "medium" is the depth; the user
 # reviews every proposal before anything is recorded anyway.
+HARVEST_MODEL_DEFAULT = MODEL_HAIKU_55
+HARVEST_MODEL = (
+    os.environ.get("BUILD_A_SPEC_HARVEST_MODEL", "").strip()
+    or HARVEST_MODEL_DEFAULT
+)
 HARVEST_EFFORT = _effort_env("BUILD_A_SPEC_HARVEST_EFFORT", "medium")
 
 # The harvest's output ceiling (the 5.5 prompting upgrade, P55-1). The
@@ -688,7 +697,7 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 
 # --- Pricing (WI4 cost meter) -----------------------------------------------
 
-# USD per token unless noted. VERIFIED 2026-09-23 against
+# USD per token unless noted. VERIFIED 2026-10-07 against
 # platform.claude.com/docs/en/about-claude/pricing, every row and rate
 # below. Sonnet 5 launched with
 # $2/$10 per MTok as introductory pricing through 2026-08-31, with a
@@ -700,8 +709,8 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 # app shows for Sonnet 5 usage instead of protecting against under-reporting.
 #
 # Cache READ is per model, not one multiple for every row: Anthropic prices
-# a cache hit at 0.1× input on every model here EXCEPT Opus 5.5, whose hits
-# cost 0.05× input ($0.20/MTok — footnote 2 on the pricing page; Fable 5.1,
+# a cache hit at 0.1× input on every model here EXCEPT Sonnet 5.5 and Opus
+# 5.5, whose hits cost 0.05× input ($0.10 and $0.20/MTok; Fable 5.1,
 # not priced here, is 0.025×). Look a new row's read rate up instead of
 # assuming 0.1×: Opus 5.5 was added that way at $0.40 (v1.20.0), and every
 # Final QC cost figure the app showed over-reported its cache-read line 2×
@@ -726,10 +735,17 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 # (``usage_ledger._rates``) — every QC dollar figure would silently
 # under-report, so a new QC model MUST land here in the same change.
 PRICING: dict[str, dict[str, float]] = {
+    MODEL_HAIKU_55: {
+        "input": 0.10 / 1_000_000,
+        "output": 0.50 / 1_000_000,
+        "cache_read": 0.01 / 1_000_000,
+        "cache_write": 0.125 / 1_000_000,
+        "cache_write_1h": 0.20 / 1_000_000,
+    },
     MODEL_SONNET_55: {
         "input": 2.0 / 1_000_000,
         "output": 10.0 / 1_000_000,
-        "cache_read": 0.20 / 1_000_000,
+        "cache_read": 0.10 / 1_000_000,
         "cache_write": 2.50 / 1_000_000,
         "cache_write_1h": 4.00 / 1_000_000,
     },
@@ -768,6 +784,24 @@ PRICING: dict[str, dict[str, float]] = {
         "cache_read": 0.20 / 1_000_000,
         "cache_write": 5.00 / 1_000_000,
         "cache_write_1h": 8.00 / 1_000_000,
+    },
+}
+
+# Haiku's premium applies to the ENTIRE request above 100k input tokens,
+# including cached input. Keep this separate from the ordinary rate map so
+# older flat-rate report snapshots retain their exact saved shape and rates.
+# Aggregators carry additive long-context token subtotals, classified before
+# summing, so several short requests never acquire the premium together.
+LONG_CONTEXT_PRICING: dict[str, dict[str, object]] = {
+    MODEL_HAIKU_55: {
+        "input_threshold_tokens": 100_000,
+        "rates_per_token": {
+            "input": 0.50 / 1_000_000,
+            "output": 2.50 / 1_000_000,
+            "cache_read": 0.05 / 1_000_000,
+            "cache_write": 0.625 / 1_000_000,
+            "cache_write_1h": 1.00 / 1_000_000,
+        },
     },
 }
 

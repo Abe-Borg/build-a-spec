@@ -124,6 +124,13 @@ function UsageTable({ usage }: { usage: UsageSummary }) {
           is billed in the estimates above, not deducted here.
         </p>
       )}
+      {usage.includes_estimated_pricing && (
+        <p className="mt-2 text-[11px] text-ink-faint">
+          Some usage lacks the prompt length of each sampling step. Its
+          pricing tier is approximated, so the cost shown may differ from
+          the provider’s bill.
+        </p>
+      )}
       {usage.includes_estimated_output && (
         <p className="mt-2 text-[11px] text-ink-faint">
           <span className="text-ink-dim">

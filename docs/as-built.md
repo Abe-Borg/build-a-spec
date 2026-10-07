@@ -19716,3 +19716,89 @@ against the built CSS: chapter 8's fits without scrolling, and the export
 step's caps at the window with its buttons in view. No backend file changed
 and no paid API call was made.
 
+
+## Claude Haiku 5.5 handles the fact harvest — implemented notes (2026-10-07)
+
+**Owner decision.** Adopt Haiku 5.5 directly, without a pilot or model
+comparison. The project-fact harvest now defaults to `claude-haiku-5-5`,
+selected independently through `settings.HARVEST_MODEL` and the
+`BUILD_A_SPEC_HARVEST_MODEL` environment override. Its adaptive-thinking
+effort stays `medium` (`BUILD_A_SPEC_HARVEST_EFFORT`). Setting the model
+override to `claude-sonnet-5-5` selects the former harvest model.
+
+**What changes.** The harvest's one call extracts established facts from
+the supplied session material. It uses Haiku's strict output schema and
+automatic tool selection, then reads the returned blocks by type. The
+existing refusal, incomplete-reply, cut-off and proposal validation remain
+in force; proposals still go through the user's review before recording.
+Harvest spend is attributed to its independently configured model rather
+than the interview model, including when a reply cannot be used.
+
+The interview, whole-section drafting, template AI Generalize, research and
+conversation-condensing defaults remain Sonnet 5.5. Final QC remains Opus
+5.5. Condensing continues to fork the chat request on its own model so it
+can read that model's cached conversation prefix; caches are model-scoped.
+
+**Capability boundaries.** Haiku's provider rules are distinct from the
+two other 5.5 defaults:
+
+| Haiku 5.5 capability | Application behavior |
+|---|---|
+| Strict tool schemas | Included in the strict-capable model table. |
+| Adaptive thinking and effort | Harvest requests retain adaptive thinking at medium effort. |
+| Forced `tool_choice` | The provider accepts it, but suppresses all thinking. Haiku is deliberately excluded from the helper that forces a one-shot output tool with adaptive thinking. |
+| Disabled thinking | Accepted at effort `high` or below; research's final-submission helper uses it if research is explicitly overridden to Haiku at those efforts. Above `high`, it retains adaptive thinking and automatic tool choice. |
+| Manual thinking budgets, non-default sampling and assistant prefill | Not sent by these application requests. |
+
+No global output-tool forcing is added. Sonnet 5, Opus 5 and Fable 5 keep
+the existing compatible forced-output path; Sonnet 5.5 and Opus 5.5 keep
+automatic selection. Unknown overrides remain conservative.
+
+**Pricing.** Haiku's price tier is chosen per sampling step, using complete
+prompt length: uncached input + cache reads + cache writes. A prompt of
+exactly 100,000 tokens uses the base tier; above that, the premium tier
+applies to every token charge for that sampling step, including output and
+caching. Rates per million tokens:
+
+| Prompt length | Input | Output, including thinking | Cache read | 5-minute cache write | 1-hour cache write |
+|---|---:|---:|---:|---:|---:|
+| Up to 100,000 tokens | $0.10 | $0.50 | $0.01 | $0.125 | $0.20 |
+| Above 100,000 tokens | $0.50 | $2.50 | $0.05 | $0.625 | $1.00 |
+
+For server-tool loops, top-level response usage is cumulative across
+sampling steps. The classifier uses the provider's `usage.iterations`
+message entries when their token counters reconcile to the top-level
+usage, selects each prompt's tier separately, and annotates the response
+before merging. Advisor and compaction iteration entries are separately
+billed rather than slices of those totals. Several short sampling prompts
+or API calls do not acquire a long-prompt premium merely because their
+counters are added; a mixed total retains the charges belonging to each
+tier. When missing or unreconciled iteration data prevents classification,
+the cumulative totals give a conservative estimate, disclosed through
+`pricing_unclassified_request_count` metadata and the session's
+`includes_estimated_pricing` flag. Stopped-turn estimated output follows
+the last message iteration's tier when complete iteration usage is known.
+The default fact harvest has no server-tool loop and is classified from
+its one prompt.
+
+The shared cost calculation accounts for the cache-write TTL split, carries the
+premium schedule into saved pricing snapshots, and applies a batch
+multiplier on batch paths. The harvest itself is synchronous, without a
+batch discount. Token estimates remain list-price estimates based on
+reported usage.
+
+Sonnet 5.5's cache-read rate is corrected from $0.20/M to $0.10/M following
+the provider's reduction on 2026-10-07. Earlier as-built cost examples
+recorded the then-current rate; README and the engineering reference now
+describe the current rates. This is a pricing correction, not a change to
+the chat or compaction cache layout.
+
+Provider references:
+
+- [Haiku 5.5 overview](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
+- [Haiku 5.5 migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide)
+- [Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+
+No pilot, comparison experiment, or paid model request was run. Tests were
+not run, as requested by the owner. The application version and published
+release entries are unchanged.

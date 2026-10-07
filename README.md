@@ -154,9 +154,13 @@ record. What changed for you:
 Fact harvesting and template AI Generalize accept only completed replies.
 An unfinished AI template is rejected even when it contains a readable
 document; the attempted call is still billed, and you can try again or use
-Exact. Their output tools are forced only on confirmed compatible model
-overrides (see `BUILD_A_SPEC_INTERVIEW_MODEL` below); the Sonnet 5.5 default
-uses automatic tool selection.
+Exact. Fact harvesting now uses Claude Haiku 5.5 at medium effort, with its
+own `BUILD_A_SPEC_HARVEST_MODEL` override. It uses automatic tool selection
+so adaptive thinking can run: Haiku's forced tool choice suppresses all
+thinking. Template AI Generalize continues to use the interview model
+(Sonnet 5.5 by default) and automatic selection. These two single-shot
+calls force their output tool only on compatible overrides that retain
+adaptive thinking (`claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`).
 
 An optional, owner-run check shows whether Sonnet 5.5's progress notes now
 stay out of the reply: one real interview turn, sent by
@@ -1019,10 +1023,17 @@ facts, and makes every recorded fact name a source that exists.
   **flagged "source not found" in the panel, never rewritten**, and the flag
   clears if the source comes back.
 - **Metered on its own line.** The harvest shows in Settings → Usage as
-  "Fact harvest", priced at the interview model's rates, whatever it produced
+  "Fact harvest", priced at the harvest model's rates, whatever it produced
   — a declined or malformed reply is still a paid one. Recording harvested
   facts makes a retained Final QC report read stale, exactly as recording a
   fact by hand does (the facts are one of its inputs).
+- **Claude Haiku 5.5 by default.** `BUILD_A_SPEC_HARVEST_MODEL` selects this
+  call independently of the interview. It extracts facts from the supplied
+  session material, and you review every proposal before recording it.
+  Its price tier depends on each request's complete prompt, including cached
+  tokens: up to 100,000 tokens costs $0.10/M input and $0.50/M output;
+  above that, the whole request costs $0.50/M input and $2.50/M output.
+  Usage is priced per request before it joins the session totals.
 - **Not in the guided tour** — the practice copy is not your session.
   `BUILD_A_SPEC_HARVEST_EFFORT` (default `medium`) sets the call's reasoning
   effort: it extracts what was settled, it drafts nothing.
@@ -1723,7 +1734,7 @@ than the others) has a copy of its own, so it never waits.
   still finds nothing to read simply stores its own copy, as before.
 - **What it saves:** the price of storing the shared copy, less the price
   of reading it, three times over. At Claude Sonnet 5.5's rates ($2.50 per
-  million tokens to store a 5-minute copy, $0.20 to read one) that is about
+  million tokens to store a 5-minute copy, $0.10 to read one) that is about
   a cent a round with nothing attached (the shared copy is then only the
   instructions and tools, about 2,000 tokens), and up to about $0.25 a round
   when attached documents and project facts fill their limits (about 35,000
@@ -1873,8 +1884,8 @@ where it can read what the paused request already stored.
   Near the context window an area switches once, for good, to one page read
   per request. Final QC already built its tools once per call.
 - **What it saves:** on each resume, the conversation it sends again is
-  billed at the cache-read price — a tenth of the input price on research's
-  model, a twentieth on Final QC's — instead of the full price, plus a write
+  billed at the cache-read price — a twentieth of the input price on both
+  research's and Final QC's models — instead of the full price, plus a write
   premium on what is new since the last resume. How much that is depends on
   how often your runs pause. If the provider's stored copy turns out not to
   match what is sent again, a resume that runs no web search of its own pays
@@ -2636,9 +2647,9 @@ This is the **1.0 release milestone**. Cut the first Windows build per
 ## Shipped in v0.9.0 (Batch 4: Final QC) and still current
 
 **One button, a fleet of Opus 5.5 reviewers, a full audit-grade report, and a
-compact accept/dismiss action queue.** The one place a model other than Sonnet
-5 appears: a user-triggered last quality-control pass before a section goes
-out the door. The report is a first-class product surface, not
+compact accept/dismiss action queue.** A user-triggered last quality-control
+pass before a section goes out the door. The report is a first-class product
+surface, not
 an incidental memo: it shows what was reviewed, which evidence was retrieved,
 how every candidate finding was challenged, what the run could not establish,
 and exactly what happened to every proposed fix. The compact queue remains
@@ -3597,16 +3608,17 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | Env var | Default | Effect |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | API key; overrides keyring/file, never persisted. |
-| `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5-5` | Model for interview/drafting turns, fact harvesting, and template AI Generalize. Only the two single-shot output calls force their submission tool on confirmed compatible overrides (`claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`); Sonnet 5.5, Opus 5.5, and unverified overrides use automatic selection. |
+| `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5-5` | Model for interview/drafting turns, conversation condensing, and template AI Generalize. Fact harvesting has its own model setting. The template call forces its submission tool only on compatible overrides that retain adaptive thinking (`claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`); Sonnet 5.5, Opus 5.5, Haiku 5.5, and unverified overrides use automatic selection. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The model's context window: the context gauge's denominator (the header's "142k / 1M" pill) and what the chat's backstop measures a request against — past 85% of it the oldest turns are condensed before sending. Pair it with a model override whose window differs; set lower, conversations are condensed earlier. |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary uses it too. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's. |
 | `BUILD_A_SPEC_DRAFT_PASS_EFFORT` | `high` | Adaptive-thinking effort for every round of a whole-section pass — **Draft full section** and **Adapt imported draft** (the ready passes only; the turn that first asks for the section, project type or country runs at the interview effort). One level above the interview because these are the app's longest multistep turns, and the Sonnet 5.5 guide moves longer, harder tool work from `medium` to `high` (the 5.5 prompting upgrade, P55-3). The effort is decided once per turn, from the server's own directive, and recorded in the turn's trace (`prompt_refs` → `effort`). A top-level effort change means that turn and the next one re-write the conversation's cache instead of reading it; these passes normally run early, while the conversation is short. Set it equal to `BUILD_A_SPEC_INTERVIEW_EFFORT` to switch the boost off. In PowerShell: `$env:BUILD_A_SPEC_DRAFT_PASS_EFFORT = "medium"`; in Command Prompt: `set BUILD_A_SPEC_DRAFT_PASS_EFFORT=medium`. |
 | `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
+| `BUILD_A_SPEC_HARVEST_MODEL` | `claude-haiku-5-5` | Model for the Project facts panel's one-shot fact extraction, independent of the interview model. Haiku uses strict output schemas and automatic tool selection to preserve adaptive thinking; forcing its tool would suppress all thinking. Set `BUILD_A_SPEC_HARVEST_MODEL=claude-sonnet-5-5` to select Sonnet for this call. |
 | `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |
 | `BUILD_A_SPEC_HARVEST_MAX_TOKENS` | `64000` (or `BUILD_A_SPEC_MAX_TOKENS`, if lower) | Output ceiling for the fact harvest's one call (floor 4096, or `BUILD_A_SPEC_MAX_TOKENS` if that is lower still, so a lower global cap keeps binding the harvest). The Sonnet 5.5 guide: set it high enough for the thinking and the JSON but no higher than one attempt is worth; a reply that reaches it is refused as cut off (`harvest_cut_off`), never shown as a partial list. |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
-| `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the fixed instruction block, the project background block (research profile, other sections, project description) and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
+| `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the fixed instruction block, the project background block (research profile, other sections, project description) and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at the cache-read rate (0.05× input for Sonnet 5.5). The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
 | `BUILD_A_SPEC_CHAT_COMPACTION` | `1` | Routine conversation condensing: once the committed conversation passes the threshold below, a summary of its oldest turns is written **in the background after a reply** — a real, **billed** model call with no click behind it — and every later message sends the summary instead of those turns. **On by default** since the owner decided it on 2026-09-23 (without the paid recall check the compaction plan had named as the gate); `0` switches it off. The backstop (condense before a message that would not fit in ~85% of the context window) runs either way and is not configurable. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD` | `600000` | Estimated tokens of committed conversation — the history as later requests send it, not the per-turn PROJECT CONTEXT or the cached project background, which condensing cannot shrink — at which routine condensing starts (owner decision D1). Floor 10,000. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS` | `3` | How many of the most recent turns stay word for word when the conversation is condensed (D1). Floor 1. |
@@ -3616,13 +3628,13 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_API_TIMEOUT_SECONDS` | `600` | Per-request read/write timeout for every model call (a streaming reply counts between chunks). The connect timeout stays the SDK's 5 s regardless. Floor 30. |
 | `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |
 | `BUILD_A_SPEC_ELIDE_FETCHED_PAGES` | `1` | Drop the text of the web pages the chat fetched from saved history (chat-history compaction Phase 2). A saved turn keeps each page's address and title, with the passages the reply quoted written into a note where the text was, and an older project is trimmed the same way when opened. **On by default** since its live check (`tools\fetch_elision_canary.py --run`) passed on 2026-09-23. The check's first run was refused on an earlier version of the trim that kept citations into the dropped text; the trim now removes those citations. `0` keeps page text in saved history, as earlier versions did. |
-| `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5-5` | Model for the research fan-out. The final submission after a research limit is shaped per model: Sonnet 5.5 uses `between_tools` thinking and automatic tool choice (one extra request if nothing was recorded); `claude-sonnet-5`, `claude-opus-5` and `claude-fable-5` force the output tool; `claude-sonnet-5`, `claude-opus-4-8` and `claude-opus-5` (at effort `high` or below) disable thinking; anything else keeps adaptive thinking with dropped-thinking recovery. |
+| `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5-5` | Model for the research fan-out. The final submission after a research limit is shaped per model: Sonnet 5.5 uses `between_tools` thinking and automatic tool choice (one extra request if nothing was recorded); `claude-sonnet-5`, `claude-opus-5` and `claude-fable-5` force the output tool; `claude-sonnet-5`, `claude-opus-4-8`, and `claude-opus-5` or `claude-haiku-5-5` (at effort `high` or below) disable thinking; anything else keeps adaptive thinking with dropped-thinking recovery. Haiku uses automatic tool selection, so a higher effort override preserves thinking. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_CONTEXT_WINDOW` | `BUILD_A_SPEC_CONTEXT_WINDOW` (`1000000`) | Research model's context window. Each request is estimated with a supported equivalent at the free provider token counter, plus server-tool overhead, output and web-result reserves; pair this override with a research model whose window differs. |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `medium` | Adaptive-thinking effort for research dimensions, following Sonnet 5.5's recalibrated scale and migration guidance for multistep tool use. Set `BUILD_A_SPEC_RESEARCH_EFFORT=high` to restore the previous default. In PowerShell: `$env:BUILD_A_SPEC_RESEARCH_EFFORT = "high"`; in Command Prompt: `set BUILD_A_SPEC_RESEARCH_EFFORT=high`. |
 | `BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS` | `45` | Staggered research launch: the areas of a round read the same tools, instructions and project block (your attached documents and project facts included), so one area is sent first and the others wait for it to start answering, then read its cached copy instead of each paying to store their own. This is the longest they wait, in seconds; a wait that runs out, a Stop, or a first area whose request ends or fails releases them at once. An area sent different tools never waits. Changes no request, only when it is sent; budgets, grounding and findings are unchanged. Research's own switch, separate from `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`. `0` starts every area at once, as before. In PowerShell: `$env:BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS = "0"`; in Command Prompt: `set BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS=0`. Floor 0. |
 | `BUILD_A_SPEC_CONTINUATION_CACHE` | `1` | Continuation caching (Chunk 4 of the cost program, on by default since the Tier 1 finish program's session CT-3): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. Watched by the cost self-checks: a resume the provider refuses because of the breakpoint is sent once more without it, and the breakpoint switches off for that engine (research or Final QC) until the app restarts; six or more measured resumes that together cost more than they saved switch it off the same way (Settings → Developer tools → Cost self-checks). `0` switches it off: no request carries it. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`. |
-| `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass (the one non-Sonnet surface). |
+| `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass. |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Global QC output/thinking ceiling. Caps every phase, including explicit phase overrides. |
 | `BUILD_A_SPEC_QC_LENS_MAX_TOKENS` | `64000` (or global QC ceiling, if lower) | Per-request ceiling for the five review lenses, including continuations. |
 | `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_TOKENS` | `32000` (or global QC ceiling, if lower) | Per-request ceiling for candidate grouping. |
@@ -3667,6 +3679,28 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_UPDATE_URL` | GitHub latest | Override the update-manifest URL. |
 | `BUILD_A_SPEC_UPDATE_STATE_PATH` | config dir | Override the updater's state file (the once-a-day throttle, the skipped version, the remembered check, and the What's-new "last seen" marker). |
 | `BUILD_A_SPEC_DISABLE_UPDATE_CHECK` | off | Truthy disables update checks entirely. |
+
+Haiku 5.5's estimated token costs use these list rates per million tokens
+([provider pricing](https://platform.claude.com/docs/en/about-claude/pricing)):
+
+| Complete sampling prompt | Input | Output, including thinking | Cache read | 5-minute cache write | 1-hour cache write |
+|---|---:|---:|---:|---:|---:|
+| Up to 100,000 tokens | $0.10 | $0.50 | $0.01 | $0.125 | $0.20 |
+| Above 100,000 tokens | $0.50 | $2.50 | $0.05 | $0.625 | $1.00 |
+
+The prompt length includes uncached input, cache reads, and cache writes.
+Crossing 100,000 tokens selects the higher rates for that whole sampling
+step; it is not a marginal charge on the excess. A server-tool call can
+contain several sampling steps. When complete provider iteration usage
+reconciles to the response totals, each step is classified before its usage
+is combined. This prevents several short prompts from acquiring a premium
+merely because their counters are added. Missing or inconsistent iteration
+data that prevents classification produces a marked conservative estimate.
+Batch token charges receive the usual 50% discount when a batch path is
+used; the fact harvest is a normal synchronous call.
+Sonnet 5.5 cache reads are now priced at $0.10/M, following the provider's
+2026-10-07 reduction. Conversation condensing continues to use the chat
+model and its cached conversation prefix.
 
 Every integer knob in `backend/settings.py` is clamped to a floor — `1` unless noted; `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` floors at `60` and `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET` at `2` — and a value below it, or one that is not an integer, is corrected (to the floor, or to the default) with a warning in the activity log rather than taken silently. The six trace/log retention ceilings (`*_MAX_RUNS`, `*_MAX_AGE_DAYS`, `*_MAX_MIB`) are the exception: `0` switches one ceiling off, and a negative or unparseable value falls back to the default. A zero-seat Final QC panel would have "upheld" every finding it never read, which is the case the floor exists for.
 

@@ -57,6 +57,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from backend import settings  # noqa: E402
+from backend.usage_ledger import PRICING_USAGE_KEYS, pricing_usage_slices  # noqa: E402
 from backend.spec_doc.project_package import parse_project_file  # noqa: E402
 
 
@@ -161,12 +162,17 @@ class Tokens:
     records_with_read: int = 0
     records_with_write: int = 0
     recorded_cost_usd: float = 0.0
+    pricing_usage: dict[str, int] = field(default_factory=dict)
 
     def add_usage(self, usage: Any, *, recorded_cost: float = 0.0) -> None:
         self.records += 1
         self.recorded_cost_usd += recorded_cost
         if not isinstance(usage, dict):
             return
+        for key in PRICING_USAGE_KEYS:
+            self.pricing_usage[key] = self.pricing_usage.get(key, 0) + _int(
+                usage.get(key)
+            )
         total_write = _int(usage.get(_WRITE))
         one_hour = min(_int(usage.get(_WRITE_1H)), total_write)
         read = _int(usage.get(_READ))
@@ -216,12 +222,44 @@ class Tokens:
         *,
         web_search_rate: float = 0.0,
         web_fetch_rate: float = 0.0,
+        long_context_pricing: dict[str, Any] | None = None,
     ) -> dict[str, float]:
         """Mirror ``usage_ledger.estimate_usage_cost`` term for term.
 
         The multiplier scales EVERY charge, server-tool fees included —
         it describes how the call was sent, not what the rate table says.
         """
+        if long_context_pricing:
+            raw = {
+                "input_tokens": self.uncached_input,
+                "cache_creation_input_tokens": self.total_write,
+                "cache_creation_1h_input_tokens": self.write_1h,
+                "cache_read_input_tokens": self.cache_read,
+                "output_tokens": self.output,
+                "estimated_output_tokens": self.estimated_output,
+                "web_search_requests": self.web_search_requests,
+                "web_fetch_requests": self.web_fetch_requests,
+                **self.pricing_usage,
+            }
+            short, long = pricing_usage_slices(
+                raw, threshold=long_context_pricing["input_threshold_tokens"]
+            )
+            result: dict[str, float] = {}
+            for counts, token_rates in (
+                (short, rates),
+                (long, long_context_pricing["rates_per_token"]),
+            ):
+                tokens = Tokens()
+                tokens.add_usage(counts)
+                priced = tokens.cost(
+                    token_rates,
+                    multiplier,
+                    web_search_rate=web_search_rate,
+                    web_fetch_rate=web_fetch_rate,
+                )
+                for key, value in priced.items():
+                    result[key] = result.get(key, 0.0) + value
+            return result
         output_rate = rates.get("output", 0.0)
         priced = {
             "input": self.uncached_input * rates.get("input", 0.0),
@@ -251,6 +289,7 @@ class RunProfile:
     batch_verification: Any = None
     consolidation_enabled: Any = None
     rates: dict[str, float] = field(default_factory=dict)
+    long_context_pricing: dict[str, Any] = field(default_factory=dict)
     web_search_rate: float = 0.0
     web_fetch_rate: float = 0.0
     rate_source: str = ""
@@ -288,6 +327,8 @@ def _rates_for(report: dict, run: RunProfile) -> None:
             for key, value in rates.items()
             if isinstance(key, str)
         }
+        tier = _manifest_value(basis, "long_context_pricing")
+        run.long_context_pricing = dict(tier) if isinstance(tier, dict) else {}
         rate_model = str(_manifest_value(basis, "rate_model") or "")
         used_fallback = bool(_manifest_value(basis, "used_fallback_rate"))
         # Server-tool fees sit OUTSIDE rates_per_token, as their own
@@ -313,6 +354,7 @@ def _rates_for(report: dict, run: RunProfile) -> None:
     else:
         run.rate_source = f"this build's PRICING table for {model}"
     run.rates = dict(table)
+    run.long_context_pricing = dict(settings.LONG_CONTEXT_PRICING.get(model, {}))
     # Matching estimate_usage_cost: web SEARCH is billed per request, web
     # FETCH is billed by tokens and carries no per-request fee.
     run.web_search_rate = float(settings.WEB_SEARCH_COST)
@@ -503,6 +545,7 @@ def _run_markdown(run: RunProfile) -> list[str]:
             multiplier,
             web_search_rate=run.web_search_rate,
             web_fetch_rate=run.web_fetch_rate,
+            long_context_pricing=run.long_context_pricing,
         )
         subtotal = sum(priced.values())
         computed_total += subtotal
@@ -535,6 +578,7 @@ def _run_markdown(run: RunProfile) -> list[str]:
             multiplier,
             web_search_rate=run.web_search_rate,
             web_fetch_rate=run.web_fetch_rate,
+            long_context_pricing=run.long_context_pricing,
         )["output"]
     lines.append(
         f"| **run total** | {totals.records} | {totals.api_requests} | "

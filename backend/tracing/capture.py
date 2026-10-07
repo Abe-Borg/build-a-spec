@@ -248,6 +248,7 @@ def _environment_meta() -> dict[str, Any]:
         "models": {
             "interview": settings.INTERVIEW_MODEL,
             "research": settings.RESEARCH_MODEL,
+            "harvest": settings.HARVEST_MODEL,
             "qc": settings.QC_MODEL,
         },
     }

@@ -3,6 +3,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { TOUR } from "../src/lib/tour.ts";
+
 const tour = readFileSync(new URL("../src/lib/tour.ts", import.meta.url), "utf8");
 const registry = readFileSync(
   new URL("../src/lib/capabilities.ts", import.meta.url),
@@ -552,4 +554,44 @@ test("the enrichment surface is gone with the source choice", () => {
   assert.doesNotMatch(hook, /tutorial_fallback|tutorial_session|tutorial_coverage/);
   assert.match(api, /workspace_id:\s*args\.workspaceId/);
   assert.match(api, /generation:\s*args\.generation/);
+});
+
+test("a step card never runs past the window, and its buttons never scroll away", () => {
+  // Chapter 8's import step once stacked a long body over the whole export
+  // glossary: the card grew past the bottom of the window and Continue and
+  // End went with it. The card is capped at the viewport and only its middle
+  // scrolls; the header and the button row sit outside the scroller.
+  assert.match(overlay, /flex max-h-\[calc\(100vh-16px\)\][^"]*flex-col/);
+  const from = overlay.indexOf('data-testid="tour-card-body"');
+  assert.ok(from > 0, "the step card has one scrolling body");
+  const scroller = overlay.slice(overlay.lastIndexOf("<div", from), overlay.indexOf(">", from));
+  assert.match(scroller, /min-h-0 flex-1 overflow-y-auto/);
+  // Keyed by step, so the next step opens at its top.
+  assert.match(scroller, /key=\{`\$\{phase\.chunk\}:\$\{phase\.step\}`\}/);
+  const header = overlay.indexOf("<CardHeader", overlay.indexOf("const chapter = TOUR[phase.chunk]"));
+  const buttons = overlay.indexOf("onClick={ob.advance}");
+  assert.ok(header > 0 && header < from, "the header sits above the scroller");
+  assert.ok(buttons > from, "the button row follows the scroller");
+  const between = overlay.slice(from, buttons);
+  assert.match(between, /<\/dl>\s*\)\}\s*<\/div>\s*<div className="mt-4 flex shrink-0/);
+});
+
+test("the export glossary is shown once, and no step body is a wall", () => {
+  const steps = TOUR.flatMap((chapter) => chapter.steps);
+  assert.deepEqual(
+    steps.filter((step) => step.details).map((step) => step.id),
+    ["export"],
+  );
+  const imported = steps.find((step) => step.id === "source-permissions");
+  assert.ok(imported);
+  // The legacy permission rules belong to Help, not to the import walkthrough.
+  assert.doesNotMatch(imported.body, /server decides|fails closed|byte-exact contract/i);
+  assert.match(imported.body, /Export Word - Tracked Changes ON/);
+  assert.match(imported.body, /Adapt imported draft/);
+  assert.match(imported.body, /Edit freely/);
+  // The scroller is the fallback, not the plan: a 390px card reads a body of
+  // this length without scrolling on an ordinary laptop window.
+  for (const step of steps) {
+    assert.ok(step.body.length <= 1300, `${step.id} body is ${step.body.length} characters`);
+  }
 });

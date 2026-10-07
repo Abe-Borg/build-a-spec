@@ -562,3 +562,113 @@ def test_semantic_rejection_cannot_reach_the_mutation_path(monkeypatch) -> None:
     assert response.json()["outcomes"] == {"rejected": "no_ops"}
     assert session.doc.doc.to_dict() == before
     assert finding.status == "open"
+
+
+def _rewrite(target_id: str, text: str) -> dict:
+    return {
+        "action": "replace",
+        "target_id": target_id,
+        "text": text,
+        "status": "confirmed",
+    }
+
+
+def test_one_findings_collection_steps_are_a_sequence_but_cross_finding_rules_hold() -> None:
+    """The planner's one new rule, and the fence around it.
+
+    Inside one finding an overlap confined to collection membership is
+    compatible; across findings — including an identical operation shared
+    with another finding, which makes an owner list of two — every rule is
+    exactly what it was.
+    """
+    section = _store().doc
+
+    def append(text: str) -> dict:
+        return {
+            "action": "add_paragraph",
+            "target_id": "pt1.a1",
+            "text": text,
+            "status": "confirmed",
+        }
+
+    delete_first = {"action": "delete", "target_id": "pt1.a1.p1"}
+
+    # One finding, its own steps: compatible.
+    for ops in (
+        [append("A."), append("B.")],
+        [append("A."), delete_first],
+        [delete_first, append("A.")],
+        [{"action": "add_article", "target_id": "pt1", "text": "SCOPE"},
+         {"action": "delete", "target_id": "pt1.a1"}],
+    ):
+        assert plan_qc_operation_batch(section, [("solo", ops)]).conflicts == ()
+
+    # One finding, an element-level overlap: still a conflict.
+    for ops, key in (
+        ([_rewrite("pt1.a1.p1", "X."), _rewrite("pt1.a1.p1", "Y.")], "element:pt1.a1.p1:*"),
+        ([_rewrite("pt1.a1.p1", "X."), delete_first], "element:pt1.a1.p1:*"),
+        ([append("A."), {"action": "delete", "target_id": "pt1.a1"}], "element:pt1.a1:*"),
+        ([_rewrite("pt1.a1.p1", "X."),
+          {"action": "set_status", "target_id": "pt1.a1.p1", "status": "assumed"}],
+         "element:pt1.a1.p1:*"),
+    ):
+        conflicts = plan_qc_operation_batch(section, [("solo", ops)]).conflicts
+        assert [c["write_keys"] for c in conflicts] == [[key]], ops
+
+    # Across findings, unchanged: a multi-step finding against a same-parent
+    # append, a sequence against a standalone append, and a step shared
+    # verbatim with another finding all conflict as before.
+    for findings in (
+        [("multi", [append("A."), append("B.")]), ("other", [append("C.")])],
+        [("sequence", [append("A."), delete_first]), ("other", [append("C.")])],
+        [("multi", [append("A."), append("B.")]), ("twin", [append("A.")])],
+    ):
+        conflicts = plan_qc_operation_batch(section, findings).conflicts
+        assert conflicts, findings
+        assert all(
+            len(c["finding_ids"]) == 2 for c in conflicts
+        ), findings
+    # …and two standalone appends to one article remain compatible.
+    assert plan_qc_operation_batch(
+        section, [("one", [append("A.")]), ("two", [append("B.")])]
+    ).conflicts == ()
+
+
+def test_a_relocation_fix_applies_as_one_finding(monkeypatch) -> None:
+    """The writing policy's relocation shape goes through the panel's Apply."""
+    session = sessions.get_session()
+    session.doc = _store()
+    relocation = _finding(
+        "relocate",
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide a complete system.",
+                "status": "confirmed",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide a complete system of hangers.",
+                "status": "confirmed",
+            },
+            {"action": "delete", "target_id": "pt1.a1.p1"},
+        ],
+    )
+    _install_result([relocation])
+    _bypass_result_contract(monkeypatch)
+
+    response = _client().post("/api/qc/apply", json={"finding_ids": ["relocate"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["outcomes"] == {"relocate": "applied"}
+    assert relocation.status == "applied"
+    texts = [
+        paragraph.text
+        for paragraph in session.doc.doc.parts[0].articles[0].paragraphs
+    ]
+    assert texts == [
+        "Coordinate all interfaces.",
+        "Provide a complete system.",
+        "Provide a complete system of hangers.",
+    ]

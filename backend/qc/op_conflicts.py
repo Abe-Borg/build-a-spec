@@ -4,6 +4,14 @@ QC findings are reviewed independently, but users may accept several at once.
 This module turns their operations into one deduplicated batch and rejects
 different operations that claim the same logical write location before any
 document or audit state is mutated.
+
+One finding's own operations are an ordered sequence — the dry run validated
+them in the order given and the apply executes them in that order — so inside
+a finding only an element-level overlap is a conflict (a second write to one
+element makes the first dead; a write under an element the same fix deletes
+targets what it removes). Its steps on one collection's membership, such as
+deleting a provision and adding its pieces back to the same article, are
+compatible with each other. Across findings every rule is unchanged.
 """
 from __future__ import annotations
 
@@ -97,6 +105,34 @@ def _is_compatible_addition_overlap(
         and left_key.scope == right_key.scope == "collection"
         and left_key.resource == right_key.resource
         and left_key.field == right_key.field == "members"
+    )
+
+
+def _is_same_finding_sequence_overlap(
+    left: _PlannedOperation,
+    right: _PlannedOperation,
+    left_key: _WriteKey,
+    right_key: _WriteKey,
+) -> bool:
+    """Whether an overlap is one finding's own ordered steps on a collection.
+
+    A finding's operations are a sequence: ``dry_run_apply_findings`` applied
+    them in the order given and the apply executes them in that order, so a
+    fix that deletes a provision and adds its pieces back to the same article
+    (the writing policy's relocation shape), or appends two paragraphs to one
+    article, is coherent — not two writers racing for one slot. Both
+    operations must belong to exactly the same one finding: an identical
+    operation shared with another finding makes an owner list of two, and
+    the cross-finding rules then decide, unchanged. The overlap must also be
+    confined to collection membership. An element-level overlap inside one
+    finding stays a conflict, because one of the two writes is then dead or
+    aimed at what the same fix removes (live finding qc-6ee3321aeea8,
+    2026-10-07: two rewrites of ``pt1.a15.p2`` in one fix).
+    """
+    return bool(
+        len(left.finding_ids) == 1
+        and left.finding_ids == right.finding_ids
+        and left_key.scope == right_key.scope == "collection"
     )
 
 
@@ -268,6 +304,9 @@ def plan_qc_operation_batch(
                         left_key,
                         right_key,
                         standalone_finding_ids,
+                    )
+                    and not _is_same_finding_sequence_overlap(
+                        left, right, left_key, right_key
                     )
                 }
             )

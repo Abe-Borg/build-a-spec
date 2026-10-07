@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from backend.app import create_app
 from backend import sessions
 from tests.fakes import (
+    with_edit_reasons,
     FakeClient,
     chat_search_blocks,
     raw_turn,
@@ -929,7 +930,7 @@ def test_thinking_blocks_preserved_mid_turn_and_stripped_at_commit(monkeypatch):
                 [
                     thinking_block(),
                     text_block("Drafting."),
-                    tool_use_block("toolu_t1", "apply_spec_edits", _SEED_EDITS),
+                    tool_use_block("toolu_t1", "apply_spec_edits", with_edit_reasons(_SEED_EDITS)),
                 ],
                 stop_reason="tool_use",
                 chunks=["Drafting."],

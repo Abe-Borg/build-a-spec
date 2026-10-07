@@ -642,9 +642,11 @@ extracted provisions* (`?redline=master&mode=normalized`) stays below them.
 
 ### Build-a-Spec's comments on the changes
 
-Each change the redline marks that has a **recorded basis** also carries a
-Word comment, authored `Build-a-Spec` (initials `BAS`, dated at export),
-saying what the change rests on. It is always on (owner decision,
+Each change the redline marks that has a **recorded basis** — since
+2026-10-07 that includes the reason the assistant gave for the edit, which
+every model edit carries, so every change the assistant made has one — also
+carries a Word comment, authored `Build-a-Spec` (initials `BAS`, dated at
+export), saying what the change rests on. It is always on (owner decision,
 2026-09-23); `BUILD_A_SPEC_REDLINE_COMMENTS=0` switches it off, read per
 request, and then the file is byte for byte what the redline wrote before
 comments existed. **The file may go to a client**, and the comments carry
@@ -665,8 +667,18 @@ says so.
 * **A Final QC fix**, from the durable fix record (below): `Changed by a
   Final QC fix, applied <date>: <title> (<severity>, <lens>)`, the issue,
   then `Sources:` and the finding's accepted sources, each titled.
+* **The edit's reason** (`SpecSection.edit_reasons[uid]` — what the
+  assistant said each edit of the element was for; `backend/redline_basis.py`
+  → "Every edit carries its reason" in CLAUDE.md): `Reason: <text>`, or
+  `Reasons, oldest first:` and one numbered paragraph each when the element
+  was edited more than once. A deleted article's reason is kept under every
+  provision deleted with it; the header's speaks on the upload's header line
+  too. A reason that only names a Final QC fix whose record already speaks
+  for the element is not repeated beside it, and a provision the user
+  retyped, moved or deleted by hand carries no reasons at all.
 
-A change with both kinds of basis gets one comment, the QC fix first. Only an
+A change with more than one kind of basis gets one comment: the QC fix
+first, then the research or attached document, then the reason. Only an
 `http`/`https` URL with a host becomes a clickable link (anything else stays
 text); a heading lists at most five, then `+N more`; long text is cut near
 500 characters with `…`; every string goes through `xml_safe_text`, so a
@@ -680,9 +692,11 @@ attached-document basis speaks for new words, so it applies only to an
 inserted provision or an edited or moved one whose text differs from the
 import — a relettered provision (only its letter changed) and a pure move
 get none. A QC basis applies to any change whose element the fix record
-still covers, deletions and moves included. Never commented: a status-only
-change (it is not tracked), a preserved block (a table, a picture, …), a
-change with no basis. A `source_item_id` the current research does not hold
+still covers, deletions and moves included; so does the edit's reason — a
+deletion and a pure move say why they were made. Never commented: a
+status-only change (it is not tracked), a preserved block (a table, a
+picture, …), a change with no basis (the user's own typed edit, content
+edited before reasons were recorded). A `source_item_id` the current research does not hold
 gives no comment and is counted (`unresolved_source`). Neighbouring changed
 paragraphs whose comments would read the same share ONE comment spanning
 them, when nothing but those paragraphs sits between them.

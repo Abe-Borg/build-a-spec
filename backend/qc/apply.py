@@ -487,6 +487,58 @@ def finding_evidence_keys(
     return keys
 
 
+#: How a Final QC fix's reason reads on the element it changed
+#: (``ops_with_fix_reasons``). The redline on the original recognises it
+#: beside the durable fix record so the same fix is not said twice.
+QC_FIX_REASON_PREFIX = "Final QC fix: "
+
+
+def qc_fix_reason(title: str) -> str:
+    """The reason recorded for a fix from the finding titled ``title``."""
+    folded = " ".join(str(title or "").split())
+    return f"{QC_FIX_REASON_PREFIX}{folded}" if folded else QC_FIX_REASON_PREFIX.rstrip(": ")
+
+
+def ops_with_fix_reasons(
+    combined_ops: list[dict[str, Any]],
+    eligible: list[tuple[str, list[dict[str, Any]]]],
+    result: Any,
+) -> list[dict[str, Any]]:
+    """``combined_ops`` for the live apply, each carrying the Final QC
+    finding it comes from as its ``reason`` ("Final QC fix: <title>").
+
+    Every edit the software makes carries a reason (owner rule,
+    2026-10-07). A finding's proposed operations carry none — the strict QC
+    schema has no such field and the lenses never write one — so the apply
+    path adds the finding's title, matched through the canonical operation
+    identity the dedupe uses: a duplicate-only finding's shared operation
+    keeps its first owner's title. Operations are copied, never mutated, and
+    their order is unchanged, so the echoes still line up 1:1 with
+    ``combined_ops`` for :func:`finding_evidence_keys`. An operation that
+    already carries a reason keeps it. The redline's comment on a QC fix
+    still comes from the durable fix record; this is what the panel shows.
+    """
+    titles = {
+        str(getattr(finding, "finding_id", "") or ""): str(
+            getattr(finding, "title", "") or ""
+        )
+        for finding in getattr(result, "findings", None) or ()
+    }
+    by_identity: dict[str, str] = {}
+    for finding_id, proposed_ops in eligible:
+        for operation in proposed_ops:
+            by_identity.setdefault(qc_operation_identity(operation), str(finding_id))
+    reasoned: list[dict[str, Any]] = []
+    for operation in combined_ops:
+        copied = dict(operation)
+        if not str(copied.get("reason") or "").strip():
+            copied["reason"] = qc_fix_reason(
+                titles.get(by_identity.get(qc_operation_identity(operation), ""), "")
+            )
+        reasoned.append(copied)
+    return reasoned
+
+
 def _element_own_state(section: Any, uid: str) -> Any:
     """The node's OWN audited fields (never its children), or None if absent.
 

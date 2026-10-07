@@ -31,7 +31,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
-| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. A change with a recorded basis carries a Word comment under your export author name with the research text and source links behind it. Export → *Redline on your original (tracked changes)* (the unreleased 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the docs/as-built.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. Every change the assistant made carries a Word comment under your export author name: the reason it gave for the edit, plus the research text and source links behind it when it has them. Export → *Redline on your original (tracked changes)* (the unreleased 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the docs/as-built.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -166,6 +166,60 @@ An optional, owner-run check shows whether Sonnet 5.5's progress notes now
 stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
+
+## Current Status — every edit says why
+
+No release entry yet: v1.24.0 is published and its entry is frozen, so the
+release-note draft is in docs/as-built.md ("Every edit carries its reason").
+
+The owner's rule (2026-10-07): the software states the reason for every
+single edit it makes, even a single added word, briefly and to the point.
+Until now it said why for some changes and not others — a provision drafted
+from a research finding or an attached document, and a Final QC fix, carried
+a Word comment in the redline on your original; everything else the
+assistant wrote, revised, moved or deleted carried nothing, and the chat's
+closing summary covered the turn, not each edit.
+
+- **Every operation carries a reason.** Each `apply_spec_edits` operation
+  the assistant sends — add, revise, move, delete, re-status, the section
+  header, the project metadata — names why it is made: what you said, the
+  research item or reference it follows, the code requirement, or the
+  correction. A batch with an operation missing one is rejected whole,
+  nothing applied, and the assistant resends it with the reasons (the same
+  posture as a placeholder). On `set_standard_edition` the required adoption
+  basis is the reason.
+- **The panel shows it.** Every provision, article title and the header the
+  assistant has edited carries a small **why** chip beside the ◆ source
+  chip; hover it for the reason, or the trail of reasons oldest first when
+  the element was edited more than once (the newest few are kept). While a
+  turn's changes are highlighted, the newest reason also prints under each
+  changed block, so you read why as the edit lands.
+- **The redline on your original says it.** Every change the assistant made
+  now carries a Word comment: `Reason: …`, after any research,
+  attached-document or Final QC basis the change also has. A deleted
+  article's reason speaks on every provision it took with it; a pure move
+  speaks too. Your own typed edits and a relettering are the only changes
+  without one.
+- **Final QC fixes say which finding.** A fix applied from the panel or
+  through chat records `Final QC fix: <finding title>` as its reason, so the
+  chip answers for it as well; its redline comment still comes from the
+  durable fix record, and that line is not repeated beside it.
+- **Kept with the document.** Reasons ride the document tree: undo, redo,
+  version history and the project file carry them, and a template made from
+  a section drops them (why another project's edits were made is not a
+  drafting basis). Retype, move or delete a provision by hand and the
+  assistant's reasons for it go with it — your words are yours; confirming
+  it keeps them. They never enter the specification text, the exported
+  specification or the Final QC inputs, and they are not sent back to the
+  model inside the document each turn.
+
+A reason is folded to one line and cut near 240 characters rather than
+refused. The reasons stay out of the tool result the model reads back (its
+own request already carries them), so history does not hold each one twice.
+The tool definition's `reason` property and one prompt line changed, so
+every open session rewrites its cached prefix once after upgrade; retained
+Final QC reports stay current, because the op vocabulary the lenses read
+did not change. No paid API call was made.
 
 ## Current Status — the diagnostics say whether an agent was starved
 
@@ -1564,8 +1618,17 @@ first.
   lead research could not verify is labelled so, and lists what it cited as
   not verified. One written from an attached document names the document. A
   change a Final QC fix made — an edit, a deletion, a move — names the
-  finding, its severity and lens, the issue, and its sources. A change with
-  no recorded basis (your own edit, a relettering) gets no comment.
+  finding, its severity and lens, the issue, and its sources. Since
+  2026-10-07 every change the assistant made also carries the reason it gave
+  for the edit (next bullet), so only your own typed edits and a relettering
+  go without a comment.
+- **Every edit says why.** The assistant states a brief reason with every
+  operation it makes — a single added word included — and the redline says
+  it on the change as `Reason: …` (a numbered trail, oldest first, when the
+  element was edited more than once), after any research or Final QC basis
+  the change also has. A deleted article's reason speaks on every provision
+  it took with it; a pure move speaks too. See "Current Status — every edit
+  says why" above.
 - **A fix is credited only while it holds.** Applying a Final QC fix now
   writes a durable record (saved with the project) of what it changed and
   why, so its comment survives the next Final QC run. It speaks only while
@@ -3489,8 +3552,9 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          run recap, compact accept/dismiss fix queue),
                          QCReportModal (complete
                          audit-grade in-app report + Word/JSON downloads),
-                         SpecDocument (SectionFormat rendering + ◆ chips
-                         + the read-only compare/diff render)
+                         SpecDocument (SectionFormat rendering + ◆ source
+                         chips + "why" chips + the read-only compare/diff
+                         render)
 packaging/windows/       build-a-spec.spec (PyInstaller), installer.iss (Inno),
                          app_entry.py (--version/--selfcheck), make_manifest.py,
                          check_release_version.py       [cloned from Spec Critic]
@@ -3661,7 +3725,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_FETCHES_LENS` | `4` | web_fetch allowance for the other lenses + verifiers. Verifier pages are capped at 5,000 content tokens each (20,000 for four fetches); lenses keep the 50,000-token page ceiling. |
 | `BUILD_A_SPEC_WORD_AUTHOR` | `Abraham Borg` | Name shown on new Word tracked changes and associated comments. Comment initials are derived from this name. Existing reviewers are retained. |
 | `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` | `1` | In the redline on your original, show a provision you moved without changing it as Word's own "Moved" marks (`w:moveFrom` where it was and `w:moveTo` where it is) instead of a deletion there and an insertion here. On by default since redline Phase 2 PR B, which was built without real Word's verdict on it (the owner waived that gate on 2026-09-23). `0` gives back the Phase 1 rendering, byte for byte — the switch to reach for if Word ever shows a native move wrongly. Either way the export checks that Accept All gives the formatted export and Reject All your original before handing the file over, and a native rendering that fails that check is rendered again without Moved marks. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_NATIVE_MOVES = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_NATIVE_MOVES=0`. |
-| `BUILD_A_SPEC_REDLINE_COMMENTS` | `1` | In the redline on your original, give each change with a recorded basis a Word comment under your export author name saying what it rests on — a research finding (with its requirement, authority, code reference and links to its sources), an attached document, or a Final QC fix (with its issue and sources). The comments travel in the file, which may go to a client. Read per export; `0` gives back the redline without comments, byte for byte. If the comments cannot be proved additive, the file goes out without them rather than being refused. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_COMMENTS = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_COMMENTS=0`. |
+| `BUILD_A_SPEC_REDLINE_COMMENTS` | `1` | In the redline on your original, give each change with a recorded basis a Word comment under your export author name saying what it rests on — the reason the assistant gave for the edit (every model edit carries one), a research finding (with its requirement, authority, code reference and links to its sources), an attached document, or a Final QC fix (with its issue and sources). The comments travel in the file, which may go to a client. Read per export; `0` gives back the redline without comments, byte for byte. If the comments cannot be proved additive, the file goes out without them rather than being refused. In PowerShell: `$env:BUILD_A_SPEC_REDLINE_COMMENTS = "0"`; in Command Prompt: `set BUILD_A_SPEC_REDLINE_COMMENTS=0`. |
 | `BUILD_A_SPEC_PORT` | `8756` | Fixed loopback backend port used only in Vite development. Packaged/browser production pre-binds an exclusive OS-assigned ephemeral loopback port per launch. |
 | `BUILD_A_SPEC_DEV` | off | Point the window at the Vite dev server. |
 | `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). Traces may contain document text; treat them as sensitive project data. `0` disables. |

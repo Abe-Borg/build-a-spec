@@ -42,6 +42,7 @@ import {
   sourceEditOpDecision,
 } from "../lib/sourceCapabilities";
 import { sourceChipTitle } from "../lib/sourceChip";
+import { editReasons, latestReason, reasonChipTitle } from "../lib/editReasons";
 import {
   adjacentAllowedPosition,
   canAddChildParagraph,
@@ -70,6 +71,15 @@ const TemplateSeedContext = createContext<{
   name: string;
   ids: ReadonlySet<string>;
 }>({ name: "", ids: new Set() });
+/**
+ * `SpecDoc.edit_reasons` — why the assistant edited each element — for the
+ * "why" chip on every provision, article title and the header. One provider
+ * at the document root rather than a prop threaded through five components;
+ * a `SectionHeader` rendered outside the document (the Compare view) reads
+ * the empty default and shows no chip.
+ */
+const EditReasonsContext = createContext<Readonly<Record<string, string[]>>>({});
+const NO_REASONS: Readonly<Record<string, string[]>> = {};
 
 /**
  * A blank header field, shown the way an empty input shows its hint: greyed,
@@ -182,6 +192,48 @@ function SourceChip({
       title={sourceChipTitle(itemId, lookup)}
     >
       ◆
+    </span>
+  );
+}
+
+/**
+ * The "why" chip: the assistant's reason(s) for editing this element, on
+ * hover (every model edit carries one; the engine refuses a batch without).
+ * Nothing renders for an element no model edit touched — an import, a
+ * template starter, the user's own typing. A hover title, not a control.
+ */
+function ReasonChip({ reasons }: { reasons: readonly string[] }) {
+  if (!reasons.length) return null;
+  return (
+    <span
+      className="ml-1.5 inline-block cursor-help select-none rounded border border-[#d9c7a6] px-1 align-middle text-[9px] uppercase tracking-wide text-[#8a7a5c]"
+      title={reasonChipTitle(reasons)}
+    >
+      why
+    </span>
+  );
+}
+
+/**
+ * The newest reason, printed under a block this turn changed: the user
+ * watches the edit land and reads why without hovering. Gone with the
+ * highlight on the next turn; the chip keeps the whole trail.
+ */
+function ChangedReason({
+  reasons,
+  changed,
+}: {
+  reasons: readonly string[];
+  changed: boolean;
+}) {
+  const latest = latestReason(reasons);
+  if (!changed || !latest) return null;
+  return (
+    <span
+      className="mt-0.5 block text-[11px] italic leading-snug text-[#8a7a5c]"
+      data-edit-reason=""
+    >
+      ↳ {latest}
     </span>
   );
 }
@@ -597,6 +649,7 @@ function ParagraphNode({
   // the review status all stay, because none of them touches the block the
   // export emits.
   const locked = Boolean(p.locked);
+  const reasons = editReasons(useContext(EditReasonsContext), p.id);
 
   const replaceOp: EditOp = {
     action: "replace",
@@ -760,6 +813,7 @@ function ParagraphNode({
             )}
             <StatusBadge status={p.status} blockId={p.id} />
             <SourceChip itemId={p.source_item_id} lookup={sourceLookup} />
+            <ReasonChip reasons={reasons} />
             <PreservedBadge
               reason={p.locked ?? ""}
               message={p.locked_message ?? ""}
@@ -812,6 +866,7 @@ function ParagraphNode({
               }}
               onCancelDelete={() => setConfirming(false)}
             />
+            <ChangedReason reasons={reasons} changed={changedIds.has(p.id)} />
           </span>
         )}
       </div>
@@ -986,6 +1041,7 @@ function ArticleTitle({
     id,
     "replace_text",
   );
+  const reasons = editReasons(useContext(EditReasonsContext), id);
   if (editing) {
     const save = () => {
       const next = draft.trim();
@@ -1037,6 +1093,7 @@ function ArticleTitle({
     );
   }
   return (
+    <>
     <p
       className={`group flex items-center rounded px-1 text-[13px] font-semibold ${
         changed ? "changed-block" : ""
@@ -1049,6 +1106,7 @@ function ArticleTitle({
       {leading}
       {number}&nbsp;&nbsp;
       <span className="uppercase">{title}</span>
+      <ReasonChip reasons={reasons} />
       <ReadOnlyBadge
         capability={replaceCapability}
         sourceExpected={sourceExpected}
@@ -1071,6 +1129,8 @@ function ArticleTitle({
       </CapabilityButton>
       {actions}
     </p>
+    <ChangedReason reasons={reasons} changed={changed} />
+    </>
   );
 }
 
@@ -1822,6 +1882,7 @@ export function SectionHeader({
   const [editing, setEditing] = useState(false);
   const [draftNumber, setDraftNumber] = useState(number);
   const [draftTitle, setDraftTitle] = useState(title);
+  const reasons = editReasons(useContext(EditReasonsContext), "sec");
 
   const save = () => {
     const op: EditOp = {
@@ -1905,6 +1966,7 @@ export function SectionHeader({
       </p>
       <p className={`mt-1 uppercase ${headingClass}`}>
         {title || <HeaderPlaceholder>title not set</HeaderPlaceholder>}
+        <ReasonChip reasons={reasons} />
         <ReadOnlyBadge capability={capability} sourceExpected={sourceExpected} />
         <CapabilityButton
           className={`${actionBtn} ml-1 hidden group-hover:inline-block`}
@@ -1923,6 +1985,7 @@ export function SectionHeader({
           ✏️
         </CapabilityButton>
       </p>
+      <ChangedReason reasons={reasons} changed={changed} />
     </div>
   );
 }
@@ -1992,6 +2055,7 @@ export default function SpecDocument({
     ids: new Set(templateOrigin?.seed_block_ids ?? []),
   };
   return (
+    <EditReasonsContext.Provider value={doc.edit_reasons ?? NO_REASONS}>
     <TemplateSeedContext.Provider value={templateSeed}>
     <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
       {/* `el-sec` stays on whichever block renders — it is the tour's section
@@ -2054,5 +2118,6 @@ export default function SpecDocument({
       )}
     </div>
     </TemplateSeedContext.Provider>
+    </EditReasonsContext.Provider>
   );
 }

@@ -7410,7 +7410,14 @@ def create_app(
                     )
                 session.doc.begin_turn()
                 try:
-                    applied_echoes = session.apply_doc_edits(combined_ops)
+                    # Each op carries the finding it comes from as its
+                    # reason (ops_with_fix_reasons); order and count are
+                    # combined_ops' own, so the echoes map 1:1 below.
+                    applied_echoes = session.apply_doc_edits(
+                        qc_apply_module.ops_with_fix_reasons(
+                            combined_ops, eligible_findings, result
+                        )
+                    )
                 except SpecEditError as exc:  # pragma: no cover — validated above
                     session.doc.rollback_turn()
                     return JSONResponse(

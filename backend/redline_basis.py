@@ -8,7 +8,7 @@ the durable QC fix record. It returns, per element uid, a
 paragraphs for the element — and never decides WHICH changes get a comment
 (the redline's own records do, in ``spec_doc/redline_comments.py``).
 
-Three kinds of basis, in plain language, and never more than the record
+Four kinds of basis, in plain language, and never more than the record
 says:
 
 * **Research.** ``Paragraph.source_item_id`` naming an ``r-…`` item. A
@@ -22,6 +22,15 @@ says:
   still covers the element (``entry_covers``): its title, severity and lens,
   the issue, and the finding's ACCEPTED sources.
 
+* **The edit's reason.** ``SpecSection.edit_reasons[uid]`` — what the
+  assistant said each edit of the element was for (every model edit carries
+  one since 2026-10-07; a deletion's reason is kept under the deleted uid
+  and every uid deleted with it). Spoken as ``Reason: …``, or a numbered
+  list oldest first when the element was edited more than once. The header
+  ("sec") speaks on the upload's header line too. A reason that only names
+  a Final QC fix whose record already speaks for the element
+  (``qc_fix_reason``) is not said twice.
+
 ``source_item_id`` is advisory and can name something the current research
 no longer holds; such an element gets no research basis and is flagged
 ``unresolved_source`` for the export's counts.
@@ -32,6 +41,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from .qc.apply import qc_fix_reason
 from .qc.fix_log import covered_uids, entry_covers
 from .spec_doc.redline_comments import CommentBasis, CommentLink, safe_link_url
 from .spec_doc.source_format import SECTION_TITLE_UID
@@ -149,6 +159,29 @@ def _qc_paragraphs(entry: Mapping[str, Any]) -> tuple:
     return tuple(paragraphs)
 
 
+#: A reason is already cut near 240 characters when recorded; this is only a
+#: guard against a hand-edited project file.
+MAX_REASON_TEXT = 300
+
+
+def _reason_paragraphs(trail: Sequence[str]) -> tuple:
+    """An element's recorded reasons, oldest first: one ``Reason:`` paragraph
+    when there is one, else a heading and one numbered paragraph each."""
+    reasons = [
+        trimmed(reason, MAX_REASON_TEXT)
+        for reason in trail
+        if str(reason or "").strip()
+    ]
+    if not reasons:
+        return ()
+    if len(reasons) == 1:
+        return ((f"Reason: {reasons[0]}",),)
+    return (
+        ("Reasons, oldest first:",),
+        *((f"{index}. {reason}",) for index, reason in enumerate(reasons, 1)),
+    )
+
+
 def _paragraph_links(section) -> Iterable[tuple[str, str]]:
     """``(uid, source_item_id)`` for every provision that names a source."""
 
@@ -202,6 +235,10 @@ def redline_comment_basis(
             latest.pop(finding_id, None)
             latest[finding_id] = entry
     qc: dict[str, list[tuple]] = {}
+    # Per target, how each covering fix reads as an edit reason — so the
+    # trail's "Final QC fix: <title>" is not said beside the record of the
+    # very fix that wrote it.
+    spoken_fixes: dict[str, set[str]] = {}
     for entry in latest.values():
         for uid in covered_uids(entry):
             if not entry_covers(entry, current, uid):
@@ -209,12 +246,31 @@ def redline_comment_basis(
             targets = (uid, SECTION_TITLE_UID) if uid == "sec" else (uid,)
             for target in targets:
                 qc.setdefault(target, []).extend(_qc_paragraphs(entry))
+                spoken_fixes.setdefault(target, set()).add(
+                    qc_fix_reason(str(entry.get("title") or ""))
+                )
+
+    # The reasons the assistant gave: the header's speak on the upload's
+    # header line as well, the QC shape.
+    reasons: dict[str, tuple] = {}
+    for uid, trail in (getattr(current, "edit_reasons", None) or {}).items():
+        targets = (uid, SECTION_TITLE_UID) if uid == "sec" else (uid,)
+        for target in targets:
+            kept = [
+                reason
+                for reason in (trail if isinstance(trail, list) else [])
+                if reason not in spoken_fixes.get(target, ())
+            ]
+            paragraphs = _reason_paragraphs(kept)
+            if paragraphs:
+                reasons[target] = paragraphs
 
     bases: dict[str, CommentBasis] = {}
-    for uid in set(research) | set(qc) | unresolved:
+    for uid in set(research) | set(qc) | unresolved | set(reasons):
         bases[uid] = CommentBasis(
             qc=tuple(qc.get(uid, ())),
             research=research.get(uid, ()),
+            reasons=reasons.get(uid, ()),
             unresolved_source=uid in unresolved,
         )
     return bases
@@ -223,6 +279,7 @@ def redline_comment_basis(
 __all__ = [
     "MAX_COMMENT_LINKS",
     "MAX_COMMENT_TEXT",
+    "MAX_REASON_TEXT",
     "redline_comment_basis",
     "trimmed",
 ]

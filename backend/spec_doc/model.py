@@ -1001,6 +1001,9 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                 "'2021 VCC per user, Loudoun County VA'). Never record an "
                 "edition override silently."
             )
+        # The basis IS the reason (check_edit_reasons accepts the op on it),
+        # so the applied record and the doc_patch echo it as one.
+        reason = reason or fold_reason(basis)
         entry = {"edition": edition, "basis": basis}
         # Optional full title, for adding a standard the module does not pin
         # (pinned standards already carry their title). Stored only when set.
@@ -1284,6 +1287,9 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             )
         siblings.pop(previous_position)
         siblings.insert(position, node)
+        # The redline marks the moved element AND everything under it as
+        # moved, so the reason speaks (or, for a hand move, resets) on the
+        # whole subtree — the delete path's shape (Codex review, PR #287).
         return done(
             {
                 "action": "move",
@@ -1291,7 +1297,7 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                 "position": position,
                 "previous_position": previous_position,
             },
-            node.uid,
+            *_subtree_uids(node),
             resets=True,
         )
 

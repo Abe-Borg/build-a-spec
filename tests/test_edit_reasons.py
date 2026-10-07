@@ -135,6 +135,8 @@ def test_every_content_op_records_its_reason_on_its_element():
         "SUMMARY reads first in SectionFormat.",
         "Section chosen by the user.",
     ]
+    # A move speaks on everything it moved: the redline marks the article
+    # and every provision under it as moved, and each gets the comment.
     assert store.doc.edit_reasons == {
         "pt1.a1": [
             "The user asked for a SUMMARY article first.",
@@ -143,8 +145,13 @@ def test_every_content_op_records_its_reason_on_its_element():
         "pt1.a1.p1": [
             "Scope the user stated.",
             "Added 'throughout': the user confirmed full coverage.",
+            "SUMMARY reads first in SectionFormat.",
         ],
-        "pt1.a1.p1.p1": ["Pump is in the user's scope", "User confirmed the pump."],
+        "pt1.a1.p1.p1": [
+            "Pump is in the user's scope",
+            "User confirmed the pump.",
+            "SUMMARY reads first in SectionFormat.",
+        ],
         "pt1.a2": ["REFERENCES leads PART 1."],
         "sec": ["Section chosen by the user."],
     }
@@ -322,7 +329,9 @@ def test_metadata_ops_echo_the_reason_and_store_it_only_where_a_basis_lives():
     )
     assert applied[0]["reason"] == "The user named the city."
     assert applied[1]["reason"] == "The user described a hyperscale campus."
-    assert "reason" not in applied[2]
+    # The basis stands in as the reason, and the record says so (the
+    # doc_patch carries it like every other op's).
+    assert applied[2]["reason"] == "2021 VCC per user"
     assert applied[3]["reason"] == "No clean-agent system on this project."
     assert section.suppressed_standards == {
         "NFPA 2001": "No clean-agent system on this project."
@@ -345,6 +354,15 @@ def test_a_non_string_reason_is_refused_and_move_accepts_one():
     )
     assert applied["reason"] == "Order."
     assert moved.edit_reasons["pt1.a2"] == ["Second.", "Order."]
+    # Moving an article with provisions under it speaks on each of them.
+    nested, _ = apply_edits(
+        moved,
+        [
+            {**_PROVISION, "target_id": "pt1.a1"},
+            {"action": "move", "target_id": "pt1.a1", "position": 0, "reason": "Back first."},
+        ],
+    )
+    assert nested.edit_reasons["pt1.a1.p1"] == ["Scope the user stated.", "Back first."]
     with pytest.raises(SpecEditError, match="unsupported field"):
         apply_edits(
             section,
@@ -392,6 +410,11 @@ def test_a_hand_rewrite_move_or_delete_drops_the_trail_but_a_confirm_keeps_it():
     assert retyped.edit_reasons == {}
     deleted, _ = apply_edits(section, [{"action": "delete", "target_id": "pt1.a1"}])
     assert set(deleted.edit_reasons) == {"pt1.a2", "sec"}
+    # A hand move resets the whole moved subtree: the redline marks every
+    # provision under the article as moved, and none of those marks is the
+    # assistant's.
+    moved, _ = apply_edits(section, [{"action": "move", "target_id": "pt1.a1", "position": 1}])
+    assert set(moved.edit_reasons) == {"pt1.a2", "sec"}
     # The redline then has no reason to say for the user's own change (the
     # retyped provision still names a source, so its basis entry survives
     # as an unresolved source with no reasons).

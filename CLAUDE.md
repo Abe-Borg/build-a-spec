@@ -1040,8 +1040,12 @@ only in the redline on the original's comments.
   dropped, each folded to one line and cut near `EDIT_REASON_MAX_CHARS`
   (240) — never refused, a refusal would cost a round for wording. Keyed by
   uid rather than stored on the element so a deletion keeps the reason under
-  the deleted uid AND every uid under it (uids are never reused); `sec` is
-  the header. Section-metadata ops echo the reason without storing it;
+  the deleted uid AND every uid under it (uids are never reused), and a move
+  speaks on the whole moved subtree the same way (the redline marks every
+  descendant as moved; Codex review on PR #287); `sec` is the header.
+  Section-metadata ops echo the reason without storing it;
+  `set_standard_edition` echoes its `basis` as the reason when none was
+  given (the record and the `doc_patch` then carry it like every op's), and
   `set_standard_suppressed` without a `basis` stores the reason as the
   basis. A reason-less op — the user's own panel edit — that rewrites,
   moves or deletes what the redline shows drops the element's trail

@@ -898,6 +898,9 @@ def test_set_standard_edition_records_normalized_override():
             "id": "sec",
             "standard": "NFPA 13",
             "edition": "2019",
+            # The basis stands in as the edit's reason (every op carries
+            # one, 2026-10-07), so the record echoes it.
+            "reason": "2021 VCC per user",
         }
     ]
     assert store.doc.edition_overrides == {

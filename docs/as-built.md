@@ -19908,6 +19908,18 @@ twice. `redline_comment_basis` leaves out a trail entry equal to
 the record stops covering it (an undo, a hand edit), the trail speaks on its
 own again.
 
+**Codex review on PR #287, two P2 findings, both taken.** A move recorded
+or reset its reason on the moved element alone, while the redline marks the
+element and everything under it as moved — so an assistant's move left the
+descendants' moved marks without the new reason, and a hand move left the
+assistant's old reasons on them, attached to the user's move. The move now
+speaks (or resets) on `_subtree_uids(node)`, the delete path's shape. And a
+`set_standard_edition` accepted on its `basis` alone (the contract's one
+exemption) echoed no reason at all, so its `doc_patch` op lacked the promised
+field; the basis is now folded in as the reason when none was given, and the
+record and the panel's copy carry it. Metadata ops still store nothing on
+the tree — there is no element to pin a chip to.
+
 **Bytes that changed once.** The tool's input schema (one property) and the
 stable prompt (`_TOOL_GUIDE` gains one line): every open session rewrites
 its cached prefix once after upgrade. The tool's top-level description — the

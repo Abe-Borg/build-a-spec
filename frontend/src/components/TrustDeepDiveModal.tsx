@@ -409,7 +409,7 @@ function DataFlowDiagram() {
           x="398"
           y="48"
           width="170"
-          height="118"
+          height="158"
           rx="12"
           fill="var(--color-surface)"
           stroke="var(--color-accent)"
@@ -429,6 +429,12 @@ function DataFlowDiagram() {
         </text>
         <text x="412" y="152" {...faint}>
           Final QC only
+        </text>
+        <text x="412" y="176" {...small}>
+          Claude Haiku 5.5
+        </text>
+        <text x="412" y="192" {...faint}>
+          project-fact harvest only
         </text>
 
         {/* Web */}
@@ -615,7 +621,7 @@ function Dossier() {
 
       <Section id="models" kicker="The engine" title="What “the model” actually is">
         <P>
-          Two Claude models, with strictly separated jobs. There is no model
+          Three Claude models, with dedicated jobs. There is no model
           picker, because the routing is a design decision rather than a
           preference.
         </P>
@@ -627,26 +633,33 @@ function Dossier() {
               <>
                 Claude Sonnet 5.5 <Mono>(claude-sonnet-5-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “medium” for research by default, following Sonnet 5.5's recalibrated effort scale. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
+              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “medium” for research by default, following Sonnet 5.5's recalibrated effort scale. Template AI Generalize and conversation condensing use this model too.",
+            ],
+            [
+              "Project-fact harvest",
+              <>
+                Claude Haiku 5.5 <Mono>(claude-haiku-5-5)</Mono>
+              </>,
+              "A fast, lower-cost model for extracting facts from the section’s own conversation, draft and QC dismissal reasons. It runs at “medium” effort and proposes facts with evidence; you review each proposal before recording it. It has its own model setting, separate from the interview.",
             ],
             [
               "Final QC only",
               <>
                 Claude Opus 5.5 <Mono>(claude-opus-5-5)</Mono>
               </>,
-              "A stronger reasoning model than the one that drafts, chosen for a pass that has to catch what the drafter missed — it is measurably good at finding real defects without inventing them. It never touches the interview loop, and it is the only place a second model appears.",
+              "A stronger reasoning model than the one that drafts, chosen for a pass that has to catch what the drafter missed — it is measurably good at finding real defects without inventing them. It never touches the interview loop.",
             ],
           ]}
         />
         <P>
-          Both run on Anthropic’s servers, not on your PC. Build-a-Spec itself is
+          All three run on Anthropic’s servers, not on your PC. Build-a-Spec itself is
           an ordinary Windows desktop program: it starts a small web server bound
           to <Mono>127.0.0.1</Mono> — your own machine, not reachable from your
           network — and displays its own interface in a native window. All the
           domain logic, your documents, and your files are local.
         </P>
         <P>
-          Both models run with <b className="text-ink">adaptive thinking</b>: they
+          All three models run with <b className="text-ink">adaptive thinking</b>: they
           reason internally before answering. Where the model streams a readable
           summary of that reasoning, the chat shows it in a collapsible block. It
           is a summary for your benefit and is never stored in your project file
@@ -1595,7 +1608,7 @@ function Dossier() {
               and the Final QC report itself are not sent.
             </>
           }
-          model="Claude Sonnet 5.5, effort “medium” — one call, only when you press Run; never on export, save or Next section."
+          model="Claude Haiku 5.5, effort “medium” by default — one call, only when you press Run; never on export, save or Next section."
           bounds={
             <>
               One request with one output tool and a cap of 40 proposals; a very

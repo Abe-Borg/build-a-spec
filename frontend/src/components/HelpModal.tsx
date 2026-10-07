@@ -441,8 +441,8 @@ function HowItWorks() {
             d: "You describe the section; Claude edits a structured CSI SectionFormat document with tools, and every edit streams into the paper panel as it happens.",
           },
           {
-            t: "Two models, one job each",
-            d: "The interview and drafting run on Claude Sonnet 5.5. Final QC runs a fleet of Claude Opus 5.5 reviewers — the one place a second model appears.",
+            t: "Three models, dedicated jobs",
+            d: "The interview, drafting and research run on Claude Sonnet 5.5. Claude Haiku 5.5 extracts project facts for you to review. Final QC runs a fleet of Claude Opus 5.5 reviewers.",
           },
           {
             t: "Domain knowledge lives in spec modules",
@@ -651,8 +651,12 @@ function About({
           <dd className="text-ink">{health?.model ?? "Claude Sonnet 5.5"}</dd>
         </div>
         <div className="flex gap-3">
+          <dt className="w-28 flex-none text-ink-faint">Fact harvest</dt>
+          <dd className="text-ink">{health?.harvest_model ?? "Claude Haiku 5.5"}</dd>
+        </div>
+        <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Final QC</dt>
-          <dd className="text-ink">Claude Opus 5.5</dd>
+          <dd className="text-ink">{health?.qc_model ?? "Claude Opus 5.5"}</dd>
         </div>
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Scope</dt>

@@ -67,7 +67,7 @@ def test_empty_usage_is_a_noop_and_does_not_count_a_turn():
 
 
 def test_estimate_math_is_golden_against_pricing():
-    # Sonnet 5 (interview): $2/M in, $10/M out, $0.20/M cache-read; web $0.01.
+    # Sonnet 5.5 (interview): $2/M in, $10/M out, $0.10/M cache-read; web $0.01.
     ledger = UsageLedger()
     ledger.add(
         "interview",
@@ -79,11 +79,11 @@ def test_estimate_math_is_golden_against_pricing():
         },
     )
     snap = ledger.snapshot()
-    # 2.0 + 2.0 + 0.2 + 0.05 = 4.25
-    assert snap["estimated_cost_usd"]["by_category"]["interview"] == 4.25
-    assert snap["estimated_cost_usd"]["total"] == 4.25
-    # Cache saved = 1e6 * (2e-6 - 0.20e-6) = 1.8
-    assert snap["cache_saved_usd"] == 1.8
+    # 2.0 + 2.0 + 0.1 + 0.05 = 4.15
+    assert snap["estimated_cost_usd"]["by_category"]["interview"] == 4.15
+    assert snap["estimated_cost_usd"]["total"] == 4.15
+    # Cache saved = 1e6 * (2e-6 - 0.10e-6) = 1.9
+    assert snap["cache_saved_usd"] == 1.9
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +191,14 @@ def test_every_priced_model_configures_both_cache_write_rates():
 
 # Cache READS are priced per model too, and unlike the write multipliers
 # they are not the same on every row: Anthropic charges a cache hit 0.1x
-# base input on every model PRICING carries except Claude Opus 5.5, whose
+# base input on every model PRICING carries except Claude Sonnet 5.5 and Opus 5.5, whose
 # hits cost 0.05x (Claude Fable 5.1, not priced here, is 0.025x). The map
 # is exhaustive on purpose, so a new row fails below until someone looks
 # its read rate up on the pricing page. Assuming 0.1x is how Opus 5.5
 # shipped at twice its real read price.
 _PUBLISHED_CACHE_READ_MULTIPLIERS = {
-    settings.MODEL_SONNET_55: 0.1,
+    settings.MODEL_HAIKU_55: 0.1,
+    settings.MODEL_SONNET_55: 0.05,
     settings.MODEL_SONNET_5: 0.1,
     settings.MODEL_OPUS_48: 0.1,
     settings.MODEL_FABLE_5: 0.1,

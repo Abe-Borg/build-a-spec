@@ -68,7 +68,7 @@ from ..runtime_context import (
     date_context_block,
 )
 from ..spec_modules import ResearchDimension, SpecModule
-from ..usage_ledger import usage_to_dict
+from ..usage_ledger import PRICING_USAGE_KEYS, usage_to_dict
 from .budget import count_request_tokens, elide_web_results, without_thinking
 from .grounding import (
     REFUSAL_KIND,
@@ -476,6 +476,15 @@ class DimensionStatus:
     cache_creation_input_tokens: int = 0
     error: str = ""
     error_kind: str = ""
+    # Optional additive pricing slices, separate from provider token counts.
+    pricing_usage: dict[str, int] = field(default_factory=dict)
+
+
+def _dimension_status_payload(status: DimensionStatus) -> dict[str, Any]:
+    payload = dataclasses.asdict(status)
+    if not status.pricing_usage:
+        payload.pop("pricing_usage")
+    return payload
 
 
 # The billed-usage fields a DimensionStatus carries. Deliberately no
@@ -513,6 +522,9 @@ def dimension_usage_total(
             value = getattr(status, key, 0)
             if value:
                 out[key] = out.get(key, 0) + int(value)
+        for key, value in status.pricing_usage.items():
+            if value:
+                out[key] = out.get(key, 0) + value
     return out
 
 
@@ -995,7 +1007,7 @@ class RequirementsProfile:
         return {
             "items": [dataclasses.asdict(i) for i in self.items],
             "dimension_statuses": [
-                dataclasses.asdict(s) for s in self.dimension_statuses
+                _dimension_status_payload(s) for s in self.dimension_statuses
             ],
             "research_date": self.research_date,
             "project": dict(self.project) if self.project else None,
@@ -1004,7 +1016,7 @@ class RequirementsProfile:
                     "round_index": r.round_index,
                     "research_date": r.research_date,
                     "dimension_statuses": [
-                        dataclasses.asdict(s) for s in r.dimension_statuses
+                        _dimension_status_payload(s) for s in r.dimension_statuses
                     ],
                     "new_items": r.new_items,
                     "repeat_items": r.repeat_items,
@@ -1163,12 +1175,20 @@ def _statuses_from_raw(data: object) -> list[DimensionStatus]:
                 web_fetch_requests=int(raw.get("web_fetch_requests", 0) or 0),
                 input_tokens=int(raw.get("input_tokens", 0) or 0),
                 output_tokens=int(raw.get("output_tokens", 0) or 0),
-                cache_read_input_tokens=int(
-                    raw.get("cache_read_input_tokens", 0) or 0
-                ),
+                cache_read_input_tokens=int(raw.get("cache_read_input_tokens", 0) or 0),
                 cache_creation_input_tokens=int(
                     raw.get("cache_creation_input_tokens", 0) or 0
                 ),
+                pricing_usage={
+                    key: int(value)
+                    for key, value in (raw.get("pricing_usage") or {}).items()
+                    if key in PRICING_USAGE_KEYS
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value >= 0
+                }
+                if isinstance(raw.get("pricing_usage"), dict)
+                else {},
                 error_kind=sanitized_error_kind(raw.get("error_kind")),
                 error=str(raw.get("error", "") or ""),
             )
@@ -1312,13 +1332,17 @@ def _accumulate_statuses(
                 input_tokens=before.input_tokens + after.input_tokens,
                 output_tokens=before.output_tokens + after.output_tokens,
                 cache_read_input_tokens=(
-                    before.cache_read_input_tokens
-                    + after.cache_read_input_tokens
+                    before.cache_read_input_tokens + after.cache_read_input_tokens
                 ),
                 cache_creation_input_tokens=(
                     before.cache_creation_input_tokens
                     + after.cache_creation_input_tokens
                 ),
+                pricing_usage={
+                    key: before.pricing_usage.get(key, 0)
+                    + after.pricing_usage.get(key, 0)
+                    for key in set(before.pricing_usage) | set(after.pricing_usage)
+                },
                 error=after.error,
                 # The kind follows the message it belongs to: both report
                 # the LATEST round's outcome, so a fresh failure stays
@@ -2288,11 +2312,15 @@ def _items_from_payload(payload: dict, dimension_id: str) -> list[ResearchItem]:
     return items
 
 
-def _sum_token_usage(responses: list[Any]) -> dict[str, int]:
+def _sum_token_usage(
+    responses: list[Any], *, model: str | None = None
+) -> dict[str, int]:
     """Sum billed token counts across a dimension's responses (WI4)."""
     totals: dict[str, int] = {}
     for response in responses:
-        for key, value in usage_to_dict(getattr(response, "usage", None)).items():
+        for key, value in usage_to_dict(
+            getattr(response, "usage", None), model=model
+        ).items():
             totals[key] = totals.get(key, 0) + value
     return totals
 
@@ -2643,7 +2671,7 @@ def _run_dimension(
         responses: list[Any] | None = None,
     ) -> _DimensionOutcome:
         billed = responses or []
-        tokens = _sum_token_usage(billed)
+        tokens = _sum_token_usage(billed, model=model)
         pressure.ended(
             resource_pressure.OUTCOME_CANCELLED
             if kind == DIMENSION_ERROR_CANCELLED
@@ -2665,6 +2693,9 @@ def _run_dimension(
                 cache_creation_input_tokens=tokens.get(
                     "cache_creation_input_tokens", 0
                 ),
+                pricing_usage={
+                    key: tokens[key] for key in PRICING_USAGE_KEYS if tokens.get(key)
+                },
                 error=error,
             )
         )
@@ -3246,7 +3277,7 @@ def _run_dimension(
             # never under-reports. A resumed conversation is all in
             # all_responses, counted once.
             billed = [*billed_responses, *all_responses]
-            tokens = _sum_token_usage(billed)
+            tokens = _sum_token_usage(billed, model=model)
             pressure.ended(
                 resource_pressure.OUTCOME_COMPLETED, attempts=attempts_used
             )
@@ -3257,20 +3288,19 @@ def _run_dimension(
                     title=dimension.title,
                     item_count=len(items),
                     grounded_count=sum(1 for i in items if i.grounded),
-                    web_search_requests=sum(
-                        web_search_count(r) for r in billed
-                    ),
-                    web_fetch_requests=sum(
-                        web_fetch_count(r) for r in billed
-                    ),
+                    web_search_requests=sum(web_search_count(r) for r in billed),
+                    web_fetch_requests=sum(web_fetch_count(r) for r in billed),
                     input_tokens=tokens.get("input_tokens", 0),
                     output_tokens=tokens.get("output_tokens", 0),
-                    cache_read_input_tokens=tokens.get(
-                        "cache_read_input_tokens", 0
-                    ),
+                    cache_read_input_tokens=tokens.get("cache_read_input_tokens", 0),
                     cache_creation_input_tokens=tokens.get(
                         "cache_creation_input_tokens", 0
                     ),
+                    pricing_usage={
+                        key: tokens[key]
+                        for key in PRICING_USAGE_KEYS
+                        if tokens.get(key)
+                    },
                 ),
                 items=items,
                 parse_source=parse_source,

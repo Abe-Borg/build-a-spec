@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from ..usage_ledger import PRICING_USAGE_KEYS
 from .config import LEVEL_DEEP, LEVEL_DEFAULT
 from .redaction import redact_text, scrub_data
 from .spans import (
@@ -109,7 +110,7 @@ _TURN_USAGE_KEYS = frozenset(
         "web_fetch_requests",
         "estimated_output_tokens",
     }
-)
+) | frozenset(PRICING_USAGE_KEYS)
 _FAILURE_EVENT_TYPES = frozenset({"client_error", "workspace_conflict"})
 _FAILURE_STATUS_VALUES = frozenset({"error", "failed", "failure"})
 _FAILURE_COUNT_FIELDS = frozenset(

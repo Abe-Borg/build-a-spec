@@ -269,7 +269,7 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
               <div className="mt-2">
                 <Row name="App" value={`${app.name} ${app.version}${app.frozen ? " (packaged)" : ""}${app.dev_mode ? " (dev mode)" : ""}`} />
                 <Row name="Platform" value={`${app.platform} · Python ${app.python} · port ${app.port}`} />
-                <Row name="Models" value={`interview ${app.models.interview} · research ${app.models.research} · QC ${app.models.qc}`} />
+                <Row name="Models" value={`interview ${app.models.interview} · research ${app.models.research}${app.models.harvest ? ` · harvest ${app.models.harvest}` : ""} · QC ${app.models.qc}`} />
                 {/* One line per engine: what the cost self-checks decided
                     about the continuation tail (Tier 1 finish). */}
                 {costCheckLines(snapshot.cost_checks).map((line, index) => (

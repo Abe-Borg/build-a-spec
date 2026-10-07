@@ -553,7 +553,7 @@ def _tail_saving(
     continuation = first_iteration_usage(response)
     if continuation is None:
         return "unmeasured", None
-    rates = usage_ledger.model_rates(model)
+    rates = usage_ledger.model_rates(model, continuation)
     u = _rate(rates, "input")
     r = _rate(rates, "cache_read")
     w = _rate(rates, "cache_write")
@@ -861,7 +861,19 @@ def _judge_lineage(lineage: WarmLeadLineage) -> _LineageJudgment:
         if read >= _WARM_LEAD_SEAT_READ_SHARE * (read + write):
             reads += 1
 
-    rates = usage_ledger.model_rates(lineage.model)
+    # A single prefix-rate delta only describes seats in the same price tier.
+    # Mixed-tier observations remain unmeasured instead of disabling the
+    # lead using arithmetic that assumes one rate for incompatible requests.
+    seat_rates = [
+        usage_ledger.model_rates(lineage.model, counts)
+        for response in lineage.batched_first
+        if (counts := first_iteration_usage(response)) is not None
+    ]
+    rates = seat_rates[0] if seat_rates else usage_ledger.model_rates(lineage.model)
+    if any(other != rates for other in seat_rates):
+        unmeasured += len(measured)
+        measured = []
+        reads = 0
     one_hour = "cache_write_1h" if "cache_write_1h" in rates else "cache_write"
     delta = _rate(rates, one_hour) - _rate(rates, "cache_read")
     batch = Decimal(format(float(settings.BATCH_COST_MULTIPLIER), ".12g"))

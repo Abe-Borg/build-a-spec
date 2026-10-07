@@ -3506,8 +3506,14 @@ def _qc_lens_telemetry_line(lens: dict) -> str:
     if isinstance(usage, dict):
         tokens = sum(
             int(value)
-            for key, value in usage.items()
-            if key.endswith("_tokens") and isinstance(value, int)
+            for key in (
+                "input_tokens",
+                "output_tokens",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+            )
+            if isinstance(value := usage.get(key), int)
+            and not isinstance(value, bool)
         )
         if tokens:
             parts.append(f"{tokens:,} billed tokens")

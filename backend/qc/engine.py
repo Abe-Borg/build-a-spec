@@ -142,6 +142,10 @@ from ..standards import standards_context_block
 from ..usage_ledger import (
     UNCOLLECTED_BATCH_REQUESTS_KEY,
     estimate_usage_cost,
+    estimate_cost_from_rates,
+    PRICING_REQUEST_COUNT_KEY,
+    PRICED_TOKEN_KEYS,
+    LONG_CONTEXT_USAGE_KEYS,
     usage_pricing_snapshot,
     usage_to_dict,
 )
@@ -497,6 +501,7 @@ _TOKEN_RATE_KEYS = _LEGACY_TOKEN_RATE_KEYS | {"cache_write_1h"}
 # (`usage_pricing_snapshot` emits both new fields together, and a
 # pre-4.1 report has neither), so pairing rejects only corruption.
 _COST_BASIS_SHAPES = (
+    (_COST_BASIS_KEYS | {"long_context_pricing"}, _TOKEN_RATE_KEYS),
     (_COST_BASIS_KEYS, _TOKEN_RATE_KEYS),
     (_LEGACY_COST_BASIS_KEYS, _LEGACY_TOKEN_RATE_KEYS),
 )
@@ -565,6 +570,41 @@ def _persisted_cost_basis(value: object, *, required: bool) -> dict[str, Any]:
     }
     if "cache_write_treatment" in value:
         basis["cache_write_treatment"] = value["cache_write_treatment"]
+    if "long_context_pricing" in value:
+        tier = value["long_context_pricing"]
+        if not isinstance(tier, dict) or set(tier) != {
+            "input_threshold_tokens",
+            "rates_per_token",
+        }:
+            raise ValueError(
+                "Persisted QC long_context_pricing has an unsupported shape."
+            )
+        premium_rates = tier["rates_per_token"]
+        if (
+            not isinstance(premium_rates, dict)
+            or set(premium_rates) != _TOKEN_RATE_KEYS
+        ):
+            raise ValueError(
+                "Persisted QC premium token rates have an unsupported shape."
+            )
+        threshold = _persisted_nonnegative_int(
+            tier["input_threshold_tokens"],
+            field_name="cost_basis.long_context_pricing.input_threshold_tokens",
+        )
+        if threshold <= 0:
+            raise ValueError(
+                "Persisted QC long-context input threshold must be positive."
+            )
+        basis["long_context_pricing"] = {
+            "input_threshold_tokens": threshold,
+            "rates_per_token": {
+                key: _persisted_nonnegative_number(
+                    premium_rates[key],
+                    field_name=f"cost_basis.long_context_pricing.rates_per_token.{key}",
+                )
+                for key in sorted(premium_rates)
+            },
+        }
     return basis
 
 
@@ -610,22 +650,13 @@ def _estimated_cost_from_basis(
     keeps the strictly shape-validated pricing snapshot untouched, so every
     report ever written still loads.
     """
-    rates = cost_basis["rates_per_token"]
-    five_minute, one_hour = _cache_write_tokens_by_ttl(usage)
-    return round(
-        multiplier
-        * (
-            usage.get("input_tokens", 0) * rates["input"]
-            + usage.get("output_tokens", 0) * rates["output"]
-            + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
-            + five_minute * rates["cache_write"]
-            + one_hour * rates.get("cache_write_1h", rates["cache_write"])
-            + usage.get("web_search_requests", 0)
-            * cost_basis["web_search_per_request"]
-            + usage.get("web_fetch_requests", 0)
-            * cost_basis["web_fetch_per_request"]
-        ),
-        6,
+    return estimate_cost_from_rates(
+        usage,
+        cost_basis["rates_per_token"],
+        long_context_pricing=cost_basis.get("long_context_pricing"),
+        multiplier=multiplier,
+        web_search_rate=cost_basis["web_search_per_request"],
+        web_fetch_rate=cost_basis["web_fetch_per_request"],
     )
 
 
@@ -673,6 +704,31 @@ def _cache_write_subtotal_possible(usage: dict[str, int]) -> bool:
     return usage.get("cache_creation_1h_input_tokens", 0) <= usage.get(
         "cache_creation_input_tokens", 0
     )
+
+
+def _pricing_subtotals_possible(usage: dict[str, int], basis: dict[str, Any]) -> bool:
+    if "long_context_pricing" not in basis:
+        return True
+    if not any(usage.values()):
+        return True
+    if usage.get(PRICING_REQUEST_COUNT_KEY, 0) <= 0:
+        return False
+    if any(
+        usage.get(long_key, 0) > usage.get(key, 0)
+        for key, long_key in zip(PRICED_TOKEN_KEYS, LONG_CONTEXT_USAGE_KEYS)
+    ):
+        return False
+    if usage.get("long_context_cache_creation_1h_input_tokens", 0) > usage.get(
+        "long_context_cache_creation_input_tokens", 0
+    ):
+        return False
+    short_total = usage.get("cache_creation_input_tokens", 0) - usage.get(
+        "long_context_cache_creation_input_tokens", 0
+    )
+    short_1h = usage.get("cache_creation_1h_input_tokens", 0) - usage.get(
+        "long_context_cache_creation_1h_input_tokens", 0
+    )
+    return short_1h <= short_total
 
 
 def _canonical_usage(usage: dict[str, int]) -> dict[str, int]:
@@ -2039,7 +2095,9 @@ class QCResult:
         for record in records:
             for key, value in record.usage_totals.items():
                 aggregate_usage[key] = aggregate_usage.get(key, 0) + value
-            if not _cache_write_subtotal_possible(record.usage_totals):
+            if not _cache_write_subtotal_possible(
+                record.usage_totals
+            ) or not _pricing_subtotals_possible(record.usage_totals, self.cost_basis):
                 return False
             multiplier = _record_cost_multiplier(record)
             if multiplier != 1.0:
@@ -2060,7 +2118,9 @@ class QCResult:
             aggregate_usage
         ):
             return False
-        if not _cache_write_subtotal_possible(self.usage_totals):
+        if not _cache_write_subtotal_possible(
+            self.usage_totals
+        ) or not _pricing_subtotals_possible(self.usage_totals, self.cost_basis):
             return False
         if self.api_request_count != sum(
             record.api_request_count for record in records
@@ -3664,6 +3724,8 @@ def _with_refusal_fallback(request: dict[str, Any]) -> dict[str, Any]:
     thinking one, when the conversation was edited). Every other key is the
     request as given.
     """
+    if request.get("model") == settings.MODEL_HAIKU_55:
+        return dict(request)
     sent = dict(request)
     sent["extra_body"] = {
         **dict(request.get("extra_body") or {}),
@@ -4849,10 +4911,12 @@ def _web_fetch_count(response: Any) -> int:
     return int(getattr(server, "web_fetch_requests", 0) or 0)
 
 
-def _sum_billed(responses: list[Any]) -> dict[str, int]:
+def _sum_billed(responses: list[Any], *, model: str | None = None) -> dict[str, int]:
     totals: dict[str, int] = {}
     for response in responses:
-        for key, value in usage_to_dict(getattr(response, "usage", None)).items():
+        for key, value in usage_to_dict(
+            getattr(response, "usage", None), model=model
+        ).items():
             totals[key] = totals.get(key, 0) + value
     return totals
 
@@ -5433,7 +5497,7 @@ def _run_lens(
         refusal_fallback=refusal_fallback,
         pressure=pressure,
     )
-    usage = _sum_billed(result.billed)
+    usage = _sum_billed(result.billed, model=model)
     queries, retrieved_sources = _collect_call_activity(result.responses)
     attempted_queries, attempted_sources = _collect_call_activity(
         result.billed, include_unconfirmed_fetches=True
@@ -5874,7 +5938,7 @@ def _consolidate_candidates(
         served_by_model: str = "",
     ) -> tuple[list[_Candidate], QCConsolidation, list[Any]]:
         billed = billed or []
-        usage = _sum_billed(billed)
+        usage = _sum_billed(billed, model=model)
         groups: list[QCConsolidationGroup] = []
         by_id = {origin.origin_id: origin for origin in origins}
         for group_index, candidate in enumerate(candidates):
@@ -6442,7 +6506,7 @@ def _verifier_outcome(
     byte-identical audit records for the same response — the whole basis of
     the claim that batching changes transport and nothing else.
     """
-    usage = _sum_billed(result.billed)
+    usage = _sum_billed(result.billed, model=model)
     queries, retrieved_sources = _collect_call_activity(result.responses)
     attempted_queries, attempted_sources = _collect_call_activity(
         result.billed, include_unconfirmed_fetches=True
@@ -7397,7 +7461,9 @@ def _run_batch_calls(
                         kind=lead.kind,
                         seats=lead.lineage_size,
                         model=states[lead.key].spec.model,
-                        lead_usage=_sum_billed(result.billed),
+                        lead_usage=_sum_billed(
+                            result.billed, model=states[lead.key].spec.model
+                        ),
                         batched_first=tuple(batched_first),
                         warm=(
                             release_outcomes.get(lead.key) == WARM_OUTCOME_WARM
@@ -8775,6 +8841,7 @@ def _run_final_qc(
         if refusal_fallback is None
         else bool(refusal_fallback)
     )
+    refusal_fallback = refusal_fallback and model != settings.MODEL_HAIKU_55
     # Same discipline, load-bearing for a different reason: this string leads
     # both cached shared prefixes, so re-reading the clock per call would
     # fork the lens and verifier cache lineages the moment a run crossed
@@ -8943,7 +9010,7 @@ def _run_final_qc(
                     ),
                 )
             outcomes[lens.lens_id] = outcome
-            _merge_usage(usage_totals, _sum_billed(outcome.billed))
+            _merge_usage(usage_totals, _sum_billed(outcome.billed, model=model))
             status = outcome.status
             event_sink(
                 {
@@ -9071,7 +9138,7 @@ def _run_final_qc(
         should_stop=should_stop,
         pressure_run=pressure_run,
     )
-    _merge_usage(usage_totals, _sum_billed(consolidation_billed))
+    _merge_usage(usage_totals, _sum_billed(consolidation_billed, model=model))
     raw_findings = [(candidate.lens, candidate.finding) for candidate in candidates]
 
     # -- Phase 2: verification (parallel across all findings' verifiers) ----
@@ -9160,7 +9227,7 @@ def _run_final_qc(
             nonlocal done
             verdict = outcome.verdict
             verdicts[finding_index].append(verdict)
-            _merge_usage(usage_totals, _sum_billed(outcome.billed))
+            _merge_usage(usage_totals, _sum_billed(outcome.billed, model=model))
             complete_event: dict[str, Any] = {
                 "type": "verifier_complete",
                 "candidate_id": candidate_ids[finding_index],

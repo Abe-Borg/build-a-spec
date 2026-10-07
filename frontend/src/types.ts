@@ -71,6 +71,9 @@ export interface Health {
   /** The model Final QC runs on (env-overridable). Optional: an older
    *  backend does not send it. */
   qc_model?: string;
+  /** The dedicated model for project-fact harvesting (env-overridable).
+   *  Optional: an older backend does not send it. */
+  harvest_model?: string;
   api_key_present: boolean;
   module?: string;
   module_id?: string;
@@ -115,6 +118,9 @@ export interface UsageSummary {
    * counter server-side, so the flag and the number cannot disagree.
    */
   includes_estimated_output?: boolean;
+  /** Some tiered-model usage lacks per-sampling-step prompt lengths, so
+   *  its pricing tier is approximated from the available aggregate. */
+  includes_estimated_pricing?: boolean;
   /**
    * True when a Final QC run in this session submitted batch requests whose
    * results it never collected. Those requests may have been billed, so the
@@ -2566,7 +2572,7 @@ export interface DiagnosticsSnapshot {
     frozen: boolean;
     dev_mode: boolean;
     port: number;
-    models: { interview: string; research: string; qc: string };
+    models: { interview: string; research: string; harvest?: string; qc: string };
   };
   tracing: {
     enabled: boolean;

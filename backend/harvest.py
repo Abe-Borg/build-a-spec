@@ -737,9 +737,10 @@ def run_harvest(
 
     Adaptive thinking and the effort stated explicitly, one strict output
     tool, forced selection only on confirmed compatible models (see
-    ``single_output_tool_kwargs``). Sonnet 5.5 and unverified overrides keep
-    automatic selection. A declined turn is named rather than parsed; an
-    unfinished reply is refused even when it holds a payload (a token-limit
+    ``single_output_tool_kwargs``). Haiku 5.5 keeps automatic selection to
+    preserve thinking, as do Sonnet 5.5 and unverified overrides. A declined
+    turn is named rather than parsed; an unfinished reply is refused even
+    when it holds a payload (a token-limit
     stop remains ``harvest_cut_off``), a reply without the tool is refused
     rather than mined, and every error that follows a response carries its
     billed usage for the caller to meter.

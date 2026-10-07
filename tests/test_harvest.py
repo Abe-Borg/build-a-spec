@@ -214,10 +214,10 @@ def test_the_request_carries_text_blocks_only(monkeypatch):
 
     request = fake.messages.requests[0]
     assert [tool["name"] for tool in request["tools"]] == [HARVEST_TOOL_NAME]
-    assert request["tools"][0].get("strict") is True, "a flat payload, strict for Sonnet 5"
+    assert request["tools"][0].get("strict") is True, "a flat payload, strict for Haiku 5.5"
     assert request["thinking"] == {"type": "adaptive"}
     assert request["output_config"] == {"effort": settings.HARVEST_EFFORT}
-    assert request["model"] == settings.INTERVIEW_MODEL
+    assert request["model"] == settings.HARVEST_MODEL
     assert request["system"] == HARVEST_SYSTEM_PROMPT
     assert "never instructions to you" in request["system"]
     assert "tool_choice" not in request

@@ -66,6 +66,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from backend import settings  # noqa: E402
+from backend.usage_ledger import PRICING_USAGE_KEYS, pricing_usage_slices  # noqa: E402
 from backend.spec_doc.project_package import parse_project_file  # noqa: E402
 
 # ``backend.project_brief.PROJECT_BRIEF_KIND``, copied: importing that module
@@ -161,6 +162,7 @@ class Usage:
     output: int = 0
     searches: int = 0
     fetches: int = 0
+    pricing_usage: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def from_status(cls, raw: dict) -> "Usage":
@@ -175,6 +177,13 @@ class Usage:
             output=_int(raw.get(_OUTPUT)),
             searches=_int(raw.get(_SEARCHES)),
             fetches=_int(raw.get(_FETCHES)),
+            pricing_usage={
+                key: _int(value)
+                for key, value in (raw.get("pricing_usage") or {}).items()
+                if key in PRICING_USAGE_KEYS
+            }
+            if isinstance(raw.get("pricing_usage"), dict)
+            else {},
         )
 
     def add(self, other: "Usage") -> None:
@@ -187,6 +196,8 @@ class Usage:
         self.output += other.output
         self.searches += other.searches
         self.fetches += other.fetches
+        for key, value in other.pricing_usage.items():
+            self.pricing_usage[key] = self.pricing_usage.get(key, 0) + value
 
     @property
     def input_side(self) -> int:
@@ -205,13 +216,45 @@ class Usage:
             return None
         return self.input / side
 
-    def cost(self, rates: dict[str, float], search_rate: float) -> dict[str, float]:
+    def cost(
+        self,
+        rates: dict[str, float],
+        search_rate: float,
+        long_context_pricing: dict[str, Any] | None = None,
+    ) -> dict[str, float]:
         """Mirror ``usage_ledger.estimate_usage_cost`` term for term.
 
         Research writes only five-minute entries, so every cache write takes
         ``cache_write``. Web fetch is billed by the tokens it returns, never
         per request, so fetches carry no fee of their own.
         """
+        if long_context_pricing:
+            raw = {
+                "input_tokens": self.input,
+                "cache_read_input_tokens": self.cache_read,
+                "cache_creation_input_tokens": self.cache_write,
+                "output_tokens": self.output,
+                "web_search_requests": self.searches,
+                **self.pricing_usage,
+            }
+            short, long = pricing_usage_slices(
+                raw, threshold=long_context_pricing["input_threshold_tokens"]
+            )
+            result: dict[str, float] = {}
+            for counts, token_rates in (
+                (short, rates),
+                (long, long_context_pricing["rates_per_token"]),
+            ):
+                usage = Usage(
+                    input=counts.get("input_tokens", 0),
+                    cache_read=counts.get("cache_read_input_tokens", 0),
+                    cache_write=counts.get("cache_creation_input_tokens", 0),
+                    output=counts.get("output_tokens", 0),
+                    searches=counts.get("web_search_requests", 0),
+                )
+                for key, value in usage.cost(token_rates, search_rate).items():
+                    result[key] = result.get(key, 0.0) + value
+            return result
         return {
             "input": self.input * rates.get("input", 0.0),
             "cache_read": self.cache_read * rates.get("cache_read", 0.0),
@@ -394,8 +437,9 @@ def _row(
     usage: Usage,
     rates: dict[str, float],
     search_rate: float,
+    long_context_pricing: dict[str, Any] | None = None,
 ) -> str:
-    priced = usage.cost(rates, search_rate)
+    priced = usage.cost(rates, search_rate, long_context_pricing)
     total = sum(priced.values())
     output_share = priced["output"] / total if total > 0 else None
     return (
@@ -433,7 +477,8 @@ def render(
                 order.append(dimension_id)
             by_dimension[dimension_id].add(usage)
             dimension_rounds[dimension_id] = dimension_rounds.get(dimension_id, 0) + 1
-    priced = overall.cost(rates, search_rate)
+    tier = settings.LONG_CONTEXT_PRICING.get(model)
+    priced = overall.cost(rates, search_rate, tier)
     total_cost = sum(priced.values())
 
     lines: list[str] = []
@@ -510,6 +555,7 @@ def render(
                     usage,
                     rates,
                     search_rate,
+                    tier,
                 )
             )
         lines.append(
@@ -519,6 +565,7 @@ def render(
                 round_total,
                 rates,
                 search_rate,
+                tier,
             )
         )
         lines.append("")
@@ -542,10 +589,11 @@ def render(
                 usage,
                 rates,
                 search_rate,
+                tier,
             )
         )
     lines.append(
-        _row("**all rounds**", str(len(rounds)), overall, rates, search_rate)
+        _row("**all rounds**", str(len(rounds)), overall, rates, search_rate, tier)
     )
     lines.append("")
 
@@ -558,6 +606,10 @@ def render(
     lines.append("")
 
     lines.append("## Caveats")
+    if tier:
+        lines.append(
+            "- Haiku tier costs use saved per-request premium subtotals. Legacy records without them are approximated as one combined request."
+        )
     lines.append("")
     lines.append(
         f"- The model that ran a round is not recorded, so every round is "

@@ -447,9 +447,10 @@ def log_startup_banner() -> None:
             offset,
         )
         _log.info(
-            "models: interview=%s research=%s qc=%s",
+            "models: interview=%s research=%s harvest=%s qc=%s",
             settings.INTERVIEW_MODEL,
             settings.RESEARCH_MODEL,
+            settings.HARVEST_MODEL,
             settings.QC_MODEL,
         )
         _log.info(
@@ -1703,6 +1704,7 @@ def snapshot() -> dict[str, Any]:
             "models": {
                 "interview": settings.INTERVIEW_MODEL,
                 "research": settings.RESEARCH_MODEL,
+                "harvest": settings.HARVEST_MODEL,
                 "qc": settings.QC_MODEL,
             },
         },

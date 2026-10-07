@@ -2648,6 +2648,8 @@ def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, A
                 "app": settings.APP_NAME,
                 "version": settings.VERSION,
                 "model": settings.INTERVIEW_MODEL,
+                "qc_model": settings.QC_MODEL,
+                "harvest_model": settings.HARVEST_MODEL,
                 "api_key_present": bool(load_api_key()),
                 "module": session.module.display_name,
                 "module_id": session.module.module_id,
@@ -3681,6 +3683,7 @@ def create_app(
             # can override the default), so the paid-run consent copy names
             # what the user is agreeing to pay for.
             "qc_model": settings.QC_MODEL,
+            "harvest_model": settings.HARVEST_MODEL,
             "api_key_present": bool(load_api_key()),
             "module": session.module.display_name,
             "module_id": session.module.module_id,
@@ -5892,7 +5895,7 @@ def create_app(
             result = run_harvest(
                 client,
                 inputs,
-                model=settings.INTERVIEW_MODEL,
+                model=settings.HARVEST_MODEL,
                 effort=settings.HARVEST_EFFORT,
             )
         except HarvestError as exc:
@@ -5923,7 +5926,7 @@ def create_app(
         session.add_usage_if_current(
             generation, "harvest", result.usage, count_turn=True
         )
-        usage = usage_to_dict(result.usage)
+        usage = usage_to_dict(result.usage, model=settings.HARVEST_MODEL)
         with session.session_state_guard():
             # Re-checked now rather than only at commit: a sheet that could
             # never commit is worse than saying so while the user is looking.
@@ -5976,7 +5979,7 @@ def create_app(
                 "dismissals": len(inputs.qc_dismissals),
                 "usage": usage,
                 "estimated_cost_usd": estimate_usage_cost(
-                    settings.INTERVIEW_MODEL, usage
+                    settings.HARVEST_MODEL, usage
                 ),
             }
         )

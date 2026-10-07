@@ -1070,7 +1070,7 @@ def test_the_rates_come_from_the_ledger(monkeypatch) -> None:
     for model in [*settings.PRICING, "a-model-nobody-priced"]:
         assert usage_ledger.model_rates(model) == usage_ledger._rates(model)
     assert usage_ledger.model_rates("a-model-nobody-priced") == settings.PRICING[
-        settings.MODEL_SONNET_5
+        settings.MODEL_SONNET_55
     ]
     copied = usage_ledger.model_rates(_SONNET)
     copied["input"] = 999.0

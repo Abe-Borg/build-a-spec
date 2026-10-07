@@ -1,10 +1,11 @@
 """Word comments on the redline on your original (Phase 3 of the redline plan).
 
 Every tracked change in the redline on your original that has a recorded
-basis — the research finding behind it, the attached document behind it, or
-the Final QC fix that made it — carries a Word comment from the export author
-saying what the change rests on, with its source web links. A reviewer sees
-why each change was made without opening the app.
+basis — the research finding behind it, the attached document behind it, the
+Final QC fix that made it, or the reason the assistant gave for the edit
+(every model edit carries one since 2026-10-07) — carries a Word comment
+from the export author saying what the change rests on, with its source web
+links. A reviewer sees why each change was made without opening the app.
 
 This module is the WRITER half and it only ever ADDS:
 
@@ -154,10 +155,14 @@ class CommentBasis:
 
     ``qc`` — the Final QC fixes that still hold at the element; ``research``
     — the research item or attached document its ``source_item_id`` names;
-    ``unresolved_source`` — it names one that resolves to nothing."""
+    ``reasons`` — what the assistant said each edit of the element was for
+    (``SpecSection.edit_reasons``), spoken on every kind of change, a
+    deletion and a pure move included; ``unresolved_source`` — it names a
+    source that resolves to nothing."""
 
     qc: tuple[CommentParagraph, ...] = ()
     research: tuple[CommentParagraph, ...] = ()
+    reasons: tuple[CommentParagraph, ...] = ()
     unresolved_source: bool = False
 
 
@@ -208,10 +213,11 @@ def plan_comments(
 
     A changed element carries the QC bases that still hold at it, plus —
     only when it has new words (inserted, or edited / moved with its text
-    changed) — its research or attached-document basis. A locked block
-    (table, picture, …) never does. Consecutive changed paragraphs whose
-    comments would read the same share ONE comment spanning them, when
-    nothing but those paragraphs sits between them.
+    changed) — its research or attached-document basis, plus the reasons
+    the assistant gave for editing it, whatever the kind of change. A
+    locked block (table, picture, …) never does. Consecutive changed
+    paragraphs whose comments would read the same share ONE comment
+    spanning them, when nothing but those paragraphs sits between them.
     """
     skipped: dict[str, int] = {}
     candidates: list[tuple[int, tuple[CommentParagraph, ...]]] = []
@@ -228,8 +234,10 @@ def plan_comments(
         research_applies = site.change == CHANGE_INSERTED or (
             site.change in (CHANGE_EDITED, CHANGE_MOVED) and site.text_changed
         )
-        paragraphs = tuple(basis.qc) + (
-            tuple(basis.research) if research_applies else ()
+        paragraphs = (
+            tuple(basis.qc)
+            + (tuple(basis.research) if research_applies else ())
+            + tuple(basis.reasons)
         )
         if not paragraphs:
             reason = (

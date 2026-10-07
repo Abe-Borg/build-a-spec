@@ -118,6 +118,7 @@ from ..spec_doc import (
     DocumentStore,
     SpecEditError,
     SpecSection,
+    check_edit_reasons,
     lint_document,
     open_questions,
     outline,
@@ -149,6 +150,7 @@ from ..qc.apply import (
     capture_fix_evidence,
     finding_evidence_keys,
     fix_survives,
+    ops_with_fix_reasons,
     stage_chat_apply,
 )
 from ..qc.context import qc_review_context_block
@@ -4246,7 +4248,14 @@ def _run_apply_qc_fixes(
     applied: list[dict[str, Any]] = []
     if combined_ops:
         try:
-            applied = session.apply_doc_edits(combined_ops)
+            # Each op carries the finding it comes from as its reason; the
+            # order and count are combined_ops' own, so the echoes still
+            # map 1:1 onto it below.
+            applied = session.apply_doc_edits(
+                ops_with_fix_reasons(
+                    combined_ops, staged["eligible"], staged["result_ref"]
+                )
+            )
         except (SpecEditError, SourcePatchError) as exc:
             # The dry-run validated the semantics; this is the live gate
             # (most plausibly the imported-source preservation check)
@@ -4437,8 +4446,11 @@ def _run_tool(
     edits = (block.get("input") or {}).get("edits")
     try:
         # The model's batches, and only the model's: the panel's manual edits
-        # reach apply_doc_edits without this check, because what the user
-        # types is theirs (spec_voice).
+        # reach apply_doc_edits without these checks, because what the user
+        # types is theirs (spec_voice) and needs no stated reason. Every
+        # model op says why it is made (owner rule, 2026-10-07): a batch
+        # with one that does not is refused whole, like a placeholder.
+        check_edit_reasons(edits)
         check_drafted_edits(edits)
         applied = session.apply_doc_edits(edits)
     except SpecEditError as exc:
@@ -4468,16 +4480,30 @@ def _run_tool(
         "type": "tool_result",
         "tool_use_id": block.get("id"),
         "content": json.dumps(
-            {"applied": applied, "outline": outline(session.doc.doc)},
+            # The reasons stay out of the result: the model wrote them in
+            # its own input, which history already carries, so echoing them
+            # would store every reason twice and re-send it every turn.
+            {"applied": _without_reasons(applied), "outline": outline(session.doc.doc)},
             ensure_ascii=False,
         ),
     }
     patch = {
         "type": "doc_patch",
+        # The panel's copy keeps each op's reason: the chip and the inline
+        # line under a block changed this turn read it from here and from
+        # the snapshot's edit_reasons.
         "ops": applied,
         "doc": session.doc.snapshot(),
     }
     return result, [patch]
+
+
+def _without_reasons(applied: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The applied records minus each op's ``reason`` (see ``_run_tool``)."""
+    return [
+        {key: value for key, value in record.items() if key != "reason"}
+        for record in applied
+    ]
 
 
 # ---------------------------------------------------------------------------

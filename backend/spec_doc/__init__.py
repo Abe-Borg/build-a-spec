@@ -12,6 +12,7 @@ from .model import (
     DocumentStore,
     SpecEditError,
     SpecSection,
+    check_edit_reasons,
     open_questions,
     outline,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "SectionDiff",
     "SpecEditError",
     "SpecSection",
+    "check_edit_reasons",
     "diff_sections",
     "lint_document",
     "open_questions",

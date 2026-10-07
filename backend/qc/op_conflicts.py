@@ -4,6 +4,14 @@ QC findings are reviewed independently, but users may accept several at once.
 This module turns their operations into one deduplicated batch and rejects
 different operations that claim the same logical write location before any
 document or audit state is mutated.
+
+One finding's own operations are an ordered sequence — the dry run validated
+them in the order given and the apply executes them in that order — so inside
+a finding only an element-level overlap is a conflict (a second write to one
+element makes the first dead; a write under an element the same fix deletes
+targets what it removes). Its steps on one collection's membership, such as
+deleting a provision and adding its pieces back to the same article, are
+compatible with each other. Across findings every rule is unchanged.
 """
 from __future__ import annotations
 
@@ -98,6 +106,65 @@ def _is_compatible_addition_overlap(
         and left_key.resource == right_key.resource
         and left_key.field == right_key.field == "members"
     )
+
+
+def _element_exists(section: SpecSection, uid: str) -> bool:
+    """Whether ``uid`` names a part, article or paragraph of ``section``."""
+
+    def walk(paragraphs) -> bool:
+        return any(p.uid == uid or walk(p.children) for p in paragraphs)
+
+    for part in section.parts:
+        if part.uid == uid:
+            return True
+        for article in part.articles:
+            if article.uid == uid or walk(article.paragraphs):
+                return True
+    return False
+
+
+def _is_same_finding_sequence_overlap(
+    left: _PlannedOperation,
+    right: _PlannedOperation,
+    left_key: _WriteKey,
+    right_key: _WriteKey,
+    section: SpecSection,
+) -> bool:
+    """Whether an overlap is one finding's own ordered steps on a collection.
+
+    A finding's operations are a sequence: ``dry_run_apply_findings`` applied
+    them in the order given and the apply executes them in that order, so a
+    fix that deletes a provision and adds its pieces back to the same article
+    (the writing policy's relocation shape), or appends two paragraphs to one
+    article, is coherent — not two writers racing for one slot. Both
+    operations must belong to exactly the same one finding: an identical
+    operation shared with another finding makes an owner list of two, and
+    the cross-finding rules then decide, unchanged. The overlap must also be
+    confined to collection membership. An element-level overlap inside one
+    finding stays a conflict, because one of the two writes is then dead or
+    aimed at what the same fix removes (live finding qc-6ee3321aeea8,
+    2026-10-07: two rewrites of ``pt1.a15.p2`` in one fix).
+
+    One collection-level pair is dead too: a ``delete`` of an element the
+    document does not have can only be deleting what this same finding adds
+    (any other absent target fails the dry run). The add is then dead, the
+    pair nets to nothing, and the dry run cannot tell — the add just minted
+    the id — so it stays a conflict rather than becoming a fix that writes
+    nothing and marks its finding applied (Codex review on PR #286).
+    """
+    if not (
+        len(left.finding_ids) == 1
+        and left.finding_ids == right.finding_ids
+        and left_key.scope == right_key.scope == "collection"
+    ):
+        return False
+    for planned in (left, right):
+        operation = planned.operation
+        if str(operation.get("action") or "") == "delete" and not _element_exists(
+            section, str(operation.get("target_id") or "")
+        ):
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -269,6 +336,9 @@ def plan_qc_operation_batch(
                         right_key,
                         standalone_finding_ids,
                     )
+                    and not _is_same_finding_sequence_overlap(
+                        left, right, left_key, right_key, section
+                    )
                 }
             )
             if not overlaps:
@@ -296,9 +366,58 @@ def plan_qc_operation_batch(
     )
 
 
+def self_conflict_write_keys(
+    finding_id: str,
+    operations: Iterable[dict[str, Any]],
+    section: SpecSection,
+) -> list[str]:
+    """The write keys ONE finding's own operations claim against each other.
+
+    :func:`plan_qc_operation_batch` run over a single finding: empty when its
+    operations are mutually compatible, otherwise the sorted distinct keys of
+    every internal conflict — ``element:pt1.a15.p2:*`` for two rewrites of
+    one paragraph, a rewrite beside a delete, or a paragraph added under an
+    article the same fix deletes; ``collection:pt1.a1:members`` for an
+    element added and then deleted by the same fix (its other steps on one
+    collection's membership are compatible; see
+    ``_is_same_finding_sequence_overlap``). Nothing here decides what
+    conflicts: the rules are the planner's, the ones the panel's Apply and
+    ``apply_qc_fixes`` enforce. Asking them about one finding at a time lets
+    a fix that would be refused all by itself be recognized before it is
+    ever offered as safe — by ``engine._validate_ops`` while the report is
+    produced, and by ``apply.finding_fix_class`` for a report retained from
+    before it asked.
+
+    ``section`` is the document the fix would apply to — the per-finding
+    snapshot during validation, the current tree at the apply gate (which
+    ``matches_current_inputs`` holds equal to the reviewed one). The planner
+    reads it to tell a relocation (delete what exists) from a dead add
+    (delete what the fix itself just added), so there is no documentless
+    shortcut. Operations that are not objects are left for the dry run to
+    reject in its own words (the drafting guard's posture).
+    """
+    batch = plan_qc_operation_batch(
+        section,
+        [
+            (
+                finding_id,
+                [op for op in operations if isinstance(op, dict)],
+            )
+        ],
+    )
+    return sorted(
+        {
+            write_key
+            for conflict in batch.conflicts
+            for write_key in conflict["write_keys"]
+        }
+    )
+
+
 __all__ = [
     "QCOperationBatch",
     "canonical_qc_operation",
     "plan_qc_operation_batch",
     "qc_operation_identity",
+    "self_conflict_write_keys",
 ]

@@ -137,6 +137,7 @@ from ..spec_doc.source_patch import (
 )
 from ..spec_doc.obligations import relocation_problems
 from ..spec_doc.spec_voice import check_drafted_edits
+from .op_conflicts import self_conflict_write_keys
 from ..spec_modules import SpecModule
 from ..standards import standards_context_block
 from ..usage_ledger import (
@@ -8496,7 +8497,9 @@ def _validate_ops(
 
     Each finding is validated independently — copy per finding so they never
     see each other's effects. The operations must also pass the drafting
-    guard every model edit passes (``spec_voice.check_drafted_edits``), and
+    guard every model edit passes (``spec_voice.check_drafted_edits``), must
+    not claim one write key against each other (the apply planner's rules,
+    ``op_conflicts.self_conflict_write_keys`` — see below), and
     a relocation or split must carry the provision intact
     (``obligations.relocation_problems``). For
     an imported DOCX, any resulting body change must also pass the same
@@ -8523,6 +8526,28 @@ def _validate_ops(
     except Exception as exc:  # noqa: BLE001 — malformed op → advisory, never a crash
         finding.ops_valid = False
         finding.ops_invalid_reason = f"{type(exc).__name__}: {exc}"
+        return
+
+    # The operations must agree with one another before anything about
+    # their effect is judged. Two rewrites of one paragraph, or a rewrite
+    # beside a delete, dry-run cleanly in sequence — the second simply wins
+    # — yet claim the same write key, which is exactly what the apply
+    # planner refuses whole (``op_conflicts.plan_qc_operation_batch``, run
+    # by the panel's Apply and by apply_qc_fixes). Asked here, over this one
+    # finding, the same planner keeps such a fix advisory instead of
+    # presenting a verified safe fix that can never be applied (live finding
+    # qc-6ee3321aeea8, 2026-10-07: "verified safe fix, 4 op(s)", then the
+    # whole batch refused for its own two writes to pt1.a15.p2).
+    self_conflicts = self_conflict_write_keys(
+        finding.finding_id, finding.proposed_ops, snapshot
+    )
+    if self_conflicts:
+        finding.ops_valid = False
+        finding.ops_invalid_reason = (
+            "The proposed operations conflict with one another (write keys: "
+            + ", ".join(self_conflicts)
+            + ")."
+        )
         return
 
     # A fix that relocates or splits a provision must carry it intact — its

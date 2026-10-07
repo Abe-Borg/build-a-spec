@@ -39,13 +39,13 @@ def _one_line(text: str, limit: int = 240) -> str:
     return folded[: limit - 1].rstrip() + "…"
 
 
-def _finding_line(finding: Any) -> str:
+def _finding_line(finding: Any, section: Any) -> str:
     ref = str(
         getattr(finding, "reviewed_ref", "")
         or getattr(finding, "element_id", "")
         or "section-level"
     )
-    if finding_fix_class(finding) == FIX_CLASS_SAFE:
+    if finding_fix_class(finding, section) == FIX_CLASS_SAFE:
         fix = (
             "fix: verified safe fix, "
             f"{len(finding.proposed_ops)} op(s) — apply via apply_qc_fixes "
@@ -79,6 +79,7 @@ def _render(
     open_findings: list[Any],
     open_disputed: list[Any],
     *,
+    section: Any,
     stale: bool,
     trimmed: int,
     latest_attempt_note: str,
@@ -115,7 +116,7 @@ def _render(
             "inputs; never apply without the user's explicit approval in "
             "this conversation):"
         )
-        lines.extend(_finding_line(f) for f in open_findings)
+        lines.extend(_finding_line(f, section) for f in open_findings)
     else:
         lines.append("")
         lines.append(
@@ -177,6 +178,7 @@ def qc_review_context_block(
         result,
         open_findings,
         open_disputed,
+        section=current_section,
         stale=stale,
         trimmed=trimmed,
         latest_attempt_note=latest_attempt_note,
@@ -196,6 +198,7 @@ def qc_review_context_block(
             result,
             open_findings,
             open_disputed,
+            section=current_section,
             stale=stale,
             trimmed=trimmed,
             latest_attempt_note=latest_attempt_note,

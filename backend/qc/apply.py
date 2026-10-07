@@ -35,6 +35,7 @@ from .op_conflicts import (
     canonical_qc_operation,
     plan_qc_operation_batch,
     qc_operation_identity,
+    self_conflict_write_keys,
 )
 
 # Sentinel distinguishing "the caller did not pre-sample" from a genuine
@@ -201,7 +202,7 @@ def result_is_audit_complete(result) -> bool:
     )
 
 
-def finding_fix_class(finding) -> str:
+def finding_fix_class(finding, section: SpecSection) -> str:
     """Classify one finding's fix: executable safe fix vs advisory-only.
 
     ``FIX_CLASS_SAFE`` is exactly the apply gate's eligibility condition
@@ -211,24 +212,35 @@ def finding_fix_class(finding) -> str:
     applied / dismissed) is deliberately NOT part of the class: it describes
     what happened to the finding, not what its fix is.
 
-    The drafting guard is re-checked here rather than trusted from the
-    persisted ``ops_valid``: a report retained from before the guard existed
-    can carry a fix that writes a ``[TBD]`` or stamps needs_input, and this
-    one gate is what the panel's Apply, the chat's apply_qc_fixes, the model's
-    FINAL QC REVIEW block and the debrief counts all read.
+    Two checks are re-run here rather than trusted from the persisted
+    ``ops_valid``, because this one gate is what the panel's Apply, the
+    chat's apply_qc_fixes, the model's FINAL QC REVIEW block and the debrief
+    counts all read: the drafting guard (a report retained from before the
+    guard existed can carry a fix that writes a ``[TBD]`` or stamps
+    needs_input) and the planner's self-conflict check (a report retained
+    from before ``_validate_ops`` asked the planner can carry a fix whose
+    own operations claim one write key — which both apply paths refuse
+    whole, so trusting it offers a safe fix that can never be applied).
+    ``section`` is the document the fix would apply to: the planner reads it
+    to tell a relocation from a fix that deletes what it itself adds.
     """
     if (
         getattr(finding, "ops_semantic_status", "") == "approved"
         and getattr(finding, "ops_valid", False)
         and getattr(finding, "proposed_ops", None)
         and not drafted_edit_problems(finding.proposed_ops)
+        and not self_conflict_write_keys(
+            str(getattr(finding, "finding_id", "") or ""),
+            finding.proposed_ops,
+            section,
+        )
     ):
         return FIX_CLASS_SAFE
     return FIX_CLASS_ADVISORY
 
 
 def select_apply_candidates(
-    result, finding_ids: list[str]
+    result, finding_ids: list[str], section: SpecSection
 ) -> tuple[
     dict[str, str],
     list[tuple[str, str, str]],
@@ -242,7 +254,8 @@ def select_apply_candidates(
     every requested id to its (so far) outcome, ``skipped_events`` carries
     the disposition-outcome records for the skipped ones, and
     ``eligible_findings`` is the ordered ``(finding_id, proposed_ops)`` list
-    for conflict planning and the dry-run.
+    for conflict planning and the dry-run. ``section`` is the document the
+    fixes would apply to (see ``finding_fix_class``).
     """
     outcomes: dict[str, str] = {}
     skipped_events: list[tuple[str, str, str]] = []
@@ -253,7 +266,7 @@ def select_apply_candidates(
         if finding is None:
             outcomes[finding_id] = "unknown"
             continue
-        if finding_fix_class(finding) != FIX_CLASS_SAFE:
+        if finding_fix_class(finding, section) != FIX_CLASS_SAFE:
             outcomes[finding_id] = "no_ops"
             skipped_events.append(
                 (
@@ -396,10 +409,10 @@ def stage_chat_apply(session, raw_input: Any) -> dict[str, Any]:
             "findings, or use the Final QC panel's Apply, which waits out "
             "the permission check."
         )
-    outcomes, skipped_events, eligible = select_apply_candidates(
-        result, finding_ids
-    )
     working = SpecSection.from_dict(session.doc.doc.to_dict())
+    outcomes, skipped_events, eligible = select_apply_candidates(
+        result, finding_ids, working
+    )
     batch = plan_qc_operation_batch(working, eligible)
     if batch.conflicts:
         conflicting_ids = sorted(

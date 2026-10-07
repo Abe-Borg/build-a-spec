@@ -19802,3 +19802,202 @@ Provider references:
 No pilot, comparison experiment, or paid model request was run. Tests were
 not run, as requested by the owner. The application version and published
 release entries are unchanged.
+
+
+## A fix that conflicts with itself is never a safe fix — implemented notes (2026-10-07)
+
+**The live failure.** In a session on 2026-10-07 (Build-a-Spec 1.24.0), Final
+QC produced `qc-6ee3321aeea8` (1.16.B, standard titles and designations that
+differed from the REFERENCES article) with four `proposed_ops`, two of them
+rewriting `pt1.a15.p2`. `_validate_ops` dry-ran the four in sequence — the
+second rewrite simply won — and stamped `ops_valid`, so the FINAL QC REVIEW
+block told the model "verified safe fix, 4 op(s)" and the chat debrief listed
+it among the fixes the user could approve. "Apply the verified safe fixes"
+went through `apply_qc_fixes`, whose planner refused the whole batch:
+
+```
+The selected Final QC fixes contain conflicting operations; nothing was
+applied. Conflicting finding ids: qc-6ee3321aeea8 (write keys:
+element:pt1.a15.p2:*). Retry with a non-conflicting subset, or leave the
+conflict to the user in the Final QC panel.
+```
+
+One finding id, because the conflict was inside the finding. The model
+recovered by retrying without it (one extra full-context round; 7 findings,
+8 operations applied) and the finding stayed open with a "safe fix" that the
+panel's Apply would also have labelled "This finding contains proposed
+operations that conflict with one another."
+
+**Root cause.** `qc/engine._validate_ops` ran the dry run (`apply_edits`,
+which happily writes one element twice), the drafting guard, the relocation
+guard and the source-preservation guard — never the write-set planner
+(`qc/op_conflicts.plan_qc_operation_batch`). The planner's rules (`replace`
+and `delete` claim `element:<id>:*`, `set_status` claims
+`element:<id>:status`, adds claim `collection:<parent>:members`) run only at
+apply time, in both paths: the `apply_qc_fixes` chat tool (`qc/apply.py`,
+`QCChatApplyError`) and `POST /api/qc/apply` plus its preview in `app.py`.
+So validation and apply disagreed, and the disagreement surfaced as a refusal
+of the user's whole request.
+
+### What changed
+
+- **Validation asks the planner about the finding alone.** After the dry run
+  and before the relocation guard, `_validate_ops` calls
+  `op_conflicts.self_conflict_write_keys(finding_id, proposed_ops, snapshot)`
+  — `plan_qc_operation_batch` over a one-finding list, returning the sorted
+  distinct write keys of its internal conflicts. Any key sets
+  `ops_valid = False` and `ops_invalid_reason = "The proposed operations
+  conflict with one another (write keys: element:pt1.a15.p2:*)."`, so the
+  finding reads advisory in `finding_fix_class`, the FINAL QC REVIEW block,
+  the debrief counts and the panel, with the reason beside it. The planner is
+  pure and the per-finding snapshot is already a deep copy; nothing else in
+  the pipeline moves.
+- **Retained reports are re-checked the way PR #275 re-checks the drafting
+  guard.** `qc/apply.finding_fix_class` — the one gate behind the panel's
+  Apply, `apply_qc_fixes`, the context block and the debrief — now also runs
+  `self_conflict_write_keys` beside `drafted_edit_problems` instead of
+  trusting the persisted `ops_valid`. A report saved before this change
+  therefore reads its self-conflicting fix as advisory and applies it as
+  `no_ops`, and the finding never reaches the planner in either apply path.
+  The gate holds no document, so the helper plans against an empty
+  `SpecSection`: the planner consults a section only to name a delete's or a
+  move's parent collection, and otherwise derives it from the element id —
+  which is exactly how ids are formed (`pt1.a2.p3` is a child of `pt1.a2`;
+  `spec_doc.model`'s load-time validator refuses any tree where it is not),
+  so the answer is the same one the current tree would give. No
+  `QC_PROTOCOL_VERSION` bump: that would have discarded every retained report
+  to catch a rare case, the same call PR #275 made.
+- **The planner gained one rule — a deliberate departure from the brief.**
+  The brief said not to change the planner. Running it per finding showed
+  why that could not stand: it refused every multi-step relocation fix the
+  writing policy blesses. Yesterday's fixtures
+  (`tests/fixtures/writing_policy/placement_cases.json`, `reviewed_edit`)
+  plan as `add_paragraph pt3.a1` + `delete pt3.a1.p1` →
+  `collection:pt3.a1:members`, two `add_paragraph pt1.a1` →
+  `collection:pt1.a1:members`, `add_article pt1` + `delete pt1.a1` →
+  `collection:pt1:members`. Those fixes were stamped safe and could never
+  have been applied — the same bug, one class wider — and marking them
+  advisory would have flipped five tests in `tests/test_writing_policy_qc.py`
+  and left the relocation guard with nothing to guard. The planner's own
+  docstring frames its job as cross-finding independence; inside a finding
+  the operations are an ordered sequence (`dry_run_apply_findings` applies
+  them in the order given and the apply executes that order), so
+  `_is_same_finding_sequence_overlap` treats an overlap as compatible when
+  both operations belong to exactly the same one finding and both
+  overlapping keys are collection-scoped. Element-level overlaps inside one
+  finding stay conflicts: two writes to one element (the live case), a
+  rewrite beside a delete, `replace` beside `set_status`, or a paragraph
+  added under an article the same fix deletes — in each, one write is dead
+  or aimed at what the fix removes. Across findings nothing changed: a
+  multi-step finding against another finding's same-parent append, a
+  sequence against a standalone append, and an operation shared verbatim
+  with another finding (an owner list of two) all conflict exactly as
+  before, and two standalone appends to one article stay compatible.
+- **Unchanged.** The apply paths' code, the preview, `QC_PROTOCOL_VERSION`,
+  every request byte, the QC input manifest, the SSE protocol, readiness.
+
+### What a user sees
+
+| One finding's operations | Before: validation → apply | After |
+|---|---|---|
+| two rewrites of one paragraph (the live case) | safe fix → whole batch refused | advisory, reason names `element:…:*` |
+| rewrite + delete of one element | safe fix → refused | advisory |
+| paragraph added under an article the fix deletes | safe fix (add first) → refused | advisory |
+| `replace` + `set_status` on one element | safe fix → refused | advisory |
+| delete a provision, add its pieces back to the same article | safe fix → refused | safe fix → applied |
+| two appends to one article | safe fix → refused | safe fix → applied |
+| rewrite one element, `set_status` another | safe fix → applied | unchanged |
+
+The chat consequence: `apply_qc_fixes` on "all verified safe fixes" can no
+longer be refused for a conflict inside one finding, because no such finding
+is a verified safe fix; a retained one is skipped as `no_ops` in the same
+turn, beside the fixes that apply.
+
+### Tests
+
+`tests/test_qc_preflight_conflicts.py`:
+- `test_a_finding_whose_operations_conflict_with_one_another_is_not_a_safe_fix`
+  — two rewrites (exact reason), rewrite + delete, add under a deleted
+  article → `ops_valid=False`; two appends and a split in place → `True`;
+  rewrite one element + `set_status` another → `True`.
+- `test_a_retained_self_conflicting_fix_reads_advisory_and_is_skipped` —
+  `ops_valid=True` on the record, `finding_fix_class` advisory,
+  `select_apply_candidates` → `no_ops`, nothing left for the planner.
+- `test_a_retained_self_conflicting_fix_is_skipped_beside_an_applied_one` —
+  `POST /api/qc/apply`: 200 with `{self: no_ops, compatible: applied}`,
+  an `apply_no_ops` disposition, the document untouched for the skipped one.
+- `test_one_findings_collection_steps_are_a_sequence_but_cross_finding_rules_hold`
+  — the new rule and its fence, case by case (incl. the dead-add cases from
+  the review correction below).
+- `test_a_relocation_fix_applies_as_one_finding` — the writing policy's
+  shape through the panel's Apply, paragraph order checked.
+
+`tests/test_qc_chat_apply.py::test_a_retained_self_conflicting_fix_no_longer_refuses_the_safe_batch`
+replays the live request against a retained report: one `qc_dispositions`
+event `{applied, no_ops}`, a non-error tool result, one committed version.
+`_seed_and_install` gained an optional `extra_ops` so a test can seed a
+second paragraph.
+
+Reversion probes, each restored afterwards: removing the planner call from
+`_validate_ops` fails the validation test (1); removing the re-check from
+`finding_fix_class` fails the retained-report unit, endpoint and chat tests
+(3); removing `_is_same_finding_sequence_overlap` from the planner fails the
+sequence test, the relocation apply test, the two-appends and split
+assertions, and the five writing-policy tests (8 failed, 5 passed across
+the probe's selection).
+
+### Validation
+
+Ruff clean. 234 passed across `test_qc_preflight_conflicts`,
+`test_qc_chat_apply`, `test_writing_policy_qc`, `test_spec_voice`,
+`test_writing_policy_eval`, `test_obligations`, `test_source_capabilities`,
+`test_qc_context`, `test_debrief`, `test_qc_remediation_preview`,
+`test_qc_apply_history` and `test_qc_consolidation`. CI runs the full suite.
+No frontend file changed.
+
+### PR #286 review correction
+
+Codex raised one P2 finding on the planner rule; it reproduced and is fixed.
+
+- **A fix that adds an element and then deletes it by the id its own add
+  mints slipped through.** `add_paragraph pt1.a1` + `delete pt1.a1.p3`
+  (p3 being the id the append would receive) overlaps only on
+  `collection:pt1.a1:members`, so the same-finding exemption made it
+  compatible; the dry run accepts it because the id exists by the time the
+  delete runs; and the pair nets to nothing — the fix would have applied,
+  consumed a sequence number, changed no text, and marked its finding
+  applied. Before the rule it was refused at apply (the collection
+  overlap); the rule had turned a refusal into a silent no-op. The
+  exemption now also requires that neither operation is a `delete` of an
+  element the document does not have: an absent target that the dry run
+  nevertheless accepts can only be the finding's own add, so the pair is a
+  dead add, not a relocation (`_element_exists`, a small local walker).
+- **The fix class therefore takes the document.** Telling a relocation
+  (delete what exists) from a dead add (delete what the fix itself adds)
+  needs the tree, so the documentless shortcut is gone:
+  `self_conflict_write_keys(finding_id, operations, section)` requires its
+  section, `finding_fix_class(finding, section)` and
+  `select_apply_candidates(result, finding_ids, section)` take the document
+  the fixes would apply to, and every caller passes it — the chat tool and
+  the apply route their `working` tree (which `matches_current_inputs`
+  holds equal to the reviewed one), the debrief `session.doc.doc`, and the
+  FINAL QC REVIEW block the `current_section` it already received. The
+  planner's cross-finding rules are untouched.
+
+Tests: the validation test gains the dead-add case (`ops_valid=False`,
+reason naming `collection:pt1.a1:members`); the planner test gains it for
+paragraphs and for an article added and deleted in one fix; the
+writing-policy relocation fixtures still validate. Removing the rule fails
+both new assertions while the relocation tests keep passing; the probe was
+restored. Ruff clean; 250 passed across the suites above plus
+`test_context_sizes` and `test_docs_consistency`.
+
+### Release-note draft (for the release after 1.24.0)
+
+"**Final QC never offers a fix that fights itself.** A fix whose own
+operations rewrite the same provision twice is now marked advisory when the
+review is produced, with the reason shown, instead of being presented as a
+verified safe fix and then refused when you approve it — and a fix that moves
+a provision's pieces within one article applies as the single change it is."
+
+No paid API call was made.

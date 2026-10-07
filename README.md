@@ -2782,13 +2782,19 @@ actions.
   The report preserves the full proposed `apply_spec_edits` operation payload,
   unanimous semantic-approval result, snapshot dry-run result and validation
   error, if any. Only semantically approved operations enter deterministic and
-  source-preservation validation; `ops_valid` means both checks passed.
+  source-preservation validation; `ops_valid` means the dry run, the drafting
+  guard, the write-set check and source preservation all passed.
   **Apply fix** edits the document exactly as previewed, in **one undo step**
   after validation against the current document; a moved target is recorded
   `stale` and skipped, never partially applied. Multi-finding requests
   deduplicate identical operations, but reject different operations that claim
   the same deterministic write target with a structured `409` before mutating
-  anything. **Dismiss** requires and preserves a reviewer rationale
+  anything. One finding's own operations are an ordered sequence, so a fix
+  that deletes a provision and adds its pieces back to the same article is one
+  coherent fix; a fix whose own operations write the same element twice (the
+  second rewrite makes the first dead) is marked advisory when the review is
+  produced, never offered as a safe fix, and so can never be the reason an
+  "apply the verified safe fixes" request is refused. **Dismiss** requires and preserves a reviewer rationale
   (blank/whitespace reasons are rejected) and is
   remembered by content-addressed id, so a re-run that regenerates the same
   finding auto-marks it dismissed. Open, applied, dismissed, advisory,
@@ -2925,7 +2931,9 @@ actions.
   accounted for. An empty roster still advances honestly through verification
   and validation instead of making phases disappear.
 - **Fix validation is the real local dry run.** Upheld candidates proceed to
-  the existing deterministic/source-preservation checks, with live local
+  the existing deterministic/source-preservation checks — including the same
+  write-set planning the Apply paths run, so a fix that conflicts with itself
+  reads advisory instead of safe-then-refused — with live local
   progress distinguishing safe fixes from advisory or manual outcomes. When
   the attempt completes, the board resolves into a concise recap — completed
   lenses, reviewed candidates, upheld/refuted/inconclusive totals and safe

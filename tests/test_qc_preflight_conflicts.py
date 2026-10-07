@@ -8,7 +8,13 @@ from fastapi.testclient import TestClient
 
 from backend import sessions
 from backend.app import create_app
-from backend.qc.engine import QCFinding, QCResult
+from backend.qc.apply import (
+    FIX_CLASS_ADVISORY,
+    FIX_CLASS_SAFE,
+    finding_fix_class,
+    select_apply_candidates,
+)
+from backend.qc.engine import QCFinding, QCResult, _validate_ops
 from backend.qc.op_conflicts import plan_qc_operation_batch
 from backend.qc.preflight import module_section_compatibility
 from backend.spec_doc.model import DocumentStore, SpecSection
@@ -562,3 +568,327 @@ def test_semantic_rejection_cannot_reach_the_mutation_path(monkeypatch) -> None:
     assert response.json()["outcomes"] == {"rejected": "no_ops"}
     assert session.doc.doc.to_dict() == before
     assert finding.status == "open"
+
+
+def _rewrite(target_id: str, text: str) -> dict:
+    return {
+        "action": "replace",
+        "target_id": target_id,
+        "text": text,
+        "status": "confirmed",
+    }
+
+
+def test_a_finding_whose_operations_conflict_with_one_another_is_not_a_safe_fix() -> None:
+    """Validation asks the planner the same question the apply paths ask.
+
+    Live finding qc-6ee3321aeea8 (2026-10-07): two of its own operations
+    claimed ``element:pt1.a15.p2:*``. They dry-ran cleanly in sequence — the
+    second rewrite simply won — so the engine stamped the fix verified; then
+    apply_qc_fixes refused the whole "apply the verified safe fixes" batch for
+    it, and the panel's Apply would have labelled it as conflicting with
+    itself. The planner's rules are unchanged; validation now consults them
+    per finding, so such a fix reads advisory and names the write key.
+    """
+    section = _store().doc
+
+    twice = _finding(
+        "qc-self-twice",
+        [
+            _rewrite("pt1.a1.p1", "Provide a complete wet-pipe system."),
+            _rewrite("pt1.a1.p1", "Provide a complete preaction system."),
+        ],
+    )
+    _validate_ops(twice, section)
+    assert twice.ops_valid is False
+    assert twice.ops_invalid_reason == (
+        "The proposed operations conflict with one another "
+        "(write keys: element:pt1.a1.p1:*)."
+    )
+
+    rewrite_then_delete = _finding(
+        "qc-self-delete",
+        [
+            _rewrite("pt1.a1.p1", "Provide a complete wet-pipe system."),
+            {"action": "delete", "target_id": "pt1.a1.p1"},
+        ],
+    )
+    _validate_ops(rewrite_then_delete, section)
+    assert rewrite_then_delete.ops_valid is False
+    assert "element:pt1.a1.p1:*" in rewrite_then_delete.ops_invalid_reason
+
+    # A paragraph added under an article the same fix deletes is aimed at
+    # what the fix removes: an element-level overlap, refused whichever way
+    # the two are ordered (delete-first fails the dry run outright).
+    add_under_deleted = _finding(
+        "qc-self-ghost",
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide hangers in accordance with NFPA 13.",
+                "status": "confirmed",
+            },
+            {"action": "delete", "target_id": "pt1.a1"},
+        ],
+    )
+    _validate_ops(add_under_deleted, section)
+    assert add_under_deleted.ops_valid is False
+    assert "element:pt1.a1:*" in add_under_deleted.ops_invalid_reason
+
+    # One finding's own steps on a collection are a sequence, not a race:
+    # two appends to one article, or the writing policy's relocation shape
+    # (delete a provision, add its pieces back to the same article), stay
+    # safe fixes — and, since the planner agrees, applyable ones.
+    two_appends = _finding(
+        "qc-self-appends",
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide hangers in accordance with NFPA 13.",
+                "status": "confirmed",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide seismic bracing in accordance with NFPA 13.",
+                "status": "confirmed",
+            },
+        ],
+    )
+    two_appends.ops_valid = False
+    _validate_ops(two_appends, section)
+    assert two_appends.ops_valid is True, two_appends.ops_invalid_reason
+
+    split_in_place = _finding(
+        "qc-self-split",
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide a complete system.",
+                "status": "confirmed",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide a complete system of hangers.",
+                "status": "confirmed",
+            },
+            {"action": "delete", "target_id": "pt1.a1.p1"},
+        ],
+    )
+    split_in_place.ops_valid = False
+    _validate_ops(split_in_place, section)
+    assert split_in_place.ops_valid is True, split_in_place.ops_invalid_reason
+
+    # …but a fix that adds a paragraph and then deletes it by the id its
+    # own add mints writes nothing: the dry run accepts it (the id exists
+    # by then), so the planner has to call it (Codex review on PR #286).
+    dead_add = _finding(
+        "qc-self-dead-add",
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide hangers in accordance with NFPA 13.",
+                "status": "confirmed",
+            },
+            {"action": "delete", "target_id": "pt1.a1.p3"},
+        ],
+    )
+    _validate_ops(dead_add, section)
+    assert dead_add.ops_valid is False
+    assert "collection:pt1.a1:members" in dead_add.ops_invalid_reason
+
+    distinct = _finding(
+        "qc-distinct",
+        [
+            _rewrite("pt1.a1.p1", "Provide a complete wet-pipe system."),
+            {"action": "set_status", "target_id": "pt1.a1.p2", "status": "assumed"},
+        ],
+    )
+    distinct.ops_valid = False  # prove validation turned it on, not the preset
+    _validate_ops(distinct, section)
+    assert distinct.ops_valid is True
+    assert distinct.ops_invalid_reason == ""
+
+
+def test_a_retained_self_conflicting_fix_reads_advisory_and_is_skipped() -> None:
+    """A report saved before validation asked the planner says ops_valid=True.
+
+    ``finding_fix_class`` re-runs the planner's check the way it re-runs the
+    drafting guard, so the one gate behind the panel's Apply, apply_qc_fixes,
+    the FINAL QC REVIEW block and the debrief counts reads such a fix
+    advisory, and the apply paths skip it as ``no_ops`` instead of refusing
+    the whole batch for it.
+    """
+    retained = _finding(
+        "qc-old-self",
+        [
+            _rewrite("pt1.a1.p1", "Provide a complete wet-pipe system."),
+            _rewrite("pt1.a1.p1", "Provide a complete preaction system."),
+        ],
+    )
+    coherent = _finding(
+        "qc-coherent", [_rewrite("pt1.a1.p2", "Coordinate every interface.")]
+    )
+    section = _store().doc
+    assert retained.ops_valid is True
+    assert finding_fix_class(retained, section) == FIX_CLASS_ADVISORY
+    assert finding_fix_class(coherent, section) == FIX_CLASS_SAFE
+
+    result = QCResult(findings=[retained, coherent])
+    outcomes, skipped, eligible = select_apply_candidates(
+        result, ["qc-old-self", "qc-coherent"], section
+    )
+    assert outcomes == {"qc-old-self": "no_ops"}
+    assert [finding_id for finding_id, _action, _reason in skipped] == [
+        "qc-old-self"
+    ]
+    assert [finding_id for finding_id, _ops in eligible] == ["qc-coherent"]
+    # What the gate lets through has nothing left for the planner to refuse.
+    assert not plan_qc_operation_batch(section, eligible).conflicts
+
+
+def test_a_retained_self_conflicting_fix_is_skipped_beside_an_applied_one(
+    monkeypatch,
+) -> None:
+    """The panel's Apply on the same pair: 200 with no_ops, not a 409."""
+    session = sessions.get_session()
+    session.doc = _store()
+    retained = _finding(
+        "self",
+        [
+            _rewrite("pt1.a1.p1", "Provide a complete wet-pipe system."),
+            _rewrite("pt1.a1.p1", "Provide a complete preaction system."),
+        ],
+    )
+    compatible = _finding(
+        "compatible", [_rewrite("pt1.a1.p2", "Coordinate every interface.")]
+    )
+    _install_result([retained, compatible])
+    _bypass_result_contract(monkeypatch)
+
+    response = _client().post(
+        "/api/qc/apply", json={"finding_ids": ["self", "compatible"]}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["outcomes"] == {
+        "self": "no_ops",
+        "compatible": "applied",
+    }
+    assert retained.status == "open"
+    assert retained.disposition_events[-1].action == "apply_no_ops"
+    assert compatible.status == "applied"
+    assert "Coordinate every interface." in str(session.doc.doc.to_dict())
+    assert "Provide a complete system." in str(session.doc.doc.to_dict())
+
+
+def test_one_findings_collection_steps_are_a_sequence_but_cross_finding_rules_hold() -> None:
+    """The planner's one new rule, and the fence around it.
+
+    Inside one finding an overlap confined to collection membership is
+    compatible; across findings — including an identical operation shared
+    with another finding, which makes an owner list of two — every rule is
+    exactly what it was.
+    """
+    section = _store().doc
+
+    def append(text: str) -> dict:
+        return {
+            "action": "add_paragraph",
+            "target_id": "pt1.a1",
+            "text": text,
+            "status": "confirmed",
+        }
+
+    delete_first = {"action": "delete", "target_id": "pt1.a1.p1"}
+
+    # One finding, its own steps: compatible.
+    for ops in (
+        [append("A."), append("B.")],
+        [append("A."), delete_first],
+        [delete_first, append("A.")],
+        [{"action": "add_article", "target_id": "pt1", "text": "SCOPE"},
+         {"action": "delete", "target_id": "pt1.a1"}],
+    ):
+        assert plan_qc_operation_batch(section, [("solo", ops)]).conflicts == ()
+
+    # One finding, an element-level overlap: still a conflict. So is a
+    # delete of what the same finding adds (pt1.a1.p3 is the id its append
+    # would mint; it is not in the document): a dead add, not a relocation.
+    for ops, key in (
+        ([_rewrite("pt1.a1.p1", "X."), _rewrite("pt1.a1.p1", "Y.")], "element:pt1.a1.p1:*"),
+        ([_rewrite("pt1.a1.p1", "X."), delete_first], "element:pt1.a1.p1:*"),
+        ([append("A."), {"action": "delete", "target_id": "pt1.a1"}], "element:pt1.a1:*"),
+        ([_rewrite("pt1.a1.p1", "X."),
+          {"action": "set_status", "target_id": "pt1.a1.p1", "status": "assumed"}],
+         "element:pt1.a1.p1:*"),
+        ([append("A."), {"action": "delete", "target_id": "pt1.a1.p3"}],
+         "collection:pt1.a1:members"),
+        ([{"action": "add_article", "target_id": "pt1", "text": "SCOPE"},
+          {"action": "delete", "target_id": "pt1.a2"}],
+         "collection:pt1:members"),
+    ):
+        conflicts = plan_qc_operation_batch(section, [("solo", ops)]).conflicts
+        assert [c["write_keys"] for c in conflicts] == [[key]], ops
+
+    # Across findings, unchanged: a multi-step finding against a same-parent
+    # append, a sequence against a standalone append, and a step shared
+    # verbatim with another finding all conflict as before.
+    for findings in (
+        [("multi", [append("A."), append("B.")]), ("other", [append("C.")])],
+        [("sequence", [append("A."), delete_first]), ("other", [append("C.")])],
+        [("multi", [append("A."), append("B.")]), ("twin", [append("A.")])],
+    ):
+        conflicts = plan_qc_operation_batch(section, findings).conflicts
+        assert conflicts, findings
+        assert all(
+            len(c["finding_ids"]) == 2 for c in conflicts
+        ), findings
+    # …and two standalone appends to one article remain compatible.
+    assert plan_qc_operation_batch(
+        section, [("one", [append("A.")]), ("two", [append("B.")])]
+    ).conflicts == ()
+
+
+def test_a_relocation_fix_applies_as_one_finding(monkeypatch) -> None:
+    """The writing policy's relocation shape goes through the panel's Apply."""
+    session = sessions.get_session()
+    session.doc = _store()
+    relocation = _finding(
+        "relocate",
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide a complete system.",
+                "status": "confirmed",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide a complete system of hangers.",
+                "status": "confirmed",
+            },
+            {"action": "delete", "target_id": "pt1.a1.p1"},
+        ],
+    )
+    _install_result([relocation])
+    _bypass_result_contract(monkeypatch)
+
+    response = _client().post("/api/qc/apply", json={"finding_ids": ["relocate"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["outcomes"] == {"relocate": "applied"}
+    assert relocation.status == "applied"
+    texts = [
+        paragraph.text
+        for paragraph in session.doc.doc.parts[0].articles[0].paragraphs
+    ]
+    assert texts == [
+        "Coordinate all interfaces.",
+        "Provide a complete system.",
+        "Provide a complete system of hangers.",
+    ]

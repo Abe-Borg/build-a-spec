@@ -302,6 +302,10 @@ function AnchoredCard({
     ref.current?.releasePointerCapture(event.pointerId);
   };
 
+  // The card is never taller than the window: the header and the Back /
+  // Continue / End row stay put and the middle scrolls (see the touring
+  // branch). Uncapped, the long import step ran off the bottom of the window
+  // and took its buttons with it.
   const style = rect
     ? position
       ? { top: position.top + offset.dy, left: position.left + offset.dx }
@@ -316,7 +320,7 @@ function AnchoredCard({
       aria-modal="false"
       data-capability="tour.controls"
       className={
-        "pointer-events-auto fixed z-[65] w-[390px] max-w-[calc(100vw-16px)] rounded-xl border border-edge bg-surface p-4 shadow-2xl"
+        "pointer-events-auto fixed z-[65] flex max-h-[calc(100vh-16px)] w-[390px] max-w-[calc(100vw-16px)] flex-col rounded-xl border border-edge bg-surface p-4 shadow-2xl"
       }
       style={style}
       onPointerDown={handlePointerDown}
@@ -549,47 +553,55 @@ export default function OnboardingOverlay({
           title={step.title}
           onClose={ob.requestEnd}
         />
-        <div className="mt-1 flex items-center gap-2">
-          <span className="rounded-full border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
-            {step.mode}
-          </span>
-          {step.optionalReason && <span className="text-[10px] text-ink-faint">Optional: {step.optionalReason}</span>}
+        {/* The one part of the card that scrolls. Keyed by step so a new
+            step starts at its top instead of where the last one was left. */}
+        <div
+          key={`${phase.chunk}:${phase.step}`}
+          data-testid="tour-card-body"
+          className="-mr-2 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-2"
+        >
+          <div className="mt-1 flex items-center gap-2">
+            <span className="rounded-full border border-edge px-2 py-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
+              {step.mode}
+            </span>
+            {step.optionalReason && <span className="text-[10px] text-ink-faint">Optional: {step.optionalReason}</span>}
+          </div>
+          {ready && !missing ? (
+            <p className="mt-2 text-sm leading-relaxed text-ink-dim">{step.body}</p>
+          ) : missing && ready ? (
+            <div className="mt-2 rounded-lg border border-edge bg-raised p-3">
+              <p className="text-sm leading-relaxed text-ink-dim">
+                This control is not available in the current UI state. The tutorial has kept the
+                explanation beside the real document instead of showing a pretend control. You can
+                continue; no project change is required.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-2 rounded-lg border border-warn/40 bg-warn/10 p-3">
+              <p className="text-sm leading-relaxed text-ink-dim">{step.body}</p>
+              <p className="text-sm leading-relaxed text-ink-dim">
+                {step.readiness === "research"
+                  ? "There is no completed research result in this tutorial state. A live run is optional because it uses your API key and web tools. If you skipped it, the details above explain the workflow without claiming that research ran."
+                  : step.readiness === "qc"
+                    ? "There is no completed Final QC result in this tutorial state. Final QC is optional and paid. If you declined the live run, the details above remain instructional; no findings or readiness state will be fabricated."
+                    : step.readiness === "imported"
+                      ? "The real imported-source scenario could not be prepared. Continue without it; the tutorial will not synthesize imported provenance or source-preservation permissions."
+                      : "The bundled showcase state for this step could not be prepared. You can continue; the explanation above stands, and nothing will be fabricated to fill the gap."}
+              </p>
+            </div>
+          )}
+          {ready && !missing && step.details && (
+            <dl className="mt-3 space-y-1.5 border-t border-edge pt-2.5">
+              {step.details.map((item) => (
+                <div key={item.id} className="text-[11px] leading-snug">
+                  <dt className="inline font-medium text-ink">{item.label}: </dt>
+                  <dd className="inline text-ink-dim">{item.description}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
         </div>
-        {ready && !missing ? (
-          <p className="mt-2 text-sm leading-relaxed text-ink-dim">{step.body}</p>
-        ) : missing && ready ? (
-          <div className="mt-2 rounded-lg border border-edge bg-raised p-3">
-            <p className="text-sm leading-relaxed text-ink-dim">
-              This control is not available in the current UI state. The tutorial has kept the
-              explanation beside the real document instead of showing a pretend control. You can
-              continue; no project change is required.
-            </p>
-          </div>
-        ) : (
-          <div className="mt-2 rounded-lg border border-warn/40 bg-warn/10 p-3">
-            <p className="text-sm leading-relaxed text-ink-dim">{step.body}</p>
-            <p className="text-sm leading-relaxed text-ink-dim">
-              {step.readiness === "research"
-                ? "There is no completed research result in this tutorial state. A live run is optional because it uses your API key and web tools. If you skipped it, the details above explain the workflow without claiming that research ran."
-                : step.readiness === "qc"
-                  ? "There is no completed Final QC result in this tutorial state. Final QC is optional and paid. If you declined the live run, the details above remain instructional; no findings or readiness state will be fabricated."
-                  : step.readiness === "imported"
-                    ? "The real imported-source scenario could not be prepared. Continue without it; the tutorial will not synthesize imported provenance or source-preservation permissions."
-                    : "The bundled showcase state for this step could not be prepared. You can continue; the explanation above stands, and nothing will be fabricated to fill the gap."}
-            </p>
-          </div>
-        )}
-        {ready && !missing && step.details && (
-          <dl className="mt-3 space-y-1.5 border-t border-edge pt-2.5">
-            {step.details.map((item) => (
-              <div key={item.id} className="text-[11px] leading-snug">
-                <dt className="inline font-medium text-ink">{item.label}: </dt>
-                <dd className="inline text-ink-dim">{item.description}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
           {!atFirst && <button onClick={ob.back} className={quietBtn}>‹ Back</button>}
           {/* The tour is a fixed track: nothing but an in-flight turn can hold
               Continue, and that guard stays because `advance` may swap in the

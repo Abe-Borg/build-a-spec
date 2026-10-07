@@ -201,8 +201,11 @@ follow + `stream_end`; event types `qc_started`, `lens_complete`,
 `POST /api/qc/apply` (`{finding_ids}` → one undoable version; per-finding
 `applied`/`stale`/`no_ops`/`not_open`/`unknown` outcomes; duplicate ids and
 identical operations are deduplicated; different operations claiming the same
-deterministic write key return a structured 409 before any mutation; 409 while
-a turn or QC run is active),
+deterministic write key return a structured 409 before any mutation — across
+findings; one finding's own steps on a collection are an ordered sequence,
+and its element-level self-conflicts never reach apply as safe fixes because
+`_validate_ops` and `finding_fix_class` run the same planner per finding;
+409 while a turn or QC run is active),
 `POST /api/qc/dismiss` (`{finding_id, reason}` with a required nonblank audit
 rationale → remembered by
 content-addressed id across re-runs; 409 while QC runs),
@@ -702,7 +705,13 @@ retiring needs-input from the panel and tour follow.
   `qc/apply.finding_fix_class` — the one gate behind the panel's Apply,
   `apply_qc_fixes`, the FINAL QC REVIEW block and the debrief counts —
   re-runs `drafted_edit_problems` instead of trusting the flag. Such a fix
-  reads advisory and applies as `no_ops`. No QC protocol bump.
+  reads advisory and applies as `no_ops`. No QC protocol bump. Since
+  2026-10-07 the same gate also re-runs the apply planner over the finding's
+  own operations (`op_conflicts.self_conflict_write_keys`), as
+  `_validate_ops` now does while a report is produced: a fix whose operations
+  write one element twice reads advisory everywhere, so "apply the verified
+  safe fixes" can never be refused for a conflict inside one finding (see
+  "A fix that conflicts with itself is never a safe fix" in docs/as-built.md).
 - **Bytes that changed once.** The stable prompt, `apply_spec_edits`'
   description (plus a description on its `status` property), and
   `track_followups`' description: every open session rewrites its cached

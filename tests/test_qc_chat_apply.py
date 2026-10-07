@@ -96,9 +96,12 @@ def _finding(finding_id: str, ops: list[dict]) -> QCFinding:
 
 
 def _seed_and_install(
-    client: TestClient, findings: list[QCFinding]
+    client: TestClient,
+    findings: list[QCFinding],
+    extra_ops: list[dict] | None = None,
 ) -> QCResult:
-    assert client.post("/api/doc/edit", json={"ops": _SEED_OPS}).json()["ok"]
+    seed = [*_SEED_OPS, *(extra_ops or [])]
+    assert client.post("/api/doc/edit", json={"ops": seed}).json()["ok"]
     session = sessions.get_session()
     result = audit_grade_qc_result(session, findings)
     session.qc.result = result
@@ -502,6 +505,97 @@ def test_conflicting_fixes_are_refused_whole(monkeypatch) -> None:
     session = sessions.get_session()
     assert session.qc.result.finding("qc-conflict001").status == "open"
     assert session.qc.result.finding("qc-conflict002").status == "open"
+
+
+def test_a_retained_self_conflicting_fix_no_longer_refuses_the_safe_batch(
+    monkeypatch,
+) -> None:
+    """The live refusal of 2026-10-07, replayed against a retained report.
+
+    "Apply the verified safe fixes" was refused whole because ONE finding's
+    own operations claimed ``element:pt1.a15.p2:*``; the model then spent a
+    round retrying without it. A report retained from before validation
+    asked the planner still carries such a finding as ``ops_valid=True``.
+    The fix class now reads it advisory, so the same call applies the
+    coherent fix and records the other as ``no_ops`` in one turn — no
+    refusal, no retry round.
+    """
+    client = _client()
+    safe = _safe_fix_finding()
+    self_conflicting = _finding(
+        "qc-selfconf0001",
+        [
+            {
+                "action": "replace",
+                "target_id": "pt1.a1.p2",
+                "text": "Coordinate with Section 21 10 00, Water-Based "
+                "Fire-Suppression Systems.",
+                "status": "confirmed",
+            },
+            {
+                "action": "replace",
+                "target_id": "pt1.a1.p2",
+                "text": "Coordinate with Section 28 31 00, Fire Detection "
+                "and Alarm.",
+                "status": "confirmed",
+            },
+        ],
+    )
+    second_paragraph = {
+        "action": "add_paragraph",
+        "target_id": "pt1.a1",
+        "text": "Coordinate with Section 21 10 00.",
+        "status": "confirmed",
+    }
+    _seed_and_install(
+        client, [safe, self_conflicting], extra_ops=[second_paragraph]
+    )
+    assert self_conflicting.ops_valid is True  # the retained report's word
+    fake = FakeClient(
+        [
+            tool_turn(
+                ["Applying the verified safe fixes… "],
+                {"finding_ids": ["qc-safe000fix1", "qc-selfconf0001"]},
+                tool_id="toolu_qc1",
+                name="apply_qc_fixes",
+            ),
+            text_turn(["Applied one; the other needs your hand."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+
+    events = _parse_sse(
+        client.post(
+            "/api/chat", json={"message": "Yes — apply the verified safe fixes"}
+        ).text
+    )
+    assert events[-1]["type"] == "turn_complete"
+    assert [e for e in events if e["type"] == "qc_dispositions"] == [
+        {
+            "type": "qc_dispositions",
+            "outcomes": {
+                "qc-safe000fix1": "applied",
+                "qc-selfconf0001": "no_ops",
+            },
+        }
+    ]
+    tool_result = _tool_results(fake.messages.requests[1])[-1]
+    assert tool_result.get("is_error") is not True
+    payload = json.loads(tool_result["content"])
+    assert payload["outcomes"] == {
+        "qc-safe000fix1": "applied",
+        "qc-selfconf0001": "no_ops",
+    }
+    assert payload["applied_operations"] == 1
+
+    session = sessions.get_session()
+    committed = json.dumps(session.doc.doc.to_dict())
+    assert _FIXED_TEXT in committed
+    assert "Coordinate with Section 21 10 00." in committed
+    assert session.qc.result.finding("qc-safe000fix1").status == "applied"
+    skipped = session.qc.result.finding("qc-selfconf0001")
+    assert skipped.status == "open"
+    assert skipped.disposition_events[-1].action == "apply_no_ops"
 
 
 def test_a_malformed_call_is_correctable_within_the_turn(monkeypatch) -> None:

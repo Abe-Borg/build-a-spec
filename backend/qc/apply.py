@@ -35,6 +35,7 @@ from .op_conflicts import (
     canonical_qc_operation,
     plan_qc_operation_batch,
     qc_operation_identity,
+    self_conflict_write_keys,
 )
 
 # Sentinel distinguishing "the caller did not pre-sample" from a genuine
@@ -211,17 +212,24 @@ def finding_fix_class(finding) -> str:
     applied / dismissed) is deliberately NOT part of the class: it describes
     what happened to the finding, not what its fix is.
 
-    The drafting guard is re-checked here rather than trusted from the
-    persisted ``ops_valid``: a report retained from before the guard existed
-    can carry a fix that writes a ``[TBD]`` or stamps needs_input, and this
-    one gate is what the panel's Apply, the chat's apply_qc_fixes, the model's
-    FINAL QC REVIEW block and the debrief counts all read.
+    Two checks are re-run here rather than trusted from the persisted
+    ``ops_valid``, because this one gate is what the panel's Apply, the
+    chat's apply_qc_fixes, the model's FINAL QC REVIEW block and the debrief
+    counts all read: the drafting guard (a report retained from before the
+    guard existed can carry a fix that writes a ``[TBD]`` or stamps
+    needs_input) and the planner's self-conflict check (a report retained
+    from before ``_validate_ops`` asked the planner can carry a fix whose
+    own operations claim one write key — which both apply paths refuse
+    whole, so trusting it offers a safe fix that can never be applied).
     """
     if (
         getattr(finding, "ops_semantic_status", "") == "approved"
         and getattr(finding, "ops_valid", False)
         and getattr(finding, "proposed_ops", None)
         and not drafted_edit_problems(finding.proposed_ops)
+        and not self_conflict_write_keys(
+            str(getattr(finding, "finding_id", "") or ""), finding.proposed_ops
+        )
     ):
         return FIX_CLASS_SAFE
     return FIX_CLASS_ADVISORY

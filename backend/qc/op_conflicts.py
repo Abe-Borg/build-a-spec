@@ -335,9 +335,56 @@ def plan_qc_operation_batch(
     )
 
 
+def self_conflict_write_keys(
+    finding_id: str,
+    operations: Iterable[dict[str, Any]],
+    section: SpecSection | None = None,
+) -> list[str]:
+    """The write keys ONE finding's own operations claim against each other.
+
+    :func:`plan_qc_operation_batch` run over a single finding: empty when its
+    operations are mutually compatible, otherwise the sorted distinct keys of
+    every internal conflict — ``element:pt1.a15.p2:*`` for two rewrites of
+    one paragraph, a rewrite beside a delete, or a paragraph added under an
+    article the same fix deletes (its own steps on one collection's
+    membership are compatible; see ``_is_same_finding_sequence_overlap``).
+    Nothing here decides what conflicts: the rules are the planner's, the
+    ones the panel's Apply and ``apply_qc_fixes`` enforce. Asking them about
+    one finding at a time lets a fix that would be refused all by itself be
+    recognized before it is ever offered as safe — by
+    ``engine._validate_ops`` while the report is produced, and by
+    ``apply.finding_fix_class`` for a report retained from before it asked.
+
+    ``section`` reaches the planner only to name a delete's or a move's
+    parent collection. Without one it derives the parent from the element
+    id, and ids are formed exactly that way (``pt1.a2.p3`` is a child of
+    ``pt1.a2``; the load-time validator refuses any tree where it is not),
+    so a caller holding no document gets the same answer as one holding the
+    current tree. Operations that are not objects are left for the dry run
+    to reject in its own words (the drafting guard's posture).
+    """
+    batch = plan_qc_operation_batch(
+        section if section is not None else SpecSection(),
+        [
+            (
+                finding_id,
+                [op for op in operations if isinstance(op, dict)],
+            )
+        ],
+    )
+    return sorted(
+        {
+            write_key
+            for conflict in batch.conflicts
+            for write_key in conflict["write_keys"]
+        }
+    )
+
+
 __all__ = [
     "QCOperationBatch",
     "canonical_qc_operation",
     "plan_qc_operation_batch",
     "qc_operation_identity",
+    "self_conflict_write_keys",
 ]

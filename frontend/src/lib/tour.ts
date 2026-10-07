@@ -8,10 +8,9 @@
 import type { DocParagraph, SpecDoc } from "../types";
 import type { EndUserCapabilityId } from "./capabilities";
 import {
-  SOURCE_CAPABILITY_GUIDANCE,
   SOURCE_OUTPUT_GUIDANCE,
   type SourceOutputGuidance,
-} from "./sourceOutputGuidance";
+} from "./sourceOutputGuidance.ts";
 
 /**
  * Bump whenever chapter/step ORDER changes.
@@ -501,10 +500,13 @@ export const TOUR: readonly TourChunk[] = [
         resolve: "first-imported",
         readiness: "imported",
         placement: "left",
-        title: "Source preservation is proven per operation",
+        title: "Imported text is yours to edit",
+        // No glossary here: the export step ("ship" chapter) carries the full
+        // SOURCE_OUTPUT_GUIDANCE list. This step used to carry it too, under a
+        // body that restated the legacy permission rules, and the card ran past
+        // the bottom of the window with Continue and End below it.
         body:
-          `Every import is editable at once, and the export menu's "Export Word - Tracked Changes ON" keeps your formatting and records every edit since import as a Word tracked change, with tracking on for further Word edits; "Open in Word" does the same into a temporary file and hands it to Word so the real layout can be checked any time. A preserved block's lock chip says why it cannot be retyped, and it can still be moved or deleted. The exact original remains separately downloadable. Projects saved under the older byte-exact contract still show server-derived permissions: ${SOURCE_CAPABILITY_GUIDANCE} There, Edit freely trades the byte-exact export for unrestricted editing. An "Adapt imported draft" action asks the assistant to walk the whole starter against this project in one pass.`,
-        details: SOURCE_OUTPUT_GUIDANCE,
+          "Every imported provision can be edited, moved, or deleted right away, by you or the assistant. The IMPORTED chip marks one nobody has reviewed yet, and a preserved block's lock chip says why it cannot be retyped. Export Word - Tracked Changes ON gives back your own file with its formatting, every edit since import shown as a Word tracked change; Open in Word does the same into a temporary file so you can check the real layout at any time. The exact original stays downloadable, and the export step near the end of the tour sets every output side by side. ✨ Adapt imported draft asks the assistant to walk the whole starter against this project in one pass. A project saved by an older version may still open in source-preserving mode: there a disabled control shows its exact reason, and Edit freely unlocks everything, after which export is a normalized Word file and your original stays downloadable.",
       },
     ],
   },
@@ -571,7 +573,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Choose the output guarantee deliberately",
         body:
-          "For an imported document, Export Word - Tracked Changes ON keeps your file's formatting, records every edit since import as a Word tracked change, and leaves tracking on for further Word edits. Earlier pending revisions are accepted in the export copy, matching the imported view; Reject All restores that accepted view and the retained original stays unchanged. Open in Word does the same into a temporary file and opens it. Redline on your original is that same file of yours with every change since the import shown as a Word tracked change: in Word, Accept All gives exactly the formatted export and Reject All gives your original back, and the app checks both before it hands the file over. A master that already carries tracked changes is refused with the fix named (accept or reject them in Word, save, and import it again). Open redline in Word writes it to a temporary file and opens it in Word to review there. The Build-a-Spec styled DOCX uses automatic Word numbering. Every specification export ends at END OF SECTION: the assumptions schedule, imported provisions not yet reviewed, any leftover placeholders and the Final QC summary are a separate review report, downloaded only from Download review report. The redline of extracted provisions compares committed semantic versions in Build-a-Spec's own styles. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
+          "For an imported document, Export Word - Tracked Changes ON keeps your file's formatting, records every edit since import as a Word tracked change, and leaves tracking on for further Word edits; Open in Word does the same into a temporary file and opens it. Redline on your original, and Open redline in Word, show the same changes on a copy of your upload with its own tracking setting; the list below says what Accept All and Reject All give back and when a master is refused. The Build-a-Spec styled DOCX uses automatic Word numbering. Every specification export ends at END OF SECTION: the assumptions schedule, imported provisions not yet reviewed, any leftover placeholders and the Final QC summary are a separate review report, downloaded only from Download review report. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
         details: SOURCE_OUTPUT_GUIDANCE,
         optionalReason: "The tour points at the real menu but never downloads anything.",
       },

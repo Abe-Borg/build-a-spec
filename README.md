@@ -2585,7 +2585,9 @@ however you end it, it comes back exactly as it was.
 - **A guided run, start to finish.** The tour cannot be parked half-done
   holding your project aside — it either runs or ends and gives your session
   back, and every card and checkpoint carries an End. Step cards never block
-  the app, so you can read the document as you go, and reloading picks the
+  the app, so you can read the document as you go. A step card is never
+  taller than the window: a long step scrolls between its title and its
+  Back / Continue / End row, which always stay in view. Reloading picks the
   tour back up where you left it — but only when
   the server agrees the same protected workspace is still live. Help restarts
   it or jumps straight to any named chapter. Reduced motion is honored.

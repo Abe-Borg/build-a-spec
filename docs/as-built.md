@@ -19669,6 +19669,54 @@ waited for a free worker, or waited the whole bound for a lead that never
 started — with what each one met, in plain words. The diagnostics bundle
 carries the same record. Nothing about any request changed."
 
+## A tour card never runs off the window — implemented notes (2026-10-07)
+
+Owner report (Abraham, with a screenshot): chapter 8's second step, then
+titled "Source preservation is proven per operation", was a wall of text that
+ran past the bottom of the window. Continue and End went with it, so the only
+way on was dragging the card up by its title.
+
+Two causes, both fixed.
+
+- **The step card had no height cap.** `AnchoredCard` was a fixed 390px box
+  with no `max-height` and no overflow, so a long step grew past the viewport
+  and `placeBubble` / `clampOffset` could only pin its top. The card is now a
+  flex column capped at `calc(100vh - 16px)`. The header and the Back /
+  Continue / End row sit outside one scrolling middle
+  (`data-testid="tour-card-body"`, `min-h-0 flex-1 overflow-y-auto
+  overscroll-contain`) that holds the mode chip, body, readiness notes and
+  any glossary. The scroller is keyed by `chunk:step`, so a new step opens at
+  its top. Every step benefits; chapter 8 was only the worst.
+- **The step said too much.** Its body restated the legacy source-preserving
+  permission rules (`SOURCE_CAPABILITY_GUIDANCE`, which Help still carries)
+  and it carried the six-entry `SOURCE_OUTPUT_GUIDANCE` glossary that the
+  export step in the "ship" chapter also carries. It is now "Imported text is
+  yours to edit": every imported provision is editable at once, what the
+  IMPORTED and lock chips mean, Export Word - Tracked Changes ON / Open in
+  Word, the exact-original download, ✨ Adapt imported draft, and one sentence
+  on a legacy source-preserving project and Edit freely. No glossary. Its four
+  capabilities are unchanged. The export step's body dropped the sentences its
+  own glossary already says in full (pending revisions, what Accept All and
+  Reject All give back, the refused master, the normalized redline), and
+  still names every export it covers.
+
+`tour.ts` now imports `./sourceOutputGuidance.ts` with its extension (the
+`lib/` convention) so `node --test` can import `TOUR` at run time.
+`TOUR_VERSION` stays 9: no step was added, removed or reordered.
+
+Tests, in `frontend/tests/tour.test.ts`: "a step card never runs past the
+window, and its buttons never scroll away" pins the cap, the one keyed
+scroller, and the header and buttons outside it; "the export glossary is shown
+once, and no step body is a wall" pins the glossary to the export step, keeps
+the legacy permission wording out of the import step, and holds every step
+body to 1,300 characters. Restoring the old overlay failed the first; restoring
+the old `tour.ts` failed the second; both were put back. `npm test` (538) and
+`npm run build` passed. Both long cards were rendered in headless Chromium
+against the built CSS: chapter 8's fits without scrolling, and the export
+step's caps at the window with its buttons in view. No backend file changed
+and no paid API call was made.
+
+
 ## Claude Haiku 5.5 handles the fact harvest — implemented notes (2026-10-07)
 
 **Owner decision.** Adopt Haiku 5.5 directly, without a pilot or model

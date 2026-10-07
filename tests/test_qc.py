@@ -123,6 +123,18 @@ def _run(
         source_guard=source_guard,
         remembered_dismissed=remembered,
         event_sink=sink or (lambda _e: None),
+        # This file pins ADJUDICATION, and it has always run it on the
+        # batched transport: that was the shipped default until the streamed
+        # stagger made streaming the default. The fakes hand a candidate's
+        # scripted verdicts out in arrival order; a batch submits its seats
+        # in seat order, so ``[True, True, False]`` always lands the dissent
+        # on reviewer 3, while streamed seats arrive in thread order and the
+        # dissent moves (one test reads ``verdicts[2]``, another hashes the
+        # votes into a content-addressed id). Pinned explicitly so the
+        # default flip changes nothing here; the streamed transport's own
+        # contracts are tests/test_qc_live_events.py and
+        # tests/test_qc_streamed_stagger.py.
+        batch_verification=True,
     )
 
 

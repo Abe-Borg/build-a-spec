@@ -1165,7 +1165,10 @@ Tests: `tests/test_qc_streamed_stagger.py` (when: followers wait, a failed
 leader releases, a Stop cancels unsent followers, a leader's 400 trips the
 breaker after one request, zero wait launches at once, two lineages have two
 leaders, waits reach the ledger; what: identical bytes across the wait,
-streamed 5m vs batched 1h, the default pinned from source). Full record,
+streamed 5m vs batched 1h, the default pinned from source). `tests/test_qc.py`
+pins `batch_verification=True`: its adjudication tests always ran batched,
+where the fake hands scripted verdicts out in seat order; streamed seats
+arrive in thread order, which moves a 3-seat script's dissent. Full record,
 reversion evidence and the release-note draft are in `docs/as-built.md` under
 the same heading. No paid API call was made; the streamed saving is modelled
 from the measured run's usage, not yet measured live.

@@ -9522,28 +9522,27 @@ def _run_final_qc(
             # leaders first") has the run this replaced: 39% of batched
             # seats read the warm lead's copy, and 76% of the phase's cost
             # was the prefix being written again at the one-hour rate.
-            seat_specs = {
-                _seat_key(i, j): _verifier_call_spec(
-                    finding=raw_findings[i][1],
-                    lens=raw_findings[i][0],
-                    section_render=section_render,
-                    module=module,
-                    model=model,
-                    max_tokens=phase_max_tokens["verifier"],
-                    effort=verifier_effort,
-                    today=today,
-                    reference_documents=reference_block,
-                    project_facts=facts_block,
-                    cache_ttl=_STREAMED_VERIFIER_CACHE_TTL,
-                )
-                for i, j in tasks
-            }
+            # Lineage keys come from the real request builders, so the seats
+            # are keyed from a build of their specs; the workers then build
+            # their own (one render per seat — cheap). Only when staggering:
+            # a zero wait is the pre-stagger pool, and must behave like it.
             lineages: dict[str, list[tuple[int, int]]] = {}
             if warm_wait_seconds > 0 and len(tasks) > 1:
-                for seat in tasks:
-                    lineages.setdefault(
-                        _spec_lineage_key(seat_specs[_seat_key(*seat)]), []
-                    ).append(seat)
+                for i, j in tasks:
+                    spec = _verifier_call_spec(
+                        finding=raw_findings[i][1],
+                        lens=raw_findings[i][0],
+                        section_render=section_render,
+                        module=module,
+                        model=model,
+                        max_tokens=phase_max_tokens["verifier"],
+                        effort=verifier_effort,
+                        today=today,
+                        reference_documents=reference_block,
+                        project_facts=facts_block,
+                        cache_ttl=_STREAMED_VERIFIER_CACHE_TTL,
+                    )
+                    lineages.setdefault(_spec_lineage_key(spec), []).append((i, j))
             leaders: list[tuple[list[tuple[int, int]], threading.Event]] = [
                 (members, threading.Event())
                 for members in lineages.values()
@@ -9633,7 +9632,6 @@ def _run_final_qc(
                             continuation_cache=continuation_cache,
                             refusal_fallback=refusal_fallback,
                             pressure=seat_pressure,
-                            spec=seat_specs[_seat_key(i, j)],
                             first_output=first_output_for.get((i, j)),
                         )
                         futures[future] = (i, j)

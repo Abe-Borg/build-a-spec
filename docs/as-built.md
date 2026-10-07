@@ -20300,6 +20300,17 @@ Seven existing tests were updated for the new default and TTL
 `test_qc_live_events.py`, `test_qc_preferences.py`, `test_qc_verifier_v3.py`,
 `test_qc_warm_launch.py`); the synchronized circuit-breaker test now passes
 `warm_wait_seconds=0`, since its client releases a full pool together.
+`tests/test_qc.py`'s `_run` is pinned to `batch_verification=True`: that
+file pins adjudication and had always run it on the batched transport (the
+shipped default until now), where the fake hands a candidate's scripted
+verdicts out in seat order. On the streamed transport the seats arrive in
+thread order, so a `[True, True, False]` script lands its dissent on a
+random reviewer — one test reads `verdicts[2]`, another hashes the votes
+into a content-addressed id — and both failed about four runs in five once
+the default flipped. The pin keeps the file meaning what it always meant;
+the streamed transport's own contracts are `test_qc_live_events.py` and
+`test_qc_streamed_stagger.py`. (The lineage keys are also built only when
+the wait is on, so a zero wait is byte-for-byte the pre-stagger pool.)
 
 **Reversion evidence.** Four probes, each applied, run and restored:
 (1) stagger off (`if False and warm_wait_seconds > 0`) — the four "when" tests

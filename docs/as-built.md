@@ -19927,7 +19927,8 @@ turn, beside the fixes that apply.
   `POST /api/qc/apply`: 200 with `{self: no_ops, compatible: applied}`,
   an `apply_no_ops` disposition, the document untouched for the skipped one.
 - `test_one_findings_collection_steps_are_a_sequence_but_cross_finding_rules_hold`
-  — the new rule and its fence, case by case.
+  — the new rule and its fence, case by case (incl. the dead-add cases from
+  the review correction below).
 - `test_a_relocation_fix_applies_as_one_finding` — the writing policy's
   shape through the panel's Apply, paragraph order checked.
 
@@ -19953,6 +19954,43 @@ Ruff clean. 234 passed across `test_qc_preflight_conflicts`,
 `test_qc_context`, `test_debrief`, `test_qc_remediation_preview`,
 `test_qc_apply_history` and `test_qc_consolidation`. CI runs the full suite.
 No frontend file changed.
+
+### PR #286 review correction
+
+Codex raised one P2 finding on the planner rule; it reproduced and is fixed.
+
+- **A fix that adds an element and then deletes it by the id its own add
+  mints slipped through.** `add_paragraph pt1.a1` + `delete pt1.a1.p3`
+  (p3 being the id the append would receive) overlaps only on
+  `collection:pt1.a1:members`, so the same-finding exemption made it
+  compatible; the dry run accepts it because the id exists by the time the
+  delete runs; and the pair nets to nothing — the fix would have applied,
+  consumed a sequence number, changed no text, and marked its finding
+  applied. Before the rule it was refused at apply (the collection
+  overlap); the rule had turned a refusal into a silent no-op. The
+  exemption now also requires that neither operation is a `delete` of an
+  element the document does not have: an absent target that the dry run
+  nevertheless accepts can only be the finding's own add, so the pair is a
+  dead add, not a relocation (`_element_exists`, a small local walker).
+- **The fix class therefore takes the document.** Telling a relocation
+  (delete what exists) from a dead add (delete what the fix itself adds)
+  needs the tree, so the documentless shortcut is gone:
+  `self_conflict_write_keys(finding_id, operations, section)` requires its
+  section, `finding_fix_class(finding, section)` and
+  `select_apply_candidates(result, finding_ids, section)` take the document
+  the fixes would apply to, and every caller passes it — the chat tool and
+  the apply route their `working` tree (which `matches_current_inputs`
+  holds equal to the reviewed one), the debrief `session.doc.doc`, and the
+  FINAL QC REVIEW block the `current_section` it already received. The
+  planner's cross-finding rules are untouched.
+
+Tests: the validation test gains the dead-add case (`ops_valid=False`,
+reason naming `collection:pt1.a1:members`); the planner test gains it for
+paragraphs and for an article added and deleted in one fix; the
+writing-policy relocation fixtures still validate. Removing the rule fails
+both new assertions while the relocation tests keep passing; the probe was
+restored. Ruff clean; 250 passed across the suites above plus
+`test_context_sizes` and `test_docs_consistency`.
 
 ### Release-note draft (for the release after 1.24.0)
 

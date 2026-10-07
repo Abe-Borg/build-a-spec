@@ -513,14 +513,15 @@ def test_a_retained_qc_fix_that_writes_a_placeholder_is_not_applyable():
         "qc-directive",
         [{"action": "set_status", "target_id": "pt1.a1.p1", "status": "confirmed"}],
     )
-    assert finding_fix_class(placeholder) == FIX_CLASS_ADVISORY
-    assert finding_fix_class(flagged) == FIX_CLASS_ADVISORY
-    assert finding_fix_class(directive) == FIX_CLASS_SAFE
+    doc = SpecSection.empty()
+    assert finding_fix_class(placeholder, doc) == FIX_CLASS_ADVISORY
+    assert finding_fix_class(flagged, doc) == FIX_CLASS_ADVISORY
+    assert finding_fix_class(directive, doc) == FIX_CLASS_SAFE
 
     by_id = {f.finding_id: f for f in (placeholder, flagged, directive)}
     result = SimpleNamespace(finding=by_id.get)
     outcomes, skipped, eligible = select_apply_candidates(
-        result, ["qc-old-tbd", "qc-old-flag", "qc-directive"]
+        result, ["qc-old-tbd", "qc-old-flag", "qc-directive"], doc
     )
     assert outcomes == {"qc-old-tbd": "no_ops", "qc-old-flag": "no_ops"}
     assert [finding_id for finding_id, _reason, _note in skipped] == [

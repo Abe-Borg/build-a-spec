@@ -709,9 +709,12 @@ retiring needs-input from the panel and tour follow.
   2026-10-07 the same gate also re-runs the apply planner over the finding's
   own operations (`op_conflicts.self_conflict_write_keys`), as
   `_validate_ops` now does while a report is produced: a fix whose operations
-  write one element twice reads advisory everywhere, so "apply the verified
-  safe fixes" can never be refused for a conflict inside one finding (see
-  "A fix that conflicts with itself is never a safe fix" in docs/as-built.md).
+  write one element twice, or delete what it itself adds, reads advisory
+  everywhere, so "apply the verified safe fixes" can never be refused for a
+  conflict inside one finding. The gate takes the document the fixes would
+  apply to (`finding_fix_class(finding, section)`), because the planner
+  reads it to tell a relocation from a dead add (see "A fix that conflicts
+  with itself is never a safe fix" in docs/as-built.md).
 - **Bytes that changed once.** The stable prompt, `apply_spec_edits`'
   description (plus a description on its `status` property), and
   `track_followups`' description: every open session rewrites its cached

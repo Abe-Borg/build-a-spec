@@ -683,6 +683,25 @@ def test_a_finding_whose_operations_conflict_with_one_another_is_not_a_safe_fix(
     _validate_ops(split_in_place, section)
     assert split_in_place.ops_valid is True, split_in_place.ops_invalid_reason
 
+    # …but a fix that adds a paragraph and then deletes it by the id its
+    # own add mints writes nothing: the dry run accepts it (the id exists
+    # by then), so the planner has to call it (Codex review on PR #286).
+    dead_add = _finding(
+        "qc-self-dead-add",
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Provide hangers in accordance with NFPA 13.",
+                "status": "confirmed",
+            },
+            {"action": "delete", "target_id": "pt1.a1.p3"},
+        ],
+    )
+    _validate_ops(dead_add, section)
+    assert dead_add.ops_valid is False
+    assert "collection:pt1.a1:members" in dead_add.ops_invalid_reason
+
     distinct = _finding(
         "qc-distinct",
         [
@@ -715,13 +734,14 @@ def test_a_retained_self_conflicting_fix_reads_advisory_and_is_skipped() -> None
     coherent = _finding(
         "qc-coherent", [_rewrite("pt1.a1.p2", "Coordinate every interface.")]
     )
+    section = _store().doc
     assert retained.ops_valid is True
-    assert finding_fix_class(retained) == FIX_CLASS_ADVISORY
-    assert finding_fix_class(coherent) == FIX_CLASS_SAFE
+    assert finding_fix_class(retained, section) == FIX_CLASS_ADVISORY
+    assert finding_fix_class(coherent, section) == FIX_CLASS_SAFE
 
     result = QCResult(findings=[retained, coherent])
     outcomes, skipped, eligible = select_apply_candidates(
-        result, ["qc-old-self", "qc-coherent"]
+        result, ["qc-old-self", "qc-coherent"], section
     )
     assert outcomes == {"qc-old-self": "no_ops"}
     assert [finding_id for finding_id, _action, _reason in skipped] == [
@@ -729,7 +749,7 @@ def test_a_retained_self_conflicting_fix_reads_advisory_and_is_skipped() -> None
     ]
     assert [finding_id for finding_id, _ops in eligible] == ["qc-coherent"]
     # What the gate lets through has nothing left for the planner to refuse.
-    assert not plan_qc_operation_batch(_store().doc, eligible).conflicts
+    assert not plan_qc_operation_batch(section, eligible).conflicts
 
 
 def test_a_retained_self_conflicting_fix_is_skipped_beside_an_applied_one(
@@ -796,7 +816,9 @@ def test_one_findings_collection_steps_are_a_sequence_but_cross_finding_rules_ho
     ):
         assert plan_qc_operation_batch(section, [("solo", ops)]).conflicts == ()
 
-    # One finding, an element-level overlap: still a conflict.
+    # One finding, an element-level overlap: still a conflict. So is a
+    # delete of what the same finding adds (pt1.a1.p3 is the id its append
+    # would mint; it is not in the document): a dead add, not a relocation.
     for ops, key in (
         ([_rewrite("pt1.a1.p1", "X."), _rewrite("pt1.a1.p1", "Y.")], "element:pt1.a1.p1:*"),
         ([_rewrite("pt1.a1.p1", "X."), delete_first], "element:pt1.a1.p1:*"),
@@ -804,6 +826,11 @@ def test_one_findings_collection_steps_are_a_sequence_but_cross_finding_rules_ho
         ([_rewrite("pt1.a1.p1", "X."),
           {"action": "set_status", "target_id": "pt1.a1.p1", "status": "assumed"}],
          "element:pt1.a1.p1:*"),
+        ([append("A."), {"action": "delete", "target_id": "pt1.a1.p3"}],
+         "collection:pt1.a1:members"),
+        ([{"action": "add_article", "target_id": "pt1", "text": "SCOPE"},
+          {"action": "delete", "target_id": "pt1.a2"}],
+         "collection:pt1:members"),
     ):
         conflicts = plan_qc_operation_batch(section, [("solo", ops)]).conflicts
         assert [c["write_keys"] for c in conflicts] == [[key]], ops

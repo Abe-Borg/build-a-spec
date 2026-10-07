@@ -25,6 +25,7 @@ from backend import sessions
 from backend.app import create_app
 from backend.qc import apply as qc_apply
 from backend.qc.engine import QCFinding, QCResult, qc_version_fingerprint
+from backend.spec_doc.model import SpecSection
 from tests.fakes import (
     FakeClient,
     audit_grade_qc_result,
@@ -642,7 +643,7 @@ def test_disputed_and_refuted_candidates_never_reach_apply() -> None:
     refuted.verification_outcome = "refuted"
     result = QCResult(findings=[], disputed=[disputed], refuted=[refuted])
     outcomes, skipped, eligible = qc_apply.select_apply_candidates(
-        result, ["qc-disputed0001", "qc-refuted00001"]
+        result, ["qc-disputed0001", "qc-refuted00001"], SpecSection.empty()
     )
     assert outcomes == {
         "qc-disputed0001": "no_ops",
@@ -700,17 +701,18 @@ def test_fix_class_matches_the_apply_gates_eligibility_condition() -> None:
         ops_valid = True
         proposed_ops = [{"action": "replace"}]
 
+    doc = SpecSection.empty()
     safe = _F()
-    assert qc_apply.finding_fix_class(safe) == qc_apply.FIX_CLASS_SAFE
+    assert qc_apply.finding_fix_class(safe, doc) == qc_apply.FIX_CLASS_SAFE
 
     rejected = _F()
     rejected.ops_semantic_status = "rejected"
-    assert qc_apply.finding_fix_class(rejected) == qc_apply.FIX_CLASS_ADVISORY
+    assert qc_apply.finding_fix_class(rejected, doc) == qc_apply.FIX_CLASS_ADVISORY
 
     invalid = _F()
     invalid.ops_valid = False
-    assert qc_apply.finding_fix_class(invalid) == qc_apply.FIX_CLASS_ADVISORY
+    assert qc_apply.finding_fix_class(invalid, doc) == qc_apply.FIX_CLASS_ADVISORY
 
     empty = _F()
     empty.proposed_ops = []
-    assert qc_apply.finding_fix_class(empty) == qc_apply.FIX_CLASS_ADVISORY
+    assert qc_apply.finding_fix_class(empty, doc) == qc_apply.FIX_CLASS_ADVISORY

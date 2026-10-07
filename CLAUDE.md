@@ -67,6 +67,13 @@ file is the working reference for AI-assisted development sessions.
   unknown is written around, stamped `assumed`, and asked about with
   `track_followups`. See "The specification gives directions, never notes"
   below.
+- Every edit the software makes carries a brief reason (owner rule,
+  2026-10-07), a single added word included. It rides each
+  `apply_spec_edits` op as `reason`, is required on every op
+  (`model.check_edit_reasons` refuses the batch whole), is kept per element
+  on the tree (`SpecSection.edit_reasons`), is shown by the panel's "why"
+  chip and said by the redline on the original. It never enters the
+  specification text. See "Every edit carries its reason" below.
 - The writing rules — where a requirement goes, how it keeps its meaning
   when it moves, how it is worded — live in ONE versioned source,
   `backend/writing_policy.py`, rendered into the drafting prompt and the
@@ -99,7 +106,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `project_facts` | `project_facts` | the model recorded or superseded established project facts via `record_project_facts` this round (v1.17.0) — the full ledger snapshot, emitted live on the tool dispatch. Same accumulating, turn-atomic posture as `followups`; the store also persists into the project file and rides a project brief into the next section |
 | `compaction` | `compaction` | the view this turn sends carries a summary of the oldest turns (compaction Phase 3): `{covers_turns, created_at, tokens_before, tokens_after, trigger, summary_chars}` — never the text (`GET /api/chat/compaction` returns it). Emitted at turn start, after `_prepare_turn_view`, whenever the turn's view has a record — including one adopted or written at that moment — so the chat's divider moves at once. Not persisted; the doc payload's `compaction` re-syncs it, and a summary adopted after a turn's stream has closed reaches the chat through the payload's `compaction_pending` + `GET /api/chat/compaction/status` |
 | `qc_dispositions` | `outcomes` | apply_qc_fixes committed audit dispositions with this turn (v1.11.0): `{finding_id: applied\|stale\|no_ops\|already_applied\|not_open\|unknown}`. Emitted from the frozen post-commit payload ONLY when the turn commits with staged dispositions — a rolled-back turn never emits it; the frontend refreshes QC state + readiness on it |
-| `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
+| `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting) and, since 2026-10-07, each op's `reason` (the panel prints the newest under a changed block); `doc` is the authoritative full snapshot (rendering), whose `edit_reasons` carries every element's trail |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks — leftovers only since 2026-10-06: the model can write neither, and since PR 4 the user's edit API refuses a needs_input stamp too; the panel titles them Leftover placeholders); emitted when a turn changed the doc |
 | `lint` | `items`, `standards` | advisory lint issues + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
@@ -201,8 +208,11 @@ follow + `stream_end`; event types `qc_started`, `lens_complete`,
 `POST /api/qc/apply` (`{finding_ids}` → one undoable version; per-finding
 `applied`/`stale`/`no_ops`/`not_open`/`unknown` outcomes; duplicate ids and
 identical operations are deduplicated; different operations claiming the same
-deterministic write key return a structured 409 before any mutation; 409 while
-a turn or QC run is active),
+deterministic write key return a structured 409 before any mutation — across
+findings; one finding's own steps on a collection are an ordered sequence,
+and its element-level self-conflicts never reach apply as safe fixes because
+`_validate_ops` and `finding_fix_class` run the same planner per finding;
+409 while a turn or QC run is active),
 `POST /api/qc/dismiss` (`{finding_id, reason}` with a required nonblank audit
 rationale → remembered by
 content-addressed id across re-runs; 409 while QC runs),
@@ -702,7 +712,16 @@ retiring needs-input from the panel and tour follow.
   `qc/apply.finding_fix_class` — the one gate behind the panel's Apply,
   `apply_qc_fixes`, the FINAL QC REVIEW block and the debrief counts —
   re-runs `drafted_edit_problems` instead of trusting the flag. Such a fix
-  reads advisory and applies as `no_ops`. No QC protocol bump.
+  reads advisory and applies as `no_ops`. No QC protocol bump. Since
+  2026-10-07 the same gate also re-runs the apply planner over the finding's
+  own operations (`op_conflicts.self_conflict_write_keys`), as
+  `_validate_ops` now does while a report is produced: a fix whose operations
+  write one element twice, or delete what it itself adds, reads advisory
+  everywhere, so "apply the verified safe fixes" can never be refused for a
+  conflict inside one finding. The gate takes the document the fixes would
+  apply to (`finding_fix_class(finding, section)`), because the planner
+  reads it to tell a relocation from a dead add (see "A fix that conflicts
+  with itself is never a safe fix" in docs/as-built.md).
 - **Bytes that changed once.** The stable prompt, `apply_spec_edits`'
   description (plus a description on its `status` property), and
   `track_followups`' description: every open session rewrites its cached
@@ -1007,6 +1026,84 @@ pressure. Tests: `tests/test_resource_pressure.py`,
 and the release-note draft are in `docs/as-built.md` under the same heading.
 No paid API call was made; what the live provider's pressure looks like on
 real runs is unmeasured.
+
+## Every edit carries its reason — implemented notes (2026-10-07)
+
+Owner rule (Abraham): the software states the reason for every single edit
+it makes, even a single added word, briefly and to the point. Until now only
+a change with a research, attached-document or Final QC basis said why, and
+only in the redline on the original's comments.
+
+- **The contract.** Every `apply_spec_edits` op carries `reason` (a schema
+  property with a description; deliberately NOT in `required` — the
+  status-enum precedent: saved histories carry inputs without it, and the
+  API reference does not establish that a past input missing a now-required
+  property validates). `model.check_edit_reasons` runs in `_run_tool`
+  before `check_drafted_edits` and refuses the batch whole, naming each op
+  without one (`#n action target`); `set_standard_edition` is satisfied by
+  its required `basis`. Shapes `apply_edits` would refuse anyway are left to
+  it. The panel's manual edits (`/api/doc/edit`) need none. Final QC's
+  proposed ops carry none (the strict QC schema has no such field) and get
+  `Final QC fix: <title>` at apply time from `qc/apply.ops_with_fix_reasons`
+  at both apply sites — copied, in `combined_ops` order, so the echoes still
+  map 1:1 for the fix record.
+- **Storage.** `SpecSection.edit_reasons: {uid: [reason, …]}`, oldest
+  first, at most `MAX_EDIT_REASONS_PER_ELEMENT` (6), a consecutive repeat
+  dropped, each folded to one line and cut near `EDIT_REASON_MAX_CHARS`
+  (240) — never refused, a refusal would cost a round for wording. Keyed by
+  uid rather than stored on the element so a deletion keeps the reason under
+  the deleted uid AND every uid under it (uids are never reused), and a move
+  speaks on the whole moved subtree the same way (the redline marks every
+  descendant as moved; Codex review on PR #287); `sec` is the header.
+  Section-metadata ops echo the reason without storing it;
+  `set_standard_edition` echoes its `basis` as the reason when none was
+  given (the record and the `doc_patch` then carry it like every op's), and
+  `set_standard_suppressed` without a `basis` stores the reason as the
+  basis. A reason-less op — the user's own panel edit — that rewrites,
+  moves or deletes what the redline shows drops the element's trail
+  (`done(…, resets=True)`): the words are the user's now, so the
+  assistant's reasons would be stale in the chip and the comment alike; a
+  status or source change keeps it. Serialized only when set (legacy bytes
+  untouched), validated on load like overrides, not counted by `is_empty`.
+  `_canonical_document` drops it from a template.
+- **What the model reads back.** The applied record echoes `reason`; the
+  tool result strips it (`_without_reasons`) — the model's own input already
+  carries it and history would hold each one twice. The `doc_patch` ops keep
+  it. `outline` does not render it: the per-turn document would grow by
+  every reason every turn.
+- **Panel.** `EditReasonsContext` at the document root (the
+  `TemplateSeedContext` pattern); `ReasonChip` ("why", hover title from
+  `lib/editReasons.reasonChipTitle`) beside the ◆ chip on provisions,
+  article titles and the header; `ChangedReason` prints the newest reason
+  under a block in `changedIds`. A hover title, not a control, so no
+  capability. `SpecDoc.edit_reasons`, `DocOp.reason`, `EditOp.reason`.
+- **Redline on the original.** `CommentBasis.reasons`;
+  `redline_basis._reason_paragraphs` → `Reason: …`, or `Reasons, oldest
+  first:` plus one numbered paragraph each; `sec` speaks on
+  `SECTION_TITLE_UID` too (the QC shape). `plan_comments` appends the
+  reasons after the QC and research paragraphs on EVERY change kind — a
+  deletion and a pure move included. A trail entry that only names a Final
+  QC fix whose record already covers the element (`qc/apply.qc_fix_reason`,
+  the prefix `ops_with_fix_reasons` writes) is not said twice.
+  `SKIP_NO_BASIS` now means the user's own edits and content from before
+  reasons existed.
+- **Bytes that changed once.** The tool's input schema (one property) and
+  the stable prompt (`_TOOL_GUIDE`): every open session rewrites its cached
+  prefix once after upgrade. The tool's top-level description — the op
+  vocabulary Final QC's lenses read — did NOT change, so retained reports
+  stay current; the rule lives in the property and the prompt on purpose.
+- **Unchanged.** Every other request byte, the budgets, the QC schema and
+  manifest, the SSE event protocol (no new event), readiness, the exported
+  specification, the version redline (`redline=version` carries no
+  comments) and the review report.
+
+Never let a reason reach the specification text, the outline, or a cached
+block; never add a model-authored edit path that skips
+`check_edit_reasons`. Tests: `tests/test_edit_reasons.py`,
+`frontend/tests/editReasons.test.ts`; `tests/fakes.tool_turn` fills a
+scripted batch's missing reasons (`reasons=False` opts out). Full record,
+reversion evidence and the release-note draft are in `docs/as-built.md`
+under the same heading. No paid API call was made.
 
 ## Final QC streams its verifier seats, leaders first — implemented notes (2026-10-07)
 

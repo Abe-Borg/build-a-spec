@@ -9,6 +9,7 @@ Critic's suite.
 """
 from __future__ import annotations
 
+import copy
 import functools
 import itertools
 import json
@@ -295,6 +296,30 @@ def text_turn(
     )
 
 
+#: The reason a scripted ``apply_spec_edits`` batch carries when the test did
+#: not write one (see :func:`with_edit_reasons`).
+FAKE_EDIT_REASON = "Scripted test edit."
+
+
+def with_edit_reasons(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """``tool_input`` with :data:`FAKE_EDIT_REASON` on every edit op that has
+    no reason of its own — a deep copy; the caller's dict is untouched.
+
+    Every model edit carries a reason (owner rule, 2026-10-07), and the
+    engine refuses a batch without one on every op. A fixture that scripts
+    the model is scripting a model that follows its contract, so the default
+    fills the field in; a test OF the refusal passes ``reasons=False`` to
+    :func:`tool_turn`, or builds the block itself.
+    """
+    filled = copy.deepcopy(tool_input)
+    edits = filled.get("edits")
+    if isinstance(edits, list):
+        for op in edits:
+            if isinstance(op, dict) and not str(op.get("reason") or "").strip():
+                op["reason"] = FAKE_EDIT_REASON
+    return filled
+
+
 def tool_turn(
     chunks: list[str],
     tool_input: dict[str, Any],
@@ -303,16 +328,20 @@ def tool_turn(
     name: str = "apply_spec_edits",
     stop_reason: str = "tool_use",
     usage: SimpleNamespace | None = None,
+    reasons: bool = True,
 ) -> SimpleNamespace:
     """A response that streams ``chunks`` then requests a tool call.
 
     ``stop_reason`` other than ``tool_use`` (e.g. ``max_tokens``) simulates
-    a response truncated mid-tool-call.
+    a response truncated mid-tool-call. An ``apply_spec_edits`` input gets
+    :func:`with_edit_reasons` unless ``reasons=False``.
     """
     content: list[SimpleNamespace] = []
     text = "".join(chunks)
     if text:
         content.append(text_block(text))
+    if name == "apply_spec_edits" and reasons:
+        tool_input = with_edit_reasons(tool_input)
     content.append(tool_use_block(tool_id, name, tool_input))
     return SimpleNamespace(
         chunks=list(chunks), content=content, stop_reason=stop_reason, usage=usage

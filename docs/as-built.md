@@ -19803,6 +19803,385 @@ No pilot, comparison experiment, or paid model request was run. Tests were
 not run, as requested by the owner. The application version and published
 release entries are unchanged.
 
+
+## A fix that conflicts with itself is never a safe fix — implemented notes (2026-10-07)
+
+**The live failure.** In a session on 2026-10-07 (Build-a-Spec 1.24.0), Final
+QC produced `qc-6ee3321aeea8` (1.16.B, standard titles and designations that
+differed from the REFERENCES article) with four `proposed_ops`, two of them
+rewriting `pt1.a15.p2`. `_validate_ops` dry-ran the four in sequence — the
+second rewrite simply won — and stamped `ops_valid`, so the FINAL QC REVIEW
+block told the model "verified safe fix, 4 op(s)" and the chat debrief listed
+it among the fixes the user could approve. "Apply the verified safe fixes"
+went through `apply_qc_fixes`, whose planner refused the whole batch:
+
+```
+The selected Final QC fixes contain conflicting operations; nothing was
+applied. Conflicting finding ids: qc-6ee3321aeea8 (write keys:
+element:pt1.a15.p2:*). Retry with a non-conflicting subset, or leave the
+conflict to the user in the Final QC panel.
+```
+
+One finding id, because the conflict was inside the finding. The model
+recovered by retrying without it (one extra full-context round; 7 findings,
+8 operations applied) and the finding stayed open with a "safe fix" that the
+panel's Apply would also have labelled "This finding contains proposed
+operations that conflict with one another."
+
+**Root cause.** `qc/engine._validate_ops` ran the dry run (`apply_edits`,
+which happily writes one element twice), the drafting guard, the relocation
+guard and the source-preservation guard — never the write-set planner
+(`qc/op_conflicts.plan_qc_operation_batch`). The planner's rules (`replace`
+and `delete` claim `element:<id>:*`, `set_status` claims
+`element:<id>:status`, adds claim `collection:<parent>:members`) run only at
+apply time, in both paths: the `apply_qc_fixes` chat tool (`qc/apply.py`,
+`QCChatApplyError`) and `POST /api/qc/apply` plus its preview in `app.py`.
+So validation and apply disagreed, and the disagreement surfaced as a refusal
+of the user's whole request.
+
+### What changed
+
+- **Validation asks the planner about the finding alone.** After the dry run
+  and before the relocation guard, `_validate_ops` calls
+  `op_conflicts.self_conflict_write_keys(finding_id, proposed_ops, snapshot)`
+  — `plan_qc_operation_batch` over a one-finding list, returning the sorted
+  distinct write keys of its internal conflicts. Any key sets
+  `ops_valid = False` and `ops_invalid_reason = "The proposed operations
+  conflict with one another (write keys: element:pt1.a15.p2:*)."`, so the
+  finding reads advisory in `finding_fix_class`, the FINAL QC REVIEW block,
+  the debrief counts and the panel, with the reason beside it. The planner is
+  pure and the per-finding snapshot is already a deep copy; nothing else in
+  the pipeline moves.
+- **Retained reports are re-checked the way PR #275 re-checks the drafting
+  guard.** `qc/apply.finding_fix_class` — the one gate behind the panel's
+  Apply, `apply_qc_fixes`, the context block and the debrief — now also runs
+  `self_conflict_write_keys` beside `drafted_edit_problems` instead of
+  trusting the persisted `ops_valid`. A report saved before this change
+  therefore reads its self-conflicting fix as advisory and applies it as
+  `no_ops`, and the finding never reaches the planner in either apply path.
+  The gate holds no document, so the helper plans against an empty
+  `SpecSection`: the planner consults a section only to name a delete's or a
+  move's parent collection, and otherwise derives it from the element id —
+  which is exactly how ids are formed (`pt1.a2.p3` is a child of `pt1.a2`;
+  `spec_doc.model`'s load-time validator refuses any tree where it is not),
+  so the answer is the same one the current tree would give. No
+  `QC_PROTOCOL_VERSION` bump: that would have discarded every retained report
+  to catch a rare case, the same call PR #275 made.
+- **The planner gained one rule — a deliberate departure from the brief.**
+  The brief said not to change the planner. Running it per finding showed
+  why that could not stand: it refused every multi-step relocation fix the
+  writing policy blesses. Yesterday's fixtures
+  (`tests/fixtures/writing_policy/placement_cases.json`, `reviewed_edit`)
+  plan as `add_paragraph pt3.a1` + `delete pt3.a1.p1` →
+  `collection:pt3.a1:members`, two `add_paragraph pt1.a1` →
+  `collection:pt1.a1:members`, `add_article pt1` + `delete pt1.a1` →
+  `collection:pt1:members`. Those fixes were stamped safe and could never
+  have been applied — the same bug, one class wider — and marking them
+  advisory would have flipped five tests in `tests/test_writing_policy_qc.py`
+  and left the relocation guard with nothing to guard. The planner's own
+  docstring frames its job as cross-finding independence; inside a finding
+  the operations are an ordered sequence (`dry_run_apply_findings` applies
+  them in the order given and the apply executes that order), so
+  `_is_same_finding_sequence_overlap` treats an overlap as compatible when
+  both operations belong to exactly the same one finding and both
+  overlapping keys are collection-scoped. Element-level overlaps inside one
+  finding stay conflicts: two writes to one element (the live case), a
+  rewrite beside a delete, `replace` beside `set_status`, or a paragraph
+  added under an article the same fix deletes — in each, one write is dead
+  or aimed at what the fix removes. Across findings nothing changed: a
+  multi-step finding against another finding's same-parent append, a
+  sequence against a standalone append, and an operation shared verbatim
+  with another finding (an owner list of two) all conflict exactly as
+  before, and two standalone appends to one article stay compatible.
+- **Unchanged.** The apply paths' code, the preview, `QC_PROTOCOL_VERSION`,
+  every request byte, the QC input manifest, the SSE protocol, readiness.
+
+### What a user sees
+
+| One finding's operations | Before: validation → apply | After |
+|---|---|---|
+| two rewrites of one paragraph (the live case) | safe fix → whole batch refused | advisory, reason names `element:…:*` |
+| rewrite + delete of one element | safe fix → refused | advisory |
+| paragraph added under an article the fix deletes | safe fix (add first) → refused | advisory |
+| `replace` + `set_status` on one element | safe fix → refused | advisory |
+| delete a provision, add its pieces back to the same article | safe fix → refused | safe fix → applied |
+| two appends to one article | safe fix → refused | safe fix → applied |
+| rewrite one element, `set_status` another | safe fix → applied | unchanged |
+
+The chat consequence: `apply_qc_fixes` on "all verified safe fixes" can no
+longer be refused for a conflict inside one finding, because no such finding
+is a verified safe fix; a retained one is skipped as `no_ops` in the same
+turn, beside the fixes that apply.
+
+### Tests
+
+`tests/test_qc_preflight_conflicts.py`:
+- `test_a_finding_whose_operations_conflict_with_one_another_is_not_a_safe_fix`
+  — two rewrites (exact reason), rewrite + delete, add under a deleted
+  article → `ops_valid=False`; two appends and a split in place → `True`;
+  rewrite one element + `set_status` another → `True`.
+- `test_a_retained_self_conflicting_fix_reads_advisory_and_is_skipped` —
+  `ops_valid=True` on the record, `finding_fix_class` advisory,
+  `select_apply_candidates` → `no_ops`, nothing left for the planner.
+- `test_a_retained_self_conflicting_fix_is_skipped_beside_an_applied_one` —
+  `POST /api/qc/apply`: 200 with `{self: no_ops, compatible: applied}`,
+  an `apply_no_ops` disposition, the document untouched for the skipped one.
+- `test_one_findings_collection_steps_are_a_sequence_but_cross_finding_rules_hold`
+  — the new rule and its fence, case by case (incl. the dead-add cases from
+  the review correction below).
+- `test_a_relocation_fix_applies_as_one_finding` — the writing policy's
+  shape through the panel's Apply, paragraph order checked.
+
+`tests/test_qc_chat_apply.py::test_a_retained_self_conflicting_fix_no_longer_refuses_the_safe_batch`
+replays the live request against a retained report: one `qc_dispositions`
+event `{applied, no_ops}`, a non-error tool result, one committed version.
+`_seed_and_install` gained an optional `extra_ops` so a test can seed a
+second paragraph.
+
+Reversion probes, each restored afterwards: removing the planner call from
+`_validate_ops` fails the validation test (1); removing the re-check from
+`finding_fix_class` fails the retained-report unit, endpoint and chat tests
+(3); removing `_is_same_finding_sequence_overlap` from the planner fails the
+sequence test, the relocation apply test, the two-appends and split
+assertions, and the five writing-policy tests (8 failed, 5 passed across
+the probe's selection).
+
+### Validation
+
+Ruff clean. 234 passed across `test_qc_preflight_conflicts`,
+`test_qc_chat_apply`, `test_writing_policy_qc`, `test_spec_voice`,
+`test_writing_policy_eval`, `test_obligations`, `test_source_capabilities`,
+`test_qc_context`, `test_debrief`, `test_qc_remediation_preview`,
+`test_qc_apply_history` and `test_qc_consolidation`. CI runs the full suite.
+No frontend file changed.
+
+### PR #286 review correction
+
+Codex raised one P2 finding on the planner rule; it reproduced and is fixed.
+
+- **A fix that adds an element and then deletes it by the id its own add
+  mints slipped through.** `add_paragraph pt1.a1` + `delete pt1.a1.p3`
+  (p3 being the id the append would receive) overlaps only on
+  `collection:pt1.a1:members`, so the same-finding exemption made it
+  compatible; the dry run accepts it because the id exists by the time the
+  delete runs; and the pair nets to nothing — the fix would have applied,
+  consumed a sequence number, changed no text, and marked its finding
+  applied. Before the rule it was refused at apply (the collection
+  overlap); the rule had turned a refusal into a silent no-op. The
+  exemption now also requires that neither operation is a `delete` of an
+  element the document does not have: an absent target that the dry run
+  nevertheless accepts can only be the finding's own add, so the pair is a
+  dead add, not a relocation (`_element_exists`, a small local walker).
+- **The fix class therefore takes the document.** Telling a relocation
+  (delete what exists) from a dead add (delete what the fix itself adds)
+  needs the tree, so the documentless shortcut is gone:
+  `self_conflict_write_keys(finding_id, operations, section)` requires its
+  section, `finding_fix_class(finding, section)` and
+  `select_apply_candidates(result, finding_ids, section)` take the document
+  the fixes would apply to, and every caller passes it — the chat tool and
+  the apply route their `working` tree (which `matches_current_inputs`
+  holds equal to the reviewed one), the debrief `session.doc.doc`, and the
+  FINAL QC REVIEW block the `current_section` it already received. The
+  planner's cross-finding rules are untouched.
+
+Tests: the validation test gains the dead-add case (`ops_valid=False`,
+reason naming `collection:pt1.a1:members`); the planner test gains it for
+paragraphs and for an article added and deleted in one fix; the
+writing-policy relocation fixtures still validate. Removing the rule fails
+both new assertions while the relocation tests keep passing; the probe was
+restored. Ruff clean; 250 passed across the suites above plus
+`test_context_sizes` and `test_docs_consistency`.
+
+### Release-note draft (for the release after 1.24.0)
+
+"**Final QC never offers a fix that fights itself.** A fix whose own
+operations rewrite the same provision twice is now marked advisory when the
+review is produced, with the reason shown, instead of being presented as a
+verified safe fix and then refused when you approve it — and a fix that moves
+a provision's pieces within one article applies as the single change it is."
+
+No paid API call was made.
+
+## Every edit carries its reason — implemented notes (2026-10-07)
+
+**Owner ask (Abraham).** "I need this software to put the reason (explain)
+for every single edit it makes, even if it is a single word that was added.
+The explanations should be brief and to the point. Right now the software
+comments on some of them, but not all."
+
+**What the user was seeing.** The redline on the original (Phase 3 of the
+redline plan) put a Word comment on a change only when the change had a
+recorded basis: a provision whose `source_item_id` named a research item or
+an attached document, or an element a Final QC fix still covered. Every
+other change the assistant made — the bulk of an interview-drafted
+section, every revision, move and deletion — had no basis in the records,
+so `plan_comments` counted it `no_basis` and wrote nothing. In the panel,
+nothing said why any element was written or changed; the chat's closing
+message summarized the turn, not each edit.
+
+**Design.** The reason becomes part of every operation the model sends,
+is kept on the document, and is read by the two surfaces where edits are
+seen: the panel and the redline on the original.
+
+- `apply_spec_edits` gains a `reason` property (string, with a description
+  that says it is required on every operation, a single added word
+  included, shown beside the element and said in the redline, never
+  specification text, and that a batch lacking one is rejected whole). It
+  is NOT added to the schema's `required` list: saved histories carry
+  inputs without it, and the API reference does not establish that a past
+  input missing a now-required property validates — the same caution the
+  status enum follows. The server enforces it instead.
+- `model.edit_reason_problems` / `check_edit_reasons` name each operation
+  without a non-blank reason as `#n action target`; `_run_tool` calls it
+  before `check_drafted_edits`, so a batch missing any reason is refused
+  whole with the outline, the model resends, and nothing was applied — the
+  placeholder posture. `set_standard_edition` is satisfied by its required
+  `basis`: the stated adoption is the reason. Shapes `apply_edits` would
+  refuse (not a dict, an unknown action) are left to it, so the model reads
+  the first real problem.
+- `SpecSection.edit_reasons: {uid: [reason, …]}` is the store, keyed by
+  element uid rather than a field on the element so a DELETED element — and
+  every element deleted with it (`_subtree_uids`) — keeps its reason for the
+  redline's comment; uids are never reused, so an entry can never name a
+  later element. `sec` is the header. Each reason is folded to one line
+  and cut at a word near `EDIT_REASON_MAX_CHARS` (240) rather than refused;
+  a consecutive repeat is not appended; the newest
+  `MAX_EDIT_REASONS_PER_ELEMENT` (6) are kept. It serializes only when set,
+  so a document no model edit touched is byte-identical to before, and
+  loads through `_validate_edit_reasons_shape` (malformed is refused like a
+  malformed override). It rides undo/redo, versions and the project file
+  because it is on the tree; `is_empty` ignores it; `_canonical_document`
+  drops it from a template (why another project's edits were made is not a
+  drafting basis).
+- Section-metadata ops (`set_project_profile`, `set_project_identity`, the
+  edition ops) echo the reason in their applied record without storing it
+  — there is no element to pin it to, and the standards block already
+  carries the basis. `set_standard_suppressed` without a `basis` stores the
+  reason as the suppression's basis, so the context block says why.
+- The applied record echoes `reason`; `_run_tool` strips it from the tool
+  result (`_without_reasons`) because the model's own input already carries
+  it and history would hold every reason twice, re-sent every turn; the
+  `doc_patch` ops keep it for the panel. `outline` does not render reasons:
+  the per-turn document would grow by every reason, every turn, for
+  nothing the history does not already hold.
+- Final QC's proposed operations carry no reason (the strict verifier
+  schema has no such field, and changing it would need the owner's canary),
+  so `qc/apply.ops_with_fix_reasons` adds `Final QC fix: <finding title>`
+  at both apply sites (the panel route and the chat tool), matched through
+  the canonical operation identity the dedupe uses; operations are copied in
+  `combined_ops` order so the echoes still map 1:1 for the fix record. The
+  redline's comment on a QC fix still comes from the durable fix record.
+- Panel: `EditReasonsContext` at the document root (the `TemplateSeedContext`
+  pattern — one provider instead of a prop through five components);
+  `ReasonChip` ("why", a hover title from `lib/editReasons.reasonChipTitle`)
+  beside the ◆ source chip on every provision, article title and the
+  header; `ChangedReason` prints the newest reason under a block in
+  `changedIds`, so the user reads why as the edit lands, and the line goes
+  with the highlight on the next turn. A hover title is not a control, so no
+  capability and no tour step. `SectionHeader` rendered in the Compare view
+  reads the context default and shows no chip.
+- Redline on the original: `CommentBasis.reasons`;
+  `redline_basis._reason_paragraphs` renders `Reason: …`, or `Reasons,
+  oldest first:` plus one numbered paragraph each; `sec` speaks on
+  `SECTION_TITLE_UID` as well (the QC shape). `plan_comments` appends the
+  reasons after the QC and research paragraphs on EVERY change kind — an
+  insertion, an edit with new words, a deletion, a native or fallback move —
+  while a relettering (no new words) stays uncommented. `SKIP_NO_BASIS` now
+  means the user's own typed edits and content edited before this build.
+  Nothing about the markup, the self-check or the proofs changed.
+
+**Two cases the first cut missed, found by the existing redline tests.**
+First, the user's own panel edit carries no reason, and the trail it left
+alone would have made the redline say the assistant's reason on words the
+user typed — against the Phase 3 contract that "your own edit gets no
+comment" (pinned by `test_a_qc_fix_is_commented_through_undo_redo_edit_and_
+review`, whose hand edit must end commentless). So a reason-less op that
+rewrites, moves or deletes what the redline shows (`replace` with text,
+`move`, `delete`, the header) drops the element's trail (`done(…,
+resets=True)`); a status or source change keeps it, because the words are
+still the assistant's. Second, a Final QC fix applied from the panel now
+leaves `Final QC fix: <title>` in the trail, and the redline already speaks
+for that fix from the durable record — the comment would have said the fix
+twice. `redline_comment_basis` leaves out a trail entry equal to
+`qc_fix_reason(entry title)` for a fix whose record covers the element; once
+the record stops covering it (an undo, a hand edit), the trail speaks on its
+own again.
+
+**Codex review on PR #287, two P2 findings, both taken.** A move recorded
+or reset its reason on the moved element alone, while the redline marks the
+element and everything under it as moved — so an assistant's move left the
+descendants' moved marks without the new reason, and a hand move left the
+assistant's old reasons on them, attached to the user's move. The move now
+speaks (or resets) on `_subtree_uids(node)`, the delete path's shape. And a
+`set_standard_edition` accepted on its `basis` alone (the contract's one
+exemption) echoed no reason at all, so its `doc_patch` op lacked the promised
+field; the basis is now folded in as the reason when none was given, and the
+record and the panel's copy carry it. Metadata ops still store nothing on
+the tree — there is no element to pin a chip to.
+
+**Bytes that changed once.** The tool's input schema (one property) and the
+stable prompt (`_TOOL_GUIDE` gains one line): every open session rewrites
+its cached prefix once after upgrade. The tool's top-level description — the
+op vocabulary Final QC's lenses read (`_op_vocabulary`) — did NOT change,
+deliberately: the lenses' strict schema has no reason field, so telling them
+every op needs one would be wrong, and retained Final QC reports stay
+current. `tests/test_edit_reasons.py` pins both.
+
+**Unchanged.** Every other request byte, the research and QC budgets, the QC
+schema and manifest, the SSE event protocol (no new event; `doc_patch` ops
+and the snapshot carry the new fields), readiness, the exported
+specification, the version redline (`redline=version`, which carries no
+comments), the review report, the importer and the tutorial.
+
+**Tests.** `tests/test_edit_reasons.py` (28): every content op records its
+reason on its element and echoes it folded; a deletion keeps the reason for
+the element and everything under it; the trail drops a repeat and keeps the
+newest six; a long reason is cut at a word, never refused; reasons ride
+undo/redo and serialization and legacy bytes are untouched; malformed
+`edit_reasons` are refused on load; metadata ops echo without storing and a
+suppression keeps the reason as its basis; a non-string reason is refused and
+`move` accepts one; a hand rewrite, move or delete drops the trail but a
+confirm keeps it; a QC fix's reason is not said beside the record of that
+fix; `check_edit_reasons` names each offender and honours the
+`set_standard_edition` exemption; the tool declares the property outside
+`required`, the top-level description is unchanged and the prompt teaches
+the rule; a model batch without reasons is refused and the resend lands,
+with the reasons in the `doc_patch` ops and every snapshot and out of the
+tool result; the panel's own edit needs none; reasons survive save and
+resume; `ops_with_fix_reasons` names the finding, keeps order and an own
+reason; a panel-applied QC fix carries its finding; the wording is one line
+or a numbered trail and the header speaks twice; a reworded provision with
+a reason gets a comment where it had none; a deleted article speaks on
+every provision it took; a pure move is commented; a template drops the
+reasons. `frontend/tests/editReasons.test.ts` covers the helper and pins the
+chip on provisions, article titles and the header, the provider, the inline
+line, and that the chip is a hover title with no control. `tests/fakes.
+tool_turn` fills a scripted `apply_spec_edits` batch's missing reasons with
+`FAKE_EDIT_REASON` (a fixture scripts a model that follows its contract);
+`reasons=False` opts out for a test of the refusal.
+
+**Reversion evidence.** Each probe reverted one line, ran the test named,
+and was restored: removing `check_edit_reasons` from `_run_tool` fails the
+chat refusal test; removing `+ tuple(basis.reasons)` from `plan_comments`
+fails the reworded-provision comment test; recording a deletion's reason on
+the deleted uid alone fails the deletion test; echoing reasons in the tool
+result fails the chat test's history assertion; dropping the QC title fails
+the panel-applied fix test; keeping a template's reasons fails the template
+test.
+
+**Release-note draft (for the next release; `v1.24.0` is published and its
+entry is frozen):** "Every edit says why. The assistant now gives a brief
+reason for every change it makes — a single added word included. Hover the
+new *why* chip beside a provision, article title or the section header to
+read it, watch the newest reason print under each block as a turn's edits
+land, and find the same reason as a Word comment on every change in the
+redline on your original. A batch of edits without a reason on every
+operation is refused and resent, and your own typed edits stay yours."
+
+No paid API call was made. The live model's compliance with the new
+`reason` field — how often a first batch is refused and resent — is
+unmeasured; the refusal costs one round and the resend lands the batch.
+
 ## Final QC streams its verifier seats, leaders first — implemented notes (2026-10-07)
 
 **Owner decision (Abraham).** After the first measured Final QC on a 1.24.0

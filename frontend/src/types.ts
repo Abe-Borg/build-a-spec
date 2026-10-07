@@ -186,6 +186,11 @@ export interface DocPart {
 }
 
 export interface SpecDoc {
+  /** Why each element was edited, as the assistant said it with each
+   *  operation: element id → reasons, oldest first (the server keeps the
+   *  newest few). A deleted element keeps its entry for the redline's
+   *  comment; "sec" is the header. Present only once a model edit landed. */
+  edit_reasons?: Record<string, string[]>;
   section: { number: string; title: string };
   parts: DocPart[];
   version: { index: number; count: number };
@@ -226,6 +231,9 @@ export interface DocOp {
   restored?: boolean;
   position?: number;
   previous_position?: number;
+  /** The assistant's brief reason for this op (every model edit carries
+   *  one; a manual panel edit none). */
+  reason?: string;
 }
 
 /** A manual edit op sent to POST /api/doc/edit. */
@@ -245,6 +253,9 @@ export interface EditOp {
   text?: string;
   status?: EditableStatus;
   source_item_id?: string;
+  /** Why the edit is made. The model must send one on every op; the
+   *  panel's own edits are the user's and send none. */
+  reason?: string;
   /** replace on target_id "sec": the section number (e.g. "21 13 13").
    * `text` carries the section title on the same op. */
   numbering?: string;

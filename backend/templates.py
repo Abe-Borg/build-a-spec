@@ -156,10 +156,12 @@ def _canonical_document(raw: Any, *, rebase_statuses: bool) -> dict[str, Any]:
     if not section.has_body_content():
         raise TemplateError("A template needs a section heading or body content.")
 
-    # Project-specific decision state is never a reusable drafting basis.
+    # Project-specific decision state is never a reusable drafting basis —
+    # nor is why another project's edits were made.
     section.project_profile = {}
     section.edition_overrides = {}
     section.suppressed_standards = {}
+    section.edit_reasons = {}
     for _part, _article, paragraph, _depth, _ref in iter_paragraphs(section):
         paragraph.source_item_id = ""
         if rebase_statuses and paragraph.status != "needs_input":

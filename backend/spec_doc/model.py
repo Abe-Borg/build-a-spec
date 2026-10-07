@@ -141,6 +141,18 @@ def lock_message(reason: str) -> str:
     return f"{detail} {LOCK_REMEDY}"
 
 
+#: Why an edit was made, as the model said it (owner rule, 2026-10-07: every
+#: edit the software makes carries a brief reason — a single added word
+#: included). A reason is folded to one line and cut near this many
+#: characters rather than refused: a refusal would cost the turn a round for
+#: wording, and "brief" is what the tool asks for.
+EDIT_REASON_MAX_CHARS = 240
+#: How many reasons one element keeps, oldest dropped first. An element is
+#: added once and revised a few times; a longer trail would only repeat the
+#: chat.
+MAX_EDIT_REASONS_PER_ELEMENT = 6
+
+
 @dataclass
 class Paragraph:
     uid: str
@@ -204,6 +216,15 @@ class SpecSection:
     # REFERENCES and lint stops checking it (see standards.effective_editions).
     # On the tree like edition_overrides: transactional, undoable, persisted.
     suppressed_standards: dict[str, str] = field(default_factory=dict)
+    # Why each element was edited, as the model said it with each operation:
+    # {element uid: [reason, ...]} oldest first, at most
+    # MAX_EDIT_REASONS_PER_ELEMENT each. Keyed by uid rather than stored on
+    # the element so a DELETED element (and every element deleted with it)
+    # keeps its reason for the redline's comment — uids are never reused, so
+    # an entry can never name a later element. "sec" is the header. On the
+    # tree like edition_overrides: transactional, undoable, versioned,
+    # persisted. Never specification text; never counted as content.
+    edit_reasons: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "SpecSection":
@@ -246,7 +267,7 @@ class SpecSection:
     # -- serialization ------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "section": {"number": self.number, "title": self.title},
             "parts": [_part_to_dict(part) for part in self.parts],
             "edition_overrides": copy.deepcopy(self.edition_overrides),
@@ -254,6 +275,13 @@ class SpecSection:
             "project_profile": dict(self.project_profile),
             "suppressed_standards": dict(self.suppressed_standards),
         }
+        if self.edit_reasons:
+            # Emitted only when set, so a document no model edit touched
+            # serializes byte-identically to before reasons existed.
+            data["edit_reasons"] = {
+                uid: list(reasons) for uid, reasons in self.edit_reasons.items()
+            }
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SpecSection":
@@ -270,6 +298,7 @@ class SpecSection:
             suppressed = validate_suppressed_shape(
                 data.get("suppressed_standards")
             )
+            edit_reasons = _validate_edit_reasons_shape(data.get("edit_reasons"))
             result = cls(
                 number=str(section.get("number", "")),
                 title=str(section.get("title", "")),
@@ -278,6 +307,7 @@ class SpecSection:
                 project_identity=identity,
                 project_profile=profile,
                 suppressed_standards=suppressed,
+                edit_reasons=edit_reasons,
             )
         except (KeyError, TypeError, AttributeError) as exc:
             raise ValueError(f"Malformed document data: {exc}") from exc
@@ -337,6 +367,27 @@ def _validate_profile_shape(data: Any) -> dict[str, str]:
             f"project_profile has unknown fields: {sorted(unknown)}"
         )
     return clean
+
+
+def _validate_edit_reasons_shape(data: Any) -> dict[str, list[str]]:
+    """``edit_reasons`` as saved: element uid → non-empty list of non-empty
+    strings. Absent is an empty mapping; anything else malformed is refused
+    like a malformed override, never silently dropped."""
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("edit_reasons must map element ids to lists of reasons")
+    result: dict[str, list[str]] = {}
+    for uid, reasons in data.items():
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("edit_reasons keys must be element ids")
+        if not isinstance(reasons, list) or not reasons:
+            raise ValueError(f"edit_reasons[{uid!r}] must be a non-empty list")
+        for reason in reasons:
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(f"edit_reasons[{uid!r}] must hold non-empty strings")
+        result[uid] = [str(reason) for reason in reasons]
+    return result
 
 
 def _letters(index: int, first: str) -> str:
@@ -801,6 +852,58 @@ def _opt_source_item_id(op: dict[str, Any]) -> str | None:
     return value.strip()
 
 
+_REASON_SPACE_RE = re.compile(r"\s+")
+
+
+def fold_reason(text: str) -> str:
+    """``text`` as one line, cut at a word near :data:`EDIT_REASON_MAX_CHARS`
+    and marked "…" when it had to be. Empty stays empty."""
+    folded = _REASON_SPACE_RE.sub(" ", text).strip()
+    if len(folded) <= EDIT_REASON_MAX_CHARS:
+        return folded
+    cut = folded[: EDIT_REASON_MAX_CHARS - 1]
+    space = cut.rfind(" ")
+    if space > EDIT_REASON_MAX_CHARS // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:.") + "…"
+
+
+def _opt_reason(op: dict[str, Any]) -> str:
+    """The op's brief reason, folded; ``""`` when none was given.
+
+    Whether a reason is REQUIRED is the caller's contract —
+    :func:`check_edit_reasons` for the model's batches; the user's own panel
+    edits carry none, and so do Final QC's proposed operations until the
+    apply path adds the finding they come from."""
+    value = op.get("reason")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise SpecEditError("'reason' must be a string.")
+    return fold_reason(value)
+
+
+def _record_edit_reason(section: SpecSection, uid: str, reason: str) -> None:
+    """Append ``reason`` to ``uid``'s trail: a repeat of the last entry is not
+    appended, and only the newest MAX_EDIT_REASONS_PER_ELEMENT are kept."""
+    if not reason:
+        return
+    reasons = section.edit_reasons.setdefault(uid, [])
+    if reasons and reasons[-1] == reason:
+        return
+    reasons.append(reason)
+    del reasons[:-MAX_EDIT_REASONS_PER_ELEMENT]
+
+
+def _subtree_uids(node: Any) -> list[str]:
+    """``node``'s uid and every uid under it, document order."""
+    uids: list[str] = [node.uid]
+    children = node.paragraphs if isinstance(node, Article) else node.children
+    for child in children:
+        uids.extend(_subtree_uids(child))
+    return uids
+
+
 def _insert(items: list[Any], item: Any, position: Any) -> None:
     if position is None:
         items.append(item)
@@ -828,6 +931,31 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
     target_id = op.get("target_id")
     if not isinstance(target_id, str) or not target_id:
         raise SpecEditError(f"{action}: 'target_id' is required.")
+    reason = _opt_reason(op)
+
+    def done(
+        record: dict[str, Any], *uids: str, resets: bool = False
+    ) -> dict[str, Any]:
+        """Finish an op: record its reason on ``uids`` (a content op's
+        element, a deletion's whole subtree, the header for "sec"; nothing
+        for section metadata, whose record carries it) and echo it in the
+        applied record when there is one.
+
+        Without a reason — the user's own panel edit — an op that rewrites,
+        moves or deletes what the redline shows (``resets``) drops the
+        trail instead: the words, place or absence are the user's now, so
+        the assistant's reasons for them would be stale, in the chip and in
+        the redline's comment alike ("your own edit gets no comment"). A
+        status or source change keeps it: the words are still the
+        assistant's."""
+        for uid in uids:
+            if reason:
+                _record_edit_reason(section, uid, reason)
+            elif resets:
+                section.edit_reasons.pop(uid, None)
+        if reason:
+            record["reason"] = reason
+        return record
 
     # -- jurisdiction edition overrides: section-level metadata ------------
     if action == "set_standard_edition":
@@ -852,12 +980,14 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                     f"{standard!r} to remove."
                 )
             del section.edition_overrides[standard]
-            return {
-                "action": "set_standard_edition",
-                "id": "sec",
-                "standard": standard,
-                "removed": True,
-            }
+            return done(
+                {
+                    "action": "set_standard_edition",
+                    "id": "sec",
+                    "standard": standard,
+                    "removed": True,
+                }
+            )
         if len(edition) > 20:
             raise SpecEditError(
                 "set_standard_edition: 'edition' looks malformed "
@@ -871,6 +1001,9 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                 "'2021 VCC per user, Loudoun County VA'). Never record an "
                 "edition override silently."
             )
+        # The basis IS the reason (check_edit_reasons accepts the op on it),
+        # so the applied record and the doc_patch echo it as one.
+        reason = reason or fold_reason(basis)
         entry = {"edition": edition, "basis": basis}
         # Optional full title, for adding a standard the module does not pin
         # (pinned standards already carry their title). Stored only when set.
@@ -878,12 +1011,14 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
         if title:
             entry["title"] = title
         section.edition_overrides[standard] = entry
-        return {
-            "action": "set_standard_edition",
-            "id": "sec",
-            "standard": standard,
-            "edition": edition,
-        }
+        return done(
+            {
+                "action": "set_standard_edition",
+                "id": "sec",
+                "standard": standard,
+                "edition": edition,
+            }
+        )
 
     # -- excluded standards: section-level scope metadata ------------------
     if action == "set_standard_suppressed":
@@ -912,22 +1047,28 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                     f"{standard!r} to restore."
                 )
             del section.suppressed_standards[standard]
-            return {
+            return done(
+                {
+                    "action": "set_standard_suppressed",
+                    "id": "sec",
+                    "standard": standard,
+                    "restored": True,
+                }
+            )
+        # Exclude the standard from this project. The stored basis is the
+        # op's own 'basis' when given, else the edit's reason (every model
+        # edit carries one) — excluding a standard is a scope decision, and
+        # the context block says why it was made either way.
+        basis = str(op.get("basis") or "").strip() or reason
+        section.suppressed_standards[standard] = basis
+        return done(
+            {
                 "action": "set_standard_suppressed",
                 "id": "sec",
                 "standard": standard,
-                "restored": True,
+                "suppressed": True,
             }
-        # Exclude the standard from this project. The reason is optional —
-        # excluding a standard is a scope decision, not an edition change.
-        basis = str(op.get("basis") or "").strip()
-        section.suppressed_standards[standard] = basis
-        return {
-            "action": "set_standard_suppressed",
-            "id": "sec",
-            "standard": standard,
-            "suppressed": True,
-        }
+        )
 
     # -- compact project identity: section-level metadata -----------------
     if action == "set_project_identity":
@@ -958,11 +1099,13 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             else:
                 updated.pop(field_name, None)
         section.project_identity = updated
-        return {
-            "action": "set_project_identity",
-            "id": "sec",
-            **{key: updated.get(key, "") for key in provided},
-        }
+        return done(
+            {
+                "action": "set_project_identity",
+                "id": "sec",
+                **{key: updated.get(key, "") for key in provided},
+            }
+        )
 
     # -- project profile: section-level metadata ---------------------------
     if action == "set_project_profile":
@@ -1006,11 +1149,13 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             updated[stored_key] = value
         section.project_profile = updated
         profile = ProjectProfile.from_dict(updated)
-        return {
-            "action": "set_project_profile",
-            "id": "sec",
-            "complete": bool(profile and profile.is_complete()),
-        }
+        return done(
+            {
+                "action": "set_project_profile",
+                "id": "sec",
+                "complete": bool(profile and profile.is_complete()),
+            }
+        )
 
     # -- section header: replace target "sec" ------------------------------
     if target_id == "sec":
@@ -1030,7 +1175,7 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             section.title = str(title).strip()
         if number is not None:
             section.number = str(number).strip()
-        return {"action": "replace", "id": "sec"}
+        return done({"action": "replace", "id": "sec"}, "sec", resets=True)
 
     node = _find(section, target_id)
     if node is None:
@@ -1048,7 +1193,10 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
         article = Article(uid=f"{node.uid}.a{node.next_seq}", title=title)
         node.next_seq += 1
         _insert(node.articles, article, op.get("position"))
-        return {"action": "add_article", "id": article.uid, "target_id": target_id}
+        return done(
+            {"action": "add_article", "id": article.uid, "target_id": target_id},
+            article.uid,
+        )
 
     if action == "add_paragraph":
         text = _require_text(op, "paragraph text")
@@ -1086,12 +1234,15 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
         )
         parent_seq_owner.next_seq += 1
         _insert(siblings, paragraph, op.get("position"))
-        return {
-            "action": "add_paragraph",
-            "id": paragraph.uid,
-            "target_id": target_id,
-            "status": status,
-        }
+        return done(
+            {
+                "action": "add_paragraph",
+                "id": paragraph.uid,
+                "target_id": target_id,
+                "status": status,
+            },
+            paragraph.uid,
+        )
 
     if action == "move":
         if isinstance(node, Article):
@@ -1109,13 +1260,13 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                 "move: target must be an article or paragraph id. Sections "
                 "and parts cannot be moved."
             )
-        extra_keys = set(op) - {"action", "target_id", "position"}
+        extra_keys = set(op) - {"action", "target_id", "position", "reason"}
         if extra_keys:
             fields = ", ".join(sorted(extra_keys))
             raise SpecEditError(
-                f"move: unsupported field(s): {fields}. Only 'target_id' "
-                "and 'position' are accepted; moving to a different parent "
-                "is not supported."
+                f"move: unsupported field(s): {fields}. Only 'target_id', "
+                "'position' and 'reason' are accepted; moving to a different "
+                "parent is not supported."
             )
         position = op.get("position")
         if not isinstance(position, int) or isinstance(position, bool):
@@ -1136,17 +1287,24 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             )
         siblings.pop(previous_position)
         siblings.insert(position, node)
-        return {
-            "action": "move",
-            "id": node.uid,
-            "position": position,
-            "previous_position": previous_position,
-        }
+        # The redline marks the moved element AND everything under it as
+        # moved, so the reason speaks (or, for a hand move, resets) on the
+        # whole subtree — the delete path's shape (Codex review, PR #287).
+        return done(
+            {
+                "action": "move",
+                "id": node.uid,
+                "position": position,
+                "previous_position": previous_position,
+            },
+            *_subtree_uids(node),
+            resets=True,
+        )
 
     if action == "replace":
         if isinstance(node, Article):
             node.title = _require_text(op, "article title")
-            return {"action": "replace", "id": node.uid}
+            return done({"action": "replace", "id": node.uid}, node.uid, resets=True)
         if isinstance(node, Paragraph):
             text = op.get("text")
             status = _opt_status(op)
@@ -1174,7 +1332,11 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             if source_item_id is not None:
                 # Empty string clears the provenance link.
                 node.source_item_id = source_item_id
-            return {"action": "replace", "id": node.uid, "status": node.status}
+            return done(
+                {"action": "replace", "id": node.uid, "status": node.status},
+                node.uid,
+                resets=text is not None,
+            )
         raise SpecEditError("replace: target must be an article or paragraph.")
 
     if action == "set_status":
@@ -1190,19 +1352,29 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                 "provisions carry a status)."
             )
         node.status = status
-        return {"action": "set_status", "id": node.uid, "status": status}
+        return done(
+            {"action": "set_status", "id": node.uid, "status": status}, node.uid
+        )
 
     # action == "delete"
     if isinstance(node, Article):
         for part in section.parts:
             if node in part.articles:
+                # The article's reason is every deleted provision's reason:
+                # the redline marks each of them, and each gets the comment.
                 part.articles.remove(node)
-                return {"action": "delete", "id": node.uid}
+                return done(
+                    {"action": "delete", "id": node.uid},
+                    *_subtree_uids(node),
+                    resets=True,
+                )
     if isinstance(node, Paragraph):
         ctx = _find_paragraph_context(section, node.uid)
         assert ctx is not None
         ctx[0].remove(node)
-        return {"action": "delete", "id": node.uid}
+        return done(
+            {"action": "delete", "id": node.uid}, *_subtree_uids(node), resets=True
+        )
     raise SpecEditError("delete: target must be an article or paragraph.")
 
 
@@ -1219,6 +1391,57 @@ def apply_edits(
     candidate = copy.deepcopy(section)
     applied = [_apply_one(candidate, op) for op in edits]
     return candidate, applied
+
+
+def edit_reason_problems(edits: Any) -> list[str]:
+    """Which operations of a batch carry no reason, as "#n action target"
+    labels in batch order; empty when every one does.
+
+    The model's contract (owner rule, 2026-10-07): every operation says why
+    it is made, a single added word included. ``set_standard_edition`` is
+    satisfied by its required ``basis`` — the stated adoption IS the reason.
+    Shapes :func:`apply_edits` would refuse anyway (not a list, not a dict,
+    an unknown action) are left to it, so the refusal the model reads names
+    the first real problem.
+    """
+    if not isinstance(edits, list):
+        return []
+    problems: list[str] = []
+    for index, op in enumerate(edits, start=1):
+        if not isinstance(op, dict) or op.get("action") not in _ACTIONS:
+            continue
+        if op["action"] == "set_standard_edition" and str(
+            op.get("basis") or ""
+        ).strip():
+            continue
+        reason = op.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            continue
+        target = op.get("target_id")
+        label = f"#{index} {op['action']}"
+        if isinstance(target, str) and target:
+            label += f" {target}"
+        problems.append(label)
+    return problems
+
+
+def check_edit_reasons(edits: Any) -> None:
+    """Refuse a model batch whose operations do not all carry a reason.
+
+    Raises :class:`SpecEditError` naming each offender, so the whole batch is
+    rejected (nothing applied) and the model resends it with the reasons —
+    the ``check_drafted_edits`` posture. Runs on the model's batches only:
+    what the user types in the panel is theirs, and Final QC's operations
+    get the finding they come from at apply time.
+    """
+    problems = edit_reason_problems(edits)
+    if problems:
+        raise SpecEditError(
+            "Every operation needs a 'reason' — one short clause saying why "
+            "the edit is made (a single added word included). Missing on: "
+            + "; ".join(problems)
+            + ". Add the reasons and resend the whole batch."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1588,6 +1811,29 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                         "discipline": {"type": "string"},
                         "project_type": {"type": "string"},
                         "source_item_id": {"type": "string"},
+                        # Required by contract (check_edit_reasons refuses a
+                        # batch without one on every op), stated here rather
+                        # than in 'required': saved histories carry inputs
+                        # without it, and the API reference does not
+                        # establish that a past input missing a now-required
+                        # property validates (the status-enum precedent).
+                        "reason": {
+                            "type": "string",
+                            "description": (
+                                "Required on every operation: one short "
+                                "clause saying why this edit is made — what "
+                                "the user said, the research item or "
+                                "reference it follows, the code requirement, "
+                                "or the correction (a single added word "
+                                "included). It is shown beside the element "
+                                "in the panel and said in a Word comment by "
+                                "the redline on the user's original; it "
+                                "never goes into the specification text. A "
+                                "batch with an operation lacking a reason is "
+                                "rejected whole. On set_standard_edition the "
+                                "basis is the reason."
+                            ),
+                        },
                     },
                     "required": ["action", "target_id"],
                 },

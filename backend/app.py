@@ -4676,7 +4676,7 @@ def create_app(
         safe_fixes = sum(
             1
             for f in open_findings
-            if qc_apply_module.finding_fix_class(f)
+            if qc_apply_module.finding_fix_class(f, session.doc.doc)
             == qc_apply_module.FIX_CLASS_SAFE
         )
         dismissed = sum(
@@ -7310,7 +7310,9 @@ def create_app(
         # One eligibility policy, shared verbatim with the apply_qc_fixes
         # chat tool (backend/qc/apply.py) so the two paths cannot drift.
         outcomes, skipped_events, eligible_findings = (
-            qc_apply_module.select_apply_candidates(result, body.finding_ids)
+            qc_apply_module.select_apply_candidates(
+                result, body.finding_ids, working
+            )
         )
 
         batch = plan_qc_operation_batch(working, eligible_findings)
@@ -7410,7 +7412,14 @@ def create_app(
                     )
                 session.doc.begin_turn()
                 try:
-                    applied_echoes = session.apply_doc_edits(combined_ops)
+                    # Each op carries the finding it comes from as its
+                    # reason (ops_with_fix_reasons); order and count are
+                    # combined_ops' own, so the echoes map 1:1 below.
+                    applied_echoes = session.apply_doc_edits(
+                        qc_apply_module.ops_with_fix_reasons(
+                            combined_ops, eligible_findings, result
+                        )
+                    )
                 except SpecEditError as exc:  # pragma: no cover — validated above
                     session.doc.rollback_turn()
                     return JSONResponse(

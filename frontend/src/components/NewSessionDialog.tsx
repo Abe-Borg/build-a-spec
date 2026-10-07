@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ProjectBriefInspection,
   ProjectBriefManifest,
@@ -418,7 +418,7 @@ export default function NewSessionDialog({
         {view === "browse" && (
           <>
             {brief && (
-              <p className="mb-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-ink-dim">
+              <p className="mb-3 break-words rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-ink-dim">
                 Pairing with project brief{" "}
                 <b className="text-ink">{brief.inspection.manifest.name}</b>: the
                 template you start supplies the document body; the brief supplies the
@@ -487,9 +487,23 @@ export default function NewSessionDialog({
                     data-template-id={template.id}
                   >
                     <div className="flex items-start gap-3">
-                      <div className="min-w-0 flex-1">
+                      {/* A filename-style name ("21_10_00_Water_Based_…") has no
+                          spaces to wrap at and slid under the buttons: it breaks
+                          after an underscore, and break-words catches the rest. */}
+                      <div className="min-w-0 flex-1 break-words">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-medium text-ink">{template.name}</h3>
+                          <h3 className="min-w-0 font-medium text-ink">
+                            {template.name.split("_").map((part, index) => (
+                              <Fragment key={index}>
+                                {index > 0 && (
+                                  <>
+                                    _<wbr />
+                                  </>
+                                )}
+                                {part}
+                              </Fragment>
+                            ))}
+                          </h3>
                           <span className="rounded-full border border-edge px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-ink-faint">
                             {template.source}
                           </span>

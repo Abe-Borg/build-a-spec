@@ -448,6 +448,16 @@ def _engine_thinking(harness) -> dict:
     return {"type": "adaptive"}
 
 
+def _engine_request_keys(harness) -> set[str]:
+    """The keys an engine's untouched request carries: streamed Final QC's
+    are the chat's; research's add ``tool_choice`` (automatic, parallel calls
+    off — ``research.engine.RESEARCH_WEB_TOOL_CHOICE``, 2026-10-08), on every
+    web request alike."""
+    if isinstance(harness, _QcHarness):
+        return _REQUEST_KEYS
+    return _REQUEST_KEYS | {"tool_choice"}
+
+
 def test_the_edit_marks_that_request_and_every_later_one(harness):
     """Opening request: untouched. The pause that fetched a PDF is sanitized
     before the next request, so that continuation carries ``drop_block`` —
@@ -457,7 +467,7 @@ def test_the_edit_marks_that_request_and_every_later_one(harness):
     assert call.status == "completed"
     first, *later = call.requests
     assert len(later) == 2
-    assert _untouched(first, _REQUEST_KEYS, _engine_thinking(harness))
+    assert _untouched(first, _engine_request_keys(harness), _engine_thinking(harness))
     assert "extra_headers" not in first
     for request in later:
         assert _pdf_elided(request)
@@ -476,7 +486,7 @@ def test_a_conversation_the_sanitizer_never_edits_is_byte_identical(harness):
     assert call.status == "completed"
     assert len(call.requests) == 3
     for request in call.requests:
-        assert _untouched(request, _REQUEST_KEYS, _engine_thinking(harness))
+        assert _untouched(request, _engine_request_keys(harness), _engine_thinking(harness))
         dumped = json.dumps(request, default=str)
         assert "block_binding" not in dumped
         assert PRESERVED_THINKING_BETA not in dumped
@@ -494,7 +504,7 @@ def test_a_resume_keeps_the_flag_and_a_restart_clears_it(harness):
     assert not _carries_drop_block(opening)
     assert _carries_drop_block(failed) and _carries_drop_block(resumed)
     assert resumed["messages"] == failed["messages"]
-    assert _untouched(restarted, _REQUEST_KEYS, _engine_thinking(harness))
+    assert _untouched(restarted, _engine_request_keys(harness), _engine_thinking(harness))
     assert "extra_headers" not in restarted
 
 

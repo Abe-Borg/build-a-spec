@@ -223,3 +223,66 @@ export function buildQcApplicationDigest(
 
   return { requested, applied, skipped, reasonCounts, text: lines.join("\n") };
 }
+
+/**
+ * One proposed operation as a line of text. `limit` clips the operation's
+ * text for the drawer's compact chips; the Resolve-in-chat prompt passes none,
+ * because a prompt that quotes a proposed edit must quote all of it.
+ */
+export function qcOperationText(
+  op: Record<string, unknown>,
+  limit?: number,
+): string {
+  const action = String(op.action ?? "");
+  const target = String(op.target_id ?? "");
+  const text = op.text != null ? String(op.text) : "";
+  const shown =
+    limit !== undefined && text.length > limit
+      ? `${text.slice(0, limit)}…`
+      : text;
+  if (action === "delete") return `delete ${target}`;
+  if (action === "set_status")
+    return `mark ${target} → ${String(op.status ?? "")}`;
+  if (action === "set_standard_edition")
+    return `${String(op.standard ?? "")} → ${String(op.edition ?? "")}`;
+  if (shown) return `${action} ${target}: “${shown}”`;
+  return `${action} ${target}`;
+}
+
+/** Fold a field onto one evidence line. Whitespace only — never clipped. */
+function promptLine(value: string | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The composer prefill for a needs-decision finding's "Resolve in chat". It
+ * carries the retained evidence whole: the provision, the issue, the
+ * rationale and every proposed edit. It used to clip each field at 800
+ * characters and each proposed edit's text at 80, so a long provision or fix
+ * reached the chat cut short.
+ */
+export function qcResolveInChatPrompt(
+  finding: QcReportFinding,
+  decisionSignals: readonly string[],
+  context: QcDecisionContext = {},
+): string {
+  const target = finding.element_id || "the section";
+  const currentProvision = promptLine(context.text);
+  const proposedChanges = finding.proposed_ops
+    .map((operation) => promptLine(qcOperationText(operation)))
+    .join("; ");
+  const evidence = [
+    `Finding: ${finding.title} (${finding.finding_id})`,
+    `Affected provision: ${target}`,
+    `Issue identified by Final QC: ${promptLine(finding.issue)}`,
+    `Review rationale: ${promptLine(finding.rationale)}`,
+    currentProvision ? `Current provision text: ${currentProvision}` : "",
+    proposedChanges
+      ? `Proposed-operation context: ${proposedChanges}`
+      : "Proposed-operation context: Final QC did not supply an executable fix.",
+    `Missing-decision signal: ${decisionSignals.join("; ")}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return `Help me resolve this Final QC finding using the retained review evidence below.\n\n${evidence}\n\nAsk only for the missing project fact or confirmation; do not invent or silently default a value. Once I answer, update the specification to resolve the finding and briefly explain what changed and why.`;
+}

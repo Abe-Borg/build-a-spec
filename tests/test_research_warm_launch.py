@@ -470,19 +470,26 @@ def test_the_qc_knob_does_not_switch_research_off(monkeypatch, caplog) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _with_small_allowance(dimension_id: str):
-    """The module with one area declaring fewer searches than the per-request
-    allowance — so its tool bytes, and its cache lineage, are its own."""
-    dims = tuple(
-        dataclasses.replace(d, max_searches=engine.RESEARCH_SEARCHES_PER_REQUEST - 4)
-        if d.dimension_id == dimension_id
-        else d
-        for d in MODULE.research_dimensions
-    )
-    return dataclasses.replace(MODULE, research_dimensions=dims)
+def _give_own_allowance(monkeypatch, dimension_id: str) -> int:
+    """Give one area fewer searches per request than the rest — so its tool
+    bytes, and its cache lineage, are its own. Every shipped area declares
+    the same allowance by design, whatever budget it declares
+    (``engine._per_request_allowance`` reads none of it), so the seam is the
+    function itself, as a module-specific exception would use it. Returns
+    the searches the area declares."""
+    real = engine._per_request_allowance
+    searches = engine.RESEARCH_SEARCHES_PER_REQUEST - 4
+
+    def own(dimension):
+        if dimension.dimension_id == dimension_id:
+            return searches, engine.RESEARCH_FETCHES_PER_REQUEST
+        return real(dimension)
+
+    monkeypatch.setattr(engine, "_per_request_allowance", own)
+    return searches
 
 
-def test_an_area_with_its_own_tool_bytes_never_waits(caplog) -> None:
+def test_an_area_with_its_own_tool_bytes_never_waits(caplog, monkeypatch) -> None:
     solo = _ORDER[-1]
     followers = _FOLLOWERS - {solo}
     observed: dict[str, object] = {}
@@ -501,8 +508,9 @@ def test_an_area_with_its_own_tool_bytes_never_waits(caplog) -> None:
     client = _WatchedClient(
         _scripts(), hold=_LEAD, before_first=before_first, after_first=after_first
     )
+    own_searches = _give_own_allowance(monkeypatch, solo)
     with caplog.at_level(logging.INFO, logger="buildaspec.research"):
-        profile = _run(client, warm=45, module=_with_small_allowance(solo), sink=sink)
+        profile = _run(client, warm=45, sink=sink)
 
     assert observed["solo_arrived"] is True
     assert observed["before"] == {_LEAD, solo}
@@ -515,7 +523,7 @@ def test_an_area_with_its_own_tool_bytes_never_waits(caplog) -> None:
         if _WatchedClient.call_name(request) == solo
         for tool in request["tools"]
     }
-    assert solo_tools["web_search"]["max_uses"] == engine.RESEARCH_SEARCHES_PER_REQUEST - 4
+    assert solo_tools["web_search"]["max_uses"] == own_searches
     records = _wait_records(caplog)
     assert len(records) == 1
     assert f"{len(_ORDER) - 1} areas share a cached prefix" in records[0].getMessage()

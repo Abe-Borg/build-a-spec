@@ -29,7 +29,10 @@ What is preserved exactly, because it is the hard-won part:
   one submission with no web tools instead of discarding the research. The
   ceilings are checked between requests; the web tools themselves carry a
   fixed per-request allowance, so their bytes — the head of every cached
-  prefix — never change within a conversation.
+  prefix — never change within a conversation, and that allowance sits
+  above the provider's own per-request pause, so the model never meets it
+  (a met allowance reads to the model as a spent budget, and it answers
+  with an early submission).
 - Structured-tool-then-tagged-JSON parsing, newest response first.
 - Accepted-vs-cited URL grounding pooled across every response in the
   dimension. Grounding proves retrieval, not truth — ungrounded items are
@@ -171,10 +174,12 @@ WARM_OUTCOME_WARM = "warm"
 WARM_OUTCOME_TIMEOUT = "timeout"
 WARM_OUTCOME_STOPPED = "stopped"
 
-# Cap on pause_turn continuations per dimension call. Research dimensions
-# carry web_search budgets of 16–40, and the server pauses long multi-search
-# turns; sized for the heaviest dimension (~one pause per 3 searches).
-# At exhaustion, one additional submission-only request closes the task.
+# Cap on pause_turn continuations per dimension call. The provider pauses a
+# turn every :data:`SERVER_TOOL_ITERATIONS_PER_REQUEST` tool calls, so the
+# heaviest dimension (an 80-search ceiling and 12 fetches) needs about ten
+# continuations to spend its whole budget; sixteen leaves room for calls
+# that return little. At exhaustion, one additional submission-only request
+# closes the task.
 RESEARCH_MAX_CONTINUATIONS = 16
 
 # Reserve space for server-tool growth before opening a paid stream. Fetch
@@ -261,42 +266,86 @@ def _wrong_tool_result(name: str) -> str:
 RESEARCH_DEFAULT_MAX_SEARCHES = 24
 RESEARCH_DEFAULT_MAX_FETCHES = 8
 
+# The provider's own bound on one request: its server-side tool loop pauses
+# the turn (``stop_reason: pause_turn``) once it has run this many
+# iterations (Anthropic's server-tools documentation, "default limit of 10
+# iterations", read 2026-10-08), and the engine resumes it as a new request
+# with the same tools. Two things read it: the per-request allowance below
+# is sized to sit above it, and the context reserve
+# (:func:`_web_tool_reserve_tokens`) counts no more tool results per request
+# than it allows. Not a knob — it is the provider's number, not the app's.
+SERVER_TOOL_ITERATIONS_PER_REQUEST = 10
+
 # The web tools' PER-REQUEST allowance — what ``max_uses`` says on every
 # request of an area's conversation (the provider counts ``max_uses`` per
 # request, and answers a call past it with an unbilled ``max_uses_exceeded``
-# result). It never changes within a conversation, because the tool
-# definitions are the first bytes of every cached prefix (tools → system →
-# messages): shrinking them to the remaining allowance, as this engine used
-# to, invalidated every cache entry of the conversation after the first
-# fetch, so each later continuation re-wrote the whole conversation at 1.25×
+# result). Two rules size it.
+#
+# It never changes within a conversation, because the tool definitions are
+# the first bytes of every cached prefix (tools → system → messages):
+# shrinking them to the remaining allowance, as this engine used to,
+# invalidated every cache entry of the conversation after the first fetch,
+# so each later continuation re-wrote the whole conversation at 1.25×
 # instead of reading it at 0.1×. The declared per-area budgets are enforced
 # BETWEEN requests by the cumulative ceilings in :func:`_run_dimension`
 # (searches at 2× the declared budget, fetches at the declared budget),
-# which request the final submission; the request that crosses one can run
-# past it by at most this allowance less one. The values are the interview's
-# per-round defaults (``CHAT_MAX_SEARCHES``/``CHAT_MAX_FETCHES``): above the
-# ~3 searches and under one fetch a research request was sized for, and small
-# enough that the context reserve each request needs (8 × 5,000 + 4 × 50,000
-# tokens) leaves the window clip idle until a conversation is past roughly
-# 580k tokens at the default output ceiling. A dimension that declares less
-# gets its own budget instead. Not a knob: equal allowances give the four
-# areas identical tool bytes, so the staggered launch
+# which request the final submission.
+#
+# And it sits ABOVE the provider's per-request pause
+# (:data:`SERVER_TOOL_ITERATIONS_PER_REQUEST`), so the model never meets it.
+# The model is told nothing about renewal, and a ``max_uses_exceeded``
+# result reads to it as a spent budget: it stops searching and submits, and
+# the conversation ends with the ceilings untouched. At 8 searches and 4
+# fetches (v1.23.0 through v1.25.1) an area could run its whole search
+# allowance before the provider's tenth iteration paused it, and once it
+# had, nothing in the loop kept it going — so an area researched for one or
+# two requests against the 16–40 searches its module declared. With both
+# allowances above the pause, a request ends by pausing, the resumed request
+# renews the allowance unseen, and the research runs until a cumulative
+# ceiling or the model's own judgment ends it. In practice the pause bounds
+# one request to 10 tool calls, so the request that crosses a ceiling
+# overshoots it by at most 9; the app's own bound is the allowance less one
+# (a request that batched calls in parallel could, in principle, run past
+# the pause).
+#
+# The same allowance for every area, whatever it declares: equal allowances
+# give the four areas identical tool bytes, so the staggered launch
 # (:func:`_launch_staggered`) lets the areas that follow the lead read its
-# cache entry for the shared block instead of each writing their own.
-RESEARCH_SEARCHES_PER_REQUEST = 8
-RESEARCH_FETCHES_PER_REQUEST = 4
+# cache entry for the shared block instead of each writing their own, and
+# the allowance is a transport detail that must never bind, never a budget
+# (the declared ceilings are the budget, and an area whose budget is below
+# the allowance is still ended by them between requests). Not a knob.
+RESEARCH_SEARCHES_PER_REQUEST = 12
+RESEARCH_FETCHES_PER_REQUEST = 12
 
 
 def _per_request_allowance(dimension: ResearchDimension) -> tuple[int, int]:
     """``(searches, fetches)`` every request of this area's conversation
-    declares: the fixed allowance, or the area's own budget when it declares
-    less. The one place both the request and the launch's lineage key read
-    it, so the two cannot disagree about an area's tool bytes."""
-    max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
-    max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
+    declares: the fixed allowance, the same for every area (the constants say
+    why it is neither the declared budget nor what remains of it). The one
+    place both the request and the launch's lineage key read it, so the two
+    cannot disagree about an area's tool bytes; it takes the area so that a
+    caller which must give one area different bytes has one seam to do it
+    through."""
+    return RESEARCH_SEARCHES_PER_REQUEST, RESEARCH_FETCHES_PER_REQUEST
+
+
+def _web_tool_reserve_tokens(web_tools: list[dict]) -> int:
+    """The context one request's web tools may add, at the worst case the
+    provider's pause allows: at most :data:`SERVER_TOOL_ITERATIONS_PER_REQUEST`
+    tool results, the dearest first — every fetch the allowance permits up to
+    that bound, at the fetch content cap, then searches in what remains of
+    it. Bounded by the pause rather than the whole allowance because the
+    allowance is sized above the pause on purpose: reserving for all of it
+    (twelve fetches at 50k each) would clip every conversation to one fetch
+    per request past about 160k tokens of input, and the clipped tool is one
+    the model can meet."""
+    searches, fetches = web_tools[0]["max_uses"], web_tools[1]["max_uses"]
+    fetch_slots = min(fetches, SERVER_TOOL_ITERATIONS_PER_REQUEST)
+    search_slots = min(searches, SERVER_TOOL_ITERATIONS_PER_REQUEST - fetch_slots)
     return (
-        min(max_searches, RESEARCH_SEARCHES_PER_REQUEST),
-        min(max_fetches, RESEARCH_FETCHES_PER_REQUEST),
+        fetch_slots * WEB_FETCH_MAX_CONTENT_TOKENS
+        + search_slots * _SEARCH_RESULT_RESERVE_TOKENS
     )
 
 
@@ -2593,14 +2642,19 @@ def _run_dimension(
     :data:`RESEARCH_FETCHES_PER_REQUEST`), never what remains of the
     budget, so the cache entries for the tools, the system prompt and the
     shared block are read by every continuation, and the continuation tail
-    can read what the conversation re-sends. The declared budgets are
-    enforced between requests by the cumulative ceilings (searches at 2× the
-    declared budget, fetches at the declared budget), which request the
-    submission; the request that crosses a ceiling can overshoot it by at
-    most its own allowance less one. The one exception is the context
-    window: a request that cannot reserve room for its allowance's fetches
-    switches the conversation, once and for good, to one fetch per request,
-    and one that cannot reserve even that submits.
+    can read what the conversation re-sends. The allowance sits above the
+    provider's per-request pause (:data:`SERVER_TOOL_ITERATIONS_PER_REQUEST`),
+    so a request ends by pausing, never by the model meeting ``max_uses`` —
+    which it would read as a spent budget and answer with an early
+    submission. The declared budgets are enforced between requests by the
+    cumulative ceilings (searches at 2× the declared budget, fetches at the
+    declared budget), which request the submission; the request that
+    crosses a ceiling can overshoot it by at most its own allowance less one
+    (the pause's ten calls less one, in practice). The one exception is the
+    context window: a request that cannot reserve room for the tool results
+    the pause lets it add (:func:`_web_tool_reserve_tokens`) switches the
+    conversation, once and for good, to one fetch per request, and one that
+    cannot reserve even that submits.
 
     Once the resend sanitizer has EDITED the conversation (a fetched PDF
     over the page limit elided, an unpaired server-tool call dropped), or
@@ -2701,10 +2755,11 @@ def _run_dimension(
         )
 
     # The per-request allowance (RESEARCH_SEARCHES_PER_REQUEST says why it is
-    # fixed): the same bytes on every request of the conversation, resumed
-    # or restarted, so the tools' cache entry and everything after it can be
-    # read by every continuation. The declared budgets are enforced by the
-    # cumulative ceilings below, between requests.
+    # fixed and why it is this large): the same bytes on every request of the
+    # conversation, resumed or restarted, so the tools' cache entry and
+    # everything after it can be read by every continuation, and above the
+    # provider's per-request pause so the model never meets it. The declared
+    # budgets are enforced by the cumulative ceilings below, between requests.
     searches_per_request, fetches_per_request = _per_request_allowance(dimension)
 
     def _web_tools(fetches: int) -> list[dict]:
@@ -2765,8 +2820,9 @@ def _run_dimension(
     # Conversation-wide ceilings, checked before every request against what
     # the conversation's responses report. Reaching one requests a submission
     # instead of discarding work. The request that crosses one may run past
-    # it by up to its per-request allowance less one: the price of tools whose
-    # bytes never change.
+    # it by up to its per-request allowance less one (the provider's pause
+    # bounds that to ten calls in practice): the price of tools whose bytes
+    # never change.
     search_budget_ceiling = max(1, max_searches * 2)
     policy = DEFAULT_REALTIME_RETRY_POLICY
     attempts_planned = max(1, policy.max_attempts)
@@ -2853,12 +2909,11 @@ def _run_dimension(
 
     def _reserve_fits(input_count: int, web_tools: list[dict]) -> bool:
         """Whether a request with ``web_tools`` leaves room for what it may
-        add: the answer, the margin, and every search and fetch its
-        per-request allowance permits."""
+        add: the answer, the margin, and the tool results the provider's
+        pause lets one request add (:func:`_web_tool_reserve_tokens`)."""
         return (
             input_count + max_tokens + _CONTEXT_MARGIN_TOKENS
-            + web_tools[0]["max_uses"] * _SEARCH_RESULT_RESERVE_TOKENS
-            + web_tools[1]["max_uses"] * WEB_FETCH_MAX_CONTENT_TOKENS
+            + _web_tool_reserve_tokens(web_tools)
             <= settings.RESEARCH_CONTEXT_WINDOW
         )
 
@@ -3429,9 +3484,10 @@ def _opening_lineage_key(
 
     Computed from the builders the requests use (:func:`_research_tools`,
     :func:`build_research_system_prompt`, :func:`build_dimension_user_message`),
-    never from a list of dimension ids: an area that declares less than the
-    per-request web allowance sends different tool bytes, so it is a lineage
-    of its own and never waits for an entry it could not read. A wrong key
+    never from a list of dimension ids: an area whose tool bytes differ
+    (none of a shipped module's do — every area declares the same allowance,
+    by design) is a lineage of its own and never waits for an entry it could
+    not read. A wrong key
     cannot break a round — it only costs the saving, or makes an area wait,
     boundedly, for nothing.
     """

@@ -1441,6 +1441,7 @@ def _qc_export_current_state(
         discipline=effective_discipline(session),
         source_guard=source_guard,
         model=settings.QC_MODEL,
+        verifier_model=settings.QC_VERIFIER_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
         consolidation_enabled=settings.QC_CONSOLIDATION,
         batch_verification=settings.QC_BATCH_VERIFICATION,
@@ -2649,6 +2650,7 @@ def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, A
                 "version": settings.VERSION,
                 "model": settings.INTERVIEW_MODEL,
                 "qc_model": settings.QC_MODEL,
+                "qc_verifier_model": settings.QC_VERIFIER_MODEL,
                 "harvest_model": settings.HARVEST_MODEL,
                 "api_key_present": bool(load_api_key()),
                 "module": session.module.display_name,
@@ -3683,6 +3685,9 @@ def create_app(
             # can override the default), so the paid-run consent copy names
             # what the user is agreeing to pay for.
             "qc_model": settings.QC_MODEL,
+            # The model the verifier seats run on (Sonnet 5.5 by default;
+            # BUILD_A_SPEC_QC_VERIFIER_MODEL), named beside the lenses' model.
+            "qc_verifier_model": settings.QC_VERIFIER_MODEL,
             "harvest_model": settings.HARVEST_MODEL,
             "api_key_present": bool(load_api_key()),
             "module": session.module.display_name,
@@ -6941,6 +6946,7 @@ def create_app(
                 max_tokens=settings.QC_MAX_TOKENS,
                 lens_effort=settings.QC_LENS_EFFORT,
                 verifier_effort=settings.QC_VERIFIER_EFFORT,
+                verifier_model=settings.QC_VERIFIER_MODEL,
                 version_index=session.doc.index,
                 discipline=effective_discipline(session),
                 source_guard=source_guard,

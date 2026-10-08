@@ -116,6 +116,53 @@ def test_shapes_the_provider_refuses_are_named(request_, reason):
     assert any(reason in problem for problem in problems), problems
 
 
+_EFFORT_BETA = "mid-conversation-output-config-2026-07-01"
+
+
+def _with_effort_message(request, *, effort="high", beta=True, role="system"):
+    """``request`` with an effort-only message before its last user turn —
+    the condensing summary's shape."""
+    sent = dict(request)
+    sent["messages"] = [
+        *request["messages"][:-1],
+        {"role": role, "content": [], "output_config": {"effort": effort}},
+        request["messages"][-1],
+    ]
+    if beta:
+        sent["extra_headers"] = {"anthropic-beta": _EFFORT_BETA}
+    return sent
+
+
+@pytest.mark.parametrize("model", [
+    "claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-haiku-5-5",
+    "claude-fable-5-1", "some-future-model",
+])
+def test_a_per_message_effort_change_passes_where_it_is_documented(model):
+    request_ = _with_effort_message(_request(model, thinking={"type": "adaptive"}))
+    assert request_shape_problems(request_) == []
+
+
+@pytest.mark.parametrize(("request_", "reason"), [
+    (_with_effort_message(_request("claude-sonnet-5-5", thinking={"type": "adaptive"}), beta=False),
+     "output_config: Extra inputs are not permitted"),
+    (_with_effort_message(_request("claude-sonnet-5", thinking={"type": "adaptive"})),
+     "requires a model that supports per-turn effort"),
+    (_with_effort_message(_request("claude-fable-5", thinking={"type": "adaptive"})),
+     "requires a model that supports per-turn effort"),
+    (_with_effort_message(_request("claude-sonnet-5-5", effort="high", thinking={"type": "between_tools"})),
+     "per-message effort needs adaptive thinking"),
+    (_with_effort_message(_request("claude-haiku-5-5", effort="high", thinking={"type": "disabled"})),
+     "per-message effort needs adaptive thinking"),
+    (_with_effort_message(_request("claude-sonnet-5-5", thinking={"type": "adaptive"}), effort="extreme"),
+     "is not an effort level"),
+    (_with_effort_message(_request("claude-sonnet-5-5", thinking={"type": "adaptive"}), role="user"),
+     "only a system message carries output_config"),
+], ids=lambda value: value["model"] if isinstance(value, dict) else "")
+def test_a_refused_per_message_effort_change_is_named(request_, reason):
+    problems = request_shape_problems(request_)
+    assert any(reason in problem for problem in problems), problems
+
+
 def test_the_beta_is_found_in_betas_or_in_any_header_spelling():
     binding = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
     for extra in (

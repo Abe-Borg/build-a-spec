@@ -413,7 +413,8 @@ def test_two_lineages_each_have_their_own_leader(caplog) -> None:
 
 def test_seats_are_grouped_by_the_lineage_key() -> None:
     """The key is computed from the real request builders: same lens, same
-    key; a web-tooled lens forks it; so does the other transport's TTL."""
+    key; a web-tooled lens forks it; so does another TTL, should a transport
+    ever carry one again."""
     kwargs = dict(
         section_render="<section/>",
         module=DEFAULT_MODULE,
@@ -433,6 +434,11 @@ def test_seats_are_grouped_by_the_lineage_key() -> None:
     assert key(no_web, "Alpha finding") == key(no_web, "Beta finding")
     assert key(no_web, "Alpha finding") != key(web, "Alpha finding")
     assert key(no_web, "Alpha finding") != key(
+        no_web, "Alpha finding", cache_ttl="1h"
+    )
+    # Both transports store the prefix for 5 minutes since 2026-10-08, so a
+    # batched seat and a streamed seat of one lens share one lineage.
+    assert key(no_web, "Alpha finding") == key(
         no_web, "Alpha finding", cache_ttl=engine._BATCH_VERIFIER_CACHE_TTL
     )
 
@@ -487,12 +493,15 @@ def test_staggering_changes_no_seat_request_bytes(monkeypatch) -> None:
     assert _canonical_requests(staggered) == _canonical_requests(at_once)
 
 
-def test_streamed_seats_keep_the_five_minute_ttl_and_batched_seats_the_hour(
+def test_both_transports_store_the_seat_prefix_for_five_minutes(
     monkeypatch,
 ) -> None:
-    """The one byte-level difference between the transports, and why it is
-    not a drift: a batched seat may run minutes after its prefix was
-    written, a streamed seat follows its leader by seconds."""
+    """Streamed and batched seats both carry the provider's 5-minute default
+    (docs/as-built.md, "The batched seats store their copy for five
+    minutes"). The batched seats carried the one-hour TTL until 2026-10-08;
+    on the measured run only 39% of them read the shared copy, where a
+    one-hour store beats plain input only above 51% and a 5-minute store
+    above 21%. Pinned from the requests each transport actually sends."""
     _fixed_clock(monkeypatch)
     streamed = SequencedFakeClient(_scripts())
     _run(streamed, warm=45)
@@ -502,7 +511,15 @@ def test_streamed_seats_keep_the_five_minute_ttl_and_batched_seats_the_hour(
     batched = SequencedFakeClient(_scripts())
     _run(batched, warm=0, batch=True)
     assert batched.batches.created
-    assert engine._BATCH_VERIFIER_CACHE_TTL == "1h"
+    batched_params = [
+        dict(item["params"])
+        for batch in batched.batches.created
+        for item in batch
+    ]
+    assert batched_params
+    for params in batched_params:
+        assert _marker_ttls(params) == [None, None, None]
+    assert engine._BATCH_VERIFIER_CACHE_TTL == ""
     assert engine._STREAMED_VERIFIER_CACHE_TTL == ""
     default_spec = engine._verifier_call_spec(
         finding=_finding("Alpha finding"),

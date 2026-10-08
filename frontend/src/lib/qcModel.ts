@@ -19,6 +19,11 @@ const KNOWN: Record<string, { name: string; strongerThanDrafter: boolean }> = {
   "claude-sonnet-5": { name: "Claude Sonnet 5", strongerThanDrafter: false },
 };
 
+/** The model Final QC's verifier seats run on by default (since
+ *  2026-10-08; `BUILD_A_SPEC_QC_VERIFIER_MODEL`). The lenses keep
+ *  `DEFAULT_QC_MODEL`. */
+export const DEFAULT_QC_VERIFIER_MODEL = "claude-sonnet-5-5";
+
 export interface QcModelLabel {
   id: string;
   name: string;
@@ -29,7 +34,32 @@ export interface QcModelLabel {
  *  shipped default; an unrecognized id is shown verbatim and makes no
  *  strength claim. */
 export function qcModelLabel(id?: string | null): QcModelLabel {
-  const resolved = (id ?? "").trim() || DEFAULT_QC_MODEL;
+  return labelFor((id ?? "").trim() || DEFAULT_QC_MODEL);
+}
+
+/** The verifier seats' model, named the same way: `id` absent reads as the
+ *  shipped seat default. */
+export function qcVerifierModelLabel(id?: string | null): QcModelLabel {
+  return labelFor((id ?? "").trim() || DEFAULT_QC_VERIFIER_MODEL);
+}
+
+/** The drawer's paid-run consent line: the lenses' model, and the seats'
+ *  model when it differs, both as configured. */
+export function qcRunsOnCopy(
+  qcModel?: string | null,
+  qcVerifierModel?: string | null,
+): string {
+  const lenses = qcModelLabel(qcModel);
+  const seats = qcVerifierModelLabel(qcVerifierModel);
+  const lead = lenses.strongerThanDrafter
+    ? `Runs on ${lenses.name} — a stronger reviewer than the drafter`
+    : `Runs on ${lenses.name}`;
+  return seats.id === lenses.id
+    ? `${lead}.`
+    : `${lead}; ${seats.name} reviewers then check each finding.`;
+}
+
+function labelFor(resolved: string): QcModelLabel {
   const known = KNOWN[resolved];
   if (known) return { id: resolved, ...known };
   return { id: resolved, name: resolved, strongerThanDrafter: false };

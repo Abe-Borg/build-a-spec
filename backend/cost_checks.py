@@ -33,7 +33,8 @@ a proven loss.
 The third is the **warm lead's check** (session WL-1). The warm lead streams
 one seat of an eligible cache lineage of Final QC's batched verifier seats FIRST,
 at list price, and submits the batch only after that seat's first output, so
-the batch can read the 1-hour entry the lead wrote instead of each seat
+the batch can read the entry the lead wrote (5 minutes since 2026-10-08, one
+hour before) instead of each seat
 writing its own (``settings.QC_BATCH_WARM_LEAD``). Whether a batch request
 can read an entry a streamed request wrote is undocumented. So after every
 batched phase that ends normally and sent a lead, the engine hands each such
@@ -704,7 +705,11 @@ class WarmLeadLineage:
       none of its requests failed, and the opening response was answered
       by the requested model.
       When it did not, the batch had no proven copy of
-      the lead's to read, and the lineage says nothing about the lead.
+      the lead's to read, and the lineage says nothing about the lead;
+    - ``cache_ttl`` — the TTL the lineage's markers carried (``"1h"``, or
+      ``""``/``"5m"`` for the provider's 5-minute default), which sets the
+      write rate a missed read paid. One hour unless the engine says
+      otherwise, the lineages' TTL until 2026-10-08.
     """
 
     kind: str
@@ -713,6 +718,7 @@ class WarmLeadLineage:
     lead_usage: Mapping[str, int]
     batched_first: tuple[Any, ...]
     warm: bool = True
+    cache_ttl: str = "1h"
 
 
 @dataclass
@@ -836,8 +842,9 @@ def _median(values: list[int]) -> Decimal:
 def _judge_lineage(lineage: WarmLeadLineage) -> _LineageJudgment:
     """Appendix B for one lineage: h₁, p, C, h₀* and the verdict.
 
-    With w₁ and r the model's 1-hour cache-write and cache-read rates, b the
-    batch multiplier and Δ = w₁ − r, the lead paid if and only if h₀ < h₀*,
+    With w the model's cache-write rate at the lineage's TTL (1-hour or
+    5-minute), r its cache-read rate, b the batch multiplier and Δ = w − r,
+    the lead paid if and only if h₀ < h₀*,
 
         h₀* = [(n − 1)·b·h₁·Δ·p − (1 − b)·C] / (n·b·Δ·p).
 
@@ -874,8 +881,12 @@ def _judge_lineage(lineage: WarmLeadLineage) -> _LineageJudgment:
         unmeasured += len(measured)
         measured = []
         reads = 0
-    one_hour = "cache_write_1h" if "cache_write_1h" in rates else "cache_write"
-    delta = _rate(rates, one_hour) - _rate(rates, "cache_read")
+    write_key = (
+        "cache_write_1h"
+        if lineage.cache_ttl == "1h" and "cache_write_1h" in rates
+        else "cache_write"
+    )
+    delta = _rate(rates, write_key) - _rate(rates, "cache_read")
     batch = Decimal(format(float(settings.BATCH_COST_MULTIPLIER), ".12g"))
     lead_cost = Decimal(
         str(usage_ledger.estimate_usage_cost(lineage.model, dict(lineage.lead_usage)))

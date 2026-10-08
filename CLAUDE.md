@@ -377,11 +377,17 @@ already resolved and does nothing). 409 when nothing is running.
   starts multistep tool use at `medium`. Whole-section drafting/adaptation
   still uses `DRAFT_PASS_EFFORT`, default `high`.
   Fact harvesting independently selects `HARVEST_MODEL` (Claude Haiku 5.5,
-  overridden by `BUILD_A_SPEC_HARVEST_MODEL`) and `HARVEST_EFFORT` (`medium`).
+  overridden by `BUILD_A_SPEC_HARVEST_MODEL`) and `HARVEST_EFFORT` (`high`
+  since 2026-10-08, `medium` before).
   Haiku supports strict tool schemas, but its single-shot output choice stays
   automatic: forced tool choice suppresses all thinking on this model.
   Template AI Generalize keeps `INTERVIEW_MODEL`; conversation condensing
-  also keeps the chat model, whose cached prefix it reuses.
+  also keeps the chat model and its top-level effort, whose cached prefix it
+  reuses, and thinks at `COMPACTION_EFFORT` (`high`) through a per-message
+  effort change (see "Final QC's verifier seats run on Sonnet 5.5 at high"
+  below). Final QC's lenses run `QC_MODEL` (Opus 5.5) at `QC_LENS_EFFORT`
+  (`medium`), its verifier seats `QC_VERIFIER_MODEL` (Sonnet 5.5) at
+  `QC_VERIFIER_EFFORT` (`high`).
   Thinking blocks are preserved **verbatim** across continuation rounds —
   the API requires them during tool use; `_serialize` round-trips every
   block type exactly (SDK `model_dump`, `vars()` for test fakes).
@@ -478,8 +484,9 @@ still reads defaults from source with `ast`, independent of local overrides.
 
 **Adaptive thinking erratum.** The earlier conversation-engine invariant
 said interview and research both defaulted to `high`. The interview has
-defaulted to `medium` since 2026-09-29; research now does too. Final QC
-also defaults to `medium`; the two whole-section drafting/adaptation
+defaulted to `medium` since 2026-09-29; research now does too. Final QC's
+lenses also default to `medium` (its verifier seats moved to Sonnet 5.5 at
+`high` on 2026-10-08); the two whole-section drafting/adaptation
 passes keep `DRAFT_PASS_EFFORT=high`. The invariant above is corrected.
 
 No paid API calls or live quality/cost comparison were run. The owner can
@@ -1146,6 +1153,9 @@ Modelled on the same usage: streamed with a stagger ≈ $5.93.
   prebuilt `spec` and `first_output`. This is the one byte-level difference
   between the transports' requests; `tests/test_qc_batch_verification.py`
   compares them with markers stripped and pins the TTLs explicitly.
+  (Superseded 2026-10-08: batched seats store for five minutes too, so the
+  two transports' seat requests are identical; see "Final QC's verifier
+  seats run on Sonnet 5.5 at high" below.)
 - **Streaming is the default.** `settings.QC_BATCH_VERIFICATION_DEFAULT =
   False`; `QC_BATCH_VERIFICATION` reads the env var against it;
   `qc_preferences.load_batch_verification` falls back to it (a saved choice
@@ -1159,8 +1169,9 @@ Modelled on the same usage: streamed with a stagger ≈ $5.93.
   version, readiness, the SSE protocol.
 
 Never let the streamed pool submit a follower before its lineage has
-released it while the wait is on, never give the two transports' seats the
-same cache TTL, and never record a `warm`/`stopped` release as pressure.
+released it while the wait is on, and never record a `warm`/`stopped`
+release as pressure. (The rule that the two transports' seats never share a
+cache TTL was retired on 2026-10-08, when both moved to five minutes.)
 Tests: `tests/test_qc_streamed_stagger.py` (when: followers wait, a failed
 leader releases, a Stop cancels unsent followers, a leader's 400 trips the
 breaker after one request, zero wait launches at once, two lineages have two
@@ -1210,6 +1221,101 @@ the manifest hashes, and never add a seat path that skips it. Tests:
 `tests/test_qc_verifier_standards.py`. Full record, reversion evidence and
 the release-note draft are in `docs/as-built.md` under the same heading. No
 paid API call was made.
+
+## Final QC's verifier seats run on Sonnet 5.5 at high — implemented notes (2026-10-08)
+
+Owner decisions (Abraham), after a cost review that asked where the app could
+still save money without giving up rigor: the verifier seats move to Sonnet
+5.5 at `high`; the batch mode follows the recommendation (5-minute store);
+condensing stays on Sonnet 5.5 and thinks at `high`; the Haiku fact harvest
+thinks at `high`.
+
+- **Seats on their own model.** `settings.QC_VERIFIER_MODEL`
+  (`BUILD_A_SPEC_QC_VERIFIER_MODEL`, else `BUILD_A_SPEC_QC_MODEL` when set,
+  else `QC_VERIFIER_MODEL_DEFAULT = MODEL_SONNET_55`). `QC_VERIFIER_EFFORT`
+  defaults per seat model (`_QC_VERIFIER_EFFORT_BY_MODEL`: Sonnet 5.5 →
+  `high`, any other → `medium`); an explicit `BUILD_A_SPEC_QC_EFFORT` still
+  wins. Lenses and grouping stay on `QC_MODEL` (Opus 5.5) at `medium`.
+  `run_final_qc(..., verifier_model="")` defaults to `model`, so a direct
+  caller naming one model gets one model; the app passes the setting (QC
+  start → `QCRunner.start` → `run_final_qc`). Every phase-2 request —
+  streamed, batched, warm lead, reminder — uses `verifier_model`; the refusal
+  fallback is decided per model (`verifier_refusal_fallback`: never on Haiku
+  5.5, which has none).
+- **Two-model accounting.** `QCResult.verifier_model` and
+  `verifier_cost_basis`, a second persisted pricing snapshot, both serialized
+  only when a seat model is named. `_audit_accounting_consistent` prices each
+  seat by `_seat_cost_basis()` and every other record by `cost_basis`; a
+  mixed run (`mixed_models()`) totals as the sum of its records, because one
+  model's rates over merged usage would be wrong, while a one-model run keeps
+  the old merged estimate. `from_dict` requires the seat snapshot once a seat
+  model is named and refuses a stray one; a pre-split report (no
+  `verifier_model`) loads and prices its seats by `cost_basis`. The
+  manifest's `configuration.verifier_model` is hashed and `matches_inputs`
+  rebuilds it from the live setting, so every pre-split report reads stale
+  once. `usage_by_meter_category` files a mixed run's seats under
+  `qc_verifier` / `qc_verifier_batched`, which `usage_ledger` prices at
+  `QC_VERIFIER_MODEL` (the batched one at the batch multiplier). Health
+  payloads carry `qc_verifier_model`; the diagnostics and trace models maps
+  carry `qc_verifier`.
+- **Report and UI.** Word report rows "Model (lens review and grouping)" and
+  "Model (verifier seats)"; `qc_refusal_fallback` names the rate model of
+  each rescued record (`_qc_rate_model`), mirrored by
+  `qcReport.qcRefusalFallback` and `QCReportModal`. A mixed run's Saved
+  Pricing Basis shows both snapshots, each named for the calls it priced
+  (`docx_export.qc_pricing_bases`, `qcReport.qcPricingBases`; Codex review
+  on PR #290); a one-model report keeps its single untitled basis. `lib/qcModel` gains
+  `DEFAULT_QC_VERIFIER_MODEL`, `qcVerifierModelLabel` and `qcRunsOnCopy`;
+  `QCDrawer`'s consent copy names both models from health (never a
+  hardcoded name, pinned for Sonnet as for Opus); `QC_SPEND_CATEGORIES` has
+  four buckets; Settings labels the two new categories; Help and the trust
+  explainer say which model does what.
+- **Batched seats store for five minutes.** `_BATCH_VERIFIER_CACHE_TTL = ""`,
+  so both transports send identical seat requests and share a lineage key
+  (superseding the previous entry's "the transports still differ only in
+  TTL").
+  The measured batch read the shared prefix on 39% of seats; a 1h write
+  beats plain input only above a 51% read share, a 5m write above 21%, so at
+  the measured share 5m wins unless five-minute hits fall below about 1%.
+  `cost_checks.WarmLeadLineage.cache_ttl` (default `"1h"` for direct
+  callers) makes `_judge_lineage` use the lineage's own write rate; the
+  engine passes the lead spec's TTL.
+- **Condensing at `high`.** `settings.COMPACTION_EFFORT` (`high`),
+  `PER_MESSAGE_EFFORT_BETA` (`mid-conversation-output-config-2026-07-01`) and
+  `PER_MESSAGE_EFFORT_MODELS` (Sonnet 5.5, Opus 5.5, Opus 5, Haiku 5.5).
+  `_build_compaction_request` keeps the top-level `output_config.effort =
+  INTERVIEW_EFFORT` (part of the cache key) and, when the two levels differ,
+  the model is listed, thinking is adaptive and the latch is armed, inserts
+  `{"role": "system", "content": [], "output_config": {"effort": …}}` right
+  before the instruction, with the beta header. `_open_summary_stream` reads
+  a 400 that names the message (`_PER_MESSAGE_EFFORT_REJECTION`) as its
+  refusal: the latch switches off for the process (one WARNING on
+  `buildaspec.chat`; `reset_per_message_effort_probe` re-arms it in the
+  conftest) and the summary is resent once without it. Any other 400
+  propagates. The `chat_compaction` trace gains `effort`;
+  `tools/compaction_json_eval.py`'s report records `summary_effort`, and
+  both its arms carry the message.
+- **Harvest at `high`.** `HARVEST_EFFORT` defaults to `high`.
+- **Oracle.** `tests/fakes.request_shape_problems` refuses a message-level
+  `output_config` without the beta, on Claude Fable 5, Sonnet 5 or Opus 4.8,
+  beside `disabled`/`between_tools` thinking, on a non-system message, or
+  with an unknown level.
+- **Bytes that changed.** The seats' model, effort and (batched) TTL, so a
+  seat's cache entry is new once; a summary request gains one message after
+  its cached prefix and a beta header. The chat request, the lenses, the
+  grouping calls, research and the stable prompt are unchanged.
+
+Never send the summary's depth as its top-level effort (it would rewrite the
+whole cached conversation), never price a seat at the lenses' rates in a
+mixed run, and never add a phase-2 request path that ignores
+`verifier_model`. Tests: `tests/test_qc_verifier_model.py`,
+`tests/test_compaction_effort.py`, `tests/test_qc_phase_effort.py`,
+`tests/test_fake_request_validator.py`, `tests/test_settings.py`,
+`frontend/tests/qcModel.test.ts`, `frontend/tests/qcSessionCost.test.ts`.
+Full record, reversion evidence and the release-note draft are in
+`docs/as-built.md` under the same heading. No paid API call was made; the
+savings are modelled from the measured run's usage, and how much more the
+seats and the summary think at `high` is unmeasured.
 
 ## As-built history
 

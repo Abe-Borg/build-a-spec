@@ -1,6 +1,7 @@
 /**
- * Final QC on Opus 5.5: one button, a fleet of Opus 5.5 reviewers,
- * an accept/dismiss fix queue, and an issue-readiness checklist.
+ * Final QC: one button, five Opus 5.5 lens reviewers whose findings Sonnet 5.5
+ * verifier seats check, an accept/dismiss fix queue, and an issue-readiness
+ * checklist.
  *
  * Idle → a "Send to Final QC" button + a cost expectation line + the
  * readiness checklist. The button never launches a run directly: because a
@@ -73,7 +74,12 @@ import QcTransportChoice from "./QcTransportChoice";
 import { useQcTransportPreference } from "../lib/useQcTransportPreference";
 import QCReportModal from "./QCReportModal";
 import Tip from "./Tip";
-import { qcModelLabel, type QcModelLabel } from "../lib/qcModel";
+import {
+  qcModelLabel,
+  qcRunsOnCopy,
+  qcVerifierModelLabel,
+  type QcModelLabel,
+} from "../lib/qcModel";
 
 interface Props {
   qc: QcSnapshot | null;
@@ -100,6 +106,8 @@ interface Props {
   openNonce?: number;
   /** The configured Final QC model id (`health.qc_model`). */
   qcModel?: string;
+  /** The verifier seats' model id (`health.qc_verifier_model`). */
+  qcVerifierModel?: string;
 }
 
 const QC_BUSY_MESSAGE = "Wait for the current action to finish.";
@@ -783,11 +791,13 @@ export default function QCDrawer({
   onJump,
   openNonce,
   qcModel,
+  qcVerifierModel,
 }: Props) {
   const model = qcModelLabel(qcModel);
-  const runsOn = model.strongerThanDrafter
-    ? `Runs on ${model.name} — a stronger reviewer than the drafter.`
-    : `Runs on ${model.name}.`;
+  // The verifier seats' model, named wherever the copy says who checks the
+  // findings (Sonnet 5.5 by default since 2026-10-08).
+  const seats = qcVerifierModelLabel(qcVerifierModel);
+  const runsOn = qcRunsOnCopy(qcModel, qcVerifierModel);
   const [expanded, setExpanded] = useState(false);
   // The tour opens the drawer by bumping the nonce; the user can still
   // collapse it freely — the tour never fights back.
@@ -1033,7 +1043,7 @@ export default function QCDrawer({
         ? "Final QC is already running."
         : interactionBusy
           ? QC_BUSY_MESSAGE
-          : `Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on ${model.name} (uses your API key)`;
+          : `Review what a pass costs and does, then confirm — runs the full lens fan-out on ${model.name} + adversarial verification on ${seats.name} (uses your API key)`;
 
   // The start button opens the confirmation dialog; the run only fires once
   // the user confirms in it (Opus 5.5 is expensive and a pass takes minutes).
@@ -1090,7 +1100,7 @@ export default function QCDrawer({
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
           aria-controls="final-qc-drawer-body"
-          title={`Final QC — a fleet of ${model.name} reviewers before the section goes out the door`}
+          title={`Final QC — ${model.name} reviewers, checked by ${seats.name} verifiers, before the section goes out the door`}
         >
           <span className="shrink-0 font-medium tracking-wide uppercase">
             Final QC
@@ -1743,6 +1753,7 @@ export default function QCDrawer({
       <ConfirmQCModal
         isRerun={!!primaryReport}
         model={model}
+        seats={seats}
         costEstimate={costEstimate}
         busy={interactionBusy}
         moduleSectionCompatibility={moduleSectionCompatibility}
@@ -2086,6 +2097,7 @@ function DismissQCModal({
 function ConfirmQCModal({
   isRerun,
   model,
+  seats,
   costEstimate,
   busy,
   moduleSectionCompatibility,
@@ -2094,6 +2106,8 @@ function ConfirmQCModal({
 }: {
   isRerun: boolean;
   model: QcModelLabel;
+  /** The verifier seats' model. */
+  seats: QcModelLabel;
   costEstimate: string;
   busy: boolean;
   moduleSectionCompatibility?: QcModuleSectionCompatibility;
@@ -2233,7 +2247,7 @@ function ConfirmQCModal({
             goes out the door. It runs on{" "}
             <strong className="text-ink">{model.name}</strong>
             {model.strongerThanDrafter
-              ? ", a stronger reasoning model than the Sonnet\u00a05 model that drafts"
+              ? ", a stronger reasoning model than the Sonnet\u00a05.5 model that drafts"
               : ""}{" "}
             — the point of the pass is to catch what the drafter missed.
           </p>
@@ -2252,8 +2266,8 @@ function ConfirmQCModal({
               </li>
               <li>
                 Every finding is then re-checked by an adversarial verification
-                panel, so weak or unfounded findings are filtered out before you
-                see them.
+                panel of {seats.name} reviewers, so weak or unfounded findings
+                are filtered out before you see them.
               </li>
             </ul>
           </div>
@@ -2261,9 +2275,9 @@ function ConfirmQCModal({
           <div className="space-y-1.5">
             <p className={sectionLabel}>Why it&apos;s expensive</p>
             <p>
-              Opus&nbsp;5 costs more per token than the interview model, and a
-              pass is not a single call — it&apos;s the five reviewers plus a
-              panel of verifiers for every finding they raise. That adds up to
+              The five reviewers run on {model.name}, and a pass is not a
+              single call — it&apos;s the five reviewers plus a panel of
+              verifiers for every finding they raise. That adds up to
               dozens of model calls, billed to your own Anthropic API key. Your
               document is sent once per stage rather than once per call, which
               keeps most of that from being charged at full rate.

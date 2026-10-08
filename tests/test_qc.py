@@ -1370,7 +1370,7 @@ def test_qc_report_export_smoke(monkeypatch):
     assert any("Edition fix" in t for t in texts)
 
 
-def test_qc_usage_rolls_up_under_the_qc_model_pricing(monkeypatch):
+def test_qc_usage_rolls_up_under_each_phase_models_pricing(monkeypatch):
     client = _client()
     _seed_doc(client, monkeypatch)
     scripts = _qc_scripts(
@@ -1387,33 +1387,44 @@ def test_qc_usage_rolls_up_under_the_qc_model_pricing(monkeypatch):
         qc_verdict_response(True, tokens={"input": 500}),
     ]
     monkeypatch.setattr("backend.app.get_client", lambda: SequencedFakeClient(scripts))
-    # Batch the verification explicitly: the shipped default is streamed
-    # (every seat then rolls up under ``qc`` at list price), and this test
-    # is about the two-rate split the batched transport needs.
+    # Batch the verification explicitly: the shipped default is streamed,
+    # and this test is about the two-rate split the batched transport needs.
     client.post("/api/qc/start", json={"batch_verification": True})
     _wait_qc(client)
 
     usage = client.get("/api/usage").json()
-    # Split by the rate each phase was billed at: the streamed lens phase at
-    # list price, the batched verification phase at the provider's batch
-    # rate. One bucket could only ever be priced at one of the two.
+    # Split by the model and the rate each phase was billed at: the streamed
+    # lens phase on the QC model at list price, the batched verifier seats on
+    # their own model (Sonnet 5.5 since 2026-10-08) at the batch rate. A
+    # bucket is priced at ONE model and ONE rate, so each needs its own.
+    assert settings.QC_VERIFIER_MODEL != settings.QC_MODEL
     qc = usage["categories"]["qc"]
-    batched = usage["categories"]["qc_batched"]
+    seats = usage["categories"]["qc_verifier_batched"]
+    assert "qc_batched" not in usage["categories"]
     assert qc["input_tokens"] == 4000  # the lens phase
     assert qc["output_tokens"] == 800
-    assert batched["input_tokens"] == 1000  # 2 x 500 verifier seats
-    # The QC model MUST carry its own PRICING entry. A model absent from the
-    # table is silently metered at Sonnet 5's rates (``usage_ledger._rates``
+    assert seats["input_tokens"] == 1000  # 2 x 500 verifier seats
+    # Each model MUST carry its own PRICING entry. A model absent from the
+    # table is silently metered at Sonnet 5.5's rates (``usage_ledger._rates``
     # falls back via ``dict.get``) and the resulting cost_basis still passes
     # every audit-integrity gate — so the wrong number would ship unnoticed.
     assert settings.QC_MODEL in settings.PRICING
-    rates = settings.PRICING[settings.QC_MODEL]
+    assert settings.QC_VERIFIER_MODEL in settings.PRICING
+    lens_rates = settings.PRICING[settings.QC_MODEL]
+    seat_rates = settings.PRICING[settings.QC_VERIFIER_MODEL]
     by_category = usage["estimated_cost_usd"]["by_category"]
     assert by_category["qc"] == round(
-        4000 * rates["input"] + 800 * rates["output"], 6
+        4000 * lens_rates["input"] + 800 * lens_rates["output"], 6
     )
-    assert by_category["qc_batched"] == round(
-        settings.BATCH_COST_MULTIPLIER * 1000 * rates["input"], 6
+    assert by_category["qc_verifier_batched"] == round(
+        settings.BATCH_COST_MULTIPLIER * 1000 * seat_rates["input"], 6
+    )
+    # The report prices its records the same way, and says which model ran
+    # the seats.
+    report = client.get("/api/qc/status").json()["result"]
+    assert report["verifier_model"] == settings.QC_VERIFIER_MODEL
+    assert report["verifier_cost_basis"]["requested_model"] == (
+        settings.QC_VERIFIER_MODEL
     )
 
 

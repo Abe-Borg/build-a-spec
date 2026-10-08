@@ -34,6 +34,7 @@ import {
   type QcReportFinding,
   type QcReportResult,
   type QcReportVerdict,
+  qcPricingBases,
 } from "../src/lib/qcReport.ts";
 
 test("phase token ceilings use the saved manifest without inventing legacy limits", () => {
@@ -1631,4 +1632,36 @@ test("the capture limitation reaches the report's limitations verbatim", () => {
   });
   const limitations = qcReportLimitations(record);
   assert.ok(limitations.includes(qcBatchCapture(record).limitation));
+});
+
+test("a run whose seats ran on their own model shows both saved pricing bases", () => {
+  // Codex, PR #290: the estimate of a mixed run rests on two snapshots, so
+  // the lenses' rates alone must not be presented as the whole basis.
+  const lens = { requested_model: "claude-opus-5-5", rate_model: "claude-opus-5-5" };
+  const seat = { requested_model: "claude-sonnet-5-5", rate_model: "claude-sonnet-5-5" };
+  assert.deepEqual(
+    qcPricingBases({
+      model: "claude-opus-5-5",
+      verifier_model: "claude-sonnet-5-5",
+      cost_basis: lens,
+      verifier_cost_basis: seat,
+    }),
+    [
+      { label: "Saved pricing basis for the lens review and grouping calls", basis: lens },
+      { label: "Saved pricing basis for the verifier seats", basis: seat },
+    ],
+  );
+  // One model (or a report from before the seats had their own): one basis.
+  const single = [{ label: "Saved pricing basis used for this estimate", basis: lens }];
+  assert.deepEqual(
+    qcPricingBases({
+      model: "claude-opus-5-5",
+      verifier_model: "claude-opus-5-5",
+      cost_basis: lens,
+      verifier_cost_basis: lens,
+    }),
+    single,
+  );
+  assert.deepEqual(qcPricingBases({ model: "claude-opus-5-5", cost_basis: lens }), single);
+  assert.deepEqual(qcPricingBases({ model: "claude-opus-5-5" }), []);
 });

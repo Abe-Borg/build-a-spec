@@ -113,19 +113,98 @@ def test_each_phase_is_sent_at_its_own_effort():
     assert _efforts(client) == {"lens": {"high"}, "verifier": {"low"}}
 
 
-def test_the_shipped_defaults_run_both_phases_at_medium():
+def _models(client) -> dict[str, set[str]]:
+    lens, verifier = set(), set()
+    for request in client.requests:
+        text = str(request.get("messages"))
+        if "[[QC-VERIFY:" in text:
+            verifier.add(request["model"])
+        elif "[[QC-LENS:" in text:
+            lens.add(request["model"])
+    return {"lens": lens, "verifier": verifier}
+
+
+def test_the_shipped_defaults_run_opus_lenses_at_medium_and_sonnet_seats_at_high():
     """The defaults are pinned directly.
 
     The lens phase shipped at "high" from the split until the 5.5 prompting
     upgrade (P55-3, decision D4) re-based it for Opus 5.5, whose "medium"
-    matches or exceeds Opus 5's "high". The verifier default never moved.
-    The two phases are still separate knobs; they simply agree by default.
+    matches or exceeds Opus 5's "high". The seats moved to their own model,
+    Claude Sonnet 5.5, at its default "high" (owner decision, 2026-10-08):
+    a seat's cost is reading the shared section, so its per-token price is
+    the lever, and the extra thinking is cheap. Run the way the app runs it.
     """
+    assert settings.QC_MODEL == settings.MODEL_OPUS_55
     assert settings.QC_LENS_EFFORT == "medium"
-    assert settings.QC_VERIFIER_EFFORT == "medium"
+    assert settings.QC_VERIFIER_MODEL == settings.MODEL_SONNET_55
+    assert settings.QC_VERIFIER_EFFORT == "high"
     client = SequencedFakeClient(_scripts())
-    _run(client)
-    assert _efforts(client) == {"lens": {"medium"}, "verifier": {"medium"}}
+    result = _run(client, verifier_model=settings.QC_VERIFIER_MODEL)
+    assert _efforts(client) == {"lens": {"medium"}, "verifier": {"high"}}
+    assert _models(client) == {
+        "lens": {settings.MODEL_OPUS_55},
+        "verifier": {settings.MODEL_SONNET_55},
+    }
+    assert result.verifier_model == settings.MODEL_SONNET_55
+    assert result.input_manifest["configuration"]["verifier_model"] == (
+        settings.MODEL_SONNET_55
+    )
+
+
+def test_a_direct_caller_naming_one_model_gets_one_model():
+    """``model`` alone sets both phases, the way one ``effort`` does."""
+    client = SequencedFakeClient(_scripts())
+    result = _run(client)
+    assert _models(client) == {
+        "lens": {settings.QC_MODEL},
+        "verifier": {settings.QC_MODEL},
+    }
+    assert result.verifier_model == settings.QC_MODEL
+    assert not result.mixed_models()
+
+
+def test_the_seat_model_is_hashed_and_reported():
+    sonnet = _run(
+        SequencedFakeClient(_scripts()), verifier_model=settings.MODEL_SONNET_55
+    )
+    opus = _run(SequencedFakeClient(_scripts()))
+    # A panel of another model is not the same review.
+    assert sonnet.input_fingerprint != opus.input_fingerprint
+    assert sonnet.mixed_models()
+
+
+def test_the_seat_effort_follows_the_seat_model(monkeypatch):
+    """Sonnet 5.5 seats default to "high"; any other seat model keeps the
+    Opus 5.5 level ("medium"), so pinning the seats back to Opus restores the
+    depth they ran at before. An explicit global effort still wins."""
+    import importlib
+
+    try:
+        monkeypatch.setenv("BUILD_A_SPEC_QC_VERIFIER_MODEL", settings.MODEL_OPUS_55)
+        reloaded = importlib.reload(settings)
+        assert reloaded.QC_VERIFIER_MODEL == settings.MODEL_OPUS_55
+        assert reloaded.QC_VERIFIER_EFFORT == "medium"
+
+        monkeypatch.delenv("BUILD_A_SPEC_QC_VERIFIER_MODEL")
+        monkeypatch.setenv("BUILD_A_SPEC_QC_MODEL", "claude-opus-5")
+        reloaded = importlib.reload(settings)
+        # One explicitly named QC model moves the seats with it.
+        assert reloaded.QC_VERIFIER_MODEL == "claude-opus-5"
+        assert reloaded.QC_VERIFIER_EFFORT == "medium"
+
+        monkeypatch.setenv("BUILD_A_SPEC_QC_VERIFIER_MODEL", settings.MODEL_SONNET_55)
+        monkeypatch.setenv("BUILD_A_SPEC_QC_EFFORT", "low")
+        reloaded = importlib.reload(settings)
+        assert reloaded.QC_VERIFIER_MODEL == settings.MODEL_SONNET_55
+        assert reloaded.QC_VERIFIER_EFFORT == "low"
+    finally:
+        for name in (
+            "BUILD_A_SPEC_QC_VERIFIER_MODEL",
+            "BUILD_A_SPEC_QC_MODEL",
+            "BUILD_A_SPEC_QC_EFFORT",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        importlib.reload(settings)
 
 
 def test_one_effort_still_sets_both_phases():

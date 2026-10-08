@@ -285,22 +285,17 @@ def test_every_seat_reads_the_block_the_lenses_read_and_the_manifest_hashes(batc
         assert hashlib.sha256(inner.encode("utf-8")).hexdigest() == hashed
 
 
-def test_the_streamed_and_batched_seats_differ_only_in_their_cache_ttl(monkeypatch):
-    """The block rides the bytes the two transports already share; the TTL
-    is still the one documented difference (tests/test_qc_batch_verification.py
-    pins the comparison for a section without an override)."""
+def test_the_streamed_and_batched_seats_send_the_same_bytes(monkeypatch):
+    """The block rides the bytes the two transports share. Since 2026-10-08
+    the batched seats store for five minutes too, so the two transports'
+    seat requests are identical, cache markers included
+    (tests/test_qc_batch_verification.py pins the comparison for a section
+    without an override)."""
     _fixed_clock(monkeypatch)
     streamed = SequencedFakeClient(_one_finding_scripts())
     batched = SequencedFakeClient(_one_finding_scripts())
     _run(streamed, batch=False)
     _run(batched, batch=True)
-
-    def bare(value):
-        if isinstance(value, dict):
-            return {k: bare(v) for k, v in value.items() if k != "cache_control"}
-        if isinstance(value, list):
-            return [bare(item) for item in value]
-        return value
 
     def ttls(params):
         return {
@@ -315,9 +310,8 @@ def test_the_streamed_and_batched_seats_differ_only_in_their_cache_ttl(monkeypat
     for sent_stream, sent_batch in zip(stream_seats, batch_seats):
         assert ADOPTION_BASIS in _content(sent_stream)[0]["text"]
         for key in ("model", "system", "tools", "thinking", "output_config", "messages"):
-            assert bare(sent_stream[key]) == bare(sent_batch[key]), key
-        assert ttls(sent_stream) == {None}
-        assert ttls(sent_batch) == {"1h"}
+            assert sent_stream[key] == sent_batch[key], key
+        assert ttls(sent_stream) == ttls(sent_batch) == {None}
 
 
 def test_the_warm_lead_streams_the_same_prefix_its_batch_reads(monkeypatch):

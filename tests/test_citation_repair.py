@@ -712,7 +712,11 @@ def test_the_summary_call_repairs_its_prefix_exactly_as_the_chat_request_does():
                     block.pop("cache_control", None)
         return stripped
 
-    view_part = without_cache_marks(summary["messages"][:-1])
+    # The summary's effort-only system message sits after the view, before
+    # the instruction; it is not part of the prefix the chat cached.
+    view_part = without_cache_marks(
+        [m for m in summary["messages"][:-1] if m.get("role") != "system"]
+    )
     assert view_part == without_cache_marks(chat["messages"][: len(view_part)])
     assert _provider_rule_violations(summary["messages"]) == []
     assert _cited_indices(view_part) == [0]

@@ -774,6 +774,18 @@ _NO_FORCED_TOOL_CHOICE = frozenset(
     {"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"}
 )
 _PRESERVED_THINKING_BETA = "thinking-binding-controls-2026-08-01"
+# Per-message effort: a ``role: "system"`` message carrying
+# ``output_config`` (the claude-api skill's model-migration guide, "New API
+# features" 1, and its prompt-caching reference). Documented for Claude
+# Fable 5.1, Mythos 5.1, Opus 5.5, Opus 5, Sonnet 5.5 and Haiku 5.5 with
+# adaptive thinking on; the known models below refuse it ("…requires a model
+# that supports per-turn effort; this model does not"), and without the beta
+# the message's ``output_config`` is an extra input.
+_PER_MESSAGE_EFFORT_BETA = "mid-conversation-output-config-2026-07-01"
+_NO_PER_MESSAGE_EFFORT = frozenset(
+    {"claude-fable-5", "claude-sonnet-5", "claude-opus-4-8"}
+)
+_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 # Every refused shape a fake has received since the current test began.
 # ``conftest.py`` clears it before each test and fails the test if it is not
@@ -884,7 +896,46 @@ def request_shape_problems(request: dict) -> list[str]:
         problems.append(
             'tool_choice: type "tool" and "any" are not supported for this model'
         )
+    problems.extend(_per_message_effort_problems(request, model, thinking))
     problems.extend(_cache_breakpoint_problems(request))
+    return problems
+
+
+def _per_message_effort_problems(
+    request: dict, model: Any, thinking: Any
+) -> list[str]:
+    problems: list[str] = []
+    for index, message in enumerate(request.get("messages") or ()):
+        if not isinstance(message, dict) or "output_config" not in message:
+            continue
+        if message.get("role") != "system":
+            problems.append(
+                f"messages.{index}.output_config: only a system message "
+                "carries output_config"
+            )
+            continue
+        if _PER_MESSAGE_EFFORT_BETA not in _request_betas(request):
+            problems.append(
+                f"messages.{index}.output_config: Extra inputs are not "
+                f"permitted (the {_PER_MESSAGE_EFFORT_BETA} beta is missing)"
+            )
+        if model in _NO_PER_MESSAGE_EFFORT:
+            problems.append(
+                "output_config.effort requires a model that supports "
+                "per-turn effort; this model does not"
+            )
+        kind = thinking.get("type") if isinstance(thinking, dict) else None
+        if kind in ("disabled", "between_tools"):
+            problems.append(
+                f"per-message effort needs adaptive thinking (got {kind})"
+            )
+        config = message.get("output_config")
+        effort = config.get("effort") if isinstance(config, dict) else None
+        if effort not in _EFFORT_LEVELS:
+            problems.append(
+                f"messages.{index}.output_config.effort: {effort!r} is not "
+                "an effort level"
+            )
     return problems
 
 

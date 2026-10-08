@@ -429,9 +429,11 @@ def test_the_trace_records_the_effort_each_turn_ran_at(monkeypatch, trace_env):
 
 
 def test_the_condensing_summary_keeps_the_interview_effort(monkeypatch):
-    """The summary fork reads the cache the ORDINARY turns wrote, so it stays
-    at the interview's effort even while the boost differs (a summary
-    written right after a boosted turn misses the cache once — D3)."""
+    """The summary fork reads the cache the ORDINARY turns wrote, so its
+    top-level effort stays the interview's even while the boost differs (a
+    summary written right after a boosted turn misses the cache once — D3).
+    Its own depth rides a per-message effort change instead
+    (``tests/test_compaction_effort.py``)."""
     monkeypatch.setattr(settings, "DRAFT_PASS_EFFORT", "xhigh")
     session = sessions.get_session()
     history = [
@@ -455,6 +457,7 @@ def test_the_condensing_summary_keeps_the_interview_effort(monkeypatch):
         )
     )
     assert request["output_config"] == {"effort": settings.INTERVIEW_EFFORT}
+    assert conversation.summary_effort(request) == settings.COMPACTION_EFFORT
 
 
 # ---------------------------------------------------------------------------
@@ -468,21 +471,28 @@ def test_the_shipped_qc_effort_is_medium():
     assert [arg.value for arg in call.args] == ["BUILD_A_SPEC_QC_EFFORT", "medium"]
 
 
-def test_the_verifier_default_is_unchanged():
-    """Still a literal "medium", still behind the explicitly-set global."""
+def test_the_verifier_default_follows_the_seat_model():
+    """Still behind the explicitly-set global; otherwise the seat model's own
+    level — "high" on Sonnet 5.5 (owner decision, 2026-10-08), "medium" (the
+    Opus 5.5 level P55-3 set) on any other seat model."""
     call = _assign_target("QC_VERIFIER_EFFORT")
     assert getattr(call.func, "id", "") == "_effort_env"
     name, default = call.args
     assert name.value == "BUILD_A_SPEC_QC_VERIFIER_EFFORT"
     assert isinstance(default, ast.IfExp)
-    assert isinstance(default.orelse, ast.Constant)
-    assert default.orelse.value == "medium"
+    fallback = default.orelse
+    assert isinstance(fallback, ast.Call)
+    assert ast.unparse(fallback) == (
+        "_QC_VERIFIER_EFFORT_BY_MODEL.get(QC_VERIFIER_MODEL, 'medium')"
+    )
+    assert settings._QC_VERIFIER_EFFORT_BY_MODEL == {settings.MODEL_SONNET_55: "high"}
 
 
-def test_every_qc_phase_defaults_to_medium():
+def test_the_lens_phases_default_to_medium_and_sonnet_seats_to_high():
     assert settings.QC_EFFORT == "medium"
     assert settings.QC_LENS_EFFORT == "medium"
-    assert settings.QC_VERIFIER_EFFORT == "medium"
+    assert settings.QC_VERIFIER_MODEL == settings.MODEL_SONNET_55
+    assert settings.QC_VERIFIER_EFFORT == "high"
 
 
 _LENS_KEYS = {lens.lens_id: f"[[QC-LENS:{lens.lens_id}]]" for lens in QC_LENSES}
@@ -572,26 +582,31 @@ def _qc_efforts(client) -> dict[str, set[str]]:
     return kinds
 
 
-def test_a_lens_a_grouping_call_and_a_seat_are_sent_at_medium():
+def test_a_lens_and_a_grouping_call_go_at_medium_and_a_sonnet_seat_at_high():
     client = SequencedFakeClient(_qc_scripts())
-    result, _store = _run_qc(client, batch_verification=False)
+    result, _store = _run_qc(
+        client,
+        batch_verification=False,
+        verifier_model=settings.QC_VERIFIER_MODEL,
+    )
     assert _qc_efforts(client) == {
         "lens": {"medium"},
         "consolidation": {"medium"},
-        "verifier": {"medium"},
+        "verifier": {"high"},
     }
     assert result.effort == "medium"
-    assert result.verifier_effort == "medium"
+    assert result.verifier_effort == "high"
     configuration = result.input_manifest["configuration"]
     assert configuration["effort"] == "medium"
-    assert configuration["verifier_effort"] == "medium"
+    assert configuration["verifier_effort"] == "high"
+    assert configuration["verifier_model"] == settings.MODEL_SONNET_55
 
 
 @pytest.mark.parametrize(
     ("env", "lens", "verifier"),
     [
         ({"BUILD_A_SPEC_QC_EFFORT": "high"}, "high", "high"),
-        ({"BUILD_A_SPEC_QC_LENS_EFFORT": "xhigh"}, "xhigh", "medium"),
+        ({"BUILD_A_SPEC_QC_LENS_EFFORT": "xhigh"}, "xhigh", "high"),
         ({"BUILD_A_SPEC_QC_VERIFIER_EFFORT": "low"}, "medium", "low"),
         (
             {"BUILD_A_SPEC_QC_EFFORT": "low", "BUILD_A_SPEC_QC_LENS_EFFORT": "high"},

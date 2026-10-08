@@ -167,6 +167,71 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — Final QC's verifier seats run on Sonnet 5.5; condensing and the fact harvest think harder
+
+(2026-10-08. docs/as-built.md's "Final QC's verifier seats run on Sonnet 5.5
+at high" is the record; no release entry yet, the app version stays 1.24.0.)
+
+The owner's cost review (2026-10-08) asked where the app could still save
+money without giving up rigor or quality. Four changes came out of it.
+
+- **Final QC's verifier seats run on Claude Sonnet 5.5, at `high`.** The five
+  lenses and the grouping calls stay on Claude Opus 5.5 at `medium`: they read
+  the section cold and decide what is wrong with it. A verifier seat answers
+  one stated question, whether a finding holds, with the same section in
+  front of it, and most of its cost is reading that shared copy, so its
+  per-token price is what matters. Sonnet 5.5 costs half of Opus 5.5 on
+  every line (input $2 against $4 per million tokens, output $10 against $20,
+  cache reads $0.10 against $0.20), and `high` is Sonnet 5.5's own default
+  effort. The extra thinking is cheap next to the reading: output was $0.84 of
+  the batched stage's $11.62 on the measured run. Modelled on that run's
+  usage, the streamed seat stage comes to about $3–4 instead of about $5.90
+  on Opus. The panels, the verdict rules and the prompts are unchanged.
+  `BUILD_A_SPEC_QC_VERIFIER_MODEL` picks the seats' model; `claude-opus-5-5`
+  puts them back on Opus at `medium`. In PowerShell:
+  `$env:BUILD_A_SPEC_QC_VERIFIER_MODEL = "claude-opus-5-5"`; in Command
+  Prompt: `set BUILD_A_SPEC_QC_VERIFIER_MODEL=claude-opus-5-5`.
+  `BUILD_A_SPEC_QC_MODEL`, when set on its own, still moves both phases.
+- **The report names both models and prices each call at its own.** The Word
+  report and the report window list "Model (lens review and grouping)" and
+  "Model (verifier seats)"; every seat is priced at its model's rates, the
+  run's total is the sum of its calls, and the saved pricing basis lists both
+  models' rates, each named for the calls it priced. The Final QC drawer's cost line and
+  start confirmation name both models. Settings lists the seats' spend as
+  **Final QC verifiers** and **Final QC verifiers (batched)**.
+- **A Final QC result made before this update reads out of date once.** Which
+  model ran the seats is now recorded with each review. Re-run Final QC before
+  applying its fixes. Older reports still open, and still price their seats
+  as they were made.
+- **Batched seats store their copy for five minutes, not an hour.** A one-hour
+  store costs twice the input price, a five-minute one 1.25 times. The
+  measured batch read the shared copy on 39% of its seats; a one-hour store
+  only pays for itself above 51%, a five-minute one above 21%. The batched and
+  streamed seats now send the same request. The warm-lead self-check judges a
+  lead at the rate its group actually stored. If you keep Batch, the measured
+  run's batched stage models at about $4.15–4.60 on Sonnet instead of $11.62.
+- **The conversation-condensing summary thinks at `high`**
+  (`BUILD_A_SPEC_COMPACTION_EFFORT`), on Sonnet 5.5 as before. The summary is
+  all the assistant keeps of the turns it replaces. Its request still opens
+  at the chat's own effort (`medium`): changing that would make the summary
+  pay for the whole conversation again instead of reading the copy the chat
+  already stored. It asks for `high` with Anthropic's per-message effort
+  setting (beta `mid-conversation-output-config-2026-07-01`), placed after
+  everything stored. If the provider refuses it, that summary is sent once
+  more without it (a refused request is not billed), and later summaries skip
+  it until the app restarts.
+- **The fact harvest thinks at `high`** on Claude Haiku 5.5
+  (`BUILD_A_SPEC_HARVEST_EFFORT`, `medium` before). Haiku 5.5's guide puts
+  strict instruction following at `high`, and the harvest's rules (one quoted
+  line per fact, nothing inferred) are that kind of work; at Haiku's prices
+  the extra thinking costs cents.
+
+No paid API call was made. The savings are modelled from the measured run's
+usage; how much more the seats and the summary think at `high` is
+unmeasured. Compare the next review's Final QC lines in Settings → Developer
+tools → This session's cost against the measured $14.87, or run
+`tools\qc_export_cost_profile.py` on both exports.
+
 ## Current Status — Final QC's reviewers see the standards editions in effect
 
 (2026-10-08. docs/as-built.md's "Final QC's verifier seats read the standards
@@ -363,6 +428,8 @@ other seat comes to about $5.90, with the rest of the review unchanged.
   read keeps the copy alive, so the hour's doubled storing price buys nothing
   there; a batched seat may run minutes after the copy was stored, so it keeps
   the hour. This is the one difference between the two transports' requests.
+  (Since 2026-10-08 batched seats store theirs for five minutes too, and the
+  two requests are the same; see the section above.)
 - **Each seat shows its activity as it works**, and Stop takes effect at once,
   as it did before batching.
 - **A Final QC result produced by the batched transport reads out of date
@@ -1181,8 +1248,10 @@ facts, and makes every recorded fact name a source that exists.
   above that, the whole request costs $0.50/M input and $2.50/M output.
   Usage is priced per request before it joins the session totals.
 - **Not in the guided tour** — the practice copy is not your session.
-  `BUILD_A_SPEC_HARVEST_EFFORT` (default `medium`) sets the call's reasoning
-  effort: it extracts what was settled, it drafts nothing.
+  `BUILD_A_SPEC_HARVEST_EFFORT` (default `high` since 2026-10-08, `medium`
+  before) sets the call's reasoning effort: it extracts what was settled, it
+  drafts nothing, and its rules (one quoted line per fact, nothing inferred)
+  are the strict instruction following Haiku 5.5's guide puts at `high`.
 - **A cut-off reply is refused, not shown** (the 5.5 prompting upgrade,
   P55-1). The harvest asks the model to think the problem through before it
   answers, and caps the call's output at `BUILD_A_SPEC_HARVEST_MAX_TOKENS`
@@ -1396,7 +1465,12 @@ turn's request, so it reads that turn's cache instead of paying for the
 whole conversation again, and every later message re-reads a far shorter
 conversation. At 600,000 tokens a summary costs roughly $0.25–0.50 (an
 estimate at Sonnet 5.5 list prices; the usage line is the real number), and
-it pays for itself within a handful of later messages. **Settings →
+it pays for itself within a handful of later messages. The summary thinks at
+`BUILD_A_SPEC_COMPACTION_EFFORT` (`high` since 2026-10-08) while its request
+keeps the chat's own top-level effort, so it still reads the chat's cache:
+the depth rides Anthropic's per-message effort setting, placed after
+everything cached (on Claude Sonnet 5.5, Opus 5.5, Opus 5 and Haiku 5.5; on
+any other chat model the summary runs at the chat's effort). **Settings →
 Developer tools → Session state → Condensed conversation** shows the
 record's sizes (never its text).
 
@@ -1981,7 +2055,7 @@ stored.
 - **Measured, not modelled:** on a Final QC that sent a lead,
   `tools\qc_export_cost_profile.py` shows the lead as its own
   `seat:list-price:<group>` row, and the batched row beside it should read
-  nearly its whole shared copy (Cache read against 1h write). If there is no
+  nearly its whole shared copy (Cache read against cache write). If there is no
   `seat:list-price` row, no group was large enough and the run says nothing
   about this switch. Settings → Developer tools → Cost self-checks shows the
   app's own last check: how many batched reviewers it measured, what share
@@ -2808,8 +2882,8 @@ This is the **1.0 release milestone**. Cut the first Windows build per
 
 ## Shipped in v0.9.0 (Batch 4: Final QC) and still current
 
-**One button, a fleet of Opus 5.5 reviewers, a full audit-grade report, and a
-compact accept/dismiss action queue.** A user-triggered last quality-control
+**One button, five Opus 5.5 reviewers and a panel of Sonnet 5.5 refuters, a
+full audit-grade report, and a compact accept/dismiss action queue.** A user-triggered last quality-control
 pass before a section goes out the door. The report is a first-class product
 surface, not
 an incidental memo: it shows what was reviewed, which evidence was retrieved,
@@ -2850,8 +2924,9 @@ actions.
   The record that call produced names the model that answered it, the Word
   report and the report window say so on that record ("Answered by … after a
   safety decline.") and once under Limitations, and the cost of those calls
-  is estimated at the configured QC model's rates, which the limitation
-  states. A call the fallback model declines too is still a declined call.
+  is estimated at the rates of the model configured for that call (the
+  lenses' model, or the seats'), which the limitation states. Seats run on
+  Claude Haiku 5.5, which has no server-side fallback, never carry it. A call the fallback model declines too is still a declined call.
   Batched verifier seats never carry it (the Batches API rejects the
   parameter), nor do research and the chat. If the provider ever refuses a
   request *because* of the parameter, that request is sent once more without
@@ -2896,8 +2971,9 @@ actions.
   conversation a fresh-start retry abandoned remain visible for
   cost/accountability without being allowed to ground a finding.
 - **Adversarial verification is seat-by-seat and auditable.** Every candidate
-  finding faces a panel of independent Opus 5.5 refuters prompted to *refute*
-  it (2 for medium/low, 3 for critical/high). The report preserves every
+  finding faces a panel of independent refuters prompted to *refute* it (2
+  for medium/low, 3 for critical/high), on Claude Sonnet 5.5 at `high` since
+  2026-10-08 (Opus 5.5 before; `BUILD_A_SPEC_QC_VERIFIER_MODEL`). The report preserves every
   expected verifier seat, including its success, verdict, severity revision,
   proposed-fix adequacy decision and note, usage, or failure. **A finding is
   upheld only when the whole panel agrees.** A majority refutation refutes it;
@@ -3227,7 +3303,7 @@ meter) and still current:
   Anthropic's published rates (most recently on 2026-09-23); the trace
   files stay the exact record. Per-session — reset and project load zero
   it out. Cache **reads are priced per model**: a tenth of the input price
-  on most models, a twentieth on Claude Opus 5.5, the Final QC model.
+  on most models, a twentieth on Claude Opus 5.5 and Claude Sonnet 5.5.
   Cache **writes are priced per TTL class**: a five-minute entry costs
   1.25× input to create, a one-hour entry 2×. The provider reports the
   one-hour count inside the cache-creation total, so the meter charges the
@@ -3285,8 +3361,9 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   Draft full section and Adapt imported draft — `high` for their whole
   turn since the 5.5 prompting upgrade's P55-3, and told to carry the pass
   through in that one turn rather than stop partway to check in; research
-  `high` — see below; Final QC `medium` in both phases since P55-3, re-based
-  for Opus 5.5), and
+  `high` — see below; Final QC's lenses `medium` since P55-3, re-based
+  for Opus 5.5, and its Sonnet 5.5 verifier seats `high` since 2026-10-08),
+  and
   thinking blocks are preserved verbatim
   across tool-use continuation rounds as the API requires — the previous
   code dropped them, a latent 400 on real drafting turns. Drafting output ceilings
@@ -3784,14 +3861,15 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5-5` | Model for interview/drafting turns, conversation condensing, and template AI Generalize. Fact harvesting has its own model setting. The template call forces its submission tool only on compatible overrides that retain adaptive thinking (`claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`); Sonnet 5.5, Opus 5.5, Haiku 5.5, and unverified overrides use automatic selection. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The model's context window: the context gauge's denominator (the header's "142k / 1M" pill) and what the chat's backstop measures a request against — past 85% of it the oldest turns are condensed before sending. Pair it with a model override whose window differs; set lower, conversations are condensed earlier. |
-| `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary uses it too. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's. |
+| `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary sends it as its top-level effort too, so it reads the chat's cache, and thinks at `BUILD_A_SPEC_COMPACTION_EFFORT`. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's. |
 | `BUILD_A_SPEC_DRAFT_PASS_EFFORT` | `high` | Adaptive-thinking effort for every round of a whole-section pass — **Draft full section** and **Adapt imported draft** (the ready passes only; the turn that first asks for the section, project type or country runs at the interview effort). One level above the interview because these are the app's longest multistep turns, and the Sonnet 5.5 guide moves longer, harder tool work from `medium` to `high` (the 5.5 prompting upgrade, P55-3). The effort is decided once per turn, from the server's own directive, and recorded in the turn's trace (`prompt_refs` → `effort`). A top-level effort change means that turn and the next one re-write the conversation's cache instead of reading it; these passes normally run early, while the conversation is short. Set it equal to `BUILD_A_SPEC_INTERVIEW_EFFORT` to switch the boost off. In PowerShell: `$env:BUILD_A_SPEC_DRAFT_PASS_EFFORT = "medium"`; in Command Prompt: `set BUILD_A_SPEC_DRAFT_PASS_EFFORT=medium`. |
 | `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
 | `BUILD_A_SPEC_HARVEST_MODEL` | `claude-haiku-5-5` | Model for the Project facts panel's one-shot fact extraction, independent of the interview model. Haiku uses strict output schemas and automatic tool selection to preserve adaptive thinking; forcing its tool would suppress all thinking. Set `BUILD_A_SPEC_HARVEST_MODEL=claude-sonnet-5-5` to select Sonnet for this call. |
-| `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |
+| `BUILD_A_SPEC_HARVEST_EFFORT` | `high` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). `high` since 2026-10-08 (`medium` before): Haiku 5.5's guide puts strict instruction following at `high`, and at Haiku's prices the extra thinking costs cents. In PowerShell: `$env:BUILD_A_SPEC_HARVEST_EFFORT = "medium"`; in Command Prompt: `set BUILD_A_SPEC_HARVEST_EFFORT=medium`. |
 | `BUILD_A_SPEC_HARVEST_MAX_TOKENS` | `64000` (or `BUILD_A_SPEC_MAX_TOKENS`, if lower) | Output ceiling for the fact harvest's one call (floor 4096, or `BUILD_A_SPEC_MAX_TOKENS` if that is lower still, so a lower global cap keeps binding the harvest). The Sonnet 5.5 guide: set it high enough for the thinking and the JSON but no higher than one attempt is worth; a reply that reaches it is refused as cut off (`harvest_cut_off`), never shown as a partial list. |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
 | `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the fixed instruction block, the project background block (research profile, other sections, project description) and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at the cache-read rate (0.05× input for Sonnet 5.5). The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
+| `BUILD_A_SPEC_COMPACTION_EFFORT` | `high` | How deeply the conversation-condensing summary thinks (owner decision, 2026-10-08). The summary's request keeps the chat's own top-level effort (`BUILD_A_SPEC_INTERVIEW_EFFORT`), because changing it would make the summary pay for the whole conversation again instead of reading the chat's cache; this level rides an effort-only message placed after everything cached (Anthropic's per-message effort, beta `mid-conversation-output-config-2026-07-01`), on Claude Sonnet 5.5, Opus 5.5, Opus 5 and Haiku 5.5 with adaptive thinking. On any other chat model, or once the provider has refused the message (that summary is resent without it; the refusal is not billed), the summary runs at the interview effort until the app restarts. Set it equal to `BUILD_A_SPEC_INTERVIEW_EFFORT` to send the summary exactly as before. In PowerShell: `$env:BUILD_A_SPEC_COMPACTION_EFFORT = "medium"`; in Command Prompt: `set BUILD_A_SPEC_COMPACTION_EFFORT=medium`. |
 | `BUILD_A_SPEC_CHAT_COMPACTION` | `1` | Routine conversation condensing: once the committed conversation passes the threshold below, a summary of its oldest turns is written **in the background after a reply** — a real, **billed** model call with no click behind it — and every later message sends the summary instead of those turns. **On by default** since the owner decided it on 2026-09-23 (without the paid recall check the compaction plan had named as the gate); `0` switches it off. The backstop (condense before a message that would not fit in ~85% of the context window) runs either way and is not configurable. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD` | `600000` | Estimated tokens of committed conversation — the history as later requests send it, not the per-turn PROJECT CONTEXT or the cached project background, which condensing cannot shrink — at which routine condensing starts (owner decision D1). Floor 10,000. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS` | `3` | How many of the most recent turns stay word for word when the conversation is condensed (D1). Floor 1. |
@@ -3807,19 +3885,20 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `medium` | Adaptive-thinking effort for research dimensions, following Sonnet 5.5's recalibrated scale and migration guidance for multistep tool use. Set `BUILD_A_SPEC_RESEARCH_EFFORT=high` to restore the previous default. In PowerShell: `$env:BUILD_A_SPEC_RESEARCH_EFFORT = "high"`; in Command Prompt: `set BUILD_A_SPEC_RESEARCH_EFFORT=high`. |
 | `BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS` | `45` | Staggered research launch: the areas of a round read the same tools, instructions and project block (your attached documents and project facts included), so one area is sent first and the others wait for it to start answering, then read its cached copy instead of each paying to store their own. This is the longest they wait, in seconds; a wait that runs out, a Stop, or a first area whose request ends or fails releases them at once. An area sent different tools never waits. Changes no request, only when it is sent; budgets, grounding and findings are unchanged. Research's own switch, separate from `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`. `0` starts every area at once, as before. In PowerShell: `$env:BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS = "0"`; in Command Prompt: `set BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS=0`. Floor 0. |
 | `BUILD_A_SPEC_CONTINUATION_CACHE` | `1` | Continuation caching (Chunk 4 of the cost program, on by default since the Tier 1 finish program's session CT-3): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. Watched by the cost self-checks: a resume the provider refuses because of the breakpoint is sent once more without it, and the breakpoint switches off for that engine (research or Final QC) until the app restarts; six or more measured resumes that together cost more than they saved switch it off the same way (Settings → Developer tools → Cost self-checks). `0` switches it off: no request carries it. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`. |
-| `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass. |
+| `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC lenses and grouping calls. Set on its own, it also moves the verifier seats (see the next row). |
+| `BUILD_A_SPEC_QC_VERIFIER_MODEL` | `claude-sonnet-5-5` | Model for the Final QC verifier seats, which check each candidate finding (owner decision, 2026-10-08; they ran on the QC model before). Unset, it follows `BUILD_A_SPEC_QC_MODEL` when that is set, else Claude Sonnet 5.5. The seats' default effort follows this model: `high` on Sonnet 5.5, `medium` on any other. Each seat is priced at this model's rates, the report names both models, and Settings lists the seats as **Final QC verifiers**. The seat model is a recorded review input, so a result made with other seats reads stale. In PowerShell: `$env:BUILD_A_SPEC_QC_VERIFIER_MODEL = "claude-opus-5-5"`; in Command Prompt: `set BUILD_A_SPEC_QC_VERIFIER_MODEL=claude-opus-5-5`. |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Global QC output/thinking ceiling. Caps every phase, including explicit phase overrides. |
 | `BUILD_A_SPEC_QC_LENS_MAX_TOKENS` | `64000` (or global QC ceiling, if lower) | Per-request ceiling for the five review lenses, including continuations. |
 | `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_TOKENS` | `32000` (or global QC ceiling, if lower) | Per-request ceiling for candidate grouping. |
 | `BUILD_A_SPEC_QC_VERIFIER_MAX_TOKENS` | `32000` (or global QC ceiling, if lower) | Per-request ceiling for verifier seats in both transports, streamed warm leads, and continuations. Phase ceilings bound runaway thinking/output; reaching a ceiling leaves incomplete coverage. Resolved limits are hashed in the audit manifest, so earlier reports become stale once. Prompt-cache reuse is unchanged. |
-| `BUILD_A_SPEC_QC_EFFORT` | `medium` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback that sets both phases. `medium` since the 5.5 prompting upgrade (P55-3): `high` was chosen for Opus 5, and the Opus 5.5 guide says its `medium` matches or exceeds Opus 5's `high`. Effort is part of a review's recorded inputs, so a Final QC result made at the old default reads stale once after the update — re-run Final QC before applying its fixes. `high` restores the old depth (and, set explicitly, moves the verifier seats with it). |
-| `BUILD_A_SPEC_QC_LENS_EFFORT` | = `QC_EFFORT` (`medium`) | Effort for phase 1 (the five lenses and the consolidation call). `BUILD_A_SPEC_QC_LENS_EFFORT=high` puts the lenses back at the pre-P55-3 depth while the verifier seats stay at `medium`. |
-| `BUILD_A_SPEC_QC_VERIFIER_EFFORT` | `medium` | Effort for phase 2 (the verifier seats — ~90% of a run's calls, answering a bounded question each). Falls back to `QC_EFFORT` instead of `medium` when that is explicitly set, so a global `low` is never silently overridden upward. |
+| `BUILD_A_SPEC_QC_EFFORT` | `medium` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback that sets both phases when set explicitly (unset, the seats follow their own model's default). `medium` since the 5.5 prompting upgrade (P55-3): `high` was chosen for Opus 5, and the Opus 5.5 guide says its `medium` matches or exceeds Opus 5's `high`. Effort is part of a review's recorded inputs, so a Final QC result made at the old default reads stale once after the update — re-run Final QC before applying its fixes. `high` restores the old depth (and, set explicitly, moves the verifier seats with it). |
+| `BUILD_A_SPEC_QC_LENS_EFFORT` | = `QC_EFFORT` (`medium`) | Effort for phase 1 (the five lenses and the consolidation call). `BUILD_A_SPEC_QC_LENS_EFFORT=high` puts the lenses back at the pre-P55-3 depth while the verifier seats keep their own effort. |
+| `BUILD_A_SPEC_QC_VERIFIER_EFFORT` | `high` on Sonnet 5.5 seats, else `medium` | Effort for phase 2 (the verifier seats — ~90% of a run's calls, answering a bounded question each). The default follows the seat model: `high`, Sonnet 5.5's own default, since the seats moved to it on 2026-10-08; `medium` on any other seat model, which is what the Opus 5.5 seats ran at. Falls back to `QC_EFFORT` instead when that is explicitly set, so a global `low` is never silently overridden upward. |
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding can never be `disputed` and a single reviewer's refusal deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |
-| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | unset (GUI defaults to Stream) | When unset, Final QC phase 2 uses the Stream / Batch choice in its start confirmation or Settings, remembered on this computer in `qc_preferences.json` beside `onboarding_state.json`; with nothing saved it streams (the default moved from Batch on 2026-10-07; a saved choice is kept). Stream sends one seat per cache group first and the rest once it is answering, with live seat activity and a 5-minute cache entry; Batch prices tokens at half, shows a count of seats returned, stores a 1-hour entry, and may re-store the document for many seats (39% of batched seats read the shared copy on the measured run). Setting this variable locks both controls: `0`, `false`, `no`, `off` select Stream; other values select Batch. The choice is snapshotted for each run, never stored in a `.baspec` or the panel layout; switching it makes retained results stale through the existing input manifest. |
-| `BUILD_A_SPEC_QC_REFUSAL_FALLBACK` | `1` | Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7): every streamed Final QC request — the lenses, the grouping calls, streamed verifier seats and warm leads — carries `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a request the QC model's safety classifiers decline is retried by the API on the fallback model it chooses, and that model's answer is used. The record that call produced names the answering model, and the report states it on that record and under Limitations, with the cost of those calls estimated at the configured QC model's rates. Batched verifier seats never carry it (the Batches API rejects the parameter). A request the provider refuses because of the parameter is sent once more without it, and the fallback then switches off until the app restarts. Not a review input: a retained Final QC result stays current either way. `0` switches it off: a declined call fails as it did before. In PowerShell: `$env:BUILD_A_SPEC_QC_REFUSAL_FALLBACK = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0`. |
+| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | unset (GUI defaults to Stream) | When unset, Final QC phase 2 uses the Stream / Batch choice in its start confirmation or Settings, remembered on this computer in `qc_preferences.json` beside `onboarding_state.json`; with nothing saved it streams (the default moved from Batch on 2026-10-07; a saved choice is kept). Stream sends one seat per cache group first and the rest once it is answering, with live seat activity and a 5-minute cache entry; Batch prices tokens at half, shows a count of seats returned, stores a 5-minute entry too (1-hour before 2026-10-08), and may re-store the document for many seats (39% of batched seats read the shared copy on the measured run). Setting this variable locks both controls: `0`, `false`, `no`, `off` select Stream; other values select Batch. The choice is snapshotted for each run, never stored in a `.baspec` or the panel layout; switching it makes retained results stale through the existing input manifest. |
+| `BUILD_A_SPEC_QC_REFUSAL_FALLBACK` | `1` | Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7): every streamed Final QC request — the lenses, the grouping calls, streamed verifier seats and warm leads — carries `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a request the QC model's safety classifiers decline is retried by the API on the fallback model it chooses, and that model's answer is used. The record that call produced names the answering model, and the report states it on that record and under Limitations, with the cost of those calls estimated at the rates of the model configured for that call (the lenses' model, or the seats'). Batched verifier seats never carry it (the Batches API rejects the parameter), nor do seats run on Claude Haiku 5.5, which has no server-side fallback. A request the provider refuses because of the parameter is sent once more without it, and the fallback then switches off until the app restarts. Not a review input: a retained Final QC result stays current either way. `0` switches it off: a declined call fails as it did before. In PowerShell: `$env:BUILD_A_SPEC_QC_REFUSAL_FALLBACK = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0`. |
 | `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` | `1` | Streamed lead seat (Chunk 3 of the cost program, on by default since the Tier 1 finish program's session WL-2): when one cache group in the batched phase has at least 8 verifier seats (the enforced floor), one of them is sent first, on its own at list price, and the batch goes out only after it starts answering (at most `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` later), so the rest can read the copy it stored. Same cached prefix and verdict rules; the streamed lead also carries the refusal fallback, whose opt-in is not documented to fork the cache key; the report prices that seat at list and says so in its methodology; a retained Final QC result stays current either way. Watched by a cost self-check: after each Final QC that sent a lead, the app reads how many batched seats read its copy, and if fewer than half did, or the lead cost more than it could have saved, leads switch off until restart for that model, tool kind and size cohort (8–19 or 20+ seats); other cohorts keep their leads (Settings → Developer tools → Cost self-checks). `0` switches it off: every seat rides the batch. In PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`. Inert when `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` is `0`. |
 | `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |
 | `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` | `7200` | Wall-clock ceiling on the batched phase (floor 60). A runaway guard, not a target: unsettled seats fail and the run reads partial. |

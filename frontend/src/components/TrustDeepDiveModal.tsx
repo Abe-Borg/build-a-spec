@@ -422,13 +422,13 @@ function DataFlowDiagram() {
           Claude Sonnet 5.5
         </text>
         <text x="412" y="112" {...faint}>
-          interview · drafting · research
+          interview · research · QC verifiers
         </text>
         <text x="412" y="136" {...small}>
           Claude Opus 5.5
         </text>
         <text x="412" y="152" {...faint}>
-          Final QC only
+          Final QC lenses only
         </text>
         <text x="412" y="176" {...small}>
           Claude Haiku 5.5
@@ -629,25 +629,25 @@ function Dossier() {
           head={["Job", "Model", "Why"]}
           rows={[
             [
-              "Interview, drafting, research",
+              "Interview, drafting, research, Final QC verifier seats",
               <>
                 Claude Sonnet 5.5 <Mono>(claude-sonnet-5-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “medium” for research by default, following Sonnet 5.5's recalibrated effort scale. Template AI Generalize and conversation condensing use this model too.",
+              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “medium” for research by default, following Sonnet 5.5's recalibrated effort scale. Template AI Generalize and conversation condensing use this model too; condensing writes its summary at “high”. Final QC's verifier seats run on it at “high”: each one judges a single finding with the whole section in view, and its own model setting lets you put the seats back on Opus.",
             ],
             [
               "Project-fact harvest",
               <>
                 Claude Haiku 5.5 <Mono>(claude-haiku-5-5)</Mono>
               </>,
-              "A fast, lower-cost model for extracting facts from the section’s own conversation, draft and QC dismissal reasons. It runs at “medium” effort and proposes facts with evidence; you review each proposal before recording it. It has its own model setting, separate from the interview.",
+              "A fast, lower-cost model for extracting facts from the section’s own conversation, draft and QC dismissal reasons. It runs at “high” effort, the level its maker recommends for strict instruction following, and proposes facts with evidence; you review each proposal before recording it. It has its own model setting, separate from the interview.",
             ],
             [
-              "Final QC only",
+              "Final QC lenses and grouping",
               <>
                 Claude Opus 5.5 <Mono>(claude-opus-5-5)</Mono>
               </>,
-              "A stronger reasoning model than the one that drafts, chosen for a pass that has to catch what the drafter missed — it is measurably good at finding real defects without inventing them. It never touches the interview loop.",
+              "A stronger reasoning model than the one that drafts, chosen for the part of the pass that has to catch what the drafter missed — the five lenses that read the whole section cold, and the step that groups their duplicate findings. It is measurably good at finding real defects without inventing them. It never touches the interview loop.",
             ],
           ]}
         />
@@ -1018,8 +1018,8 @@ function Dossier() {
               <br />
               <b className="text-ink">2 · Adversarial verification.</b> Every
               candidate finding is handed to a fresh panel of independent
-              reviewers instructed to <em>refute</em> it — three for critical and
-              high, two for medium and low. A finding survives only when{" "}
+              Claude Sonnet 5.5 reviewers instructed to <em>refute</em> it — three
+              for critical and high, two for medium and low. A finding survives only when{" "}
               <b className="text-ink">every seat upholds it</b>; a majority
               refuting kills it, and anything in between is recorded as{" "}
               <b className="text-ink">disputed</b> — a real disagreement that
@@ -1039,6 +1039,9 @@ function Dossier() {
               in the start confirmation; it is no longer the default, because
               on the first measured review only 39% of the batched seats read
               the shared copy and the rest rewrote it at the one-hour rate.
+              Batched seats now store their copy for five minutes instead of an
+              hour, which costs less unless the shorter life almost stops the
+              batch from reading it.
               When you choose Batch, nothing about the review changes;
               batched requests are not streamed, so the panel board reports
               how many seats have returned instead of each seat’s activity.
@@ -1088,14 +1091,15 @@ function Dossier() {
           }
           model={
             <>
-              Claude Opus 5.5 — five lens calls plus two or three verifier calls{" "}
-              <em>per finding</em>. Reasoning depth is set per stage, and both
-              stages default to “medium”: the lenses, which read the section
-              cold and decide what is wrong with it, and the verifier seats,
-              which adjudicate one already-stated claim with the same document
-              in front of them. The lenses ran at “high” until the model maker
+              Claude Opus 5.5 for the five lens calls and the grouping step, at
+              “medium” (the lenses ran at “high” until the model maker
               recalibrated the levels for Opus 5.5, whose “medium” matches or
-              exceeds Opus 5’s “high”; each stage is still its own setting.
+              exceeds Opus 5’s “high”). Claude Sonnet 5.5 for the two or three
+              verifier calls <em>per finding</em>, at “high”: a seat adjudicates
+              one already-stated claim with the same document in front of it,
+              and almost all of what it costs is reading that document, which
+              Sonnet 5.5 does at half the price. Each stage has its own model
+              and effort setting, and both are recorded in the report.
               This is still the most expensive action in the app. Your document
               is cached by the API, and a call that finds it cached reads it at
               a twentieth of the price. Calls whose tools differ cannot share a
@@ -1618,7 +1622,7 @@ function Dossier() {
               and the Final QC report itself are not sent.
             </>
           }
-          model="Claude Haiku 5.5, effort “medium” by default — one call, only when you press Run; never on export, save or Next section."
+          model="Claude Haiku 5.5, effort “high” by default — one call, only when you press Run; never on export, save or Next section."
           bounds={
             <>
               One request with one output tool and a cap of 40 proposals; a very
@@ -1668,7 +1672,7 @@ function Dossier() {
               arrive fresh with every message.
             </>
           }
-          model="Claude Sonnet 5.5, effort “medium” — the chat's own model and settings."
+          model="Claude Sonnet 5.5 — the chat's own model and settings, with the summary itself written at effort “high” through a per-message instruction, so the chat's cached copy still reads."
           bounds={
             <>
               One summary at a time, at most 64,000 output tokens; after a

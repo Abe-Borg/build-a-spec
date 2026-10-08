@@ -291,6 +291,7 @@ def run_cases(client, cases: list[Case], folder: Path) -> dict:
         "limits": dict(_LIMITS), "production_output_budget": all(case.request["max_tokens"] == settings.CHAT_COMPACTION_MAX_TOKENS for case in cases),
         "threshold_tokens": settings.CHAT_COMPACTION_THRESHOLD, "keep_turns": settings.CHAT_COMPACTION_KEEP_TURNS,
         "effort": settings.INTERVIEW_EFFORT, "cache_ttl": settings.CHAT_CACHE_TTL,
+        "summary_effort": sorted({conversation.summary_effort(case.request) for case in cases}),
         "schema_sha256": _digest(json.dumps(SUMMARY_SCHEMA, sort_keys=True).encode("utf-8")),
         "protocol": "max_tokens=0 warm; alternating Markdown/JSON order; no retries",
         "planned_sessions": len(cases), "requests_max": 3 * len(cases), "run_complete": False, "cases": [],

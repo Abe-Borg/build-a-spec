@@ -28,6 +28,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   audit: "Audit",
   qc: "Final QC",
   qc_batched: "Final QC (batched)",
+  qc_verifier: "Final QC verifiers",
+  qc_verifier_batched: "Final QC verifiers (batched)",
   template: "Template creation",
   harvest: "Fact harvest",
   compaction: "Conversation condensing",

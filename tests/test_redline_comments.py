@@ -160,8 +160,10 @@ def test_a_grounded_research_item_cites_what_grounding_accepted():
         section, profile=RequirementsProfile(items=[item])
     )["pt1.a1.p1"]
     assert basis.qc == () and not basis.unresolved_source
+    # No item id and no research date: bookkeeping, not basis (owner,
+    # 2026-10-08).
     assert _text(basis.research) == [
-        "Basis: requirements research (item r-abc123, researched 2026-09-01)",
+        "Basis: requirements research",
         "Provide seismic bracing per ASCE 7.",
         "Authority: City of Reno",
         "Code reference: IBC 1613",
@@ -182,8 +184,8 @@ def test_an_ungrounded_item_is_named_a_lead_and_its_citations_unverified():
     )["pt1.a1.p1"]
     lines = _text(basis.research)
     assert lines[0] == (
-        "Basis: a requirements research lead (item r-lead01) that was not "
-        "verified against a retrieved source"
+        "Basis: a requirements research lead that was not verified against a "
+        "retrieved source"
     )
     assert "Cited (not verified):" in lines
     assert "Sources:" not in lines
@@ -241,9 +243,10 @@ def test_a_qc_fix_names_the_finding_its_issue_and_its_accepted_sources():
     basis = redline_comment_basis(
         section, fix_log=[_fix_entry("pt1.a1.p1", "Comply with NFPA 13-2025.")]
     )["pt1.a1.p1"]
+    # No applied date: bookkeeping, not the finding (owner, 2026-10-08).
     assert _text(basis.qc) == [
-        "Changed by a Final QC fix, applied 2026-09-20: Cite the adopted "
-        "edition (high, Code compliance)",
+        "Changed by a Final QC fix: Cite the adopted edition (high, Code "
+        "compliance)",
         "The provision cites a superseded edition.",
         "Sources:",
         "NFPA 13",
@@ -1145,7 +1148,7 @@ def test_a_qc_fix_is_commented_through_undo_redo_edit_and_review(client):
         [{"action": "replace", "target_id": uid, "text": fixed, "status": "confirmed"}],
     )
     (lines,) = _redline_comment_lines(_export_redline(client))
-    assert lines[0].startswith("Changed by a Final QC fix, applied ")
+    assert lines[0].startswith("Changed by a Final QC fix: ")
     assert "Finding qc-fix0000001" in lines[0]
     assert lines[-2:] == ["Sources:", "NFPA 13"]
 
@@ -1230,7 +1233,8 @@ def test_research_and_attached_bases_reach_the_route(client):
         },
     ).json()["ok"]
     (lines,) = _redline_comment_lines(_export_redline(client))
-    assert lines[0] == "Basis: requirements research (item r-route1, researched 2026-09-01)"
+    assert lines[0] == "Basis: requirements research"
+    assert not any("r-route1" in line or "2026-09-01" in line for line in lines)
 
 
 def test_the_switch_is_read_per_request_and_off_is_todays_file(client, monkeypatch):
@@ -1330,4 +1334,6 @@ def test_a_status_only_fix_does_not_claim_an_earlier_edit(client):
     lines = _redline_comment_lines(_export_redline(client))
     assert not any(
         line.startswith("Changed by a Final QC fix") for comment in lines for line in comment
-    )  # ...and credits nothing
+    )  # ...and credits nothing — not even as the reason its status-only
+    # operation carried, which never reaches Word (owner, 2026-10-08).
+    assert not any("Final QC fix" in line for comment in lines for line in comment)

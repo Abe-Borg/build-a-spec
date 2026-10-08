@@ -21691,3 +21691,140 @@ made.
 project's sections and facts, Waiting on you, master import and templates —
 now say the important bits in a few sentences. The full guide to each export
 option stays in Help → How to use."
+
+## The redline's comments say nothing of the app's bookkeeping — implemented notes (2026-10-08)
+
+Owner report (Abraham), reading the comments in a redline on the original:
+"Reason: user cleared assumed status after review" — make sure we don't
+include that; and no "(item r-ec2b37e839e6, researched 2026-10-07)" either.
+The file may go to a client; both lines were the app talking to itself.
+
+**Why the status reason showed.** Since 2026-10-07 every model edit carries
+a reason, kept per element (`SpecSection.edit_reasons`) and said by the
+redline's comment on every kind of change. A `set_status` op, or a `replace`
+that only re-stamps a status or re-points `source_item_id`, recorded its
+reason on the same trail. Status and source links never reach Word — the
+DOCX fidelity guide already said "Never commented: a status-only change" —
+but the trail had no way to say which entry came from such an edit, so a
+provision whose words had changed (for any other reason, or before reasons
+existed) said the status reason as if it explained the change.
+
+- **The mark.** `SpecSection.workflow_reasons: {uid: [reason, …]}` — the
+  entries of `edit_reasons[uid]` given only for a WORKFLOW edit (a status or
+  source-link change). `_apply_one`'s `done(…, workflow=True)` on
+  `set_status` and on a paragraph `replace` without `text`;
+  `_record_edit_reason(…, workflow=)` keeps it. A mark is by text: a reason
+  the trail already holds from a shown edit stays said when a status edit
+  repeats it, a marked reason a later shown edit gives again loses its mark,
+  and a mark never outlives its trail entry (the cap, a hand reset).
+  Serialized only when set (legacy bytes untouched), validated on load with
+  `edit_reasons`' shape check, cleared by `_canonical_document` for a
+  template, carried by undo/redo like everything on the tree. Section
+  metadata ops record on no element and are unaffected. The chip still
+  shows every reason; the owner rule that every edit carries one is
+  unchanged.
+- **Older projects.** A project edited by 1.25.0–1.26.0 has trails and no
+  marks. `redline_basis._workflow_flags(history, current)` reads them off the
+  store's versions (captured with the export as
+  `_ExportInputs.comment_history = store.versions[: index + 1]` — immutable
+  records, so a tuple of references): per committed step, the entries a
+  trail gained (`_overlap` aligns the old trail's tail with the new one's
+  head, which handles the cap) are flagged workflow when the step changed
+  nothing the redline shows of the element — not its presence, not its
+  words (`_snapshot_elements`: a provision's text, an article's title, the
+  header's number and title), and not its place (`_changed_visibly`: its
+  own or an enclosing article's order among the siblings both versions
+  hold, so an insertion beside it does not count as a move). Every
+  ambiguity falls to "said": a step that changed the element's words and
+  recorded two reasons on it says both, an entry already on the first
+  version is said, and a malformed snapshot reads as a visible change. The
+  comment leaves out an entry the flags OR the stored marks call workflow;
+  for a marked project the two agree. Nothing is written back: the QC
+  version fingerprint hashes `to_dict()`, so a load-time migration into the
+  tree would have made every retained Final QC report stale.
+- **No ids, no bookkeeping dates.** The research heading is `Basis:
+  requirements research` (ungrounded: `Basis: a requirements research lead
+  that was not verified against a retrieved source`); the QC heading is
+  `Changed by a Final QC fix: <title> (<severity>, <lens>)` — no applied
+  date, and a missing lens title falls back to the lens id with spaces
+  rather than the raw id. Reasons and the QC title and issue pass through
+  `redline_basis.reader_text` (bound per export as `_Reader`): an element id
+  (`pt1`, `pt1.a2`, `pt1.a2.p3.p1`) becomes the number a reader sees
+  (`PART 1`, `1.2`, `1.2.C.1`, from `to_dict`'s labels; a preserved block
+  has none), an attached document's `ref-N` its title in quotes, and every
+  other id the app mints (`r-` + 12 hex, `qc-` + 12 hex, `pf-N`,
+  `pf-conflictN`, `fu-N`) is dropped with the label and connective that only
+  introduced it; `researched <date>` goes too; a parenthetical left
+  holding only those goes whole; punctuation is tidied.
+  Ids never match inside a word, a dotted name or a URL path. Text with no
+  id and no such date comes back exactly as recorded (stripped), and a
+  reason that was nothing but ids is left out. Research text from the web
+  is not rewritten.
+- **The prompt.** `_TOOL_GUIDE`'s reason line and the tool's `reason`
+  property description now ask for a source to be named by what it says or
+  its title and a provision by its number, never by an id, and say that a
+  status or source-link change's reason is not said in Word. The stable
+  prompt and the tool's input schema changed, so every open session
+  rewrites its cached prefix once after upgrade. The tool's top-level
+  description — Final QC's op vocabulary — did not change: retained reports
+  stay current.
+- **Copy.** Help, the trust dossier and the source-output guidance now say
+  a comment carries the edit's reason and never the app's bookkeeping;
+  `docs/DOCX_FIDELITY.md` describes the new headings, the workflow
+  exception and `reader_text`; README has a status section.
+
+Unchanged: which changes get a comment (`plan_comments`), the research
+text, sources and links, the attached-document line, the QC fix record and
+its coverage rule, the chip and `ChangedReason`, the review report, every
+other request byte, the QC manifest and readiness.
+
+Tests: `tests/test_redline_comment_hygiene.py` (the mark and its text rules,
+the cap and a hand reset, serialization and strict load, undo/redo, the
+template; the comment without the status reason; an older project's
+history — status steps flagged, a status change beside an insertion still
+a status change, a move and a deletion said, a mixed step said in full, the
+header, a malformed snapshot; `reader_text` over the owner's example and
+lookalikes that must stay; reasons and QC text through the basis; the route
+end to end, marked and as an older build saved it).
+`tests/test_redline_comments.py` pins the new headings, the route's
+research line carrying no id or date, and a status-only QC fix's reason
+staying out. Reversion probes, each restored: `set_status` unmarked (8
+failures), a status-only `replace` unmarked (1), the history ignored (3),
+the stored marks ignored (3), the old research heading (1), no id rewrite
+(14), the history not captured by the export (1), moves not seen (1).
+No paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+"**The redline's comments are for your reader.** A comment no longer says
+why the assistant confirmed a provision or changed its source link — those
+never reach Word — and no longer carries the app's research item ids or
+dates. Element ids in a reason become provision numbers. Projects you
+already have export clean too."
+
+**Codex review on PR #302 (three P2 findings, all fixed in the PR):**
+
+- *"applied <date>" can be a fact of the work.* "The coating was applied on
+  2026-10-07" lost its date. `reader_text` now drops only `researched
+  <date>` (the research heading's own phrasing); the QC heading's applied
+  date is gone at its source, so free text keeps every "applied".
+- *A shown edit repeating a status reason was still hidden by the history.*
+  A status edit with reason X, then a rewrite with the same X: the trail
+  does not grow (a repeat is not appended) and the stored mark is cleared,
+  but the history's flag for X stayed set. `_workflow_flags` now treats a
+  step that changed the element's words or presence while leaving its
+  trail as it was as one that re-gave its newest reason, and says it. Only
+  words or presence count there — a sibling's move shifts the element's
+  order and must not bring a status reason back (found in self-review of
+  the first cut, which used `_changed_visibly`).
+- *A deleted provision's id was dropped, not numbered.* The number map was
+  the current tree's, which holds no deleted element, though deletion
+  reasons are said on tracked deletions. `_Numbers` falls back, on the
+  first miss, to the number each element last had in the version history.
+
+Tests: four more in `tests/test_redline_comment_hygiene.py` (the "applied"
+case in the `reader_text` table; a repeated status reason said in both
+records, and not revived by a sibling's move; a deleted provision's id
+numbered from the history). Reversion probes, each restored: the repeat
+rule off (1 failure), the repeat rule counting moves (2), no history
+numbers (1), "applied" dates dropped again (1).

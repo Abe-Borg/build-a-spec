@@ -162,6 +162,7 @@ def _canonical_document(raw: Any, *, rebase_statuses: bool) -> dict[str, Any]:
     section.edition_overrides = {}
     section.suppressed_standards = {}
     section.edit_reasons = {}
+    section.workflow_reasons = {}
     for _part, _article, paragraph, _depth, _ref in iter_paragraphs(section):
         paragraph.source_item_id = ""
         if rebase_statuses and paragraph.status != "needs_input":

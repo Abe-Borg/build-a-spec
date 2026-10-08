@@ -656,17 +656,19 @@ says so.
 **What a comment says** — never more than the record does:
 
 * **Research** (`source_item_id` names an `r-…` item in the current
-  research). A grounded item: `Basis: requirements research (item r-…,
-  researched <date>)`, its requirement, `Authority: …`, `Code reference: …`,
-  then `Sources:` and the sources grounding ACCEPTED. An ungrounded one:
-  `Basis: a requirements research lead (item r-…) that was not verified
-  against a retrieved source`, then `Cited (not verified):` and what it
-  cited.
+  research). A grounded item: `Basis: requirements research`, its
+  requirement, `Authority: …`, `Code reference: …`, then `Sources:` and the
+  sources grounding ACCEPTED. An ungrounded one: `Basis: a requirements
+  research lead that was not verified against a retrieved source`, then
+  `Cited (not verified):` and what it cited. (Until 2026-10-08 the heading
+  also named the item id and its research date; both are the app's
+  bookkeeping, meaningless to a reader of the file, and are gone.)
 * **Attached document** (`ref-…`): `Basis: attached document "<title>"
   (<file name>).` — no link; it is a file on the user's machine.
 * **A Final QC fix**, from the durable fix record (below): `Changed by a
-  Final QC fix, applied <date>: <title> (<severity>, <lens>)`, the issue,
-  then `Sources:` and the finding's accepted sources, each titled.
+  Final QC fix: <title> (<severity>, <lens>)`, the issue, then `Sources:`
+  and the finding's accepted sources, each titled. (The applied date was
+  dropped on 2026-10-08, with the research heading's.)
 * **The edit's reason** (`SpecSection.edit_reasons[uid]` — what the
   assistant said each edit of the element was for; `backend/redline_basis.py`
   → "Every edit carries its reason" in CLAUDE.md): `Reason: <text>`, or
@@ -675,7 +677,26 @@ says so.
   provision deleted with it; the header's speaks on the upload's header line
   too. A reason that only names a Final QC fix whose record already speaks
   for the element is not repeated beside it, and a provision the user
-  retyped, moved or deleted by hand carries no reasons at all.
+  retyped, moved or deleted by hand carries no reasons at all. A reason the
+  assistant gave for a **status or source-link change** — "user cleared
+  assumed status after review" — is never said: that change does not reach
+  Word, so its reason explains nothing the reader sees (owner, 2026-10-08).
+  It is marked when recorded (`SpecSection.workflow_reasons`); a project
+  edited before the mark existed (1.25.0–1.26.0) has it read off the
+  document's version history — a turn that recorded a reason on an element
+  but changed none of its words, place or presence. The panel's **why** chip
+  still shows it.
+
+**No app bookkeeping in a comment.** Reasons and Final QC text pass through
+`redline_basis.reader_text`: an element id becomes the provision's number
+(`pt1.a2.p3` → `1.2.C`; a deleted provision's, the number it last had), an
+attached document's id its title in quotes, and every other id the app
+mints — a research item, a fact, a finding, a follow-up — is dropped with
+the word that introduced it, as is a `researched <date>`; a parenthetical
+left holding only those goes whole. An `applied <date>` in free text is
+kept: it can be a fact of the work. Text with no id reads exactly as recorded. The prompt asks
+the assistant to name sources by what they say and provisions by number in
+the first place.
 
 A change with more than one kind of basis gets one comment: the QC fix
 first, then the research or attached document, then the reason. Only an

@@ -3140,10 +3140,12 @@ def _join_folder_brief(
     No folder: the section's own brief, unchanged. A folder whose brief was
     read: the section merged INTO it, the refresh's direction and arguments
     (newest export wins the setup, which is this section's: it was built just
-    now). When the brief cannot be joined — gone, unreadable, now another
-    project's, a merge that would have to delete, or the folder changed while
-    it was read — the seed falls back to the section alone and the brief's
-    warnings say why: they reach the dialog's manifest and the seed's notice.
+    now); the joined brief's warnings carry the folder brief's parse warnings
+    and the merge's conflicts and warnings. When the brief cannot be joined —
+    gone, unreadable, now another project's, a merge that would have to
+    delete, or the folder changed while it was read — the seed falls back to
+    the section alone and the brief's warnings say why. Either way they reach
+    the dialog's manifest and the seed's notice.
     """
     if sampled_home is None and current_home is None:
         return section_brief
@@ -3159,14 +3161,28 @@ def _join_folder_brief(
         }.get(on_disk.code, "The project brief in the project folder could not be read.")
     elif isinstance(on_disk, ProjectBrief):
         try:
-            merged, _report = merge_project_brief(on_disk, section_brief)
+            merged, report = merge_project_brief(on_disk, section_brief)
         except ProjectBriefError as exc:
             reason = (
                 "The project brief in the project folder could not be joined with "
                 f"this section: {exc}"
             )
         else:
-            merged.warnings = list(section_brief.warnings)
+            # Everything the join has to say travels with the seed: what the
+            # folder brief's parse degraded, and the merge's own conflicts and
+            # warnings — the lines Pull project changes shows (a reference
+            # this section added that the attachment cap refused, a setup
+            # value the two sides record differently). Codex review on PR #297.
+            merged.warnings = list(
+                dict.fromkeys(
+                    [
+                        *section_brief.warnings,
+                        *on_disk.warnings,
+                        *report.conflicts,
+                        *report.warnings,
+                    ]
+                )
+            )
             return merged
     if reason:
         section_brief.warnings.append(f"{reason} {_NEXT_SECTION_ALONE}")

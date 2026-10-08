@@ -21149,7 +21149,13 @@ chose to fix them in one change, plus a warning for a fourth.
   that is gone, unreadable, another project's, refused by the merge, or a home
   that changed between the read and the guard falls back to the section's own
   brief, with a warning appended to `brief.warnings` (shown by the dialog's
-  manifest and the seed notice). The dialog's `GET /api/project/next-section`
+  manifest and the seed notice). A successful join keeps what it has to say
+  too: the folder brief's parse warnings and the merge's conflicts and
+  warnings ride the seeded brief's `warnings`, deduplicated — the lines Pull
+  project changes shows. The cap only refuses what a merge ADDS, so a
+  reference this section attached can be refused against a full folder brief
+  where the old section-only seed carried it; it is named, never silently
+  lost (Codex review on PR #297). The dialog's `GET /api/project/next-section`
   renders its manifest through the same join, so the preview matches the
   seed. A section with no home is byte-for-byte the old path.
 - **A number only the folder lists is drafted.** `sections_drafted(session,
@@ -21183,15 +21189,16 @@ Tests: `tests/test_project_home.py` (a picked brief binds its folder and the
 first Save opens there and writes the link; a linked sibling binds, an
 unlinked one does not; a session replaced since the seed is never bound;
 Next section → carries a fact only the folder's brief held and writes
-nothing; a number only the folder lists is refused; an unreadable brief
-falls back with the note and is never overwritten), `tests/test_close_prompt.py`
+nothing; the join's cap refusal, setup difference and parse warning reach
+the manifest and the notice; a number only the folder lists is refused; an
+unreadable brief falls back with the note and is never overwritten), `tests/test_close_prompt.py`
 (a brief pick mints a token), `tests/test_project_brief.py` (the unlinked
 warning in the brief, the inspect manifest and the seed; none for a linked
 sibling, whose id is its own), `frontend/tests/projectPanel.test.ts` (the
 brief-start bind is pinned after the bundle is applied). Each of these,
 reverted one at a time, failed its test and was restored: the merge in
-`_join_folder_brief`, the folder registry in `sections_drafted`, the
-fallback warning, `project_brief` in `_FOLDER_BINDING_OPEN_KINDS`, the
+`_join_folder_brief`, the join's warnings, the folder registry in
+`sections_drafted`, the fallback warning, `project_brief` in `_FOLDER_BINDING_OPEN_KINDS`, the
 unlinked warning, and the frontend bind. Ruff, the touched backend files
 and `npm test` (562) pass; the full suite runs in CI. No paid API call was
 made.

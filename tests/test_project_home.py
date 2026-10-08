@@ -732,6 +732,51 @@ def test_next_section_starts_with_work_the_folder_brief_holds_that_this_one_neve
     assert (tmp_path / BRIEF_NAME).read_bytes() == brief_before, "nothing is written"
 
 
+def test_next_section_says_what_the_join_with_the_folder_brief_reported(
+    tmp_path, monkeypatch
+):
+    """Codex review on PR #297: the join's own findings travel with the seed.
+    A reference this section attached that the folder brief's attachment cap
+    refuses, a setup value the two record differently, and a part of the
+    folder brief its parse had to drop are each said in the dialog's manifest
+    and the start notice — never silently lost."""
+    import json
+
+    client = _client()
+    session, section_file = _project_folder(client, tmp_path)
+    _home(session, section_file)
+    brief_path = tmp_path / BRIEF_NAME
+    data = json.loads(brief_path.read_text(encoding="utf-8"))
+    data["profile"]["city"] = "Reno"
+    data["facts"].append(7)
+    brief_path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(project_brief, "MAX_REFERENCE_DOCS", 1)
+    session.references.add(
+        filename="hydrant-flow-test.pdf",
+        text="[page 1] Static 72 psi, residual 58 psi at 1,250 gpm.",
+        block_count=1,
+        title="Hydrant flow test",
+        kind="pdf",
+        token_count=200,
+    )
+
+    options = client.get("/api/project/next-section")
+    resp = client.post(
+        "/api/project/next-section", json={"number": "21 30 00", "title": "Fire Pumps"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    for warnings in (options.json()["manifest"]["warnings"], resp.json()["seed"]["warnings"]):
+        joined = " ".join(warnings)
+        assert "past the attachment cap were not carried: Hydrant flow test" in joined
+        assert "differs" in joined and "'Reno'" in joined
+        assert "malformed project fact" in joined
+        assert len(warnings) == len(set(warnings)), "each line once"
+    assert [doc.title for doc in sessions.get_session().references.docs] == [
+        "Owner fire protection standard"
+    ]
+
+
 def test_next_section_refuses_a_number_only_the_folder_brief_lists(tmp_path):
     """A's file was saved before B existed, so A's own link lists only A. Opened
     from the folder, A used to offer — and accept — 21 30 00 again, which would

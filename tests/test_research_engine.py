@@ -189,6 +189,8 @@ def test_web_tools_declare_direct_callers_on_every_research_request():
     assert len(client.requests) == 4
     for request in client.requests:
         by_name = {tool.get("name"): tool for tool in request["tools"]}
+        # One call per step: the pause bounds calls only because of this.
+        assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
         assert by_name["web_search"] == {
             "type": "web_search_20260209",
             "name": "web_search",
@@ -486,14 +488,16 @@ def test_a_dimension_without_any_container_is_unaffected():
 # The continuation tail (Research/QC cost Tier 1, Chunk 4)
 # ---------------------------------------------------------------------------
 
-# Every key a research request carried before the switch existed. A request
-# with the switch off carries exactly these (plus ``container`` when a pause
-# supplies one).
+# Every key a research web request carries. A request with the switch off
+# carries exactly these (plus ``container`` when a pause supplies one);
+# ``tool_choice`` joined on 2026-10-08 (automatic, parallel calls off —
+# ``engine.RESEARCH_WEB_TOOL_CHOICE``), on every web request alike.
 _TODAYS_REQUEST_KEYS = {
     "model",
     "max_tokens",
     "system",
     "tools",
+    "tool_choice",
     "thinking",
     "output_config",
     "messages",

@@ -30,7 +30,8 @@ What is preserved exactly, because it is the hard-won part:
   ceilings are checked between requests; the web tools themselves carry a
   fixed per-request allowance, so their bytes — the head of every cached
   prefix — never change within a conversation, and that allowance sits
-  above the provider's own per-request pause, so the model never meets it
+  above the provider's own per-request pause, with one web call per step
+  (parallel calls off), so the model never meets it
   (a met allowance reads to the model as a spent budget, and it answers
   with an early submission).
 - Structured-tool-then-tagged-JSON parsing, newest response first.
@@ -276,6 +277,24 @@ RESEARCH_DEFAULT_MAX_FETCHES = 8
 # than it allows. Not a knob — it is the provider's number, not the app's.
 SERVER_TOOL_ITERATIONS_PER_REQUEST = 10
 
+# What every web request of a research area sends as ``tool_choice``:
+# automatic choice, at most one tool call per sampling step. Without it the
+# model may issue several web calls in one step (parallel tool use is on by
+# default), and then the pause bounds ITERATIONS, not calls: two searches a
+# step would meet a 12-search allowance by the sixth iteration and bring
+# back the early submission, and a request could add more fetch results
+# than :func:`_web_tool_reserve_tokens` reserves for (Codex review on PR
+# #299). One call per step makes the pause a bound on calls, which is what
+# the allowance's size and the reserve both rest on. ``auto`` is the one
+# choice every research model accepts (Sonnet 5.5 and Opus 5.5 refuse
+# ``any``/``tool``), and ``tool_choice`` is outside the tools+system cache
+# entry, so sending it on every request of a conversation invalidates
+# nothing. The final submission sets its own
+# (:func:`.schema.single_output_tool_kwargs`) or none, as before.
+RESEARCH_WEB_TOOL_CHOICE: Mapping[str, Any] = MappingProxyType(
+    {"type": "auto", "disable_parallel_tool_use": True}
+)
+
 # The web tools' PER-REQUEST allowance — what ``max_uses`` says on every
 # request of an area's conversation (the provider counts ``max_uses`` per
 # request, and answers a call past it with an unbilled ``max_uses_exceeded``
@@ -303,10 +322,10 @@ SERVER_TOOL_ITERATIONS_PER_REQUEST = 10
 # allowances above the pause, a request ends by pausing, the resumed request
 # renews the allowance unseen, and the research runs until a cumulative
 # ceiling or the model's own judgment ends it. In practice the pause bounds
-# one request to 10 tool calls, so the request that crosses a ceiling
-# overshoots it by at most 9; the app's own bound is the allowance less one
-# (a request that batched calls in parallel could, in principle, run past
-# the pause).
+# one request to 10 tool calls — one per step, since every web request
+# turns parallel calls off (:data:`RESEARCH_WEB_TOOL_CHOICE`) — so the
+# request that crosses a ceiling overshoots it by at most 9; the app's own
+# bound is the allowance less one.
 #
 # The same allowance for every area, whatever it declares: equal allowances
 # give the four areas identical tool bytes, so the staggered launch
@@ -339,7 +358,8 @@ def _web_tool_reserve_tokens(web_tools: list[dict]) -> int:
     allowance is sized above the pause on purpose: reserving for all of it
     (twelve fetches at 50k each) would clip every conversation to one fetch
     per request past about 160k tokens of input, and the clipped tool is one
-    the model can meet."""
+    the model can meet. One result per iteration holds because every web
+    request turns parallel calls off (:data:`RESEARCH_WEB_TOOL_CHOICE`)."""
     searches, fetches = web_tools[0]["max_uses"], web_tools[1]["max_uses"]
     fetch_slots = min(fetches, SERVER_TOOL_ITERATIONS_PER_REQUEST)
     search_slots = min(searches, SERVER_TOOL_ITERATIONS_PER_REQUEST - fetch_slots)
@@ -2643,8 +2663,10 @@ def _run_dimension(
     budget, so the cache entries for the tools, the system prompt and the
     shared block are read by every continuation, and the continuation tail
     can read what the conversation re-sends. The allowance sits above the
-    provider's per-request pause (:data:`SERVER_TOOL_ITERATIONS_PER_REQUEST`),
-    so a request ends by pausing, never by the model meeting ``max_uses`` —
+    provider's per-request pause (:data:`SERVER_TOOL_ITERATIONS_PER_REQUEST`)
+    and every web request turns parallel calls off
+    (:data:`RESEARCH_WEB_TOOL_CHOICE`, one call per step), so a request ends
+    by pausing, never by the model meeting ``max_uses`` —
     which it would read as a spent budget and answer with an early
     submission. The declared budgets are enforced between requests by the
     cumulative ceilings (searches at 2× the declared budget, fetches at the
@@ -2776,13 +2798,14 @@ def _run_dimension(
     # can. Equal to ``tools`` when the dimension allows one fetch anyway, and
     # then never used.
     near_window_tools = _web_tools(1)
-    # No ``tool_choice``: the system prompt instructs the model to end its
-    # turn with the research tool, and the tagged-JSON fallback catches a
-    # text detour. Forcing one was impossible while the web tools ran
-    # dynamic filtering (which rejects a forcing/parallel-disable
-    # tool_choice); ``WEB_TOOL_ALLOWED_CALLERS`` lifts that constraint, but
-    # the behavior is deliberately unchanged — the fallback is what makes
-    # the loop robust, not the absence of a forcing choice.
+    # ``tool_choice`` is automatic with parallel calls off
+    # (RESEARCH_WEB_TOOL_CHOICE says why: one call per step is what makes the
+    # provider's pause a bound on calls). Never a forcing choice: the system
+    # prompt instructs the model to end its turn with the research tool, and
+    # the tagged-JSON fallback catches a text detour — the fallback is what
+    # makes the loop robust. (Dynamic filtering used to reject any
+    # tool_choice beside the web tools; ``WEB_TOOL_ALLOWED_CALLERS`` lifted
+    # that.)
     request_kwargs: dict = {
         "model": model,
         "max_tokens": max_tokens,
@@ -2794,6 +2817,7 @@ def _run_dimension(
             }
         ],
         "tools": tools,
+        "tool_choice": dict(RESEARCH_WEB_TOOL_CHOICE),
         # Adaptive thinking at the research effort level (default medium
         # for Sonnet 5.5's recalibrated scale; the env override restores high).
         "thinking": {"type": "adaptive"},
@@ -3031,6 +3055,11 @@ def _run_dimension(
                     stream_kwargs.pop("extra_headers", None)
                     if submission_choice:
                         stream_kwargs["tool_choice"] = dict(submission_choice)
+                    else:
+                        # Automatic choice sends no ``tool_choice`` at all,
+                        # as before: the web requests' parallel-disable is
+                        # about the web tools, which this request drops.
+                        stream_kwargs.pop("tool_choice", None)
                     if submission_keeps_thinking:
                         # Dropping the web tools edits the prefix every
                         # replayed block was bound to.

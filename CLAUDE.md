@@ -1409,6 +1409,14 @@ one deliberate cross-round influence, capped at 20k tokens).
   keep the staggered launch's one shared prefix. Still not a knob.
 - **Overshoot.** The app's bound is still the allowance less one (11 of
   either kind); in practice the pause bounds a request to ten calls, so nine.
+- **Parallel calls off.** Every web request sends `RESEARCH_WEB_TOOL_CHOICE`
+  (`{"type": "auto", "disable_parallel_tool_use": true}`): one call per
+  step is what makes the pause a bound on calls, which the allowance's size
+  and the reserve both rest on (Codex review on PR #299: two searches a step
+  would meet 12 by the sixth iteration, and a request could add more fetch
+  results than the reserve counts). `tool_choice` is outside the tools+system
+  cache entry and identical on every web request, so it invalidates nothing;
+  the submission keeps its own shape (forced where allowed, none elsewhere).
 - **The context reserve** (`_web_tool_reserve_tokens`) counts what the pause
   lets one request add — at most ten results, fetches first (10 × 50k) — not
   the whole allowance (12 × 50k + 12 × 5k would have clipped every
@@ -1426,8 +1434,9 @@ one deliberate cross-round influence, capped at 20k tokens).
 
 Never let a per-request web allowance sit at or below
 `SERVER_TOOL_ITERATIONS_PER_REQUEST`, never shrink it to an area's budget,
-and never reserve context for more results than the pause lets a request
-add. Tests: `tests/test_research_budget.py`,
+never let a web request make parallel calls, and never reserve context for
+more results than the pause lets a request add. Tests:
+`tests/test_research_budget.py`, `tests/test_research_engine.py`,
 `tests/test_research_warm_launch.py`; `frontend/tests/verificationCopy.test.ts`
 pins the dossier's and README's numbers. Full record, reversion evidence and
 the release-note draft are in `docs/as-built.md` under the same heading. No

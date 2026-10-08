@@ -158,6 +158,32 @@ def test_every_area_declares_the_same_allowance_above_the_providers_pause(module
     assert allowances == {(_SEARCHES, _FETCHES)}
 
 
+@pytest.mark.parametrize("model", ["claude-sonnet-5", settings.RESEARCH_MODEL])
+def test_every_web_request_turns_parallel_calls_off(model):
+    """One call per step is what makes the provider's pause a bound on calls
+    — the allowance's size and the context reserve both rest on it (Codex
+    review on PR #299). Every web request says so; the submission keeps its
+    own shape: forced where the model allows it, no tool_choice elsewhere."""
+    client = _ToolBytesClient([
+        pause_response(searched_urls=[_URL]),
+        pause_response(searched_urls=[_URL], searches=80),
+        _final(),
+    ])
+    result = _run(client, model=model)
+
+    assert result.status.status == "completed", result.status.error
+    *web, submission = client.requests
+    assert len(web) == 2
+    for request in web:
+        assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+    if model == "claude-sonnet-5":
+        assert submission["tool_choice"]["type"] == "tool"
+    else:
+        assert "tool_choice" not in submission
+    # The counter saw the same choice the stream did.
+    assert client.count_requests[0]["tool_choice"] == web[0]["tool_choice"]
+
+
 def test_an_area_declaring_less_than_the_allowance_keeps_it_and_is_ended_by_its_ceiling():
     """A budget below the allowance never shrinks the tools (a smaller
     ``max_uses`` is one the model can meet, and it quits when it does); the

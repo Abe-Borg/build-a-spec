@@ -21467,6 +21467,30 @@ about 8 searches against the 16 to 40 each area is allowed. Expect research
 rounds to take longer and cost more again, as they did before v1.23.0, and
 to find more."
 
+**Codex review on PR #299 (two findings, one root).** P1: with parallel tool
+use on (the default), the pause bounds iterations, not calls — two searches
+a step would meet a 12-search allowance by the sixth iteration and bring
+the early submission back. P2: for the same reason a request could add
+twelve 50k fetch results while the reserve counted ten, and near the clip
+threshold the paid request could exceed the window. Both are real paths,
+and the engine's comment had named the first as a possibility and left it
+open. Fix: every web request sends `RESEARCH_WEB_TOOL_CHOICE`
+(`{"type": "auto", "disable_parallel_tool_use": true}`), so a step makes
+one web call and the pause is a bound on calls — which is what the
+allowance's size and the reserve both rest on. `auto` is the one choice
+every research model accepts; `tool_choice` is outside the tools+system
+cache entry (Anthropic's prompt-caching invalidation table) and identical on
+every web request, so it invalidates nothing; the submission keeps its own
+shape (forced where the model allows it, no `tool_choice` elsewhere — it
+drops the web tools, so the parallel rule has nothing to apply to). The
+behavioural price: a step that would have fired two or three searches at
+once now fires one, so a round takes a few more steps (each a cached
+continuation) and a little more thinking. Tests:
+`test_every_web_request_turns_parallel_calls_off` (both research models;
+the counter sees the same choice) and the request-shape test in
+`tests/test_research_engine.py`. Reversion (the `tool_choice` removed from
+the web requests, restored): 3 failed.
+
 **Errata.** "Research web tools keep their bytes (2026-10-05)", here and in
 CLAUDE.md, says the numbers 8 and 4 "sit above what one research request was
 sized to use: about 3 searches per pause". The provider pauses at ten

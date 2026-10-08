@@ -958,8 +958,9 @@ function Dossier() {
               with a hard 2× runaway ceiling on searches. Each step may run at
               most 12 searches and 12 fetches, the same offer on every step so
               the conversation’s cached copy keeps matching, and more than the
-              provider’s own ten-call pause lets one step make, so the agent
-              never runs into the offer mid-step (an offer it could run into
+              provider’s own ten-call pause lets one step make — one web call
+              per step, with parallel calls off — so the agent never runs
+              into the offer mid-step (an offer it could run into
               reads to it as a spent budget, and it would hand in early); the
               step that reaches a budget can therefore finish up to 11 searches
               or 11 fetches past it — nine in practice, the pause’s ten calls

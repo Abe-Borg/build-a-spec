@@ -7,10 +7,6 @@
  */
 import type { DocParagraph, SpecDoc } from "../types";
 import type { EndUserCapabilityId } from "./capabilities";
-import {
-  SOURCE_OUTPUT_GUIDANCE,
-  type SourceOutputGuidance,
-} from "./sourceOutputGuidance.ts";
 
 /**
  * Bump whenever chapter/step ORDER changes.
@@ -105,7 +101,6 @@ export interface TourStep {
   readiness?: TourReadiness;
   title: string;
   body: string;
-  details?: readonly SourceOutputGuidance[];
   placement?: "top" | "bottom" | "left" | "right";
   continueLabel?: string;
   optionalReason?: string;
@@ -303,7 +298,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Nothing the assistant needs from you gets lost",
         body:
-          "The specification never holds a place for something it does not know yet: no [TBD], no placeholder, no note to you. Where a value is missing, the assistant writes the provision so it stands complete without it, marks it assumed, and asks here instead. This list holds the questions the assistant raised, the decisions only you can make, and the to-dos either side owes. It keeps them after the chat has scrolled past, marks the ones the draft cannot be right without, and checks each off the moment it is settled — by the assistant when it reads your answer, or by you with the tick. Every reply surfaces one of them, so a decision cannot quietly go missing. An older document can still carry [TBD] markers or needs-input blocks from before; those collect in a Leftover placeholders list beside this one, each linked to its block, to be rewritten as complete provisions. Until they are gone, they are listed in the review report and hold back the readiness checklist. This practice copy has none.",
+          "The specification never holds a place for something it does not know yet: no [TBD], no placeholder, no note to you. When a value is missing, the assistant writes the provision so it stands without it, marks it assumed, and asks here instead. This list keeps every open question, decision and to-do after the chat scrolls past, and each is ticked off once it is settled — by the assistant when it reads your answer, or by you. Placeholders left in an older document collect in Leftover placeholders beside it, to be rewritten; until then they hold back readiness. This practice copy has none.",
       },
       {
         id: "project-facts",
@@ -314,7 +309,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "What the project has settled travels to its next section",
         body:
-          "Each section of a project is its own session, and the next one starts without this conversation. Facts the project has established — the edition the authority confirmed, an owner standard, the water-supply basis, what another section specifies — are recorded here the moment they are settled, grouped by how far they reach: project-wide, discipline-wide, or one section's coordination fact. The assistant reads them every turn, the research and Final QC teams are briefed with them, and a project brief carries them into the next section. Retiring one keeps it in the record with its reason; a fact the user contradicts is superseded in the same reply, never drafted around. Every fact names a source that must exist — a reply, a research finding, an attached document or a Final QC finding — and one whose source is gone is flagged rather than rewritten. In your own project, Harvest facts… reviews what a section settled but nobody recorded: one paid call, run only when pressed, that reads the conversation, the confirmed provisions and your Final QC dismissal reasons and proposes facts with the line each rests on — nothing is recorded until you accept it. The practice copy does not offer it.",
+          "Each section is its own session, and the next one starts without this conversation. Facts the project has settled — the edition the authority confirmed, an owner standard, the water-supply basis — are recorded here, project-wide, discipline-wide or for one section, each with its source. The assistant reads them every turn, research and Final QC are briefed with them, and a project brief carries them to the next section. In your own project, Harvest facts… proposes the ones nobody recorded: one paid call, run only when pressed, and nothing is recorded until you accept it.",
       },
       {
         id: "project-panel",
@@ -330,7 +325,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "The project's sections, one click apart",
         body:
-          "A project lives in one folder: its project brief beside one saved file per section. In the desktop app, once a section is saved beside its brief, this panel names the folder, lists every section the project has drafted with when each was exported and the facts and research rounds it recorded, marks the one you are in, and opens any sibling by its number in one click — offering to save the section being left first. Next section → starts the next one from the same list. The brief is a living file: every save adds what the section established — research rounds, reference documents, facts — without removing anything another section recorded, and Update project brief does the same on demand. When other sections have added work this one lacks, the panel offers Pull project changes, which brings it in and shows any difference in the project setup rather than applying it. Nothing about the folder is written into any file, so a project folder can be moved or shared whole. This practice copy lives in no folder, so it lists only what its project recorded — the update and pull controls appear only in a real project folder — and its header is blank for the lint lesson, so no row is marked as the one you are in.",
+          "A project lives in one folder: its project brief beside one saved file per section. In the desktop app this panel lists every section the project has drafted, marks the one you are in, and opens any other in one click, offering to save first; Next section → starts a new one. Every save adds this section's research, references and facts to the brief, and Update project brief does it on demand. When other sections have added work this one lacks, Pull project changes brings it in. This practice copy lives in no folder, so its update and pull controls are hidden and no row is marked as yours.",
       },
       {
         id: "lint",
@@ -485,7 +480,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "An office master is another real on-ramp",
         body:
-          "A DOCX imports only into a blank spec, and there is nothing to choose: the document keeps your firm's formatting — header, footer, fonts, styles, page setup — and is fully editable at the same time, so the assistant can restructure and redraft it freely. PART and article headings are read from Word's own numbering and from the CSI paragraph styles (PRT, ART, PR1…), and the section identity from the front matter — a cover page, revision history or table of contents ahead of the section is kept for export exactly as it is rather than turned into provisions. Tables, pictures, embedded objects and Word fields come through as preserved blocks you can move or delete but not retype. The exact package is retained, extraction warnings are dismissible notes, and non-spec files get honest presentation.",
+          "A DOCX imports only into a blank spec, with nothing to choose: it keeps your firm's formatting — header, footer, fonts, styles, page setup — and is fully editable at once. PART and article headings come from Word's numbering and the CSI paragraph styles, the section identity from the front matter, and a cover page or table of contents ahead of the section is kept as it is. Tables, pictures and Word fields come through as preserved blocks you can move or delete but not retype. The exact file you imported is retained.",
       },
       {
         id: "source-permissions",
@@ -501,12 +496,11 @@ export const TOUR: readonly TourChunk[] = [
         readiness: "imported",
         placement: "left",
         title: "Imported text is yours to edit",
-        // No glossary here: the export step ("ship" chapter) carries the full
-        // SOURCE_OUTPUT_GUIDANCE list. This step used to carry it too, under a
-        // body that restated the legacy permission rules, and the card ran past
-        // the bottom of the window with Continue and End below it.
+        // No glossary here or anywhere in the tour: Help → How to use carries
+        // the full SOURCE_OUTPUT_GUIDANCE list. This step and the export step
+        // both used to carry it, and the cards became walls of text.
         body:
-          "Every imported provision can be edited, moved, or deleted right away, by you or the assistant. The IMPORTED chip marks one nobody has reviewed yet, and a preserved block's lock chip says why it cannot be retyped. Export Word - Tracked Changes ON gives back your own file with its formatting, every edit since import shown as a Word tracked change; Open in Word does the same into a temporary file so you can check the real layout at any time. The exact original stays downloadable, and the export step near the end of the tour sets every output side by side. ✨ Adapt imported draft asks the assistant to walk the whole starter against this project in one pass. A project saved by an older version may still open in source-preserving mode: there a disabled control shows its exact reason, and Edit freely unlocks everything, after which export is a normalized Word file and your original stays downloadable.",
+          "Every imported provision can be edited, moved, or deleted right away, by you or the assistant. The IMPORTED chip marks one nobody has reviewed yet, and a preserved block's lock chip says why it cannot be retyped. Export Word - Tracked Changes ON gives back your own file with every edit since import as a Word tracked change, and the exact original stays downloadable. ✨ Adapt imported draft walks the whole starter against this project in one pass. A project saved by an older version may open in source-preserving mode, where Edit freely unlocks everything; its export is then a normalized Word file.",
       },
     ],
   },
@@ -571,10 +565,9 @@ export const TOUR: readonly TourChunk[] = [
         mode: "optional",
         anchor: "export",
         placement: "bottom",
-        title: "Choose the output guarantee deliberately",
+        title: "Take the specification to Word",
         body:
-          "For an imported document, Export Word - Tracked Changes ON keeps your file's formatting, records every edit since import as a Word tracked change, and leaves tracking on for further Word edits; Open in Word does the same into a temporary file and opens it. Redline on your original, and Open redline in Word, show the same changes on a copy of your upload with its own tracking setting; the list below says what Accept All and Reject All give back and when a master is refused. The Build-a-Spec styled DOCX uses automatic Word numbering. Every specification export ends at END OF SECTION: the assumptions schedule, imported provisions not yet reviewed, any leftover placeholders and the Final QC summary are a separate review report, downloaded only from Download review report. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
-        details: SOURCE_OUTPUT_GUIDANCE,
+          "Export clean gives you the specification as a Word file, ending at END OF SECTION. For an imported master, Export Word - Tracked Changes ON returns your own file, formatting kept, with every edit since import as a tracked change; Open in Word opens it, and Redline on your original shows the same changes on a copy of your upload. A redline against a saved version comes in Build-a-Spec's own styles. Download review report holds the assumptions, unreviewed imports and Final QC summary. Export project brief carries the project to its next section. Help → How to use explains each one in full.",
         optionalReason: "The tour points at the real menu but never downloads anything.",
       },
       {
@@ -639,7 +632,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Reusable starters, created and used in one place",
         body:
-          "The template studio is the one door to reusable work. From here a built-in or personal template starts an independent spec; personal templates import and export as files, rename, take a description, and delete behind a confirmation. The same studio turns the spec you have open into a named starter of your own — an exact copy, or an AI-generalized version where available, always previewed as real server-produced content before anything commits. Missing curated modules are shown rather than silently substituted. New session → New section in an existing project takes a project brief (or a sibling section's .baspec file) and can pair it with a template from here: the template's body under the project's own profile, editions, research, references and facts. The panel's Next section → button is the same handoff without the file: it offers to save, then opens the next section of the same project straight from this one, pre-filled from the module's sibling catalog.",
+          "The template studio is the one door to reusable work. Start a spec from a built-in or personal template; import, export, rename, describe or delete your own; or turn the spec you have open into a starter — an exact copy, or an AI-generalized one where available, previewed before it is saved. New session → New section in an existing project starts from a project brief, with a template's body if you pick one. The panel's Next section → does the same without the file.",
       },
       {
         id: "finish",

@@ -573,15 +573,33 @@ test("a step card never runs past the window, and its buttons never scroll away"
   assert.ok(header > 0 && header < from, "the header sits above the scroller");
   assert.ok(buttons > from, "the button row follows the scroller");
   const between = overlay.slice(from, buttons);
-  assert.match(between, /<\/dl>\s*\)\}\s*<\/div>\s*<div className="mt-4 flex shrink-0/);
+  assert.match(between, /<\/div>\s*\)\}\s*<\/div>\s*<div className="mt-4 flex shrink-0/);
 });
 
-test("the export glossary is shown once, and no step body is a wall", () => {
+test("no step carries a glossary, and no step body is a wall", () => {
+  // The export step once stacked a long body over the six-entry
+  // SOURCE_OUTPUT_GUIDANCE glossary — about 4,000 characters on one card.
+  // A card says the important bits and leaves the full guide to Help.
+  assert.doesNotMatch(tour, /from "\.\/sourceOutputGuidance/);
+  assert.doesNotMatch(tour, /\bdetails\?:/);
+  assert.doesNotMatch(overlay, /step\.details/);
   const steps = TOUR.flatMap((chapter) => chapter.steps);
-  assert.deepEqual(
-    steps.filter((step) => step.details).map((step) => step.id),
-    ["export"],
-  );
+  for (const step of steps) assert.ok(!("details" in step), `${step.id} carries a glossary`);
+  const exported = steps.find((step) => step.id === "export");
+  assert.ok(exported);
+  // Short, but it still names every export its capabilities claim to teach.
+  for (const label of [
+    /Export clean/,
+    /Export Word - Tracked Changes ON/,
+    /Open in Word/,
+    /Redline on your original/,
+    /redline against a saved version/,
+    /Download review report/,
+    /Export project brief/,
+    /Help → How to use/,
+  ]) {
+    assert.match(exported.body, label);
+  }
   const imported = steps.find((step) => step.id === "source-permissions");
   assert.ok(imported);
   // The legacy permission rules belong to Help, not to the import walkthrough.
@@ -592,6 +610,6 @@ test("the export glossary is shown once, and no step body is a wall", () => {
   // The scroller is the fallback, not the plan: a 390px card reads a body of
   // this length without scrolling on an ordinary laptop window.
   for (const step of steps) {
-    assert.ok(step.body.length <= 1300, `${step.id} body is ${step.body.length} characters`);
+    assert.ok(step.body.length <= 700, `${step.id} body is ${step.body.length} characters`);
   }
 });

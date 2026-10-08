@@ -20657,7 +20657,12 @@ right before its instruction, after every cached byte.
   and "Model (verifier seats)" rows; the refusal-fallback limitation names
   the rate model of each rescued record (`_qc_rate_model`,
   `_qc_fallback_record_groups`), joined with " and " when both phases had
-  one.
+  one. `qc_pricing_bases` gives Saved Pricing Basis both snapshots of a
+  mixed run, titled "Lens review and grouping calls" and "Verifier seats"
+  (Codex review on PR #290: showing only `cost_basis` presented the lens
+  rates as the whole basis of an estimate that also used the seat rates); a
+  one-model report keeps its single untitled basis. The report window does
+  the same through `qcReport.qcPricingBases`.
 - *`backend/llm/conversation.py`.* `_build_compaction_request(inputs, *,
   per_message_effort=True)` keeps the top-level effort and inserts the
   effort-only message (`_summary_effort_message`) with its beta when the
@@ -20700,7 +20705,7 @@ TTL, so the seats' prefix is a new cache entry; the manifest's
 one extra message after the cached prefix and its beta header; the harvest
 request's effort.
 
-**Tests.** `tests/test_qc_verifier_model.py` (9): seats go to the seat model
+**Tests.** `tests/test_qc_verifier_model.py`: seats go to the seat model
 and everything else to the run's; each record is priced by its own model and
 the total is their sum (and below one-model pricing); a mixed report round
 trips and refuses a swapped, renamed or missing seat snapshot; a one-model
@@ -20709,7 +20714,9 @@ seats by its own basis; the seat model is hashed so other seats (and every
 pre-split report) read stale; the meter files streamed and batched seats,
 and the gap disclosure, under their own buckets; Sonnet seats ask for the
 fallback and Haiku seats do not while the lenses still do; the Word report
-names the rate model of each rescued call. `tests/test_compaction_effort.py`
+names the rate model of each rescued call; a mixed run's Word report shows
+both pricing bases, a one-model one a single untitled basis (11 in all).
+`tests/test_compaction_effort.py`
 (11): the shipped depths; the message sits after the cached prefix with the
 top level untouched and passes the oracle; equal depths send the summary
 exactly as before; unlisted models and non-adaptive thinking never get it;
@@ -20729,7 +20736,8 @@ recomputed at the 5-minute rate), `test_continuation_cache.py`,
 the instruction), and `test_qc_verifier_standards.py` (merged in from the
 previous entry: its streamed-versus-batched test now pins identical seat
 bytes, cache markers included, instead of a 1-hour batched TTL). Frontend: `qcModel.test.ts` (seat label, the consent line,
-no hardcoded Sonnet name) and `qcSessionCost.test.ts` (four buckets).
+no hardcoded Sonnet name), `qcSessionCost.test.ts` (four buckets) and
+`qcReport.test.ts` (both pricing bases for a mixed run, one otherwise).
 
 **Reversion evidence.** Each probe applied, run and restored:
 (1) seats ignore `verifier_model` — 7 of 9 seat-model tests and the defaults
@@ -20745,7 +20753,9 @@ the prefix test fails; (9) the latch not read — the refusal test fails;
 (10) every 400 read as the message's refusal — the other-400 test fails;
 (11) the summary's depth sent top-level — the prefix test fails;
 (12) `HARVEST_EFFORT` or `COMPACTION_EFFORT` back to `medium` — the source
-pins (and for condensing four behaviour tests) fail. Ruff clean; the touched
+pins (and for condensing four behaviour tests) fail. (13) only the lens basis
+shown for a mixed run — the Word-report test and the report-window test
+fail. Ruff clean; the touched
 backend files pass; `npm test` (545) and `npm run build` pass.
 
 **Release-note draft.** "Final QC's reviewers that check each finding now run

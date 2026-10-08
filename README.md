@@ -194,8 +194,9 @@ money without giving up rigor or quality. Four changes came out of it.
   `BUILD_A_SPEC_QC_MODEL`, when set on its own, still moves both phases.
 - **The report names both models and prices each call at its own.** The Word
   report and the report window list "Model (lens review and grouping)" and
-  "Model (verifier seats)"; every seat is priced at its model's rates, and the
-  run's total is the sum of its calls. The Final QC drawer's cost line and
+  "Model (verifier seats)"; every seat is priced at its model's rates, the
+  run's total is the sum of its calls, and the saved pricing basis lists both
+  models' rates, each named for the calls it priced. The Final QC drawer's cost line and
   start confirmation name both models. Settings lists the seats' spend as
   **Final QC verifiers** and **Final QC verifiers (batched)**.
 - **A Final QC result made before this update reads out of date once.** Which

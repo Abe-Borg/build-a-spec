@@ -164,6 +164,10 @@ export type QcReportResult = Omit<
   input_manifest?: Record<string, unknown>;
   estimated_cost_usd?: number;
   cost_basis?: Record<string, unknown>;
+  /** The verifier seats' own pricing snapshot, saved when the seats had
+   *  their own model (2026-10-08 on). A run whose seats differ from its
+   *  lenses priced each seat by it. */
+  verifier_cost_basis?: Record<string, unknown>;
   api_request_count?: number;
   model_response_count?: number;
 };
@@ -2427,4 +2431,34 @@ export function qcSessionCost(usage: UsageSummary | null | undefined): number {
     (sum, category) => sum + (finiteNumber(byCategory[category]) ?? 0),
     0,
   );
+}
+
+/**
+ * The saved pricing snapshots a run's estimate rests on, each labelled.
+ *
+ * Mirrors `docx_export.qc_pricing_bases`: one basis for a run on one model,
+ * as every older report has; two when the verifier seats ran on their own
+ * model, because those seats were priced by `verifier_cost_basis` and every
+ * other call by `cost_basis`. Showing only the lenses' rates would present
+ * them as the whole basis of the estimate.
+ */
+export function qcPricingBases(
+  report: Pick<QcReportResult, "model" | "verifier_model" | "cost_basis" | "verifier_cost_basis">,
+): { label: string; basis: Record<string, unknown> }[] {
+  const nonEmpty = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0;
+  const model = (report.model ?? "").trim();
+  const seatModel = (report.verifier_model ?? "").trim();
+  const mixed = !!seatModel && seatModel !== model && nonEmpty(report.verifier_cost_basis);
+  if (!mixed) {
+    return nonEmpty(report.cost_basis)
+      ? [{ label: "Saved pricing basis used for this estimate", basis: report.cost_basis }]
+      : [];
+  }
+  const bases: { label: string; basis: Record<string, unknown> }[] = [];
+  if (nonEmpty(report.cost_basis)) {
+    bases.push({ label: "Saved pricing basis for the lens review and grouping calls", basis: report.cost_basis });
+  }
+  bases.push({ label: "Saved pricing basis for the verifier seats", basis: report.verifier_cost_basis as Record<string, unknown> });
+  return bases;
 }

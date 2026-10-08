@@ -1261,7 +1261,10 @@ thinks at `high`.
 - **Report and UI.** Word report rows "Model (lens review and grouping)" and
   "Model (verifier seats)"; `qc_refusal_fallback` names the rate model of
   each rescued record (`_qc_rate_model`), mirrored by
-  `qcReport.qcRefusalFallback` and `QCReportModal`. `lib/qcModel` gains
+  `qcReport.qcRefusalFallback` and `QCReportModal`. A mixed run's Saved
+  Pricing Basis shows both snapshots, each named for the calls it priced
+  (`docx_export.qc_pricing_bases`, `qcReport.qcPricingBases`; Codex review
+  on PR #290); a one-model report keeps its single untitled basis. `lib/qcModel` gains
   `DEFAULT_QC_VERIFIER_MODEL`, `qcVerifierModelLabel` and `qcRunsOnCopy`;
   `QCDrawer`'s consent copy names both models from health (never a
   hardcoded name, pinned for Sonnet as for Opus); `QC_SPEND_CATEGORIES` has

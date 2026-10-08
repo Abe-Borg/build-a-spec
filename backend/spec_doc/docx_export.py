@@ -1530,6 +1530,28 @@ def _qc_fallback_records(qc_result: dict) -> list[dict]:
     return [*phase_records, *seat_records]
 
 
+def qc_pricing_bases(qc_result: dict) -> list[tuple[str, dict]]:
+    """The saved pricing snapshots the run's estimate rests on, titled.
+
+    One untitled basis for a run on one model, as every older report has. A
+    run whose verifier seats ran on their own model (``verifier_model``
+    differing from ``model``) priced its seats by ``verifier_cost_basis`` and
+    everything else by ``cost_basis``, so both are shown, each named for the
+    calls it priced. Empty when nothing was saved.
+    """
+    cost_basis = _qc_dict(qc_result.get("cost_basis"))
+    seat_basis = _qc_dict(qc_result.get("verifier_cost_basis"))
+    model = str(qc_result.get("model") or "").strip()
+    seat_model = str(qc_result.get("verifier_model") or "").strip()
+    if not (seat_model and seat_model != model and seat_basis):
+        return [("", cost_basis)] if cost_basis else []
+    bases: list[tuple[str, dict]] = []
+    if cost_basis:
+        bases.append(("Lens review and grouping calls", cost_basis))
+    bases.append(("Verifier seats", seat_basis))
+    return bases
+
+
 def _qc_rate_model(value: object) -> str:
     model = str(value or "").strip()
     return model if _QC_MODEL_ID.fullmatch(model) else "the configured model's"
@@ -5398,15 +5420,18 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
         gap.add_run(capture_note)
     note = document.add_paragraph(style="QC Table Citation")
     note.add_run(QC_REQUEST_METHODOLOGY_NOTE)
-    cost_basis = _qc_dict(qc_result.get("cost_basis"))
+    bases = qc_pricing_bases(qc_result)
     _qc_heading(document, "Saved Pricing Basis", 2)
-    if cost_basis:
-        for key, value in cost_basis.items():
-            _qc_add_label(
-                document,
-                xml_safe_title(str(key).replace("_", " ")),
-                _qc_json(value) if isinstance(value, (dict, list)) else value,
-            )
+    if bases:
+        for title, basis in bases:
+            if title:
+                _qc_heading(document, title, 3)
+            for key, value in basis.items():
+                _qc_add_label(
+                    document,
+                    xml_safe_title(str(key).replace("_", " ")),
+                    _qc_json(value) if isinstance(value, (dict, list)) else value,
+                )
     else:
         document.add_paragraph(
             "No pricing-rate snapshot was saved. The aggregate estimate cannot be "

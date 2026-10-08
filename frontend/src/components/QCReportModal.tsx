@@ -38,6 +38,7 @@ import {
   qcFallbackRecordNote,
   qcInconclusiveCandidates,
   qcLensCoverage,
+  qcPricingBases,
   qcOperationEvaluation,
   qcPanelSizePhrase,
   qcPhaseTokenCeilings,
@@ -973,6 +974,7 @@ export default function QCReportModal({
   const consolidation = qcConsolidationSummary(report);
   const preRemediation = qcPreRemediationState(report);
   const requestPopulation = qcRequestPopulation(report);
+  const pricingBases = qcPricingBases(report);
   const traceRecords = collectQcTraceRecords(report);
   const operationRecords = collectQcOperationRecords(report);
   const limitations = qcReportLimitations(report, reportIsStale);
@@ -1492,10 +1494,12 @@ export default function QCReportModal({
               {qcRequestPopulationNote(requestPopulation)}. {QC_REQUEST_METHODOLOGY_NOTE}
             </p>
             <UsageTable usage={report.usage_totals} empty="No aggregate usage totals were recorded." />
-            {report.cost_basis && Object.keys(report.cost_basis).length > 0 ? (
-              <div className="mt-3">
-                <JsonBlock value={report.cost_basis} label="Saved pricing basis used for this estimate" />
-              </div>
+            {pricingBases.length > 0 ? (
+              pricingBases.map(({ label, basis }) => (
+                <div key={label} className="mt-3">
+                  <JsonBlock value={basis} label={label} />
+                </div>
+              ))
             ) : (
               <div className="mt-3"><EmptyRecord>No saved pricing-rate snapshot was recorded; provider billing remains authoritative.</EmptyRecord></div>
             )}

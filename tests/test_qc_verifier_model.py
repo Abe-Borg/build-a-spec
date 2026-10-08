@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import io
+
+from docx import Document
 
 from backend import settings
 from backend.qc.engine import (
@@ -312,3 +315,43 @@ def test_the_word_report_names_both_models_and_the_rates_a_rescued_call_used():
     count, limitation = docx_export.qc_refusal_fallback(payload)
     assert count == 2
     assert limitation.endswith(f"estimated at {_OPUS} and {_SONNET} rates.")
+
+
+def _memo_paragraphs(payload: dict, store: DocumentStore) -> list[str]:
+    document = Document(io.BytesIO(docx_export.build_qc_memo(payload, store.doc, stale=False)))
+    return [p.text for p in document.paragraphs]
+
+
+def test_both_pricing_bases_are_shown_when_the_seats_ran_on_their_own_model():
+    """The estimate of a mixed run rests on two snapshots; showing only the
+    lenses' rates would present them as the whole basis (Codex, PR #290)."""
+    result, store = _run(SequencedFakeClient(_scripts()), verifier_model=_SONNET)
+    payload = result.to_dict()
+    bases = docx_export.qc_pricing_bases(payload)
+    assert [title for title, _basis in bases] == [
+        "Lens review and grouping calls",
+        "Verifier seats",
+    ]
+    assert bases[0][1]["requested_model"] == _OPUS
+    assert bases[1][1]["requested_model"] == _SONNET
+
+    paragraphs = _memo_paragraphs(payload, store)
+    start = paragraphs.index("Saved Pricing Basis")
+    tail = paragraphs[start:]
+    lens_at = tail.index("Lens review and grouping calls")
+    seat_at = tail.index("Verifier seats")
+    assert lens_at < seat_at
+    assert any(_SONNET in text for text in tail[seat_at:])
+
+
+def test_a_one_model_report_keeps_its_single_untitled_pricing_basis():
+    result, store = _run(SequencedFakeClient(_scripts()))
+    payload = result.to_dict()
+    assert docx_export.qc_pricing_bases(payload) == [("", payload["cost_basis"])]
+    legacy = copy.deepcopy(payload)
+    del legacy["verifier_model"]
+    del legacy["verifier_cost_basis"]
+    assert docx_export.qc_pricing_bases(legacy) == [("", payload["cost_basis"])]
+    paragraphs = _memo_paragraphs(payload, store)
+    tail = paragraphs[paragraphs.index("Saved Pricing Basis"):]
+    assert "Verifier seats" not in tail

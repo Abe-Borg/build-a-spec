@@ -20779,3 +20779,33 @@ review's Final QC lines (Settings → Developer tools → This session's cost)
 against the measured $14.87, or run `tools\qc_export_cost_profile.py` on
 both exports, and read a summary's `effort` in its `chat_compaction` trace
 event.
+
+## Windows release follow-up — run ordering and export test (2026-10-07)
+
+The `v1.25.0` Windows workflow stopped before packaging or publication:
+4,174 backend tests passed, 64 skipped, and two failed. Linux CI passed
+on Python 3.11 and 3.12. The failed tag remains unpublished; `v1.25.1`
+carries its release notes as well as this correction, using the published
+`v1.24.0` release as the notes bound.
+
+- Resource pressure sorted runs by wall-clock start time. Windows can
+  record several starts in one tick, leaving older runs first when the
+  timestamps tie. Each run now keeps the existing global creation counter
+  privately, and the snapshot orders by it under the ledger lock. The
+  public schema and timestamps are unchanged. Tests hold the wall clock
+  constant and move it backwards across different engines; the bounded
+  ledger test also uses a constant wall clock.
+- The QC Word download completed in 1.54 seconds against a 1.5-second
+  assertion while the permission sweep remained held. The test now holds
+  the sweep for up to 30 seconds, downloads both reports on a separate
+  thread with a 10-second bound, and proves that both responses arrived
+  before the sweep finished. It still checks the pending-verification
+  disclosure and the settled verdict after release. This tests the
+  dependency rather than ZIP generation speed on a shared Windows runner.
+
+Reversion probes fail when snapshot sorting returns to wall-clock time
+and when the export waits for source capabilities with `block=True`.
+Both probes were restored. Ruff and the targeted resource-pressure,
+import-responsiveness, release-note, update and documentation tests passed.
+No paid model call, interactive Windows installation or Word visual check
+was run.

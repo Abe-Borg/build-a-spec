@@ -307,6 +307,8 @@ def test_unknown_tokens_are_reduced_or_refused() -> None:
 
 
 def test_the_ledger_is_bounded(monkeypatch) -> None:
+    # Windows can open several runs in one wall-clock tick.
+    monkeypatch.setattr(RP.time, "time", lambda: 1000.0)
     monkeypatch.setattr(RP, "MAX_RUNS_PER_ENGINE", 2)
     monkeypatch.setattr(RP, "MAX_AGENTS_PER_RUN", 2)
     monkeypatch.setattr(RP, "MAX_EVENTS_PER_RUN", 2)
@@ -335,6 +337,22 @@ def test_the_ledger_is_bounded(monkeypatch) -> None:
     assert len(busy["events"]) == 2 and busy["events_dropped"] == 1
     # The totals count the dropped agent too: it ran, it just has no record.
     assert totals["agents"] == 3
+
+
+@pytest.mark.parametrize("walls", [(1000.0, 1000.0, 1000.0), (1002.0, 1001.0, 1000.0)])
+def test_runs_stay_newest_first_across_engines_when_wall_clock_ties_or_reverses(
+    monkeypatch, walls
+):
+    ticks = iter(walls)
+    monkeypatch.setattr(RP, "_now", lambda: (next(ticks), RP.time.monotonic()))
+    RP.begin_run(RP.ENGINE_QC, label="oldest")
+    RP.begin_run(RP.ENGINE_CHAT, label="middle")
+    RP.begin_run(RP.ENGINE_RESEARCH, label="newest")
+    snapshot = RP.snapshot()
+    assert [run["label"] for run in snapshot["runs"]] == [
+        "newest", "middle", "oldest"
+    ]
+    assert [run["started_at"] for run in snapshot["runs"]] == list(reversed(walls))
 
 
 def test_the_null_handles_record_nothing() -> None:

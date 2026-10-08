@@ -89,6 +89,32 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.25.1",
+        date="2026-10-07",
+        headline="Recent diagnostics runs stay in order",
+        summary=(
+            "Developer tools keeps the newest runs first even when Windows "
+            "records several starts at the same time. This installer also "
+            "includes all the changes listed under 1.25.0, which did not "
+            "publish as an installer."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Developer tools",
+                items=(
+                    ReleaseItem(
+                        title="The newest run stays first",
+                        body=(
+                            "Resource pressure lists runs in the order they "
+                            "started, newest first, even when their clock "
+                            "timestamps match or the system clock changes."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.25.0",
         date="2026-10-07",
         headline="Every edit says why, and Final QC costs less per token",

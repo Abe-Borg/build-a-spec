@@ -348,6 +348,7 @@ class _Run:
     engine: str
     run_id: str
     label: str
+    sequence: int
     started_at: float
     started_mono: float
     status: str = RUN_RUNNING
@@ -800,6 +801,7 @@ def begin_run(engine: str, *, run_id: str = "", label: str = "") -> RunPressure:
                 engine=token,
                 run_id=_agent_id(run_id) if run_id else f"{token}-{_run_counter}",
                 label=_label(label) or token,
+                sequence=_run_counter,
                 started_at=wall,
                 started_mono=mono,
             )
@@ -994,14 +996,18 @@ def snapshot() -> dict[str, Any]:
     """
     try:
         with _lock:
-            runs = [
-                _run_view(run)
+            kept = [
+                run
                 for state in _engines.values()
                 for run in state.runs
             ]
+            # Wall-clock ticks can tie on Windows or move backwards. The
+            # sequence records creation order across every engine under this
+            # same lock, without adding anything to the public snapshot.
+            kept.sort(key=lambda run: run.sequence, reverse=True)
+            runs = [_run_view(run) for run in kept]
             totals = {engine: _totals_view(state) for engine, state in _engines.items()}
             observer = _observer_state_locked()
-        runs.sort(key=lambda run: run["started_at"], reverse=True)
         return {
             "schema_version": 1,
             "sdk_retries_per_request": int(settings.SDK_MAX_RETRIES),

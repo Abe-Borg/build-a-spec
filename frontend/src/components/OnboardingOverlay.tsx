@@ -590,16 +590,6 @@ export default function OnboardingOverlay({
               </p>
             </div>
           )}
-          {ready && !missing && step.details && (
-            <dl className="mt-3 space-y-1.5 border-t border-edge pt-2.5">
-              {step.details.map((item) => (
-                <div key={item.id} className="text-[11px] leading-snug">
-                  <dt className="inline font-medium text-ink">{item.label}: </dt>
-                  <dd className="inline text-ink-dim">{item.description}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
         </div>
         <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
           {!atFirst && <button onClick={ob.back} className={quietBtn}>‹ Back</button>}

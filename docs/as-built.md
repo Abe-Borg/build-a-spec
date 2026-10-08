@@ -21628,3 +21628,59 @@ The tag-triggered Windows workflow builds and smoke-tests the frozen app,
 compiles the installer, and publishes `BuildASpecSetup.exe` with its SHA-256
 `latest.json`. No paid API call or interactive Windows installation was
 performed during preparation.
+
+## Tour cards say the important bits — implemented notes (2026-10-08)
+
+Owner report (Abraham, with a screenshot): the guided tour still had a wall
+of text. Chapter 10's first step, "Choose the output guarantee deliberately",
+carried a 1,130-character body over the six-entry `SOURCE_OUTPUT_GUIDANCE`
+glossary, about 4,070 characters on one 390px card. The 2026-10-07 fix ("A
+tour card never runs off the window") kept its buttons in view, but the card
+still filled the window and scrolled. Owner direction: shorten it; the user
+needs only the important bits there.
+
+- **The export step** is now "Take the specification to Word" (539
+  characters): Export clean ends at END OF SECTION; for an imported master,
+  Export Word - Tracked Changes ON returns your own file with every edit
+  since import as a tracked change, and the exact original stays
+  downloadable; Download review report holds assumptions, unreviewed imports
+  and the Final QC summary; Export project brief carries the profile,
+  research and facts to the next section; Help → How to use explains every
+  export in full. Its six capabilities are unchanged.
+- **No glossary in the tour.** `TourStep.details`, the tour's import of
+  `sourceOutputGuidance.ts`, and the overlay's `<dl>` rendering are gone.
+  Help (How to use → "Know what each source option means") and the trust
+  dossier still render `SOURCE_OUTPUT_GUIDANCE` in full, unchanged.
+- **The other long cards were cut too**, so the next-longest does not become
+  the new wall: followups (996 → 591), project-facts (1,198 → 577),
+  project-panel (1,217 → 595), source-permissions (906 → 602), master-import
+  (802 → 521), template-use (971 → 469). Each still names every capability it
+  covers and keeps the wording other tests pin (`no [TBD], no placeholder,
+  no note to you`, `Leftover placeholders`, `Export Word - Tracked Changes
+  ON`, `Adapt imported draft`, `Edit freely`). Dropped: detail Help already
+  carries (how Accept All and Reject All behave, pending revisions, refused
+  masters, the normalized redline, extraction warnings, fact retirement and
+  source flags, brief merge rules). The import step no longer promises that
+  the export step "sets every output side by side".
+- `TOUR_VERSION` stays 9: no step was added, removed or reordered.
+
+Tests, in `frontend/tests/tour.test.ts`: "no step carries a glossary, and no
+step body is a wall" replaces "the export glossary is shown once": no step
+has `details`, the tour does not import the glossary, the overlay does not
+render one, the export step names Download review report, Export project
+brief and Help → How to use, the import step keeps its pinned wording, and
+every step body is at most 700 characters (was 1,300). The scroller test's
+tail pin now matches the body ternary's close instead of the removed `</dl>`.
+Restoring the old `tour.ts` failed the new test; restoring the old overlay
+failed both; both were put back. `npm test` (564) and `npm run build`
+passed. The export, project-facts and project-panel cards were rendered in
+headless Chromium against the built CSS: the export card is about 420px
+tall with no scrolling. No backend file changed and no paid API call was
+made.
+
+### Release-note draft (for the release after 1.26.0)
+
+"**The guided tour is easier to read.** Its longest cards — exporting, the
+project's sections and facts, Waiting on you, master import and templates —
+now say the important bits in a few sentences. The full guide to each export
+option stays in Help → How to use."

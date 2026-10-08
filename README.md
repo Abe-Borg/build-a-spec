@@ -1804,8 +1804,9 @@ The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Fou
   cannot handle and for comparing against a version.
 - **The intended workflow:** export it, review the changes in Word, accept
   or reject them, save, and replace your master with the saved file. Help's
-  *Workflows* has the recipe; the Help export guide, the tour's export step
-  and the trust dossier's export card state the same promise and its limits.
+  *Workflows* has the recipe; the Help export guide and the trust dossier's
+  export card state the same promise and its limits, and the tour's export
+  step names it in a sentence and points to Help for the rest.
 - **`GET /api/export/docx?redline=master&mode=preserved`** returns
   `<your upload's name> - REDLINE.docx`: your file, with every change since
   the import as a Word tracked change by "Build-a-Spec", dated at export.
@@ -3042,10 +3043,13 @@ however you end it, it comes back exactly as it was.
 - **A guided run, start to finish.** The tour cannot be parked half-done
   holding your project aside — it either runs or ends and gives your session
   back, and every card and checkpoint carries an End. Step cards never block
-  the app, so you can read the document as you go. A step card is never
-  taller than the window: a long step scrolls between its title and its
-  Back / Continue / End row, which always stay in view. Reloading picks the
-  tour back up where you left it — but only when
+  the app, so you can read the document as you go. A step card says only
+  the important bits, in a few sentences — a test holds every step to 700
+  characters and keeps glossaries out of the tour — and leaves the full
+  detail, such as what each export option promises, to Help → *How to use*.
+  A step card is never taller than the window: a long step scrolls between
+  its title and its Back / Continue / End row, which always stay in view.
+  Reloading picks the tour back up where you left it — but only when
   the server agrees the same protected workspace is still live. Help restarts
   it or jumps straight to any named chapter. Reduced motion is honored.
 - **Finishing the tour is remembered between launches.** Once you have taken

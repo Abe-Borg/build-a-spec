@@ -21,6 +21,7 @@ import type {
   ProjectBriefInspection,
   ProjectBriefManifest,
   ProjectFact,
+  ProjectLinkStamp,
   ProjectPullResult,
   ProjectSectionsPayload,
   SeedReport,
@@ -600,6 +601,24 @@ export async function nextSectionOptions(): Promise<NextSectionOptions> {
     throw new Error(data.error ?? `next section options failed (${resp.status})`);
   }
   return data as NextSectionOptions;
+}
+
+/**
+ * Join THIS section to a project before Next section → saves it. A section
+ * that never exported or started from a brief has no project id; the start
+ * route would mint one only for the session it replaces, so the file the
+ * save gate writes would never carry it. Stamped first, that Save writes the
+ * id the next section is seeded with. A no-op (`stamped: false`) when the
+ * section already belongs to a project; refused in a tour and while a reply
+ * streams, the server's message thrown as is.
+ */
+export async function ensureProjectLink(): Promise<ProjectLinkStamp> {
+  const resp = await fetch("/api/project/link", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `joining the project failed (${resp.status})`);
+  }
+  return { stamped: !!data.stamped, project: data.project };
 }
 
 /**

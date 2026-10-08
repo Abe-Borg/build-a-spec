@@ -11,6 +11,10 @@
  *    is a dialog whose "Save, then start" saves and then does nothing.
  * 3. The dialog offers "leave it unnamed": a named page counts as content
  *    and the master import refuses it, so the choice must be made here.
+ * 4. The section joins the project BEFORE the gate saves it. The start
+ *    route mints a project id for a section that has none, but only for the
+ *    session it replaces: a gate that saved first wrote a file that never
+ *    carries the id, orphaning the section it left behind.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -31,7 +35,7 @@ test("the next-section click runs the save gate before the seed", () => {
   const request = /const requestStartNextSection = async[\s\S]*?\n  \};/.exec(app)?.[0];
   assert.ok(request, "requestStartNextSection must exist");
   assert.match(request, /if \(await isUnsaved\(\)\)/);
-  assert.match(request, /setSaveGate\(\{ kind: "next-section", opts \}\)/);
+  assert.match(request, /setSaveGate\(\{ kind: "next-section", opts, joined \}\)/);
   assert.match(request, /else \{\s*void doStartNextSection\(opts\);/);
   // The panel hands the choice to the gated request, never to the seed.
   assert.match(app, /onStartNextSection=\{\(opts\) => void requestStartNextSection\(opts\)\}/);
@@ -43,9 +47,34 @@ test("the gate resumes a next-section start once the user has chosen", () => {
   assert.ok(runGate, "runGate must exist");
   assert.match(runGate, /gate\.kind === "next-section"[\s\S]*?void doStartNextSection\(gate\.opts\)/);
   // The union carries the kind, so a missing branch is a type error too.
-  assert.match(app, /\{ kind: "next-section"; opts: NextSectionRequest \}/);
+  assert.match(app, /\{ kind: "next-section"; opts: NextSectionRequest; joined: boolean \}/);
   // And the prompt names the action rather than falling through to "new session".
   assert.match(app, /saveGate\?\.kind === "start-brief" \|\| saveGate\?\.kind === "next-section"/);
+});
+
+test("the next-section click joins the project before the save gate saves", () => {
+  const request = /const requestStartNextSection = async[\s\S]*?\n  \};/.exec(app)?.[0];
+  assert.ok(request, "requestStartNextSection must exist");
+  const stamp = request.indexOf("await ensureProjectLink()");
+  const gate = request.indexOf("await isUnsaved()");
+  assert.ok(stamp >= 0, "the click must stamp the project link");
+  assert.ok(gate > stamp, "the stamp must land before the gate decides, and so before its Save");
+  // A refusal stops here: going on would save the section unlinked again.
+  assert.match(request, /catch \(error\) \{\s*reportNextSectionFailure\(error\);\s*return;\s*\}/);
+  // A fresh stamp is re-read, the way a brief export's is, so a cancelled
+  // gate still shows the project the section now belongs to.
+  assert.match(request, /if \(joined\) refreshDoc\(\);/);
+  // The gate says what Save does for a section that just joined.
+  assert.match(app, /saveGate\?\.kind === "next-section" && saveGate\.joined/);
+  assert.match(app, /This section is joining a project now: Save writes the project into its file/);
+});
+
+test("the stamp client posts to its route and reads back whether it stamped", () => {
+  const fn = /export async function ensureProjectLink[\s\S]*?\n\}/.exec(api)?.[0];
+  assert.ok(fn, "ensureProjectLink must exist");
+  assert.match(fn, /fetch\("\/api\/project\/link", \{ method: "POST" \}\)/);
+  assert.match(fn, /throw new Error\(data\.error/);
+  assert.match(fn, /stamped: !!data\.stamped/);
 });
 
 test("the panel button is hidden in a tour and declares its capability", () => {

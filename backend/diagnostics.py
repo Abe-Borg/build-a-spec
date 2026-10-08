@@ -447,11 +447,12 @@ def log_startup_banner() -> None:
             offset,
         )
         _log.info(
-            "models: interview=%s research=%s harvest=%s qc=%s",
+            "models: interview=%s research=%s harvest=%s qc=%s qc_verifier=%s",
             settings.INTERVIEW_MODEL,
             settings.RESEARCH_MODEL,
             settings.HARVEST_MODEL,
             settings.QC_MODEL,
+            settings.QC_VERIFIER_MODEL,
         )
         _log.info(
             "tracing: enabled=%s level=%s root=%s",
@@ -1706,6 +1707,7 @@ def snapshot() -> dict[str, Any]:
                 "research": settings.RESEARCH_MODEL,
                 "harvest": settings.HARVEST_MODEL,
                 "qc": settings.QC_MODEL,
+                "qc_verifier": settings.QC_VERIFIER_MODEL,
             },
         },
         "tracing": tracing_block,

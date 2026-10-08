@@ -250,6 +250,7 @@ def _environment_meta() -> dict[str, Any]:
             "research": settings.RESEARCH_MODEL,
             "harvest": settings.HARVEST_MODEL,
             "qc": settings.QC_MODEL,
+            "qc_verifier": settings.QC_VERIFIER_MODEL,
         },
     }
     if server_identity:

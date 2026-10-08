@@ -239,6 +239,37 @@ def test_a_one_seat_standard_panel_warns_at_settings_load(monkeypatch):
         importlib.reload(settings)
 
 
+def test_the_owners_2026_10_08_model_and_effort_defaults():
+    """The fact harvest thinks at "high" on Haiku 5.5, the condensing
+    summary at "high", and Final QC's verifier seats run on Sonnet 5.5.
+    Read from the source, so a developer's environment cannot move them."""
+    source = Path(settings.__file__).read_text(encoding="utf-8")
+    efforts = {}
+    names = {}
+    for node in ast.walk(ast.parse(source)):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            continue
+        target = node.targets[0].id
+        if target in ("HARVEST_EFFORT", "COMPACTION_EFFORT"):
+            call = node.value
+            assert isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_effort_env"
+            efforts[target] = tuple(arg.value for arg in call.args)
+        elif target in ("HARVEST_MODEL_DEFAULT", "QC_VERIFIER_MODEL_DEFAULT"):
+            names[target] = getattr(node.value, "id", None)
+    assert efforts == {
+        "HARVEST_EFFORT": ("BUILD_A_SPEC_HARVEST_EFFORT", "high"),
+        "COMPACTION_EFFORT": ("BUILD_A_SPEC_COMPACTION_EFFORT", "high"),
+    }
+    assert names == {
+        "HARVEST_MODEL_DEFAULT": "MODEL_HAIKU_55",
+        "QC_VERIFIER_MODEL_DEFAULT": "MODEL_SONNET_55",
+    }
+
+
 def test_the_chat_interview_and_research_ship_at_medium_effort():
     """Interview turns and research default to "medium". Sonnet 5.5
     recalibrated its effort levels from Sonnet 5's, and Anthropic's migration

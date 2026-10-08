@@ -20352,3 +20352,230 @@ aggregates. Deferred, deliberately: a 1-seat panel for low-severity
 candidates (42 of the 82 seats here) and a cheaper verifier model, both
 already recorded as deferred levers because they change what the review
 means.
+
+## Final QC's verifier seats run on Sonnet 5.5 at high — implemented notes (2026-10-08)
+
+**Owner decisions (Abraham).** A cost review asked where the app could still
+save money, in batch and real-time modes, without giving up rigor or
+quality, and whether each call ran on the right model at the right effort.
+The review's recommendations and the owner's answers:
+
+1. Final QC's verifier seats move from Claude Opus 5.5 at `medium` to Claude
+   Sonnet 5.5 at `high`. The lenses and the grouping calls stay on Opus 5.5
+   at `medium`. This is the "cheaper verifier model" lever the previous
+   entry recorded as deferred because it changes what the review means; the
+   owner took that call.
+2. The batched seats store their shared prefix for five minutes instead of
+   an hour ("whatever you recommend regarding batch mode").
+3. The conversation-condensing summary stays on Sonnet 5.5 and thinks at
+   `high`.
+4. The Haiku 5.5 fact harvest thinks at `high`.
+
+Haiku 5.5 was considered for every other call and kept off them: the
+interview drafts and edits the specification with tools over a long cached
+conversation, research grounds code requirements in retrieved pages, the
+lenses generate findings cold, the seats adjudicate them, and condensing
+must read the chat's cache, which is keyed to the chat's model. Only the
+harvest, a bounded extraction whose every proposal the user reviews, fits
+Haiku's strengths.
+
+**Why the seats.** A seat answers one stated question (does this finding
+hold?) with the shared section in front of it, so most of its cost is
+reading that prefix: on the measured run (the previous entry's table) cache
+writes and reads were $10.65 of the batched stage's $11.62 and output only
+$0.84. Sonnet 5.5's rates are half Opus 5.5's on every line (per MTok:
+input $2 against $4, output $10 against $20, cache read $0.10 against
+$0.20, 5-minute write $2.50 against $5, 1-hour write $4 against $8). `high`
+is Sonnet 5.5's own default effort; Anthropic's guide recalibrated its
+scale, and adjudication is the bounded, careful reasoning the higher level
+is for. Doubling the seats' thinking would add about $0.84 on the streamed
+stage at Sonnet rates.
+
+| Scenario (same seats and usage as the measured run) | Verifier stage |
+|---|---|
+| Measured: Opus 5.5, batch, 1h store, 39% read | $11.62 |
+| Opus 5.5, streamed with the stagger (previous entry, modelled) | $5.93 |
+| Sonnet 5.5, streamed with the stagger, same tokens | ≈ $2.97 |
+| … with output doubled by `high` | ≈ $3.81 |
+| Opus 5.5, batch, 5-minute store (previous entry, modelled) | $8.31 |
+| Sonnet 5.5, batch, 5-minute store, same tokens | ≈ $4.16 |
+| … with output doubled by `high` | ≈ $4.58 |
+
+**Why five minutes for the batch.** At a share `h` of seats reading the
+prefix, caching beats plain input when `(1−h)·w + h·0.05 < 1`, where `w` is
+the write multiplier: 2 for an hour (break-even 51%), 1.25 for five minutes
+(break-even 21%). The measured batch read 39%: below the hour's break-even,
+above the five minutes'. Anthropic calls cache hits inside a concurrent
+batch best-effort, and a five-minute entry can lapse before a late seat
+runs; at the measured share the five-minute store still wins unless its
+hits fall below about 1%. The streamed seats already stored for five
+minutes, so the two transports now send identical seat requests.
+
+**Why condensing needs a per-message effort.** The summary forks the chat
+request to read the conversation the chat already cached (up to the 600k
+threshold). A top-level effort change invalidates the messages cache, so
+sending `high` at the top would rewrite the whole conversation at the 1h
+write rate on every summary (about $2.40 at 600k tokens on Sonnet 5.5,
+against about $0.06 to read it). Anthropic's per-message effort (beta
+`mid-conversation-output-config-2026-07-01`; Claude Fable 5.1, Mythos 5.1,
+Opus 5.5, Opus 5, Sonnet 5.5 and Haiku 5.5, adaptive thinking only) changes
+the level from the next user turn on without invalidating the cache, and an
+effort-only system message is exempt from the placement rules. The summary
+keeps the chat's top-level `medium` and appends
+`{"role": "system", "content": [], "output_config": {"effort": "high"}}`
+right before its instruction, after every cached byte.
+
+**What changed.**
+
+- *`backend/settings.py`.* `QC_VERIFIER_MODEL_DEFAULT = MODEL_SONNET_55`;
+  `QC_VERIFIER_MODEL` reads `BUILD_A_SPEC_QC_VERIFIER_MODEL`, else
+  `BUILD_A_SPEC_QC_MODEL` (an operator who named one QC model keeps one),
+  else the default. `QC_VERIFIER_EFFORT`'s default follows the seat model
+  (`_QC_VERIFIER_EFFORT_BY_MODEL`: Sonnet 5.5 `high`, else `medium`); an
+  explicit `BUILD_A_SPEC_QC_EFFORT` still sets both phases.
+  `HARVEST_EFFORT` defaults to `high`. New `COMPACTION_EFFORT` (`high`,
+  `BUILD_A_SPEC_COMPACTION_EFFORT`), `PER_MESSAGE_EFFORT_BETA` and
+  `PER_MESSAGE_EFFORT_MODELS` (the four documented models the app names).
+- *`backend/qc/engine.py`.* `run_final_qc` / `_run_final_qc` take
+  `verifier_model` (default: the run's `model`) and every phase-2 request
+  (streamed seats, batched seats, warm leads, reminders, usage summing) uses
+  it. `verifier_refusal_fallback` asks for the server-side fallback per
+  model; Haiku 5.5 has none (`_with_refusal_fallback` also refuses it there,
+  so the per-model flag mainly keeps the warm-lead check's `carried`
+  accurate). `QCResult` gains `verifier_model` and `verifier_cost_basis`
+  (serialized only when set), `seat_model()`, `mixed_models()` and
+  `_seat_cost_basis()`. `_audit_accounting_consistent` validates the seat
+  snapshot's identity, refuses a stray one, prices seats by it, and totals a
+  mixed run as the sum of its records; a one-model run keeps the merged
+  one-model estimate every older report claims. `_manifest_claims_consistent`
+  checks the manifest's `verifier_model` against the record's (absent on
+  both for a pre-split report). `matches_inputs(..., verifier_model=None)`
+  rebuilds the manifest with the live seat model, so every pre-split report
+  reads stale once. `usage_by_meter_category` files a mixed run's seats, and
+  the uncollected-batch disclosure, under `qc_verifier` /
+  `qc_verifier_batched`. `build_qc_input_manifest` records
+  `configuration.verifier_model`. `_BATCH_VERIFIER_CACHE_TTL = ""`. The
+  warm-lead lineage carries its spec's TTL.
+- *`backend/cost_checks.py`.* `WarmLeadLineage.cache_ttl` (default `"1h"`,
+  so a direct caller's lineage is judged as before); `_judge_lineage` uses
+  the 1-hour write rate only for a 1-hour lineage.
+- *`backend/usage_ledger.py`.* `qc_verifier` and `qc_verifier_batched`
+  priced at `QC_VERIFIER_MODEL`, the batched one at the batch multiplier.
+- *`backend/app.py`, `qc/runner.py`, `qc/apply.py`.* QC start passes the seat
+  model; the readiness/apply staleness checks pass it to `matches_inputs`;
+  health carries `qc_verifier_model`. Diagnostics and the trace's models map
+  carry `qc_verifier`.
+- *`backend/spec_doc/docx_export.py`.* "Model (lens review and grouping)"
+  and "Model (verifier seats)" rows; the refusal-fallback limitation names
+  the rate model of each rescued record (`_qc_rate_model`,
+  `_qc_fallback_record_groups`), joined with " and " when both phases had
+  one.
+- *`backend/llm/conversation.py`.* `_build_compaction_request(inputs, *,
+  per_message_effort=True)` keeps the top-level effort and inserts the
+  effort-only message (`_summary_effort_message`) with its beta when the
+  two levels differ, the model is listed, thinking is adaptive and the
+  process latch is armed. `_open_summary_stream` reads a 400 naming the
+  message (`messages.N.output_config`, "per-turn effort", or the beta name)
+  as its refusal, switches the latch off with one WARNING on
+  `buildaspec.chat`, and resends once without it; any other 400, "prompt is
+  too long" included, propagates as before. `summary_effort(request)`
+  reports the depth a request asks for; the `chat_compaction` trace event
+  gains `effort`. `reset_per_message_effort_probe` re-arms the latch (the
+  conftest calls it around every test).
+- *`tools/compaction_json_eval.py`.* The plan's report records
+  `summary_effort`; both arms carry the production effort message (the JSON
+  arm rebuilds only the instruction).
+- *Frontend.* `lib/qcModel` (`DEFAULT_QC_VERIFIER_MODEL`,
+  `qcVerifierModelLabel`, `qcRunsOnCopy`); `QCDrawer`, `ArtifactPanel` and
+  `App` thread `qcVerifierModel` from health into the cost line and the
+  start confirmation; `QC_SPEND_CATEGORIES` has four buckets;
+  `qcReport.qcRefusalFallback` mirrors the Python; `QCReportModal`,
+  `SettingsPanel`, `HelpModal` and `TrustDeepDiveModal` name which model
+  does what.
+- *Docs.* README gains "Current Status — Final QC's verifier seats run on
+  Sonnet 5.5; condensing and the fact harvest think harder", rows for
+  `BUILD_A_SPEC_QC_VERIFIER_MODEL` and `BUILD_A_SPEC_COMPACTION_EFFORT`, and
+  corrected rows and passages for the QC model, the efforts, the harvest,
+  the batch TTL and the refusal fallback. CLAUDE.md gains the implemented
+  notes and corrects the adaptive-thinking invariant, its erratum and the
+  retired "never share a TTL" rule.
+
+**Unchanged.** The lenses' and grouping calls' model, effort and requests;
+panel sizes, adjudication, prompts and the QC protocol version; the chat
+request, research and the stable prompt; the summary's model, cached
+prefix, top-level keys and instruction; the harvest's model and request
+shape. The SSE protocol has no new event.
+
+**Bytes that changed.** A seat request's model, effort and (batched) cache
+TTL, so the seats' prefix is a new cache entry; the manifest's
+`verifier_model`, so retained reports read stale once; a summary request's
+one extra message after the cached prefix and its beta header; the harvest
+request's effort.
+
+**Tests.** `tests/test_qc_verifier_model.py` (9): seats go to the seat model
+and everything else to the run's; each record is priced by its own model and
+the total is their sum (and below one-model pricing); a mixed report round
+trips and refuses a swapped, renamed or missing seat snapshot; a one-model
+run keeps the old pricing shape; a pre-split report loads and prices its
+seats by its own basis; the seat model is hashed so other seats (and every
+pre-split report) read stale; the meter files streamed and batched seats,
+and the gap disclosure, under their own buckets; Sonnet seats ask for the
+fallback and Haiku seats do not while the lenses still do; the Word report
+names the rate model of each rescued call. `tests/test_compaction_effort.py`
+(11): the shipped depths; the message sits after the cached prefix with the
+top level untouched and passes the oracle; equal depths send the summary
+exactly as before; unlisted models and non-adaptive thinking never get it;
+a refused message costs one 400, the resend is the plain fork, later
+summaries skip it, one WARNING; other 400s propagate and leave the latch
+armed; the trace records the depth. `tests/test_qc_phase_effort.py` gains
+the two-model defaults, the one-model direct caller, the hashed seat model
+and the seat effort following the seat model (env reloads).
+`tests/test_fake_request_validator.py` pins the oracle's new per-message
+effort rules (6 accepted, 7 refused). `tests/test_settings.py` pins the
+harvest, condensing and seat-model defaults from source. Updated:
+`test_qc.py`, `test_qc_audit_report.py`, `test_qc_streamed_stagger.py`,
+`test_qc_batch_verification.py`, `test_cost_checks_warm_lead.py` (break-evens
+recomputed at the 5-minute rate), `test_continuation_cache.py`,
+`test_prompt55_effort.py`, `test_citation_repair.py` and
+`test_compaction_json_eval.py` (the effort message sits between the view and
+the instruction). Frontend: `qcModel.test.ts` (seat label, the consent line,
+no hardcoded Sonnet name) and `qcSessionCost.test.ts` (four buckets).
+
+**Reversion evidence.** Each probe applied, run and restored:
+(1) seats ignore `verifier_model` — 7 of 9 seat-model tests and the defaults
+test fail; (2) a mixed total priced one-model — the round-trip test fails;
+(3) batched TTL back to `"1h"` — 5 tests across the stagger, batch and
+continuation files fail; (4) the seat model dropped from the manifest — 8
+tests fail; (5) the gap disclosure filed under `qc_batched` — survived at
+first, a test was added, then the meter test fails; (6) the warm-lead check
+always at the 1-hour rate — 3 tests fail; (7) Haiku seats asking for the
+fallback — survives, because `_with_refusal_fallback` refuses Haiku on its
+own (recorded above, not a gap); (8) the effort message placed first —
+the prefix test fails; (9) the latch not read — the refusal test fails;
+(10) every 400 read as the message's refusal — the other-400 test fails;
+(11) the summary's depth sent top-level — the prefix test fails;
+(12) `HARVEST_EFFORT` or `COMPACTION_EFFORT` back to `medium` — the source
+pins (and for condensing four behaviour tests) fail. Ruff clean; the touched
+backend files pass; `npm test` (545) and `npm run build` pass.
+
+**Release-note draft.** "Final QC's reviewers that check each finding now run
+on Claude Sonnet 5.5 at high effort, at half the per-token price of Opus 5.5;
+the five lenses that find the problems stay on Opus 5.5. The report and the
+Final QC drawer name both models, and Settings shows the reviewers' spend on
+its own line. A Final QC result made before updating reads out of date once;
+re-run it before applying its fixes. If you use the Batch option, its
+reviewers now keep their shared copy of your section for five minutes
+instead of an hour, which cost more than it saved on the measured run. The
+conversation-condensing summary now thinks at high effort without giving up
+the cached conversation it reads, and the project-facts harvest thinks at
+high effort on Claude Haiku 5.5."
+
+**Not measured.** No paid API call was made. The savings are modelled from
+the measured run's usage at the app's own list prices; how much more the
+seats and the summary think at `high`, whether Sonnet 5.5 seats uphold,
+refute and dispute findings as the Opus seats did, and the five-minute
+batch store's live read share are unmeasured. The owner can compare the next
+review's Final QC lines (Settings → Developer tools → This session's cost)
+against the measured $14.87, or run `tools\qc_export_cost_profile.py` on
+both exports, and read a summary's `effort` in its `chat_compaction` trace
+event.

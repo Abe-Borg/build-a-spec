@@ -161,6 +161,9 @@ def _run(
         module,
         client,
         model=settings.QC_MODEL,
+        # The seats run as the app runs them, so the app reads this report
+        # as current (the seat model is a hashed input).
+        verifier_model=settings.QC_VERIFIER_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
         version_index=store.index,
         started_at="2026-07-24T10:00:00+00:00",
@@ -1697,6 +1700,7 @@ def _run_with_dismissal_memory(
         DEFAULT_MODULE,
         client,
         model=settings.QC_MODEL,
+        verifier_model=settings.QC_VERIFIER_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
         version_index=store.index,
         started_at="2026-07-24T11:00:00+00:00",
@@ -2028,7 +2032,9 @@ def test_a_verifier_seats_one_hour_cache_subtotal_is_captured_and_priced() -> No
     for seat in seats:
         assert seat.usage_totals["cache_creation_input_tokens"] == 900
         assert seat.usage_totals["cache_creation_1h_input_tokens"] == 400
-        rates = result.cost_basis["rates_per_token"]
+        # Seats are priced by their own model's snapshot (the verifier
+        # model since 2026-10-08), never the lenses'.
+        rates = result.verifier_cost_basis["rates_per_token"]
         # 500 five-minute + 400 one-hour, each at its own rate — not 900 at
         # either one. Scaled by the seat's own rate multiplier, which is the
         # batch discount on the batched transport: the two mechanisms

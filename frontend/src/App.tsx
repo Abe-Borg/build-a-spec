@@ -3499,6 +3499,7 @@ export default function App() {
           readiness={readiness}
           usage={usage}
           qcModel={health?.qc_model}
+          qcVerifierModel={health?.qc_verifier_model}
           changedIds={changedIds}
           saveTarget={saveTarget}
           onSaveProject={onSaveProject}

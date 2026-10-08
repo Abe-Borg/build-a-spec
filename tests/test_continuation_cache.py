@@ -280,15 +280,18 @@ def test_no_request_exceeds_four_breakpoints(monkeypatch) -> None:
     for request in captured:
         _assert_within_the_rules(request)
 
-    # Not vacuous: tails were really there, after both TTL families.
+    # Not vacuous: tails were really there. Every tail follows 5-minute
+    # markers since 2026-10-08, when the batched seats (and so a batched
+    # lineage's warm lead) stopped carrying one-hour markers; the mixed
+    # 1h-then-5m order the provider allows is still pinned synthetically in
+    # the guard test below.
     tails = [request for request in captured if "cache_control" in request]
     assert len(tails) >= 7
     tail_families = {
         tuple(marker.get("ttl") for _w, b in _blocks(r) if (marker := _marker(b)))
         for r in tails
     }
-    assert (None, None, None) in tail_families
-    assert ("1h", "1h", "1h") in tail_families
+    assert tail_families == {(None, None, None)}
 
 
 def test_the_guard_refuses_the_shapes_it_exists_to_catch() -> None:
@@ -368,8 +371,9 @@ def test_a_streamed_lead_resumes_with_the_tail_and_its_batch_does_not(
 ) -> None:
     """A lead (cost Tier 1, Chunk 3) is an ordinary streamed call.
 
-    Its continuation carries the tail, 5 minutes after its 1-hour markers;
-    the batch of the rest of its lineage carries none.
+    Its continuation carries the tail, 5 minutes after its own 5-minute
+    markers (one-hour until 2026-10-08); the batch of the rest of its lineage
+    carries none.
     """
     scripts, lead_title = _paused_lead_scripts(monkeypatch)
     client = _StreamLog(scripts)
@@ -392,7 +396,7 @@ def test_a_streamed_lead_resumes_with_the_tail_and_its_batch_does_not(
         marker.get("ttl")
         for _w, block in _blocks(continuation)
         if (marker := _marker(block))
-    ] == ["1h", "1h", "1h"]
+    ] == [None, None, None]
     assert client.batches.created
     assert all("cache_control" not in params for params in _batched_params(client))
 

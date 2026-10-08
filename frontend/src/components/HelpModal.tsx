@@ -442,7 +442,7 @@ function HowItWorks() {
           },
           {
             t: "Three models, dedicated jobs",
-            d: "The interview, drafting and research run on Claude Sonnet 5.5. Claude Haiku 5.5 extracts project facts for you to review. Final QC runs a fleet of Claude Opus 5.5 reviewers.",
+            d: "The interview, drafting and research run on Claude Sonnet 5.5. Claude Haiku 5.5 extracts project facts for you to review. Final QC runs five Claude Opus 5.5 reviewers, and Claude Sonnet 5.5 verifier panels check each finding they raise.",
           },
           {
             t: "Domain knowledge lives in spec modules",
@@ -657,6 +657,12 @@ function About({
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Final QC</dt>
           <dd className="text-ink">{health?.qc_model ?? "Claude Opus 5.5"}</dd>
+        </div>
+        <div className="flex gap-3">
+          <dt className="w-28 flex-none text-ink-faint">QC verifiers</dt>
+          <dd className="text-ink">
+            {health?.qc_verifier_model ?? "Claude Sonnet 5.5"}
+          </dd>
         </div>
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Scope</dt>

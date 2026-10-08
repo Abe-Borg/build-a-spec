@@ -2,7 +2,8 @@
 
 Model ids mirror Spec Critic's current stack (``api_config.py`` in the
 Claude-Spec-Critic repo): Sonnet 5.5 for interactive interview/drafting turns,
-Opus 5.5 for Final QC, and Haiku 5.5 for bounded project-fact extraction.
+Opus 5.5 for Final QC's lenses and grouping (its verifier seats run on Sonnet
+5.5), and Haiku 5.5 for bounded project-fact extraction.
 Every value is env-overridable with the same degrade-gracefully posture as
 Spec Critic — a bad value falls back to the default rather than crashing.
 
@@ -263,9 +264,10 @@ API_TIMEOUT_SECONDS = _int_env("BUILD_A_SPEC_API_TIMEOUT_SECONDS", 600, minimum=
 # 2026-07-28, dialed back from "xhigh"). At "high" or below Sonnet 5.5 also
 # accepts research's ``between_tools`` final submission
 # (``research.schema.lowest_thinking``); above it the submission keeps
-# adaptive thinking instead. The chat's condensing
-# summary reads INTERVIEW_EFFORT too, and must: an effort change invalidates
-# the messages cache the summary exists to read.
+# adaptive thinking instead. The chat's condensing summary sends
+# INTERVIEW_EFFORT as its top-level effort too, and must: a top-level effort
+# change invalidates the messages cache the summary exists to read. It thinks
+# at COMPACTION_EFFORT (below) through a per-message effort change instead.
 EFFORT_LEVELS = ("low", "medium", "high", "max", "xhigh")
 
 
@@ -290,6 +292,28 @@ INTERVIEW_EFFORT = _effort_env("BUILD_A_SPEC_INTERVIEW_EFFORT", "medium")
 # Setting this equal to BUILD_A_SPEC_INTERVIEW_EFFORT switches the boost off.
 DRAFT_PASS_EFFORT = _effort_env("BUILD_A_SPEC_DRAFT_PASS_EFFORT", "high")
 
+# The condensing summary's depth (owner decision, 2026-10-08): "high". The
+# summary is all the model keeps of the turns it replaces, so it is worth
+# more thought than a routine interview turn. It cannot simply send "high"
+# as its top-level effort: the summary forks the chat request to read the
+# conversation the chat already cached, and a top-level effort change would
+# bill that whole conversation again as a cache write. Instead it keeps the
+# chat's top-level effort and appends an effort-only system message just
+# before its instruction (``PER_MESSAGE_EFFORT_BETA``), which changes the
+# depth from that point on without touching the cache. Only on the models
+# Anthropic documents it for (``PER_MESSAGE_EFFORT_MODELS``); elsewhere, or
+# once the provider has refused it, the summary runs at INTERVIEW_EFFORT as
+# it did before. Setting this equal to BUILD_A_SPEC_INTERVIEW_EFFORT sends
+# the summary exactly as before.
+COMPACTION_EFFORT = _effort_env("BUILD_A_SPEC_COMPACTION_EFFORT", "high")
+PER_MESSAGE_EFFORT_BETA = "mid-conversation-output-config-2026-07-01"
+# Anthropic's per-message effort reference names these models, with
+# adaptive thinking on. An unlisted model (Claude Sonnet 5, Claude Fable 5,
+# an unknown override) never gets the message: it is a 400 there.
+PER_MESSAGE_EFFORT_MODELS = frozenset(
+    {MODEL_SONNET_55, MODEL_OPUS_55, MODEL_OPUS_5, MODEL_HAIKU_55}
+)
+
 # AI template generalization is a bounded, mechanical rewrite: same tree,
 # same ids, same unresolved decisions, project-specific wording made
 # reusable. The structural contract (``app._template_structure_contract``)
@@ -301,14 +325,18 @@ TEMPLATE_EFFORT = _effort_env("BUILD_A_SPEC_TEMPLATE_EFFORT", "medium")
 # The fact harvest (Project workspace Phase 4) EXTRACTS — it reads a
 # conversation, a draft and a handful of dismissal reasons and proposes the
 # project facts already settled in them, each with the line it rests on. It
-# drafts nothing and adjudicates nothing, so "medium" is the depth; the user
-# reviews every proposal before anything is recorded anyway.
+# drafts nothing and adjudicates nothing; the user reviews every proposal
+# before anything is recorded. Effort is "high" (owner decision, 2026-10-08;
+# "medium" before it): the Haiku 5.5 guide puts knowledge work and strict
+# instruction following at "high", the harvest's rules (one quoted line per
+# fact, nothing inferred) are exactly that, and on Haiku the extra thinking
+# costs cents per harvest.
 HARVEST_MODEL_DEFAULT = MODEL_HAIKU_55
 HARVEST_MODEL = (
     os.environ.get("BUILD_A_SPEC_HARVEST_MODEL", "").strip()
     or HARVEST_MODEL_DEFAULT
 )
-HARVEST_EFFORT = _effort_env("BUILD_A_SPEC_HARVEST_EFFORT", "medium")
+HARVEST_EFFORT = _effort_env("BUILD_A_SPEC_HARVEST_EFFORT", "high")
 
 # The harvest's output ceiling (the 5.5 prompting upgrade, P55-1). The
 # Sonnet 5.5 guide: with structured output at low and medium effort the
@@ -418,9 +446,10 @@ RESEARCH_WARM_WAIT_SECONDS = _int_env(
     "BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS", 45, minimum=0
 )
 
-# --- Final QC (the pre-issue review pass, on Opus 5.5) -----------------------
+# --- Final QC (the pre-issue review pass: Opus 5.5 lenses, Sonnet 5.5 seats) --
 
-# The one model other than Sonnet 5.5 in the app (frozen decision). A
+# QC_MODEL is the lenses' and grouping calls' model (frozen decision); the
+# verifier seats have their own, QC_VERIFIER_MODEL, below. A
 # user-triggered lens fan-out + adversarial verification pass before a
 # section goes out the door. Opus 5.5 runs adaptive thinking by default;
 # depth is set via output_config effort.
@@ -438,6 +467,30 @@ RESEARCH_WARM_WAIT_SECONDS = _int_env(
 # made at "high" reads stale once after this change (release-noted).
 QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_OPUS_55
 QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
+
+# The verifier seats run on their OWN model (owner decision, 2026-10-08):
+# Claude Sonnet 5.5, while the five lenses and the grouping calls stay on
+# QC_MODEL. A lens GENERATES — a defect it misses never reaches a verifier —
+# and a wrong grouping silently hides a defect, so those keep Opus 5.5. A seat
+# ADJUDICATES one finding with the whole section in view and writes ~1k
+# tokens; its cost is reading the ~54k-token shared prefix, so the per-token
+# price is the lever (Sonnet 5.5 is half of Opus 5.5 on every token class),
+# and effort is not (halving the measured run's seat output saved ~13%).
+# docs/as-built.md "Final QC's verifier seats run on Sonnet 5.5" has the
+# numbers and the risk the owner accepted: a seat also sets ops_adequate, the
+# last semantic gate before a fix can be auto-applied.
+#
+# Resolution order, mirroring the effort knobs below: the specific knob wins;
+# an explicitly set BUILD_A_SPEC_QC_MODEL moves the seats with it (an
+# operator who named one QC model asked for that model); otherwise Sonnet 5.5.
+# The verifier model is a hashed QC input, so a retained Final QC result made
+# with Opus seats reads stale once after this change.
+QC_VERIFIER_MODEL_DEFAULT = MODEL_SONNET_55
+QC_VERIFIER_MODEL = (
+    os.environ.get("BUILD_A_SPEC_QC_VERIFIER_MODEL", "").strip()
+    or os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip()
+    or QC_VERIFIER_MODEL_DEFAULT
+)
 
 # Output includes adaptive thinking. A lens reviews the entire section;
 # grouping and a verifier seat answer bounded questions. These ceilings
@@ -468,10 +521,13 @@ QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "medium")
 #
 # A verifier seat ADJUDICATES: it is handed one finding, its rationale, its
 # proposed operations and the same document, and answers a bounded question
-# about that one claim. Phase 2 is ~90% of a run's calls, so this is where
-# reasoning depth compounds hardest and buys least. Default "medium" — which
-# P55-3 left alone, so both phases now default to the same level. The split
-# stays: each phase is still its own knob, and both are still recorded.
+# about that one claim. Its default depth follows its MODEL: "high" on Claude
+# Sonnet 5.5 (owner decision, 2026-10-08) — Sonnet 5.5's own default, and its
+# guide says that at low and medium it often answers a reasoning task with a
+# structured output without thinking first; the extra thinking is cheap,
+# because a seat's cost is its input. "medium" on any other seat model, the
+# Opus 5.5 level P55-3 set, so an operator who pins the seats back to Opus
+# gets the depth they ran at before.
 #
 # BUILD_A_SPEC_QC_EFFORT still moves BOTH (it is each one's fallback), so the
 # existing global override keeps working; the two specific knobs override it
@@ -479,12 +535,15 @@ QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "medium")
 # always states the depth each phase actually ran at.
 # Resolution order for the verifier seat, and the order matters: an operator
 # who explicitly set BUILD_A_SPEC_QC_EFFORT asked for a depth and must get it,
-# including when that depth is BELOW this default. Falling back to a literal
-# "medium" would silently raise the verifier above a global "low".
+# including when that depth is BELOW this default. Falling back to the
+# model's default would silently raise the verifier above a global "low".
 QC_LENS_EFFORT = _effort_env("BUILD_A_SPEC_QC_LENS_EFFORT", QC_EFFORT)
+_QC_VERIFIER_EFFORT_BY_MODEL = {MODEL_SONNET_55: "high"}
 QC_VERIFIER_EFFORT = _effort_env(
     "BUILD_A_SPEC_QC_VERIFIER_EFFORT",
-    QC_EFFORT if _effort_env("BUILD_A_SPEC_QC_EFFORT", "") else "medium",
+    QC_EFFORT
+    if _effort_env("BUILD_A_SPEC_QC_EFFORT", "")
+    else _QC_VERIFIER_EFFORT_BY_MODEL.get(QC_VERIFIER_MODEL, "medium"),
 )
 
 # Concurrent streaming calls in flight across a QC fan-out (lenses share the

@@ -177,6 +177,7 @@ def matches_current_inputs(
                 else source_guard
             ),
             model=settings.QC_MODEL,
+            verifier_model=settings.QC_VERIFIER_MODEL,
             max_tokens=settings.QC_MAX_TOKENS,
             # Attached documents are review inputs now, so detaching or
             # replacing one makes a retained report stale exactly the way a

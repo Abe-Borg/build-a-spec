@@ -665,6 +665,8 @@ def _run_estimated_cost(
     model: str,
     usage_totals: dict[str, int],
     records: list[Any],
+    *,
+    mixed_models: bool = False,
 ) -> float:
     """A run's estimate, and the two ways it can legitimately be reached.
 
@@ -676,8 +678,14 @@ def _run_estimated_cost(
     merged usage can describe the total, so the total IS the sum of its
     records. :meth:`QCResult._audit_accounting_consistent` reconciles the
     same two ways round, and the two must not drift apart.
+
+    ``mixed_models`` is the other way the sum becomes the only answer: seats
+    that ran on their own model were priced at its rates, which no single
+    model's estimate over the merged usage can reproduce.
     """
-    if not any(_record_cost_multiplier(record) != 1.0 for record in records):
+    if not mixed_models and not any(
+        _record_cost_multiplier(record) != 1.0 for record in records
+    ):
         return estimate_usage_cost(model, usage_totals)
     return round(
         sum(record.estimated_cost_usd for record in records), 6
@@ -1783,6 +1791,13 @@ class QCResult:
     # findings, a seat adjudicates one. Empty on a record written before the
     # split, which renders as "Not recorded" rather than claiming a value.
     verifier_effort: str = ""
+    # The verifier seats' model, and the pricing snapshot their records are
+    # reconciled against (``settings.QC_VERIFIER_MODEL``). Empty on a report
+    # written before the seats had their own model: its seats ran on
+    # ``model`` and are priced by ``cost_basis``, exactly as that report
+    # claimed. Serialized only when set, so an older report's bytes stay put.
+    verifier_model: str = ""
+    verifier_cost_basis: dict[str, Any] = field(default_factory=dict)
     # The calendar date the run put in front of every lens and verifier
     # seat, which now materially affects their edition-currency judgements.
     # Recorded but NOT fingerprinted — hashing it would flip every retained
@@ -2061,6 +2076,22 @@ class QCResult:
         # could write.
         return gaps == 0
 
+    def seat_model(self) -> str:
+        """The model the verifier seats ran on (``model`` on older reports)."""
+        return self.verifier_model or self.model
+
+    def mixed_models(self) -> bool:
+        """Whether the seats ran on a different model from the lenses.
+
+        Then no single pricing snapshot describes the run, so its total is
+        the sum of its records — the same reconciliation a batched phase
+        already forces.
+        """
+        return bool(self.verifier_model) and self.verifier_model != self.model
+
+    def _seat_cost_basis(self) -> dict[str, Any]:
+        return self.verifier_cost_basis if self.verifier_model else self.cost_basis
+
     def _audit_accounting_consistent(self) -> bool:
         """Reconcile current-schema spend to every underlying review record."""
         if not self.cost_basis or not self.model:
@@ -2070,6 +2101,20 @@ class QCResult:
         if self.cost_basis.get("used_fallback_rate") != (
             self.cost_basis.get("rate_model") != self.model
         ):
+            return False
+        # A report that names a seat model must carry that model's snapshot,
+        # held to the same identity rules as the run's own; one that names
+        # none must not carry a stray snapshot that no record is priced by.
+        if self.verifier_model:
+            seat_basis = self.verifier_cost_basis
+            if (
+                not seat_basis
+                or seat_basis.get("requested_model") != self.verifier_model
+                or seat_basis.get("used_fallback_rate")
+                != (seat_basis.get("rate_model") != self.verifier_model)
+            ):
+                return False
+        elif self.verifier_cost_basis:
             return False
 
         verdicts = [
@@ -2084,27 +2129,36 @@ class QCResult:
         ]
         # The consolidation call is a billed model request like any other, so
         # it joins the population the run totals must reconcile to. A record
-        # that never made a call contributes zeros and changes nothing.
-        records: list[QCLensStatus | QCVerdict | QCConsolidation] = [
-            *self.lens_statuses,
-            *([self.consolidation] if self.consolidation is not None else []),
-            *verdicts,
+        # that never made a call contributes zeros and changes nothing. Each
+        # record is priced by the snapshot of the model that ran it: seats by
+        # the seat model's, everything else by the run's.
+        seat_basis = self._seat_cost_basis()
+        records: list[
+            tuple[QCLensStatus | QCVerdict | QCConsolidation, dict[str, Any]]
+        ] = [
+            *((status, self.cost_basis) for status in self.lens_statuses),
+            *(
+                [(self.consolidation, self.cost_basis)]
+                if self.consolidation is not None
+                else []
+            ),
+            *((verdict, seat_basis) for verdict in verdicts),
         ]
         aggregate_usage: dict[str, int] = {}
         record_cost_total = 0.0
-        discounted = False
-        for record in records:
+        discounted = self.mixed_models()
+        for record, basis in records:
             for key, value in record.usage_totals.items():
                 aggregate_usage[key] = aggregate_usage.get(key, 0) + value
             if not _cache_write_subtotal_possible(
                 record.usage_totals
-            ) or not _pricing_subtotals_possible(record.usage_totals, self.cost_basis):
+            ) or not _pricing_subtotals_possible(record.usage_totals, basis):
                 return False
             multiplier = _record_cost_multiplier(record)
             if multiplier != 1.0:
                 discounted = True
             expected_cost = _estimated_cost_from_basis(
-                record.usage_totals, self.cost_basis, multiplier
+                record.usage_totals, basis, multiplier
             )
             if not math.isclose(
                 record.estimated_cost_usd,
@@ -2124,11 +2178,11 @@ class QCResult:
         ) or not _pricing_subtotals_possible(self.usage_totals, self.cost_basis):
             return False
         if self.api_request_count != sum(
-            record.api_request_count for record in records
+            record.api_request_count for record, _basis in records
         ):
             return False
         if self.model_response_count != sum(
-            record.model_response_count for record in records
+            record.model_response_count for record, _basis in records
         ):
             return False
         # With every record at list price the run total is derivable from
@@ -2141,7 +2195,9 @@ class QCResult:
         # its records, which is the stronger claim anyway — each part is
         # already reconciled to its own usage and multiplier just above, so
         # the sum is verified transitively rather than by a second formula
-        # that could disagree with them.
+        # that could disagree with them. Seats on their own model are the
+        # same case: one rate table cannot price a total whose parts ran on
+        # two models.
         expected_total = (
             round(record_cost_total, 6)
             if discounted
@@ -2238,6 +2294,9 @@ class QCResult:
         # record's own ``verifier_effort`` is empty too, so the pair still
         # reconciles. Present-and-different is still tampering.
         manifest_verifier_effort = configuration.get("verifier_effort", "")
+        # Absent on a report written before the seats had their own model;
+        # that record's ``verifier_model`` is empty too.
+        manifest_verifier_model = configuration.get("verifier_model", "")
         manifest_max_tokens = configuration.get("max_tokens")
         # Absent on pre-ceiling reports, which remain readable but no longer
         # match current inputs. Present limits must describe all three phases
@@ -2267,6 +2326,7 @@ class QCResult:
             or not isinstance(manifest_effort, str)
             or not manifest_effort
             or not isinstance(manifest_verifier_effort, str)
+            or not isinstance(manifest_verifier_model, str)
             or not isinstance(manifest_max_tokens, int)
             or isinstance(manifest_max_tokens, bool)
             or manifest_max_tokens < 1
@@ -2281,6 +2341,7 @@ class QCResult:
             and manifest_model == self.model
             and manifest_effort == self.effort
             and manifest_verifier_effort == self.verifier_effort
+            and manifest_verifier_model == self.verifier_model
             and manifest_max_tokens == self.max_tokens
             and manifest_research_present == self.research_profile_present
         )
@@ -2361,6 +2422,7 @@ class QCResult:
         source_guard: "QCSourceGuard | None" = None,
         *,
         model: str | None = None,
+        verifier_model: str | None = None,
         max_tokens: int | None = None,
         reference_docs: list[ReferenceDoc] | None = None,
         project_facts: list[ProjectFact] | None = None,
@@ -2412,6 +2474,11 @@ class QCResult:
             reference_docs=reference_docs,
             project_facts=project_facts,
             model=model or self.model or settings.QC_MODEL,
+            # A report from before the seats had their own model names none,
+            # so it is rebuilt with today's seat model and reads stale once.
+            verifier_model=(
+                verifier_model or self.verifier_model or settings.QC_VERIFIER_MODEL
+            ),
             max_tokens=(
                 int(max_tokens)
                 if max_tokens is not None
@@ -2456,12 +2523,25 @@ class QCResult:
                 for verdict in finding.verdicts
             ),
         ]
+        seat_records = {
+            id(verdict)
+            for finding in [
+                *self.findings,
+                *self.refuted,
+                *self.disputed,
+                *self.inconclusive,
+            ]
+            for verdict in finding.verdicts
+        }
         for record in records:
-            category = (
-                "qc_batched"
-                if _record_cost_multiplier(record) != 1.0
-                else "qc"
-            )
+            batched = _record_cost_multiplier(record) != 1.0
+            # Seats on their own model get their own buckets, priced at that
+            # model: the meter prices a bucket by one model, and a Sonnet
+            # seat filed under `qc` would be billed at the lenses' Opus rates.
+            if self.mixed_models() and id(record) in seat_records:
+                category = "qc_verifier_batched" if batched else "qc_verifier"
+            else:
+                category = "qc_batched" if batched else "qc"
             bucket = buckets.setdefault(category, {})
             for key, value in record.usage_totals.items():
                 if value:
@@ -2474,7 +2554,11 @@ class QCResult:
         # keys, so it is never priced.
         gaps = self.uncollected_batch_requests() + self.unassigned_batch_results
         if gaps:
-            bucket = buckets.setdefault("qc_batched", {})
+            # Only seats are ever batched, so the disclosure rides the
+            # bucket their tokens went to.
+            bucket = buckets.setdefault(
+                "qc_verifier_batched" if self.mixed_models() else "qc_batched", {}
+            )
             bucket[UNCOLLECTED_BATCH_REQUESTS_KEY] = (
                 bucket.get(UNCOLLECTED_BATCH_REQUESTS_KEY, 0) + gaps
             )
@@ -2506,6 +2590,14 @@ class QCResult:
             "model": self.model,
             "effort": self.effort,
             "verifier_effort": self.verifier_effort,
+            **(
+                {
+                    "verifier_model": self.verifier_model,
+                    "verifier_cost_basis": dict(self.verifier_cost_basis),
+                }
+                if self.verifier_model
+                else {}
+            ),
             "context_date": self.context_date,
             "max_tokens": self.max_tokens,
             "duration_ms": self.duration_ms,
@@ -2648,6 +2740,15 @@ class QCResult:
                 data.get("cost_basis"),
                 required=schema_version >= QC_REPORT_SCHEMA_VERSION,
             )
+            verifier_model = data.get("verifier_model", "")
+            if not isinstance(verifier_model, str):
+                return None
+            verifier_model = verifier_model.strip()
+            verifier_cost_basis = _persisted_cost_basis(
+                data.get("verifier_cost_basis"),
+                required=bool(verifier_model)
+                and schema_version >= QC_REPORT_SCHEMA_VERSION,
+            )
             result = cls(
                 schema_version=schema_version,
                 protocol_version=str(
@@ -2681,6 +2782,8 @@ class QCResult:
                 model=str(data.get("model", "") or ""),
                 effort=str(data.get("effort", "") or ""),
                 verifier_effort=str(data.get("verifier_effort", "") or ""),
+                verifier_model=verifier_model,
+                verifier_cost_basis=verifier_cost_basis,
                 # Absent from every pre-1.8.0 record, so "" (rendered "Not
                 # recorded") is the honest read, not a defaulted-to-today lie.
                 context_date=str(data.get("context_date", "") or ""),
@@ -3401,7 +3504,7 @@ def _verifier_shared_prefix(
     finding for want of anything supporting it — the exact failure this
     material was threaded in to remove. It is the most expensive place in the
     run to add bytes (~35 seats), which is precisely why it belongs in this
-    1h cached prefix: one write, then one read per seat.
+    cached prefix: one write, then one read per seat.
 
     The established project facts ride here for the same reason: a seat
     asked to refute "this contradicts what the AHJ confirmed" cannot
@@ -3568,11 +3671,9 @@ def _qc_user_content(
     Block 0 is identical across every call that shares this lineage (the
     four non-web lenses, or every verifier seat of one transport), so it is
     written to cache once and read thereafter. Block 1 is the per-call tail
-    and is never cached. ``cache_ttl`` is ``"1h"`` for the BATCHED
-    verification phase, whose seats the provider may run minutes after the
-    entry was written; streamed seats, sent seconds after their lineage's
-    leader began answering, keep the 5-minute default
-    (``_STREAMED_VERIFIER_CACHE_TTL``).
+    and is never cached. ``cache_ttl`` is the provider's 5-minute default
+    for every call today, the batched verifier seats included
+    (``_BATCH_VERIFIER_CACHE_TTL`` says why); ``"1h"`` stays supported.
     """
     return [
         {
@@ -4573,7 +4674,7 @@ def _run_streaming_call(
                     ):
                         # The continuation tail: beside the container, never
                         # in a block, and only on a resume (the constant says
-                        # why). 5 minutes after this call's 1h markers too. A
+                        # why). 5 minutes, after markers of 5 minutes or 1h. A
                         # request resumed after a failure is built here from
                         # the same messages, so it carries the tail exactly as
                         # the request that failed did. The latch is read after
@@ -6422,18 +6523,20 @@ def _verifier_tools(lens: QCLens, model: str) -> list[dict]:
     return tools
 
 
-# The verification phase's cache TTL, PER TRANSPORT. A batched seat may run
-# minutes after the request that wrote its prefix — the provider schedules
-# the batch — so its markers carry the one-hour TTL: 2× to write, and the
-# entry outlives the queue. A streamed seat is sent the moment a worker is
+# The verification phase's cache TTL, per transport — and today both are the
+# provider's 5-minute default. A streamed seat is sent the moment a worker is
 # free, seconds after its lineage's leader began answering, and every read
-# refreshes the entry, so it carries the 5-minute default: 1.25× to write,
-# and the phase's dozens of reads keep it alive. The TTL forks the lineage
-# key (``_prefix_lineage_key``), so a batched lead and a streamed seat
-# never pretend to share an entry. On the run in docs/as-built.md ("Final
-# QC streams its verifier seats, leaders first") 76% of the batched phase's
-# cost was one-hour writes that the batch did not read back.
-_BATCH_VERIFIER_CACHE_TTL = "1h"
+# refreshes the entry. A batched seat may run minutes after the request that
+# wrote its prefix, which is why it carried the one-hour TTL until 2026-10-08
+# (docs/as-built.md, "The batched seats store their copy for five minutes").
+# The measured batch read the shared copy on only 39% of its seats, and a
+# one-hour store (2× input to write) beats sending the text plain only above
+# a 51% read share; a 5-minute store (1.25×) does above 21%, and it beats the
+# one-hour store at 39% unless the shorter life cuts reads below about 1%.
+# Reads inside the batch refresh the entry, so the shorter life costs little.
+# The constants stay separate so a transport can diverge again on evidence;
+# the TTL is part of the lineage key (``_prefix_lineage_key``) either way.
+_BATCH_VERIFIER_CACHE_TTL = ""  # the provider's 5-minute default
 _STREAMED_VERIFIER_CACHE_TTL = ""  # the provider's 5-minute default
 
 
@@ -6570,9 +6673,8 @@ def _verify_one(
         first_output=first_output,
         # A streamed seat's continuations are seconds apart, like a lens's,
         # so they get the tail too: a 5-minute tail after this seat's
-        # markers (5 minutes themselves on the streamed transport; a batched
-        # lead's are 1h, and a 5-minute tail after 1h markers is the one
-        # mixed order the provider allows).
+        # 5-minute markers (a batched warm lead's are 5 minutes as well since
+        # 2026-10-08; a 5-minute tail after 1h markers would also be allowed).
         continuation_cache=continuation_cache,
         refusal_fallback=refusal_fallback,
         pressure=pressure,
@@ -7560,6 +7662,9 @@ def _run_batch_calls(
                         kind=lead.kind,
                         seats=lead.lineage_size,
                         model=states[lead.key].spec.model,
+                        # The write rate a missed read paid follows the
+                        # lineage's markers (5 minutes since 2026-10-08).
+                        cache_ttl=states[lead.key].spec.cache_ttl,
                         lead_usage=_sum_billed(
                             result.billed, model=states[lead.key].spec.model
                         ),
@@ -8381,6 +8486,7 @@ def build_qc_input_manifest(
     phase_max_tokens: dict[str, int] | None = None,
     effort: str = "",
     verifier_effort: str = "",
+    verifier_model: str = "",
     consolidation_enabled: bool = False,
     batch_verification: bool | None = None,
     reference_docs: list[ReferenceDoc] | None = None,
@@ -8515,6 +8621,11 @@ def build_qc_input_manifest(
             # seats adjudicated at a different depth is not the same review,
             # so a retained report from the other depth reads stale.
             "verifier_effort": verifier_effort or settings.QC_VERIFIER_EFFORT,
+            # The seats' model, hashed for the same reason: a panel of another
+            # model is not the same review, so a retained report made with
+            # other seats reads stale (every report from before the seats had
+            # their own model reads stale once).
+            "verifier_model": verifier_model or settings.QC_VERIFIER_MODEL,
             # Transport, recorded because it is a fact about how the review
             # was executed — not because it changes the review. Same model,
             # same effort, same panel sizes, same prompts either way; what
@@ -8790,6 +8901,7 @@ def run_final_qc(
     effort: str = "",
     lens_effort: str = "",
     verifier_effort: str = "",
+    verifier_model: str = "",
     batch_verification: bool | None = None,
     warm_wait_seconds: float | None = None,
     batch_warm_lead: bool | None = None,
@@ -8844,6 +8956,7 @@ def run_final_qc(
             effort=effort,
             lens_effort=lens_effort,
             verifier_effort=verifier_effort,
+            verifier_model=verifier_model,
             batch_verification=batch_verification,
             warm_wait_seconds=warm_wait_seconds,
             batch_warm_lead=batch_warm_lead,
@@ -8877,6 +8990,7 @@ def _run_final_qc(
     effort: str = "",
     lens_effort: str = "",
     verifier_effort: str = "",
+    verifier_model: str = "",
     batch_verification: bool | None = None,
     warm_wait_seconds: float | None = None,
     batch_warm_lead: bool | None = None,
@@ -8908,6 +9022,10 @@ def _run_final_qc(
     # what a caller passing one effort meant.
     lens_effort = lens_effort or effort or settings.QC_LENS_EFFORT
     verifier_effort = verifier_effort or effort or settings.QC_VERIFIER_EFFORT
+    # The seats' model, pinned the same way. A direct caller that names one
+    # model gets one model — what a caller passing one ``model`` meant; the
+    # app passes ``settings.QC_VERIFIER_MODEL``.
+    verifier_model = verifier_model or model
     phase_max_tokens = _qc_phase_max_tokens(max_tokens)
     # Pinned per run for the same reason as the efforts: the audit record has
     # to describe the transport this run actually used, not whatever the
@@ -8964,6 +9082,11 @@ def _run_final_qc(
         if refusal_fallback is None
         else bool(refusal_fallback)
     )
+    # Haiku 5.5 has no server-side fallback, so neither phase asks for one
+    # on it; the seats are judged by their own model.
+    verifier_refusal_fallback = (
+        refusal_fallback and verifier_model != settings.MODEL_HAIKU_55
+    )
     refusal_fallback = refusal_fallback and model != settings.MODEL_HAIKU_55
     # Same discipline, load-bearing for a different reason: this string leads
     # both cached shared prefixes, so re-reading the clock per call would
@@ -9017,6 +9140,7 @@ def _run_final_qc(
         phase_max_tokens=phase_max_tokens,
         effort=lens_effort,
         verifier_effort=verifier_effort,
+        verifier_model=verifier_model,
         consolidation_enabled=consolidation_enabled,
         batch_verification=batch_verification,
     )
@@ -9206,13 +9330,18 @@ def _run_final_qc(
             model=model,
             effort=lens_effort,
             verifier_effort=verifier_effort,
+            verifier_model=verifier_model,
+            verifier_cost_basis=usage_pricing_snapshot(verifier_model),
             max_tokens=max_tokens,
             duration_ms=max(
                 0, int((time.monotonic() - pipeline_started) * 1000)
             ),
             usage_totals=usage_totals,
             estimated_cost_usd=_run_estimated_cost(
-                model, usage_totals, list(lens_statuses)
+                model,
+                usage_totals,
+                list(lens_statuses),
+                mixed_models=verifier_model != model,
             ),
             cost_basis=usage_pricing_snapshot(model),
             api_request_count=api_request_count,
@@ -9350,7 +9479,7 @@ def _run_final_qc(
             nonlocal done
             verdict = outcome.verdict
             verdicts[finding_index].append(verdict)
-            _merge_usage(usage_totals, _sum_billed(outcome.billed, model=model))
+            _merge_usage(usage_totals, _sum_billed(outcome.billed, model=verifier_model))
             complete_event: dict[str, Any] = {
                 "type": "verifier_complete",
                 "candidate_id": candidate_ids[finding_index],
@@ -9429,7 +9558,7 @@ def _run_final_qc(
                     lens=raw_findings[i][0],
                     section_render=section_render,
                     module=module,
-                    model=model,
+                    model=verifier_model,
                     max_tokens=phase_max_tokens["verifier"],
                     effort=verifier_effort,
                     today=today,
@@ -9459,7 +9588,7 @@ def _run_final_qc(
                 warm_wait_seconds=warm_wait_seconds,
                 # The streamed leads' continuations only; batched seats never.
                 continuation_cache=continuation_cache,
-                refusal_fallback=refusal_fallback,
+                refusal_fallback=verifier_refusal_fallback,
                 pressure_run=pressure_run,
             )
             call_results = batch_phase.results
@@ -9482,7 +9611,7 @@ def _run_final_qc(
                 outcome = _verifier_outcome(
                     call_result,
                     finding=raw_findings[i][1],
-                    model=model,
+                    model=verifier_model,
                     reviewer_index=j + 1,
                     element_ids=element_ids,
                     reference_ids=reference_ids,
@@ -9534,7 +9663,7 @@ def _run_final_qc(
                         lens=raw_findings[i][0],
                         section_render=section_render,
                         module=module,
-                        model=model,
+                        model=verifier_model,
                         max_tokens=phase_max_tokens["verifier"],
                         effort=verifier_effort,
                         today=today,
@@ -9616,7 +9745,7 @@ def _run_final_qc(
                             lens=raw_findings[i][0],
                             section_render=section_render,
                             module=module,
-                            model=model,
+                            model=verifier_model,
                             max_tokens=phase_max_tokens["verifier"],
                             effort=verifier_effort,
                             candidate_id=candidate_ids[i],
@@ -9630,7 +9759,7 @@ def _run_final_qc(
                             should_stop=should_stop,
                             shared_should_stop=shared_failure.is_set,
                             continuation_cache=continuation_cache,
-                            refusal_fallback=refusal_fallback,
+                            refusal_fallback=verifier_refusal_fallback,
                             pressure=seat_pressure,
                             first_output=first_output_for.get((i, j)),
                         )
@@ -9946,6 +10075,8 @@ def _run_final_qc(
         model=model,
         effort=lens_effort,
         verifier_effort=verifier_effort,
+        verifier_model=verifier_model,
+        verifier_cost_basis=usage_pricing_snapshot(verifier_model),
         context_date=context_date,
         max_tokens=max_tokens,
         duration_ms=max(0, int((time.monotonic() - pipeline_started) * 1000)),
@@ -9967,6 +10098,7 @@ def _run_final_qc(
                     for verdict in finding.verdicts
                 ),
             ],
+            mixed_models=verifier_model != model,
         ),
         cost_basis=usage_pricing_snapshot(model),
         api_request_count=api_request_count,

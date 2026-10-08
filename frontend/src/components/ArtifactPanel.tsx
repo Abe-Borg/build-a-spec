@@ -168,6 +168,8 @@ interface Props {
   usage: UsageSummary | null;
   /** The configured Final QC model id (`health.qc_model`). */
   qcModel?: string;
+  /** The verifier seats' model id (`health.qc_verifier_model`). */
+  qcVerifierModel?: string;
   changedIds: ReadonlySet<string>;
   /** The file this session already saved itself to, or null when it never
    *  has. Null draws a plain Save that asks where; a target draws Save (which
@@ -458,6 +460,7 @@ export default function ArtifactPanel({
   readiness,
   usage,
   qcModel,
+  qcVerifierModel,
   changedIds,
   saveTarget,
   onSaveProject,
@@ -1908,6 +1911,7 @@ export default function ArtifactPanel({
               onJump={scrollToElement}
               openNonce={drawerNonces?.qc}
               qcModel={qcModel}
+              qcVerifierModel={qcVerifierModel}
             />
           ),
           issues: (

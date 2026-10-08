@@ -89,10 +89,27 @@ test("a malformed entry cannot render as NaN", () => {
   assert.equal(qcSessionCost(missingBlock), 0);
 });
 
-test("the category list is exactly the two QC meter buckets", () => {
-  // `usage_ledger._category_models` names these two for Final QC; interview,
-  // research, audit and template are other work and must not be folded in.
-  assert.deepEqual([...QC_SPEND_CATEGORIES], ["qc", "qc_batched"]);
+test("the verifier seats' own buckets are summed with the lenses'", () => {
+  // Since 2026-10-08 the seats run on their own model, so a run whose seats
+  // differ from its lenses meters them under `qc_verifier` /
+  // `qc_verifier_batched`, each priced at the seat model.
+  const spend = usage({
+    qc: 1.5,
+    qc_verifier: 0.75,
+    qc_verifier_batched: 0.5,
+    compaction: 9,
+  });
+  assert.equal(qcSessionCost(spend), 2.75);
+});
+
+test("the category list is exactly the four QC meter buckets", () => {
+  // `usage_ledger._category_models` names these four for Final QC;
+  // interview, research, audit, template and compaction are other work and
+  // must not be folded in.
+  assert.deepEqual(
+    [...QC_SPEND_CATEGORIES],
+    ["qc", "qc_batched", "qc_verifier", "qc_verifier_batched"],
+  );
 });
 
 test("the drawer reads the shared helper, not one category", () => {

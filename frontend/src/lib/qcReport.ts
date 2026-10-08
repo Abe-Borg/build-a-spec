@@ -151,6 +151,9 @@ export type QcReportResult = Omit<
   execution_status?: string;
   effort?: string;
   verifier_effort?: string;
+  /** The verifier seats' model. Absent on a report written before the seats
+   *  had their own (2026-10-08): those seats ran on `model`. */
+  verifier_model?: string;
   /** Local date the run supplied to every lens and verifier seat. Absent on
    *  pre-1.8.0 records, and never equal to `started_at`'s UTC calendar date
    *  for an evening run west of UTC. */
@@ -1770,6 +1773,13 @@ export const QC_FALLBACK_LIMITATION_TEMPLATE =
 
 const QC_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,63}$/;
 
+/** A recorded model id as printed in the fallback limitation, or the
+ *  generic phrase when it is not an id. Mirrors `docx_export._qc_rate_model`. */
+function rateModel(value: unknown): string {
+  const model = String(value ?? "").trim();
+  return QC_MODEL_ID.test(model) ? model : "the configured model's";
+}
+
 /** The answering models a record names, as the engine wrote them. Anything
  *  that is not a model id is not printed as one. Mirrors
  *  `docx_export._qc_served_by_models`. */
@@ -1820,12 +1830,14 @@ export function qcRefusalFallback(
     result.disputed,
     result.inconclusive,
   ];
+  const seatRecordList: unknown[] = [];
   for (const collection of collections) {
     if (!Array.isArray(collection)) continue;
     for (const candidate of collection as QcReportFinding[]) {
       if (!candidate || typeof candidate !== "object") continue;
       if (!Array.isArray(candidate.verdicts)) continue;
       records.push(...candidate.verdicts);
+      seatRecordList.push(...candidate.verdicts);
     }
   }
   const served = records.filter((record) => qcServedByModels(record).length);
@@ -1833,10 +1845,17 @@ export function qcRefusalFallback(
   const models = [
     ...new Set(served.flatMap((record) => qcServedByModels(record))),
   ].sort();
-  const configured = String(result.model ?? "").trim();
-  const qcModel = QC_MODEL_ID.test(configured)
-    ? configured
-    : "the configured model's";
+  // A rescued call is estimated at the rates of the model it was sent to:
+  // the run's `model` for a lens or grouping call, the seats'
+  // `verifier_model` (`model` on an older report) for a seat.
+  const seatRecords = new Set<unknown>(seatRecordList);
+  const servedSeats = served.filter((record) => seatRecords.has(record));
+  const rateModels: string[] = [];
+  if (served.length > servedSeats.length) rateModels.push(rateModel(result.model));
+  if (servedSeats.length) {
+    rateModels.push(rateModel(result.verifier_model || result.model));
+  }
+  const qcModel = [...new Set(rateModels)].join(" and ");
   return {
     count: served.length,
     limitation: QC_FALLBACK_LIMITATION_TEMPLATE.replace(
@@ -2377,14 +2396,20 @@ export function qcReportLimitations(
 /**
  * The session-meter categories one Final QC pass bills into.
  *
- * Two, not one. The verification phase is submitted through the Message
- * Batches API by default, where the provider prices every token class at half
- * — and the ledger prices a bucket by category, so a discounted token needs
- * its own bucket (one bucket could only ever carry one of the two rates).
- * That phase is roughly nine calls in ten, so a surface reading only `qc`
- * under-reports the pass by most of its cost.
+ * Four, not one. The ledger prices a bucket by ONE model at ONE rate, so a
+ * token billed differently needs its own bucket: `qc_batched` for seats sent
+ * through the Message Batches API (half price), and `qc_verifier` /
+ * `qc_verifier_batched` for seats that ran on their own model (Sonnet 5.5
+ * since 2026-10-08), which would otherwise be priced at the lenses' rates.
+ * The verification phase is roughly nine calls in ten, so a surface reading
+ * only `qc` under-reports the pass by most of its cost.
  */
-export const QC_SPEND_CATEGORIES = ["qc", "qc_batched"] as const;
+export const QC_SPEND_CATEGORIES = [
+  "qc",
+  "qc_batched",
+  "qc_verifier",
+  "qc_verifier_batched",
+] as const;
 
 /**
  * This session's Final QC spend, streamed and batched phases together.

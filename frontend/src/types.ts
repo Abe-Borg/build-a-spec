@@ -71,6 +71,9 @@ export interface Health {
   /** The model Final QC runs on (env-overridable). Optional: an older
    *  backend does not send it. */
   qc_model?: string;
+  /** The model Final QC's verifier seats run on (env-overridable; Sonnet
+   *  5.5 by default). Optional: an older backend does not send it. */
+  qc_verifier_model?: string;
   /** The dedicated model for project-fact harvesting (env-overridable).
    *  Optional: an older backend does not send it. */
   harvest_model?: string;

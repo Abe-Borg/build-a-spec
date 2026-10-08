@@ -262,13 +262,14 @@ def test_a_batched_seat_sends_the_same_request_bytes_as_a_streamed_one():
         assert without_markers(sent_stream["messages"]) == without_markers(
             sent_batch["messages"]
         )
-        # The ONE documented difference: the cache TTL. A batched seat may
-        # run minutes after its prefix was written, so its markers are
-        # one-hour; a streamed seat follows its lineage's leader by seconds
-        # and keeps the 5-minute default (engine._BATCH_VERIFIER_CACHE_TTL /
-        # _STREAMED_VERIFIER_CACHE_TTL). Three explicit markers each.
-        assert marker_ttls(sent_batch) == ["1h", "1h", "1h"]
+        # The markers match too since 2026-10-08: both transports store the
+        # prefix for the provider's 5-minute default
+        # (engine._BATCH_VERIFIER_CACHE_TTL / _STREAMED_VERIFIER_CACHE_TTL),
+        # where batched seats used to carry one-hour markers. Three explicit
+        # markers each, so a batched seat is byte-identical to a streamed one.
+        assert marker_ttls(sent_batch) == [None, None, None]
         assert marker_ttls(sent_stream) == [None, None, None]
+        assert sent_stream["messages"] == sent_batch["messages"]
 
 
 @pytest.mark.parametrize("batch", [False, True])

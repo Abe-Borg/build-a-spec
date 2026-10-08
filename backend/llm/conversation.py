@@ -201,6 +201,7 @@ from ..research.schema import (
     build_web_fetch_tool,
     build_web_search_tool,
     input_transformation_counts,
+    with_beta_header,
     with_drop_block,
 )
 from ..runtime_context import current_date_iso, date_context_block
@@ -4517,7 +4518,17 @@ def _without_reasons(applied: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # turn wrote at its committed-history boundary, so condensing a 600k-token
 # conversation bills the conversation at the cache-read rate. Anything that
 # changes those bytes (another model, a trimmed tool list, a different
-# effort) would bill the whole conversation again as fresh input.
+# top-level effort) would bill the whole conversation again as fresh input.
+#
+# The summary still thinks at its own depth, ``settings.COMPACTION_EFFORT``
+# (owner decision, 2026-10-08): an effort-only system message just before
+# the instruction changes the depth from that point on without touching the
+# cached prefix (Anthropic's per-message effort, beta
+# ``settings.PER_MESSAGE_EFFORT_BETA``). One process-wide latch: set when the
+# provider refused a summary request BECAUSE of that message, read on every
+# summary after it, cleared only by an app restart (and by the test
+# conftest). A refusal is a 400, which is not billed; the summary is resent
+# without the message, at the chat's depth, as it ran before.
 
 # How often a summary written while the user waits (the backstop) refreshes
 # its "Condensing earlier conversation…" status, and how long the backstop
@@ -4532,6 +4543,93 @@ _BACKSTOP_WAIT_LIMIT_S = 300.0
 _RETRY_VIEW_FRACTION = 0.7
 _RETRY_TOKENS_PER_CHAR = 0.5
 _PROMPT_TOO_LONG = re.compile(r"prompt is too long", re.IGNORECASE)
+# The provider's words for a refused per-message effort: the message's
+# ``output_config`` without the beta ("messages.N.output_config: Extra
+# inputs are not permitted"), a model without the feature ("…requires a
+# model that supports per-turn effort…"), or the beta itself named. Any
+# other 400 is not the effort message's to answer.
+_PER_MESSAGE_EFFORT_REJECTION = re.compile(
+    r"messages\.\d+\.output_config|per-turn effort|mid-conversation-output-config",
+    re.IGNORECASE,
+)
+_per_message_effort_lock = threading.Lock()
+_per_message_effort_refusal = ""
+
+
+def per_message_effort_available() -> bool:
+    """False once the provider has refused the summary's effort message."""
+    with _per_message_effort_lock:
+        return not _per_message_effort_refusal
+
+
+def _refuse_per_message_effort(detail: str) -> None:
+    """Switch the summary's own effort off until the app restarts; one
+    WARNING, once."""
+    global _per_message_effort_refusal
+    detail = " ".join(str(detail).split())[:200] or "refused"
+    with _per_message_effort_lock:
+        if _per_message_effort_refusal:
+            return
+        _per_message_effort_refusal = detail
+    _log.warning(
+        "Condensing summaries run at the chat's effort until the app "
+        "restarts: the provider refused the per-message effort (%s).",
+        detail,
+    )
+
+
+def reset_per_message_effort_probe() -> None:
+    """Re-arm the latch. Tests only (the conftest's autouse reset)."""
+    global _per_message_effort_refusal
+    with _per_message_effort_lock:
+        _per_message_effort_refusal = ""
+
+
+def _summary_effort_message(
+    model: str, thinking: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """The effort-only system message a summary sends, or ``None``.
+
+    ``None`` when the summary's depth already is the chat's (nothing to
+    change), on a model Anthropic does not document the feature for, without
+    adaptive thinking (a 400 with any other thinking type), or once the
+    provider has refused it.
+    """
+    effort = settings.COMPACTION_EFFORT
+    if effort == settings.INTERVIEW_EFFORT:
+        return None
+    if model not in settings.PER_MESSAGE_EFFORT_MODELS:
+        return None
+    if thinking.get("type") != "adaptive":
+        return None
+    if not per_message_effort_available():
+        return None
+    return {"role": "system", "content": [], "output_config": {"effort": effort}}
+
+
+def _carries_summary_effort(request: Mapping[str, Any]) -> bool:
+    return any(
+        isinstance(message, Mapping)
+        and message.get("role") == "system"
+        and "output_config" in message
+        for message in request.get("messages") or ()
+    )
+
+
+def summary_effort(request: Mapping[str, Any]) -> str:
+    """The depth a summary request asks for: its effort message's level when
+    it carries one, else its top-level effort."""
+    for message in request.get("messages") or ():
+        if (
+            isinstance(message, Mapping)
+            and message.get("role") == "system"
+            and isinstance(message.get("output_config"), Mapping)
+        ):
+            return str(message["output_config"].get("effort") or "")
+    output_config = request.get("output_config")
+    if isinstance(output_config, Mapping):
+        return str(output_config.get("effort") or "")
+    return ""
 
 
 def _system_tools_chars(module: SpecModule, project_block: str = "") -> int:
@@ -4673,7 +4771,9 @@ def _compaction_plan_locked(
     )
 
 
-def _build_compaction_request(inputs: _CompactionInputs) -> dict[str, Any]:
+def _build_compaction_request(
+    inputs: _CompactionInputs, *, per_message_effort: bool = True
+) -> dict[str, Any]:
     """The summary call: the chat request's prefix plus one instruction.
 
     One breakpoint in the messages, and not at the tail: at the previous
@@ -4690,6 +4790,11 @@ def _build_compaction_request(inputs: _CompactionInputs) -> dict[str, Any]:
     It opens with the chat's own project block — the one the forked turn
     sent (C1) — so the prefix up to the boundary is byte for byte the one
     the chat cached.
+
+    The top-level effort is the chat's, for the same reason. The summary's
+    own depth rides an effort-only system message placed after everything
+    cached, right before the instruction (``_summary_effort_message``), with
+    its beta; ``per_message_effort=False`` builds the request without it.
     """
     view, _pending = compacted_view(inputs.history, inputs.view_spec)
     # The same repair the chat request applies, so the prefix stays byte for
@@ -4706,24 +4811,64 @@ def _build_compaction_request(inputs: _CompactionInputs) -> dict[str, Any]:
         "role": "user",
         "content": [{"type": "text", "text": inputs.instruction}],
     }
-    return {
+    thinking = _thinking_param()
+    sent = _with_project_block(
+        _with_cache_breakpoints(
+            [*messages, instruction],
+            committed_boundary=boundary,
+            cache_ttl=settings.CHAT_CACHE_TTL,
+            tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
+            mark_tail=False,
+        ),
+        inputs.project_block,
+    )
+    request: dict[str, Any] = {
         "model": inputs.model,
         "max_tokens": settings.CHAT_COMPACTION_MAX_TOKENS,
         "system": _stable_system_blocks(inputs.module),
-        "messages": _with_project_block(
-            _with_cache_breakpoints(
-                [*messages, instruction],
-                committed_boundary=boundary,
-                cache_ttl=settings.CHAT_CACHE_TTL,
-                tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
-                mark_tail=False,
-            ),
-            inputs.project_block,
-        ),
+        "messages": sent,
         "tools": _chat_tools(),
-        "thinking": _thinking_param(),
+        "thinking": thinking,
         "output_config": {"effort": settings.INTERVIEW_EFFORT},
     }
+    effort_message = (
+        _summary_effort_message(inputs.model, thinking)
+        if per_message_effort
+        else None
+    )
+    if effort_message is not None:
+        # After the cached prefix and before the instruction: the new depth
+        # takes effect from the next user turn, which is the instruction.
+        request["messages"] = [*sent[:-1], effort_message, sent[-1]]
+        request["extra_headers"] = with_beta_header(
+            None, settings.PER_MESSAGE_EFFORT_BETA
+        )
+    return request
+
+
+def _open_summary_stream(
+    client: Any, request: dict[str, Any], inputs: _CompactionInputs
+) -> tuple[Any, Any, dict[str, Any]]:
+    """Open the summary's stream; RETURN ``(manager, stream, request sent)``.
+
+    A 400 that names the effort message switches it off for the process
+    and resends the summary once without it — at the chat's depth, still
+    reading the chat's cache. Any other failure reaches the caller.
+    """
+    try:
+        manager, stream = _enter_stream(client, request)
+        return manager, stream, request
+    except anthropic.BadRequestError as exc:
+        if (
+            not _carries_summary_effort(request)
+            or _PROMPT_TOO_LONG.search(str(exc))
+            or not _PER_MESSAGE_EFFORT_REJECTION.search(str(exc))
+        ):
+            raise
+        _refuse_per_message_effort(str(exc))
+    request = _build_compaction_request(inputs, per_message_effort=False)
+    manager, stream = _enter_stream(client, request)
+    return manager, stream, request
 
 
 def _compaction_call(
@@ -4732,16 +4877,21 @@ def _compaction_call(
     *,
     meter: Callable[[Any], None],
     should_stop: Callable[[], bool] | None = None,
+    effort_seen: list[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """One summary call. Yields ``condensing`` status frames while it runs
     and RETURNS the record (the generator's value), or raises
     :class:`CompactionError` / an API error.
 
     The reply's usage is metered before anything is checked: a declined,
-    cut-off or malformed summary was still billed.
+    cut-off or malformed summary was still billed. ``effort_seen`` receives
+    the depth the request that was sent asked for.
     """
-    request = _build_compaction_request(inputs)
-    manager, stream = _enter_stream(client, request)
+    manager, stream, request = _open_summary_stream(
+        client, _build_compaction_request(inputs), inputs
+    )
+    if effort_seen is not None:
+        effort_seen.append(summary_effort(request))
     stopped = False
     last_status = time.monotonic()
     try:
@@ -4827,9 +4977,14 @@ def _summary_attempt(
     record: CompactionRecord | None = None
     error = ""
     kind = ""
+    effort_seen: list[str] = []
     try:
         record = yield from _compaction_call(
-            client, inputs, meter=meter, should_stop=should_stop
+            client,
+            inputs,
+            meter=meter,
+            should_stop=should_stop,
+            effort_seen=effort_seen,
         )
     except CompactionError as exc:
         error, kind = str(exc), exc.code
@@ -4847,6 +5002,7 @@ def _summary_attempt(
         summary_chars=len(record.summary) if record is not None else 0,
         duration_ms=int((time.perf_counter() - started) * 1000),
         usage=usage_to_dict(usage_seen[-1]) if usage_seen else {},
+        effort=effort_seen[-1] if effort_seen else "",
     )
     return record, error, kind
 

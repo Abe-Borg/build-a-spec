@@ -133,9 +133,15 @@ def test_real_loader_and_builder_preserve_prefix_and_retention(saved_session, pa
     assert "Nothing is waiting on the user." in tail["text"]
     assert "last 3 exchanges" in tail["text"]
     assert ("yours replaces it" in tail["text"]) is re_compaction
+    # Both arms think at the production summary's depth: its effort-only
+    # system message, right before the instruction, rides the JSON arm too.
+    assert candidate["messages"][-2] == {
+        "role": "system", "content": [], "output_config": {"effort": settings.COMPACTION_EFFORT},
+    }
+    assert candidate["extra_headers"] == request["extra_headers"]
     marked = [i for i, message in enumerate(candidate["messages"]) if isinstance(message["content"], list)
               and any(block.get("cache_control") for block in message["content"])]
-    assert marked == [len(candidate["messages"]) - 4]  # Before the final typed exchange.
+    assert marked == [len(candidate["messages"]) - 5]  # Before the final typed exchange.
 
 
 @pytest.mark.parametrize("stop", ["end_turn", "stop_sequence"])

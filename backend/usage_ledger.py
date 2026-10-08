@@ -246,6 +246,14 @@ def _category_models() -> dict[str, str]:
         # because those tokens were billed at a different multiplier, and a
         # single bucket could only ever be priced at one of the two.
         "qc_batched": settings.QC_MODEL,
+        # Final QC's verifier seats, when they run on their own model
+        # (``settings.QC_VERIFIER_MODEL``, Sonnet 5.5 since 2026-10-08): their
+        # own buckets, because a bucket is priced at ONE model and the seats'
+        # tokens filed under ``qc`` would be billed at the lenses' rates. A
+        # run whose seats share the lenses' model files them under ``qc`` /
+        # ``qc_batched`` as before.
+        "qc_verifier": settings.QC_VERIFIER_MODEL,
+        "qc_verifier_batched": settings.QC_VERIFIER_MODEL,
         "template": settings.INTERVIEW_MODEL,
         # The fact harvest's one call (Project workspace Phase 4). Its own
         # bucket rather than "interview" so the Settings table says what the
@@ -262,7 +270,10 @@ def _category_models() -> dict[str, str]:
 
 def _category_multipliers() -> dict[str, float]:
     """Per-category rate multipliers. Absent means full list price."""
-    return {"qc_batched": settings.BATCH_COST_MULTIPLIER}
+    return {
+        "qc_batched": settings.BATCH_COST_MULTIPLIER,
+        "qc_verifier_batched": settings.BATCH_COST_MULTIPLIER,
+    }
 
 
 def _rates(model: str) -> dict[str, float]:

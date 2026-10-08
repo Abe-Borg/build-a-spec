@@ -1495,27 +1495,44 @@ def qc_fallback_record_note(record: object) -> str:
     )
 
 
-def _qc_fallback_records(qc_result: dict) -> list[dict]:
-    """Every call record another model answered: lenses, the grouping step,
-    and every verifier seat in the four candidate collections."""
-    records: list[dict] = [
+def _qc_fallback_record_groups(qc_result: dict) -> tuple[list[dict], list[dict]]:
+    """The call records another model answered, as ``(lens and grouping
+    records, verifier seat records)`` — the two are priced at different
+    models once the seats run on their own (``verifier_model``)."""
+    phase_records: list[dict] = [
         item
         for item in _qc_list(qc_result.get("lens_statuses"))
         if isinstance(item, dict)
     ]
     consolidation = _qc_dict(qc_result.get("consolidation"))
     if consolidation:
-        records.append(consolidation)
+        phase_records.append(consolidation)
+    seat_records: list[dict] = []
     for key in ("findings", "refuted", "disputed", "inconclusive"):
         for candidate in _qc_list(qc_result.get(key)):
             if not isinstance(candidate, dict):
                 continue
-            records.extend(
+            seat_records.extend(
                 verdict
                 for verdict in _qc_list(candidate.get("verdicts"))
                 if isinstance(verdict, dict)
             )
-    return [record for record in records if _qc_served_by_models(record)]
+    return (
+        [record for record in phase_records if _qc_served_by_models(record)],
+        [record for record in seat_records if _qc_served_by_models(record)],
+    )
+
+
+def _qc_fallback_records(qc_result: dict) -> list[dict]:
+    """Every call record another model answered: lenses, the grouping step,
+    and every verifier seat in the four candidate collections."""
+    phase_records, seat_records = _qc_fallback_record_groups(qc_result)
+    return [*phase_records, *seat_records]
+
+
+def _qc_rate_model(value: object) -> str:
+    model = str(value or "").strip()
+    return model if _QC_MODEL_ID.fullmatch(model) else "the configured model's"
 
 
 def qc_refusal_fallback(qc_result: dict) -> tuple[int, str]:
@@ -1524,18 +1541,29 @@ def qc_refusal_fallback(qc_result: dict) -> tuple[int, str]:
     ``(0, "")`` when the configured model answered every call — including
     every record written before the fallback existed, which carries no
     ``served_by_model`` at all. Reads the RECORD, never live state or a
-    setting. Mirrored by ``qcReport.qcRefusalFallback``.
+    setting. A rescued call is estimated at the rates of the model it was
+    sent to — the run's ``model`` for a lens or grouping call, the seats'
+    ``verifier_model`` (``model`` on an older report) for a seat — so the
+    limitation names whichever of the two priced a rescued call. Mirrored by
+    ``qcReport.qcRefusalFallback``.
     """
-    records = _qc_fallback_records(qc_result)
+    phase_records, seat_records = _qc_fallback_record_groups(qc_result)
+    records = [*phase_records, *seat_records]
     if not records:
         return 0, ""
     models = sorted(
         {model for record in records for model in _qc_served_by_models(record)}
     )
-    qc_model = str(qc_result.get("model") or "").strip()
-    qc_model = (
-        qc_model if _QC_MODEL_ID.fullmatch(qc_model) else "the configured model's"
-    )
+    rate_models: list[str] = []
+    if phase_records:
+        rate_models.append(_qc_rate_model(qc_result.get("model")))
+    if seat_records:
+        rate_models.append(
+            _qc_rate_model(
+                qc_result.get("verifier_model") or qc_result.get("model")
+            )
+        )
+    qc_model = " and ".join(dict.fromkeys(rate_models))
     return len(records), QC_FALLBACK_LIMITATION_TEMPLATE.format(
         count=len(records), models=", ".join(models), qc_model=qc_model
     )
@@ -3027,7 +3055,16 @@ def _qc_render_identity(
         ("Export-time input state", "STALE" if stale else "Current at export"),
         ("Section number", section.number or "[TBD]"),
         ("Section title", section.title or "[TBD]"),
-        ("Model", qc_result.get("model") or "Not recorded"),
+        ("Model (lens review and grouping)", qc_result.get("model") or "Not recorded"),
+        # The seats' own model since 2026-10-08. A report from before then
+        # ran its seats on ``model`` and says so rather than "Not recorded":
+        # that is what the record states.
+        (
+            "Model (verifier seats)",
+            qc_result.get("verifier_model")
+            or qc_result.get("model")
+            or "Not recorded",
+        ),
         (
             "Reasoning effort (lens review)",
             "Not recorded" if legacy else qc_result.get("effort") or "Not recorded",

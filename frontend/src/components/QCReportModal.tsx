@@ -1128,7 +1128,12 @@ export default function QCReportModal({
               <DataField label="Primary report selection">{reportSelectionSource}</DataField>
               <DataField label="Retained action-queue run ID" mono>{recorded(retainedRunId)}</DataField>
               <DataField label="Execution status">{executionStatus}</DataField>
-              <DataField label="Model">{recorded(report.model)}</DataField>
+              <DataField label="Model (lens review and grouping)">{recorded(report.model)}</DataField>
+              {/* A report from before the seats had their own model ran them on
+                  `model`, which is what its record states. */}
+              <DataField label="Model (verifier seats)">
+                {recorded(report.verifier_model || report.model)}
+              </DataField>
               <DataField label="Effort (lens review)">
                 {recorded(report.effort)}
               </DataField>

@@ -214,6 +214,25 @@ def test_h1_p_c_and_the_break_even_by_hand() -> None:
     }
 
 
+def test_a_five_minute_lineage_is_judged_at_the_five_minute_write_rate() -> None:
+    """The batched seats' markers are 5 minutes since 2026-10-08, so a missed
+    read paid the 5-minute write, not the hour's: Δ = $5.00 − $0.20 = $4.80
+    per million. Same seats as above:
+    N = 9 × 0.5 × 1 × 4.8e-6 × 40,000 − 0.5 × 0.40028 = 0.864 − 0.20014
+      = 0.66386,
+    D = 10 × 0.5 × 4.8e-6 × 40,000 = 0.96, and h₀* = 0.66386 / 0.96."""
+    seats = [_seat(40_000, 0)] * 9
+    for ttl in ("", "5m"):
+        lineage = replace(_lineage(seats), cache_ttl=ttl)
+        judged = cost_checks._judge_lineage(lineage)
+        assert judged.lead_cost == Decimal("0.40028")
+        assert judged.break_even == Decimal("0.66386") / Decimal("0.96")
+    # Unnamed, the TTL is the hour the lineages carried before.
+    assert cost_checks.WarmLeadLineage(
+        kind="no-web", seats=1, model=_OPUS, lead_usage={}, batched_first=()
+    ).cache_ttl == "1h"
+
+
 def test_p_is_the_median_of_the_measured_prefixes() -> None:
     """An even count takes the mean of the middle two: four seats at 30,000
     and four at 40,000 give p = 35,000 (h₁ = 0.5: the 40,000s wrote)."""
@@ -665,8 +684,9 @@ def test_a_lineage_the_batch_reads_is_kept_and_diagnostics_record_it(
     monkeypatch, caplog
 ) -> None:
     """Ten no-web seats at the floor; the nine batched ones read the 30,000
-    prefix. N = 9 × 0.5 × 1 × 7.8e-6 × 30,000 − 0.5 × 0.28228 = 0.91186,
-    D = 10 × 0.5 × 7.8e-6 × 30,000 = 1.17, h₀* = 0.77936…"""
+    prefix. Their markers are 5 minutes (Δ = $5.00 − $0.20 per million):
+    N = 9 × 0.5 × 1 × 4.8e-6 × 30,000 − 0.5 × 0.28228 = 0.50686,
+    D = 10 × 0.5 × 4.8e-6 × 30,000 = 0.72, h₀* = 0.70397…"""
     caplog.set_level(logging.INFO, logger="buildaspec.cost_checks")
     _minimums_at_the_floor(monkeypatch)
     titles, scripts = _doc_scripts()
@@ -688,7 +708,7 @@ def test_a_lineage_the_batch_reads_is_kept_and_diagnostics_record_it(
             "read_share": 1.0,
             "prefix_tokens": 30_000,
             "lead_cost_usd": _LEAD_COST,
-            "break_even_read_share": 0.7794,
+            "break_even_read_share": 0.704,
             "verdict": "kept",
         }
     ]
@@ -819,10 +839,11 @@ def test_an_expensive_lead_on_a_lightly_read_lineage_is_unprofitable(
     monkeypatch,
 ) -> None:
     """Five of the nine batched seats read (h₁ = 5/9, not below one half), and
-    the lead cost $1.45628 (60,000 output, a 32,000-token 1-hour write, 70
-    input): N = 2.5 × 0.234 − 0.72814 = −0.14314."""
+    the lead cost $1.36028 (60,000 output, a 32,000-token 5-minute write, 70
+    input): with Δ·p = 4.8e-6 × 30,000 = 0.144,
+    N = 2.5 × 0.144 − 0.68014 = −0.32014 and h₀* = −0.32014 / 0.72."""
     _minimums_at_the_floor(monkeypatch)
-    lead = {"input": 70, "output": 60_000, "cache_write": 32_000, "cache_write_1h": 32_000}
+    lead = {"input": 70, "output": 60_000, "cache_write": 32_000}
     _titles_used, scripts = _doc_scripts([_READ] * 5 + [_WROTE] * 4, lead=lead)
     _run(_LeadClient(scripts))
 
@@ -830,8 +851,8 @@ def test_an_expensive_lead_on_a_lightly_read_lineage_is_unprofitable(
     assert block["reason"] == "unprofitable"
     (lineage,) = block["last_check"]["lineages"]
     assert lineage["read_share"] == 0.5556
-    assert lineage["lead_cost_usd"] == 1.45628
-    assert lineage["break_even_read_share"] == -0.1224
+    assert lineage["lead_cost_usd"] == 1.36028
+    assert lineage["break_even_read_share"] == -0.4447
     assert lineage["verdict"] == "unprofitable"
 
 

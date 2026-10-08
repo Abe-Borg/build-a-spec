@@ -20352,3 +20352,191 @@ aggregates. Deferred, deliberately: a 1-seat panel for low-severity
 candidates (42 of the 82 seats here) and a cheaper verifier model, both
 already recorded as deferred levers because they change what the review
 means.
+
+## Final QC's verifier seats read the standards in effect — implemented notes (2026-10-08)
+
+**The gap.** Every lens reviews against `<standards_in_effect>`, the editions
+in effect and the basis recorded for each (`standards_context_block`, rendered
+by `_render_standards`), and the `code_compliance` brief tells it to flag
+"editions that contradict the recorded basis in <standards_in_effect>". The
+verifier seats checking those findings were handed that brief in
+`<lens_brief>`, but their cached prefix (`_verifier_shared_prefix`) carried
+only `<current_date>`, the attached documents, the established facts and
+`<specification>`. A seat asked to refute "this cites the 2025 edition, but
+the recorded basis is the jurisdiction's adopted 2022 edition" could not see
+the recorded basis, and its system prompt says "Default to refuted when
+uncertain". Under final-qc/4 a two-seat medium/low panel whose seats both
+refute marks the finding refuted, and a critical/high panel goes to disputed
+unless a validated citation backs the refutation. So the finding the
+compliance lens exists to catch — NFPA 13 cited at the 2025 default where the
+jurisdiction adopted an earlier edition, recorded with `set_standard_edition`
+— was the one its seats were least able to uphold. The prefix's docstring
+already argued for the documents and the facts on this ground ("a seat asked
+to refute X cannot adjudicate it without Y").
+
+**What changed** (`backend/qc/engine.py`, one frontend sentence).
+
+- `_standards_in_effect_block(standards)` is the one `<standards_in_effect>`
+  frame. `_lens_shared_prefix` now uses it; its output, and
+  `_render_standards`', are byte-identical to the previous commit's for both
+  modules, with and without every optional block and with an exclusion
+  recorded (checked by executing the old functions beside the new).
+- `_verifier_shared_prefix` takes `standards_in_effect` and renders the frame
+  after `<current_date>` and before the attached documents, the facts and
+  `<specification>`: the lens prefix's reading order (what governs, what the
+  owner asked for, what the team recorded, the document under review). It is
+  in block 0, the shared block that carries the cache breakpoint. Empty
+  renders nothing, as for the documents and the facts, so a direct caller
+  that passes none (tests, `tools/qc_verifier_canary.py`) builds the bytes it
+  always did.
+- `_run_final_qc` renders `standards_render = _render_standards(module,
+  section)` once, beside the documents and facts blocks, from the run's
+  snapshot: the render every lens reads and `build_qc_input_manifest` hashes.
+  It reaches all three seat builders: the batched specs (the batched phase's
+  streamed warm lead is sent from its seat's batched spec), the streamed
+  pool's lineage-key specs, and `_verify_one` for the streamed workers.
+  `_verifier_call_spec` and `_verify_one` take `standards_in_effect` and pass
+  it on. The two transports stay byte-identical apart from the cache TTL.
+- `_verifier_system_prompt`'s data-classification sentence names
+  `<standards_in_effect>` ("the editions in effect for this project and their
+  recorded basis") beside the attachments and the facts. Each fan-out
+  enumerates what it treats as data, so an omission is silent (the PR #138
+  lesson). It matters twice here: the basis is text the chat model or the
+  user wrote, and the block carries drafting directives addressed to the chat
+  model ("record it with a set_standard_edition operation", the
+  basis-is-not-document-text line), which a seat should read as data.
+- `_render_standards` defuses the block's own tag (`_STANDARDS_TAG_PATTERN`,
+  any case or spacing) to `[escaped tag: standards_in_effect]`, the posture
+  `reference_context_block` and `neutralize_fact_delimiters` take. A basis,
+  an exclusion's reason or an added standard's title is text the chat model
+  or a person wrote, and a shared project file or brief can carry it in
+  (`validate_overrides_shape` checks its shape, not its words); one holding
+  `</standards_in_effect>` would have closed the frame early in every lens
+  prompt since the block existed, and would now do it in every seat's. The
+  chat's own context is untouched (it renders `standards_context_block`
+  without this frame). Text without the tag renders byte for byte as before,
+  so neither the lens bytes nor the manifest's fingerprint move for an
+  ordinary project; one whose basis does hold the tag reads its retained
+  report stale once, rightly, since what its reviewers read changed. This
+  was not among the three asks for this change and was added deliberately:
+  the change that sends the block to every seat should send it with both
+  halves of the defence the documents and the facts have (the PR #138
+  lesson).
+- `TrustDeepDiveModal`'s Final QC "What is sent" says the seats get the
+  editions in effect with their recorded basis.
+
+**Protocol and manifest: neither changes.** The decision, and why:
+
+1. *No new input.* The render the seats now read is the render the manifest
+   already hashes (`module.standards_basis_fingerprint`, sha256 of
+   `_render_standards`), from the same snapshot; a test pins that every
+   seat's block hashes to that fingerprint. Recording, changing or removing
+   an edition override already reads a retained report stale.
+2. *The manifest records inputs and review rules, not which prompt carries
+   them.* P55-4 changed every Final QC system prompt and a retained result
+   stayed current ("The QC input manifest hashes lens briefs, not system
+   prompts", pinned by
+   `test_a_retained_result_stays_current_across_the_new_lines`).
+   Reference documents and project facts each got a manifest key because
+   each was a new input, not because a seat began to read it. A key that
+   only recorded "seats read the standards" would be the first prompt-layout
+   fact in the manifest, and every later layout change would owe it an
+   update.
+3. *No protocol bump.* `QC_PROTOCOL_VERSION` moves when adjudication, the
+   verdict schema or the record shape changes; none did. A bump would make
+   `QCResult.from_dict` discard every saved final-qc/4 report.
+4. *The release still reads every retained report stale once.*
+   `application_version` is in the hashed manifest and `matches_inputs`
+   rebuilds it with the running version, so updating to the release that
+   carries this reads every report made before it stale until Final QC runs
+   again: the conservative direction for a review whose seats could not see
+   the basis. Pinned by
+   `test_the_release_that_ships_it_reads_every_retained_report_stale_once`.
+
+What remains: on a source checkout between this merge and that release the
+version does not move, so a report made earlier on that checkout stays
+current although its seats did not see the block. That is the posture every
+Final QC prompt change has had. The `stale_edition` lint also flags a
+standard cited at an edition contradicting the one in effect, override
+included, and every lint issue blocks readiness; the lens is the second
+check, for what the patterns miss.
+
+**Costs.** Each lineage's cached seat prefix grows by a few hundred tokens
+and is rewritten once per lineage. Framed, the block is 1,223 characters for
+the hyperscale module's defaults (about 306 tokens at the app's
+four-characters-per-token estimate) and 872 for the generic module with
+nothing recorded (about 218), plus one line of roughly 90 characters per
+recorded edition and its basis; the verifier system prompt grows by 90
+characters. Both sit in the cached prefix, which a lineage's first seat
+writes once per run and every other seat reads. On the measured run's shape
+(82 seats, two lineages, Opus 5.5; "Final QC streams its verifier seats,
+leaders first" above), with about 350 added tokens: under one cent per run
+on the streamed default (two 5-minute writes and 80 reads), about eight
+cents on the batched transport at the measured 39% read rate, and at most
+about twelve if every batched seat wrote its own copy. The changed bytes
+also leave an entry cached under the old ones unread; entries live 5
+minutes streamed and 1 hour batched, and a run writes its own lineages
+anyway, so the one-time cost is at most one write per lineage for a run
+that would otherwise have read a copy made just before the update. Lens,
+grouping and research requests are untouched.
+
+**Unchanged.** The lens prefix (byte-identical unless a basis carries the
+block's tag), the grouping calls (deliberately without the block: "are these
+the same defect?" is not an edition question, the posture the documents and
+facts took), the per-finding tail, budgets, panel sizes, adjudication
+(final-qc/4), the QC protocol version and the manifest, the SSE protocol,
+readiness, the warm lead and its self-check, the stagger. The research
+profile, the discipline and the source-preservation summary stay lens-only.
+`tools/qc_verifier_canary.py` checks the strict verdict schema with a toy
+prefix and was not changed.
+
+**Tests.** `tests/test_qc_verifier_standards.py` (15), on the owner's case:
+the hyperscale module (NFPA 13 2025 default) with an NFPA 13 2022 override
+and its adoption basis. The seat frame equals the lens frame and precedes the
+documents, the facts and the specification; a basis or an exclusion's reason
+holding the tag (four spellings) leaves exactly one opening and one closing
+tag in the lens and the seat prefix, with the words around it kept; a render
+without the tag is the context block byte for byte; an empty render adds
+nothing; on the streamed and the batched transport every seat carries the
+block in its cached block 0, never the tail, equal to the code-compliance
+lens's frame, with the basis, hashing to `standards_basis_fingerprint`;
+streamed and
+batched seats differ only in their TTL (fixed clock); the batched phase's
+warm lead and its seven batched followers share one prefix carrying the
+block; the streamed pool keys each seat on the request it sends; the
+verifier prompt's data sentence names the block; a retained result stays
+current across the change; a version bump reads it stale.
+`tests/test_qc_batch_verification.py`'s streamed-vs-batched bytes test also
+asserts the block is in the bytes it compares.
+
+**Reversion evidence.** Nine probes, each applied in place, run and
+restored (the engine was byte-identical afterwards): (1) the batched site
+drops the argument → 4 failures (the per-transport test's batched case, the
+TTL comparison, the warm lead, the existing bytes test); (2) the streamed
+lineage-key build drops it → the keying test; (3) the streamed worker drops
+it → 4 (the streamed case, the TTL comparison, the keying test, the existing
+bytes test); (4) the data sentence loses the tag → the prompt test; (5) the
+block after the documents and facts → the order test; (6) an empty render
+still framed → the empty-render and stays-current tests; (7)
+`application_version` out of the manifest → the version-bump test; (8) the
+seat render one character off the lens render → 3 (both transports and the
+warm lead); (9) the escape removed → the four tag spellings. Ruff clean;
+455 passed across the 18 suites the change touches or reads (the QC
+transports, stagger, warm lead, live events, ceilings, verifier v3, writing
+policy, reference and fact visibility, runtime date, refusal fallback,
+manifest integrity, docs consistency); `npm test` (542) and `npm run build`
+pass.
+
+**Release-note draft (for the release after 1.24.0).** "Final QC's reviewers
+see the standards editions in effect. The reviewer seats that try to refute
+each finding now read the same list of editions, with the adoption basis
+recorded for each, that the five lenses check your section against, so a
+finding that a citation contradicts the edition your jurisdiction adopted is
+judged against that record instead of being dismissed for want of it. A
+Final QC result from before this update reads out of date once; run it
+again."
+
+**Not measured.** No paid API call was made. Whether the seats now uphold
+more correct edition findings is unmeasured; the owner can compare the
+refuted code-compliance candidates of the next review with a report from
+before the update.

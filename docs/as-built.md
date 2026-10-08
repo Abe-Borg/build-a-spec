@@ -21754,8 +21754,8 @@ existed) said the status reason as if it explained the change.
   has none), an attached document's `ref-N` its title in quotes, and every
   other id the app mints (`r-` + 12 hex, `qc-` + 12 hex, `pf-N`,
   `pf-conflictN`, `fu-N`) is dropped with the label and connective that only
-  introduced it; `researched <date>` / `applied <date>` go too; a
-  parenthetical left holding only those goes whole; punctuation is tidied.
+  introduced it; `researched <date>` goes too; a parenthetical left
+  holding only those goes whole; punctuation is tidied.
   Ids never match inside a word, a dotted name or a URL path. Text with no
   id and no such date comes back exactly as recorded (stripped), and a
   reason that was nothing but ids is left out. Research text from the web
@@ -21801,3 +21801,30 @@ why the assistant confirmed a provision or changed its source link — those
 never reach Word — and no longer carries the app's research item ids or
 dates. Element ids in a reason become provision numbers. Projects you
 already have export clean too."
+
+**Codex review on PR #302 (three P2 findings, all fixed in the PR):**
+
+- *"applied <date>" can be a fact of the work.* "The coating was applied on
+  2026-10-07" lost its date. `reader_text` now drops only `researched
+  <date>` (the research heading's own phrasing); the QC heading's applied
+  date is gone at its source, so free text keeps every "applied".
+- *A shown edit repeating a status reason was still hidden by the history.*
+  A status edit with reason X, then a rewrite with the same X: the trail
+  does not grow (a repeat is not appended) and the stored mark is cleared,
+  but the history's flag for X stayed set. `_workflow_flags` now treats a
+  step that changed the element's words or presence while leaving its
+  trail as it was as one that re-gave its newest reason, and says it. Only
+  words or presence count there — a sibling's move shifts the element's
+  order and must not bring a status reason back (found in self-review of
+  the first cut, which used `_changed_visibly`).
+- *A deleted provision's id was dropped, not numbered.* The number map was
+  the current tree's, which holds no deleted element, though deletion
+  reasons are said on tracked deletions. `_Numbers` falls back, on the
+  first miss, to the number each element last had in the version history.
+
+Tests: four more in `tests/test_redline_comment_hygiene.py` (the "applied"
+case in the `reader_text` table; a repeated status reason said in both
+records, and not revived by a sibling's move; a deleted provision's id
+numbered from the history). Reversion probes, each restored: the repeat
+rule off (1 failure), the repeat rule counting moves (2), no history
+numbers (1), "applied" dates dropped again (1).

@@ -347,6 +347,69 @@ def test_a_turn_that_retypes_and_restamps_one_provision_keeps_both_said():
     )
 
 
+def test_a_shown_edit_repeating_a_status_reason_says_it_in_both_records():
+    """Codex review, PR #302: a status edit with reason X, then a later
+    rewrite with the same X. The trail does not grow (a repeat is not
+    appended) and the stored mark is cleared; the history must agree, so X
+    is said. A sibling's later move, which shifts the provision's order but
+    not its words, must not bring a status reason back."""
+    store = _store(
+        [_ARTICLE, _PROVISION, {**_PROVISION, "text": "Second.", "reason": "Second provision."}],
+        [_CONFIRM],
+        [
+            {
+                "action": "replace",
+                "target_id": "pt1.a1.p1",
+                "text": "Provide a wet-pipe sprinkler system throughout.",
+                "reason": _STATUS_REASON,
+            }
+        ],
+    )
+    assert store.doc.edit_reasons["pt1.a1.p1"] == ["Scope the user stated.", _STATUS_REASON]
+    assert store.doc.workflow_reasons == {}
+    expected = (
+        ("Reasons, oldest first:",),
+        ("1. Scope the user stated.",),
+        (f"2. {_STATUS_REASON}",),
+    )
+    history = store.versions[: store.index + 1]
+    assert redline_comment_basis(store.doc, history=history)["pt1.a1.p1"].reasons == expected
+    current, legacy = _as_legacy(store)
+    assert redline_comment_basis(current, history=legacy)["pt1.a1.p1"].reasons == expected
+
+    moved = _store(
+        [_ARTICLE, _PROVISION, {**_PROVISION, "text": "Second.", "reason": "Second provision."}],
+        [_CONFIRM],
+        [{"action": "move", "target_id": "pt1.a1.p2", "position": 0, "reason": "Second reads first."}],
+    )
+    current, legacy = _as_legacy(moved)
+    assert redline_comment_basis(current, history=legacy)["pt1.a1.p1"].reasons == (
+        ("Reason: Scope the user stated.",),
+    )
+
+
+def test_a_deleted_provisions_id_reads_as_the_number_it_last_had():
+    """Codex review, PR #302: a deletion's reason is said on the deleted
+    provision, which the current tree no longer numbers."""
+    store = _store(
+        [_ARTICLE, _PROVISION, {**_PROVISION, "text": "Second.", "reason": "Second provision."}],
+        [
+            {
+                "action": "delete",
+                "target_id": "pt1.a1.p2",
+                "reason": "pt1.a1.p2 repeats pt1.a1.p1.",
+            }
+        ],
+    )
+    history = store.versions[: store.index + 1]
+    bases = redline_comment_basis(store.doc, history=history)
+    assert bases["pt1.a1.p2"].reasons[-1] == ("2. 1.1.B repeats 1.1.A.",)
+    # Without the history, the deleted one cannot be numbered and is dropped.
+    assert redline_comment_basis(store.doc)["pt1.a1.p2"].reasons[-1] == (
+        "2. repeats 1.1.A.",
+    )
+
+
 def test_the_header_and_a_malformed_history_degrade_to_saying_the_reason():
     store = _store(
         [_ARTICLE, {"action": "replace", "target_id": "sec", "text": "WET-PIPE", "reason": "Section chosen."}],
@@ -388,6 +451,11 @@ _TITLES = {"ref-1": "Owner Standard"}
         ("Paragraph pt2.a9.p1 duplicates the scope; finding qc-0123456789ab.", "Duplicates the scope."),
         ("Per research (researched 2026-10-07).", "Per research."),
         ("Per research, researched on 2026-10-07.", "Per research."),
+        # "applied <date>" can be a fact of the work (Codex review, PR #302).
+        (
+            "The coating was applied on 2026-10-07; repair it under warranty per pf-3.",
+            "The coating was applied on 2026-10-07; repair it under warranty.",
+        ),
         ("r-ec2b37e839e6", ""),
         ("(fu-4)", ""),
         # Nothing that only looks like an id.

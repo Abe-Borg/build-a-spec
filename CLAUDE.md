@@ -1518,10 +1518,12 @@ r-ec2b37e839e6, researched 2026-10-07)". The file may go to a client.
 - **No ids, no bookkeeping dates.** Research heading `Basis: requirements
   research` (no item id, no date); QC heading without `applied <date>`.
   Reasons and QC title/issue go through `redline_basis.reader_text`: an
-  element id → its number, `ref-N` → the document's title, other app ids
-  (`r-`/`qc-` + 12 hex, `pf-`, `fu-`) and `researched/applied <date>`
-  dropped with their label; a pure-bookkeeping parenthetical goes whole;
-  id-free text is unchanged. Research text is not rewritten.
+  element id → its number (a deleted one's from the history), `ref-N` →
+  the document's title, other app ids (`r-`/`qc-` + 12 hex, `pf-`, `fu-`)
+  and `researched <date>` dropped with their label; a pure-bookkeeping
+  parenthetical goes whole; id-free text is unchanged. Never "applied
+  <date>" in free text: that can be a fact of the work. Research text is
+  not rewritten.
 - **Bytes that changed once.** The stable prompt's reason line and the
   `reason` property description (name sources by what they say, provisions
   by number, never an id): every open session rewrites its cached prefix

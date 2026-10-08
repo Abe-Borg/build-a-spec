@@ -689,11 +689,12 @@ says so.
 
 **No app bookkeeping in a comment.** Reasons and Final QC text pass through
 `redline_basis.reader_text`: an element id becomes the provision's number
-(`pt1.a2.p3` → `1.2.C`), an attached document's id its title in quotes,
-and every other id the app mints — a research item, a fact, a finding, a
-follow-up — is dropped with the word that introduced it, as is a
-`researched <date>` or `applied <date>`; a parenthetical left holding only
-those goes whole. Text with no id reads exactly as recorded. The prompt asks
+(`pt1.a2.p3` → `1.2.C`; a deleted provision's, the number it last had), an
+attached document's id its title in quotes, and every other id the app
+mints — a research item, a fact, a finding, a follow-up — is dropped with
+the word that introduced it, as is a `researched <date>`; a parenthetical
+left holding only those goes whole. An `applied <date>` in free text is
+kept: it can be a fact of the work. Text with no id reads exactly as recorded. The prompt asks
 the assistant to name sources by what they say and provisions by number in
 the first place.
 

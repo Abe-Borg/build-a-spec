@@ -100,10 +100,12 @@ _ID_RE = re.compile(
     r"|(?P<record>(?:r|qc)-[0-9a-f]{12}|pf-(?:conflict)?\d+|ref-\d+|fu-\d+)"
     r")(?![\w\-/])"
 )
-#: The app's own dating of a record — "researched 2026-10-07", "applied
-#: 2026-09-20" — which the research and QC headings used to print.
+#: The research heading's own dating of an item, "researched 2026-10-07".
+#: Only that verb: "applied on 2026-10-07" can be a fact of the work (a
+#: coating, a test), so a date after it is the reader's (Codex review on
+#: PR #302).
 _BOOKKEEPING_DATE_RE = re.compile(
-    r"\b(?:researched|applied)\s+(?:on\s+)?\d{4}-\d{2}-\d{2}(?:T[\d:.+\-Z]*)?",
+    r"\bresearched\s+(?:on\s+)?\d{4}-\d{2}-\d{2}(?:T[\d:.+\-Z]*)?",
     re.IGNORECASE,
 )
 #: Where a dropped id (or bookkeeping date) was, until the text is tidied.
@@ -122,7 +124,8 @@ _CONNECTIVE_OF_DROPPED_RE = re.compile(
 )
 _PARENTHETICAL_RE = re.compile(r"\s*\(([^()]*)\)")
 #: What a parenthetical may hold besides dropped ids and still be pure
-#: bookkeeping — "(item r-…, researched 2026-10-07)".
+#: bookkeeping — "(item r-…, researched 2026-10-07)". Checked only on a
+#: parenthetical that held a dropped id.
 _BOOKKEEPING_RE = re.compile(
     r"\x00|\d{4}-\d{2}-\d{2}(?:T[\d:.+\-Z]*)?"
     r"|\b(?:researched|applied|recorded|dated|see|per|and|on|research)\b"
@@ -149,9 +152,9 @@ def reader_text(
     An element id that ``numbers`` holds becomes its number ("1.2.C",
     "PART 2"); an attached document's id that ``titles`` holds becomes its
     title in quotes. Every other id is dropped with the word that only
-    introduced it ("item", "fact" …), as is a "researched <date>" or
-    "applied <date>"; a parenthetical left holding nothing but those and
-    bookkeeping words goes whole, and the punctuation is tidied. Text with
+    introduced it ("item", "fact" …), as is a "researched <date>"; a
+    parenthetical left holding nothing but those and bookkeeping words goes
+    whole, and the punctuation is tidied. Text with
     neither comes back as it was (only stripped); text that was nothing but
     ids comes back empty."""
     value = str(text or "").strip()
@@ -188,6 +191,46 @@ def reader_text(
     if capital:
         value = value[:1].upper() + value[1:]
     return value if _WORD_RE.search(value) else ""
+
+
+class _Numbers(Mapping[str, str]):
+    """Element numbers for one export: the current tree's, and — only when a
+    text names an element the tree no longer holds — the number it last had
+    in the version history, so "Removed pt1.a1.p1" on a deleted provision
+    reads "Removed 1.1.A", not "Removed" (Codex review on PR #302). The
+    history is walked once, on the first such miss."""
+
+    def __init__(
+        self, current: Mapping[str, Any], history: Sequence[Mapping[str, Any]] = ()
+    ) -> None:
+        self._current = _element_numbers(current)
+        self._history = history
+        self._former: dict[str, str] | None = None
+
+    def _lookup(self, uid: str) -> str | None:
+        if uid in self._current:
+            return self._current[uid]
+        if self._former is None:
+            self._former = {}
+            for snapshot in self._history:
+                if isinstance(snapshot, Mapping):
+                    try:
+                        self._former.update(_element_numbers(snapshot))
+                    except (AttributeError, TypeError):
+                        continue  # a malformed version names nothing
+        return self._former.get(uid)
+
+    def __getitem__(self, uid: str) -> str:
+        number = self._lookup(uid)
+        if number is None:
+            raise KeyError(uid)
+        return number
+
+    def __iter__(self):
+        return iter(self._current)
+
+    def __len__(self) -> int:
+        return len(self._current)
 
 
 @dataclass(frozen=True)
@@ -322,7 +365,12 @@ def _workflow_flags(
     each committed turn is one step. A step that changed the element's words
     or place AND recorded more than one reason on it cannot say which reason
     was which, so all of them stay said; an entry already on the first
-    version is said too. This is how a project edited before
+    version is said too. A step that changed the element's words (or
+    deleted it) but left its trail as it was gave its newest reason again (a
+    repeat is not appended; a hand edit would have cleared the trail), so
+    that entry is said from then on — the shown edit wins, as the stored
+    mark has it (Codex review on PR #302). Only words or presence count
+    there: a sibling's move shifts the element's order too. This is how a project edited before
     ``workflow_reasons`` existed (1.25.0–1.26.0) keeps its status reasons out
     of the comments; for a newer edit the mark is exact and this agrees."""
     snapshots = [*history, current]
@@ -340,9 +388,22 @@ def _workflow_flags(
         for uid in set(trails_before) - set(trails):
             flags.pop(uid, None)
         changed = [uid for uid, trail in trails.items() if trail != trails_before.get(uid)]
+        repeated = [
+            uid
+            for uid, trail in trails.items()
+            if trail and trail == trails_before.get(uid) and (flags.get(uid) or [False])[-1]
+        ]
+        if not (repeated or changed):
+            trails_before = trails
+            continue
+        before = shape(index - 1)
+        after = shape(index)
+        for uid in repeated:
+            # Words or presence only: a sibling's move shifts this element's
+            # order too, and must not turn its status reason back on.
+            if before[0].get(uid) != after[0].get(uid):
+                flags[uid][-1] = False
         if changed:
-            before = shape(index - 1)
-            after = shape(index)
             for uid in changed:
                 old, new = trails_before.get(uid, []), trails[uid]
                 kept = _overlap(old, new)
@@ -509,7 +570,7 @@ def redline_comment_basis(
     }
     snapshot = current.to_dict()
     reader = _Reader(
-        numbers=_element_numbers(snapshot),
+        numbers=_Numbers(snapshot, history),
         titles={
             rid: trimmed(document.get("title") or document.get("filename") or "", 200)
             for rid, document in references_by_id.items()

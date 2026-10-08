@@ -241,9 +241,10 @@ app talking to itself, and they are gone:
   requirements research` instead of `Basis: requirements research (item
   r-ec2b37e839e6, researched 2026-10-07)`, and the Final QC line drops its
   `applied <date>`. In reasons and Final QC text, a provision's element id
-  becomes its number (`pt1.a2.p3` → `1.2.C`), an attached document's id its
-  title, and any other id the app makes (a research item, a fact, a finding,
-  a follow-up) is dropped with the word that introduced it. The assistant is
+  becomes its number (`pt1.a2.p3` → `1.2.C`; a deleted provision's, the
+  number it last had), an attached document's id its title, and any other
+  id the app makes (a research item, a fact, a finding, a follow-up) is
+  dropped with the word that introduced it. The assistant is
   also asked to write reasons that way in the first place.
 
 Nothing else about the redline changes: the same changes get a comment, the

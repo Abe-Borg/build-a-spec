@@ -20300,17 +20300,30 @@ Seven existing tests were updated for the new default and TTL
 `test_qc_live_events.py`, `test_qc_preferences.py`, `test_qc_verifier_v3.py`,
 `test_qc_warm_launch.py`); the synchronized circuit-breaker test now passes
 `warm_wait_seconds=0`, since its client releases a full pool together.
-`tests/test_qc.py`'s `_run` is pinned to `batch_verification=True`: that
-file pins adjudication and had always run it on the batched transport (the
-shipped default until now), where the fake hands a candidate's scripted
-verdicts out in seat order. On the streamed transport the seats arrive in
-thread order, so a `[True, True, False]` script lands its dissent on a
-random reviewer — one test reads `verdicts[2]`, another hashes the votes
-into a content-addressed id — and both failed about four runs in five once
-the default flipped. The pin keeps the file meaning what it always meant;
-the streamed transport's own contracts are `test_qc_live_events.py` and
-`test_qc_streamed_stagger.py`. (The lineage keys are also built only when
-the wait is on, so a zero wait is byte-for-byte the pre-stagger pool.)
+**Tests that had been running on the batch without saying so.** The
+shipped default was batch, so every QC test that named no transport ran
+batched, and some depend on what the batch guarantees: the fakes hand a
+candidate's scripted verdicts out in arrival order, a batch submits its
+seats in seat order, and streamed seats arrive in thread order. Once the
+default flipped, a `[True, True, False]` script landed its dissent on a
+random reviewer and the first CI run found four failures the targeted runs
+had missed (three deterministic, one a 1-in-5 race). What changed:
+`tests/test_qc.py`'s `_run` passes `batch_verification` through (None
+follows the live setting, which `tests/test_refusal_handling.py` toggles
+through it) and its two seat-order-sensitive tests — one reads
+`verdicts[2]`, one hashes the votes into a content-addressed id — ask for
+batch explicitly; `tests/test_qc_audit_report.py` gets an autouse fixture
+that sets both `QC_BATCH_VERIFICATION` and `QC_BATCH_VERIFICATION_DEFAULT`
+to True for every test (its fixtures depend on seat order through the
+memo's "representative note", two tests read the batch's multiplier and
+reminder rounds back, and `create_app` re-samples the setting from
+`qc_preferences`, whose fallback is the default); and
+`tests/test_prompt55_batch_reminder.py` compares the streamed and batched
+reminder requests with their `cache_control` markers stripped, the TTL
+being the one documented difference. The streamed transport's own
+contracts are `test_qc_live_events.py` and `test_qc_streamed_stagger.py`.
+(The lineage keys are also built only when the wait is on, so a zero wait
+is byte-for-byte the pre-stagger pool.)
 
 **Reversion evidence.** Four probes, each applied, run and restored:
 (1) stagger off (`if False and warm_wait_seconds > 0`) — the four "when" tests

@@ -109,7 +109,16 @@ def _run(
     sink=None,
     version_index=0,
     source_guard=None,
+    batch_verification=None,
 ):
+    """``batch_verification`` None follows the live setting, as the engine
+    does (tests/test_refusal_handling.py toggles it through this helper).
+    A test whose 3-seat script must land its dissent on a known reviewer
+    passes True: the fakes hand a candidate's scripted verdicts out in
+    arrival order, a batch submits its seats in seat order, and streamed
+    seats arrive in thread order — which was invisible while batch was the
+    shipped default and is a race since the streamed stagger made streaming
+    the default."""
     return run_final_qc(
         store.doc,
         profile,
@@ -123,18 +132,7 @@ def _run(
         source_guard=source_guard,
         remembered_dismissed=remembered,
         event_sink=sink or (lambda _e: None),
-        # This file pins ADJUDICATION, and it has always run it on the
-        # batched transport: that was the shipped default until the streamed
-        # stagger made streaming the default. The fakes hand a candidate's
-        # scripted verdicts out in arrival order; a batch submits its seats
-        # in seat order, so ``[True, True, False]`` always lands the dissent
-        # on reviewer 3, while streamed seats arrive in thread order and the
-        # dissent moves (one test reads ``verdicts[2]``, another hashes the
-        # votes into a content-addressed id). Pinned explicitly so the
-        # default flip changes nothing here; the streamed transport's own
-        # contracts are tests/test_qc_live_events.py and
-        # tests/test_qc_streamed_stagger.py.
-        batch_verification=True,
+        batch_verification=batch_verification,
     )
 
 
@@ -681,7 +679,13 @@ def test_a_dismissed_dispute_stays_dismissed_across_a_rerun():
     where a re-run has to re-derive one from the carried record.
     """
     store = _section()
-    first = _run(SequencedFakeClient(_high_scripts(_split_panel_verdicts())), store)
+    # Batched: the content-addressed id hashes the votes by reviewer, so the
+    # split script must land identically on both runs (see ``_run``).
+    first = _run(
+        SequencedFakeClient(_high_scripts(_split_panel_verdicts())),
+        store,
+        batch_verification=True,
+    )
     runner = QCRunner()
     runner.restore(first)
     disputed = runner.result.disputed[0]
@@ -703,6 +707,7 @@ def test_a_dismissed_dispute_stays_dismissed_across_a_rerun():
         SequencedFakeClient(_high_scripts(_split_panel_verdicts())),
         store,
         remembered=remembered,
+        batch_verification=True,
     )
     regenerated = second.disputed[0]
     # The same disagreement: same votes, same claim, so the same id.
@@ -795,6 +800,8 @@ def test_a_reloaded_v4_report_re_adjudicates_to_the_same_outcome():
             )
         ),
         _section(),
+        # Batched, so the dissent is reviewer 3's (see ``_run``).
+        batch_verification=True,
     )
     restored = QCResult.from_dict(result.to_dict())
     assert restored is not None

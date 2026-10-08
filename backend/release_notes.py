@@ -89,6 +89,142 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.25.0",
+        date="2026-10-07",
+        headline="Every edit says why, and Final QC costs less per token",
+        summary=(
+            "Every assistant edit carries a brief reason in the document panel "
+            "and the redline on your original. Final QC checks findings with "
+            "Sonnet 5.5 at high effort, keeps Opus 5.5 for its five review "
+            "lenses, and streams verifier seats by default to share their "
+            "stored section. Re-run saved Final QC results before applying "
+            "their fixes after updating."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Understanding your edits",
+                items=(
+                    ReleaseItem(
+                        title="Every edit says why",
+                        body=(
+                            "The assistant gives a brief reason for every "
+                            "change, including a single added word. Read it "
+                            "from the why chip beside the edited text, see "
+                            "the newest reason as edits arrive, and find it "
+                            "as a Word comment in the redline on your original."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="Finding checks use Sonnet 5.5 at high effort",
+                        body=(
+                            "The reviewers that check each finding now use "
+                            "Claude Sonnet 5.5 at high effort, at half the "
+                            "per-token price of Opus 5.5. The five lenses and "
+                            "grouping calls stay on Opus 5.5; the report and "
+                            "cost display name both models and price each "
+                            "call at its own rates."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Reviewer seats stream and share their copy",
+                        body=(
+                            "New installations stream verifier seats by "
+                            "default, starting one per group before the rest "
+                            "so they can share a stored copy of your section. "
+                            "Your saved transport choice is kept, and Batch "
+                            "remains available with a five-minute store "
+                            "instead of an hour; total savings depend on the run."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Reviewers see the standards editions in effect",
+                        body=(
+                            "Finding checks read the same standards editions "
+                            "and recorded adoption basis as the review lenses, "
+                            "so edition-related findings are judged against "
+                            "your project's record."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A fix that fights itself stays advisory",
+                        body=(
+                            "Final QC marks a fix advisory when its own "
+                            "operations contradict each other, with the "
+                            "reason shown before you approve it. A valid "
+                            "move within one article applies as one change."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Saved reviews need a fresh run",
+                        body=(
+                            "Final QC results made before this update read "
+                            "out of date. Run Final QC again before applying "
+                            "its fixes; older reports still open."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Conversation and project facts",
+                items=(
+                    ReleaseItem(
+                        title="Long conversations get a deeper summary",
+                        body=(
+                            "The summary that carries earlier conversation "
+                            "forward now thinks at high effort on Sonnet 5.5 "
+                            "while retaining access to the chat's stored copy. "
+                            "If the provider refuses that setting, it uses "
+                            "the chat's effort instead."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Project-fact harvesting uses Haiku 5.5",
+                        body=(
+                            "Harvest project facts now uses Claude Haiku 5.5 "
+                            "at high effort. You still review each proposed "
+                            "fact and its quoted basis before recording it."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Using the app",
+                items=(
+                    ReleaseItem(
+                        title="Tour buttons stay within reach",
+                        body=(
+                            "Long tour cards scroll their text while keeping "
+                            "Back, Continue and End visible. The import and "
+                            "export steps are shorter and easier to follow."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Long template names stay clear of Start",
+                        body=(
+                            "The New section dialog wraps long template names "
+                            "without covering the Start button."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Developer tools show what slowed a run",
+                        body=(
+                            "Settings → Developer tools → Engine state → "
+                            "Resource pressure shows rate limits, connection "
+                            "failures, exhausted allowances and waits for "
+                            "chat, research and Final QC. The diagnostics "
+                            "bundle carries the same record."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.24.0",
         date="2026-10-06",
         headline="Clear requirements and a separate review report",

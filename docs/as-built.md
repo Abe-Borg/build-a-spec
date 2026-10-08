@@ -21183,7 +21183,8 @@ before `_build_brief_locked` stamps the link, the session is then replaced,
 and its file never carries the project id the next section was seeded with.
 An offline probe confirmed it (the saved file's `project_link` is `None`
 after the seed). The owner's current workflow exports the brief and saves
-before Next section →, which avoids it.
+before Next section →, which avoids it. **Fixed** by "Next section → joins the
+project before it saves (2026-10-08)" below.
 
 Tests: `tests/test_project_home.py` (a picked brief binds its folder and the
 first Save opens there and writes the link; a linked sibling binds, an
@@ -21210,3 +21211,100 @@ starts the new section with everything the project's brief holds, even work
 the section you are leaving never pulled, and no longer offers a section
 number the brief already lists. Starting from a section file that never
 joined a project now warns that the two will stay separate projects."
+
+## Next section → joins the project before it saves (2026-10-08)
+
+Fixes the gap "A new section starts from the whole project, in its folder"
+recorded as found, not fixed. Pressing Next section → in a section with no
+`project_link` (started blank, from a template or from an import, and never
+exported to a `.basproject`) orphaned that section. The frontend's save gate
+(`requestStartNextSection` → `setSaveGate({kind: "next-section"})`) wrote
+the `.baspec` first, with no link. `POST /api/project/next-section` then ran
+`_build_brief_locked`, which minted the id (`build_project_brief`:
+`uuid.uuid4().hex` when there is no link) into the in-memory link of a
+session `start_from_brief` replaced at once. The file never received the
+id, so the reopened section had no `project_home`
+(`discover_project_home` needs a link). A brief it exported later minted a
+second id, and `merge_project_brief` refuses to join two ids
+(`ProjectBriefMismatchError`).
+
+- **`POST /api/project/link`** (`project_link_stamp`) stamps the link
+  before the gate saves. With no link it runs `_build_brief_locked`, the
+  stamp a brief export makes: project id, name, `brief_updated_at`, empty
+  `seeded_from`, `research_rounds_at_seed` 0, and this section's own
+  registry record, all through `sanitize_project_link`. With a link it
+  changes nothing. It answers `{ok, stamped, project: {project_id, name}}`.
+  Like the brief export, it is refused inside a tour
+  (`_brief_scope_refusal`, 409 `tutorial_active`) and while a turn streams
+  (409 `turn_active`). It writes nothing to disk. A stamp records a
+  `project_brief` trace event with `action="link"`; a no-op records none.
+  It is fast and synchronous, so it is not added to the slow-operation
+  lease middleware.
+- **The start route needed no change.** `build_project_brief` keeps an
+  existing link's id, so the seed reuses the stamped one. Its second
+  `_build_brief_locked` re-upserts this section's record, which after a
+  native save also carries the saved file's name.
+- **Frontend.** `requestStartNextSection` awaits `ensureProjectLink()`
+  (`lib/api.ts`) before `isUnsaved()`, so the gate's Save writes the
+  linked file. If the stamp is refused, it reports through
+  `reportNextSectionFailure` (factored out of `doStartNextSection`'s catch)
+  and stops; going on would save the section unlinked again. A fresh stamp
+  is re-read with `refreshDoc()`, as a brief export is, so a cancelled gate
+  shows the project the section now belongs to. The gate's union gains
+  `joined: boolean`. When it is true, the `CloseDialog` body adds that the
+  section is joining a project now, that Save writes the project into its
+  file, and that continuing without saving leaves any earlier copy outside
+  the project. The Save / Start without saving / Cancel choice is
+  unchanged.
+- **What a cancel leaves.** A link identical to a brief export's. For a
+  numbered section, `project_sections_block` still renders nothing, since it
+  never lists the open section itself, so the cached project block is
+  unchanged. An unnumbered section's own `(unnumbered)` record does render
+  there. That rendering is pre-existing behavior that a brief export of an
+  unnumbered section already triggers, and this change does not alter it.
+  `brief_updated_at` is compared only with an on-disk brief's `updated_at`
+  (`_pull_availability`). No brief exists yet for a freshly minted id, so
+  the comparison has nothing to match.
+- **Unchanged.** The file route's warning for an unlinked sibling `.baspec`
+  (`brief_from_sibling_project`), whose source file is not open and so
+  cannot be stamped. Also unchanged: every request byte, the SSE protocol,
+  the tour, the saved-file format and `has_unsaved_progress`. That check is
+  coarse, so a section with content always reaches the gate.
+
+Help's "Start the next section of the same project" recipe and README (a
+Current Status entry and the route list) describe the new behavior.
+
+Tests: `tests/test_next_section.py` covers four cases:
+- An unlinked section goes through the stamp, a package written to disk and
+  Next section →. The saved file's `project_link.project_id` must equal the
+  seed's. The reopened file's brief and the next section's brief must share
+  that id, and `merge_project_brief` must join them.
+- The stamp equals an export's, changes nothing but the link, leaves the
+  project block empty, and is a no-op the second time, clocks included.
+- A seeded section's link is never re-stamped.
+- The stamp is refused while a turn streams and inside a tour, and stamps
+  nothing.
+
+`frontend/tests/nextSection.test.ts` pins the stamp before the gate, the stop
+on refusal, the re-read, the gate copy and the client. Its two existing pins
+on the gate's shape gain `joined`.
+
+Reversion probes:
+- Removing the `_build_brief_locked` call from the route failed two backend
+  tests. The end-to-end one failed on "the file the gate saved carries the
+  link" (`None`), the original probe's finding.
+- Replacing the `ensureProjectLink` call in `requestStartNextSection` with
+  `joined = false` failed the frontend pin.
+- Making the route re-stamp an existing link failed both idempotence tests.
+- Dropping the turn guard, or the tour refusal, failed the refusal test.
+
+Each probe was restored. Ruff, `tests/test_next_section.py` (18) plus the
+adjacent `test_project_home.py`, `test_project_brief.py` and
+`test_brief_merge.py` (89), `npm test` (564) and `npm run build` pass. The
+full suite runs in CI. No paid API call was made.
+
+**Release-note draft.** "Next section → no longer leaves the section you are
+leaving outside the project. A section that had never exported or started
+from a project brief used to be saved without the project's id, so it and
+the next section could never be joined again. It now joins the project before
+the save prompt, and the prompt says so."

@@ -96,6 +96,7 @@ import {
   HarvestRequestError,
   startFromProjectBrief,
   startNextSection,
+  ensureProjectLink,
   downloadProjectBrief,
   pullProject,
   refreshProjectBrief,
@@ -406,7 +407,9 @@ export default function App() {
         discipline?: string;
         templateId?: string;
       }
-    | { kind: "next-section"; opts: NextSectionRequest }
+    // `joined`: the section had no project until Next section → stamped one
+    // just now, so the gate's copy says what a Save does for it.
+    | { kind: "next-section"; opts: NextSectionRequest; joined: boolean }
     | null
   >(null);
   // A file upload in flight (master import / project open). Reading, parsing
@@ -2882,25 +2885,47 @@ export default function App() {
         });
       }
     } catch (error) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: newId(),
-          role: "assistant",
-          text: `Could not start the next section: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          error: true,
-        },
-      ]);
+      reportNextSectionFailure(error);
     } finally {
       setBriefStarting(false);
     }
   }
 
+  function reportNextSectionFailure(error: unknown) {
+    setMessages((current) => [
+      ...current,
+      {
+        id: newId(),
+        role: "assistant",
+        text: `Could not start the next section: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        error: true,
+      },
+    ]);
+  }
+
   const requestStartNextSection = async (opts: NextSectionRequest) => {
+    // Join the project BEFORE the save gate saves this section. A section
+    // that never exported or started from a brief has no project id, and the
+    // start route would mint one only for the session it replaces — the file
+    // the gate's Save wrote would never carry it, and the section left behind
+    // could never be joined to the project it started. Stamped here, that
+    // Save writes the id the next section is seeded with. A no-op when the
+    // section already belongs to a project; a refusal stops here, because
+    // going on would save the section unlinked again.
+    let joined: boolean;
+    try {
+      joined = (await ensureProjectLink()).stamped;
+    } catch (error) {
+      reportNextSectionFailure(error);
+      return;
+    }
+    // The stamp is what a brief export makes; re-read it, as an export does,
+    // so a cancelled gate still shows the project the section now belongs to.
+    if (joined) refreshDoc();
     if (await isUnsaved()) {
-      setSaveGate({ kind: "next-section", opts });
+      setSaveGate({ kind: "next-section", opts, joined });
     } else {
       void doStartNextSection(opts);
     }
@@ -3434,7 +3459,9 @@ export default function App() {
         body={
           saveGate?.kind === "install-update"
             ? "You have unsaved work in this session. Save it to a project file first, or install without saving — the installer closes the app, and this can't be undone."
-            : "You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone."
+            : saveGate?.kind === "next-section" && saveGate.joined
+              ? "You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone. This section is joining a project now: Save writes the project into its file, so it and the next section stay one project. Continuing without saving leaves any earlier copy of it outside the project."
+              : "You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone."
         }
         saveLabel={
           saveGate?.kind === "open-project" || saveGate?.kind === "open-section"

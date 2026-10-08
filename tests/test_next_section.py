@@ -11,7 +11,11 @@ What the tests pin:
 - the options payload flags what is done rather than hiding it, and reads the
   effective discipline, the manifest and the link;
 - the 409/400/404 matrix mirrors brief/start's;
-- the catalog is empty (not absent) on the open-catalog module.
+- the catalog is empty (not absent) on the open-catalog module;
+- a section that never joined a project joins one BEFORE the save gate saves
+  it (``POST /api/project/link``), so the file it leaves behind carries the
+  project id the next section is seeded with — the stamp is idempotent and
+  refused in a tour and while a turn streams.
 """
 from __future__ import annotations
 
@@ -23,9 +27,13 @@ from backend.project_brief import (
     MAX_NEXT_SECTION_TITLE_CHARS,
     ProjectBriefError,
     clean_next_section_header,
+    merge_project_brief,
     next_section_catalog,
+    parse_project_brief,
+    project_sections_block,
     sections_drafted,
 )
+from backend.spec_doc.project_package import parse_project_package
 from backend.spec_modules.generic import GENERIC
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.test_project_brief import (
@@ -443,3 +451,151 @@ def test_the_new_section_exports_a_brief_that_lists_both_sections():
     link = sessions.get_session().project_link
     assert link["seeded_from"] == ["21 13 13", "21 30 00"]
     assert [s["number"] for s in link["sections"]] == ["21 13 13", "21 30 00"]
+
+
+# ---------------------------------------------------------------------------
+# Joining the project before the save gate saves (POST /api/project/link)
+# ---------------------------------------------------------------------------
+
+
+def _saved_link(path) -> dict | None:
+    """The project link a saved ``.baspec`` actually carries on disk."""
+    return parse_project_package(path.read_bytes()).project.get("project_link")
+
+
+def test_a_section_that_never_joined_a_project_saves_the_id_its_next_section_gets(
+    tmp_path,
+):
+    """The orphan this route exists to prevent. Next section → used to save
+    the outgoing section (the frontend's save gate) BEFORE the start route
+    minted its project id, so the file kept no link while the next section
+    was seeded with one: reopened, the old section had no folder and no
+    Project panel, and a brief it exported later minted a second id the
+    merge refuses to join. The click now stamps first, the gate's Save writes
+    the link, and the start route reuses its id."""
+    client = _client()
+    session = _rich_session(client)
+    assert session.project_link is None, "a section that never exported a brief"
+
+    # What the frontend does: stamp, then the gate's Save, then the start.
+    stamp = client.post("/api/project/link")
+    assert stamp.status_code == 200, stamp.text
+    assert stamp.json()["stamped"] is True
+    section_file = tmp_path / "21 13 13.baspec"
+    section_file.write_bytes(sessions.project_package(session)[0])
+    seeded = client.post(
+        "/api/project/next-section", json={"number": "21 30 00", "title": "Fire Pumps"}
+    )
+    assert seeded.status_code == 200, seeded.text
+
+    saved = _saved_link(section_file)
+    assert saved is not None, "the file the gate saved carries the link"
+    project_id = seeded.json()["seed"]["project_id"]
+    assert saved["project_id"] == project_id, "…and it is the next section's project"
+    assert sessions.get_session().project_link["project_id"] == project_id
+    assert stamp.json()["project"]["project_id"] == project_id
+
+    # The proof that matters: the two sections are one project. The next
+    # section's brief and the reopened section's brief share an id, and the
+    # merge every save and pull runs joins them instead of refusing.
+    next_brief = parse_project_brief(client.get("/api/project/brief").content)
+    loaded = client.post(
+        "/api/project/load-file",
+        files={"file": (section_file.name, section_file.read_bytes(), "application/zip")},
+    )
+    assert loaded.status_code == 200, loaded.text
+    reopened_brief = parse_project_brief(client.get("/api/project/brief").content)
+    assert reopened_brief.project_id == next_brief.project_id == project_id
+    merged, _report = merge_project_brief(next_brief, reopened_brief)
+    assert {s["number"] for s in merged.sections} == {"21 13 13", "21 30 00"}
+
+
+def test_the_link_stamp_is_the_export_s_stamp_once_and_a_no_op_after():
+    client = _client()
+    session = _rich_session(client)
+    before = _projection(session)
+
+    first = client.post("/api/project/link")
+    assert first.status_code == 200, first.text
+    assert first.json()["stamped"] is True
+    link = dict(session.project_link)
+    # Exactly what a brief export stamps: the project's id and name, and this
+    # section in the registry — nothing seeded, nothing carried.
+    assert first.json()["project"] == {
+        "project_id": link["project_id"],
+        "name": "Client X · Data Center · Ashburn, Virginia",
+    }
+    assert link["seeded_from"] == [] and link["research_rounds_at_seed"] == 0
+    assert [s["number"] for s in link["sections"]] == ["21 13 13"]
+    # Nothing but the link moved, and the cached project block did not: a
+    # numbered section never lists itself among the project's other sections.
+    after = _projection(session)
+    after.pop("link")
+    expected = dict(before)
+    expected.pop("link")
+    assert after == expected, "a stamp changes nothing but the link"
+    assert project_sections_block(session.project_link, session.doc.doc.number) == ""
+
+    # Pressing Next section → again (or after cancelling the gate) mints
+    # nothing new: the link is left exactly as it is, clocks included.
+    again = client.post("/api/project/link")
+    assert again.status_code == 200, again.text
+    assert again.json()["stamped"] is False
+    assert again.json()["project"]["project_id"] == link["project_id"]
+    assert session.project_link == link
+
+    # An export afterwards keeps the stamped project, as a second export would.
+    exported = parse_project_brief(client.get("/api/project/brief").content)
+    assert exported.project_id == link["project_id"]
+
+
+def test_the_link_stamp_leaves_an_existing_project_alone():
+    client = _client()
+    _rich_session(client)
+    seeded = client.post(
+        "/api/project/next-section", json={"number": "21 30 00", "title": "Fire Pumps"}
+    )
+    assert seeded.status_code == 200, seeded.text
+    session = sessions.get_session()
+    link = dict(session.project_link)
+
+    resp = client.post("/api/project/link")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["stamped"] is False
+    assert resp.json()["project"]["project_id"] == seeded.json()["seed"]["project_id"]
+    assert session.project_link == link, "a seeded section's link is never re-stamped"
+
+
+def test_the_link_stamp_refuses_a_streaming_turn_and_a_tour():
+    client = _client()
+    session = _rich_session(client)
+
+    token = session.claim_model_turn()
+    try:
+        resp = client.post("/api/project/link")
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["code"] == "turn_active"
+        assert "current reply" in resp.json()["error"]
+    finally:
+        session.release_model_turn(token[0] if isinstance(token, tuple) else token)
+    assert session.project_link is None, "a refusal stamps nothing"
+
+    original = sessions.get_workspace()
+    started = client.post(
+        "/api/tutorial/start",
+        json={
+            "request_id": "project-link-refuses-in-a-tour",
+            "source": "showcase",
+            "workspace_id": original.workspace_id,
+            "generation": original.generation,
+        },
+    )
+    assert started.status_code == 200, started.text
+    try:
+        resp = client.post("/api/project/link")
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["code"] == "tutorial_active"
+        assert original.session.project_link is None, "the project behind the tour is untouched"
+    finally:
+        sessions.reset_session()

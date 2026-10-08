@@ -1187,6 +1187,41 @@ reversion evidence and the release-note draft are in `docs/as-built.md` under
 the same heading. No paid API call was made; the streamed saving is modelled
 from the measured run's usage, not yet measured live.
 
+## Final QC's verifier seats read the standards in effect — implemented notes (2026-10-08)
+
+A seat on a compliance finding was handed the `code_compliance` brief
+("editions that contradict the recorded basis in <standards_in_effect>")
+without the block it names, and seats default to refuted when uncertain.
+
+- **The block.** `_standards_in_effect_block` is the one frame for the lens
+  and verifier prefixes (the lens bytes are unchanged). `_run_final_qc`
+  renders `standards_render` once (`_render_standards`: the render the lenses
+  read and the manifest hashes) and passes `standards_in_effect=` to all
+  three seat builders: the batched specs (the warm lead streams from them),
+  the streamed lineage-key specs and `_verify_one`. In the seat prefix it
+  follows `<current_date>` and precedes the documents, the facts and
+  `<specification>`, inside cached block 0; empty renders nothing. The
+  transports still differ only in TTL. Grouping calls stay without it.
+- **The verifier system prompt** names `<standards_in_effect>` in its
+  data-classification sentence.
+- **No protocol bump, no manifest key.** The render is already hashed
+  (`standards_basis_fingerprint`), and the manifest records inputs and review
+  rules, not which prompt carries them (the P55-4 precedent). A retained
+  result stays current by fingerprint; the release's `application_version`
+  reads every retained report stale once. Both are pinned.
+- **Cost.** A few hundred tokens more in each lineage's cached prefix,
+  written once per lineage per run.
+- **The frame is escaped.** `_render_standards` defuses the block's own tag
+  in a basis, an exclusion's reason or a title (`_STANDARDS_TAG_PATTERN`, the
+  documents' and facts' posture): a shared project file or brief can carry
+  one in. Text without the tag renders byte for byte as before.
+
+Never give a seat a standards render other than the one the lenses read and
+the manifest hashes, and never add a seat path that skips it. Tests:
+`tests/test_qc_verifier_standards.py`. Full record, reversion evidence and
+the release-note draft are in `docs/as-built.md` under the same heading. No
+paid API call was made.
+
 ## Final QC's verifier seats run on Sonnet 5.5 at high — implemented notes (2026-10-08)
 
 Owner decisions (Abraham), after a cost review that asked where the app could
@@ -1233,7 +1268,9 @@ thinks at `high`.
   four buckets; Settings labels the two new categories; Help and the trust
   explainer say which model does what.
 - **Batched seats store for five minutes.** `_BATCH_VERIFIER_CACHE_TTL = ""`,
-  so both transports send identical seat requests and share a lineage key.
+  so both transports send identical seat requests and share a lineage key
+  (superseding the previous entry's "the transports still differ only in
+  TTL").
   The measured batch read the shared prefix on 39% of seats; a 1h write
   beats plain input only above a 51% read share, a 5m write above 21%, so at
   the measured share 5m wins unless five-minute hits fall below about 1%.

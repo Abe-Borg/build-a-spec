@@ -231,6 +231,41 @@ unmeasured. Compare the next review's Final QC lines in Settings → Developer
 tools → This session's cost against the measured $14.87, or run
 `tools\qc_export_cost_profile.py` on both exports.
 
+## Current Status — Final QC's reviewers see the standards editions in effect
+
+(2026-10-08. docs/as-built.md's "Final QC's verifier seats read the standards
+in effect" is the record; no release entry yet, the app version stays 1.24.0.)
+
+Final QC's second stage — the reviewer seats that try to refute each
+candidate finding — now reads the **standards editions in effect, with the
+adoption basis recorded for each**: the same block the five lenses check your
+section against. Until now a seat got the finding, the code-compliance lens's
+brief, your section, the attached documents and the project facts, but not
+the editions. Asked to refute "this cites NFPA 13 2025, but the recorded
+basis is the jurisdiction's adopted 2022 edition", it could not see the
+recorded basis, and the seats are told to refute when uncertain.
+
+- **Same block, same bytes.** The seats read exactly what the lenses read and
+  the audit manifest hashes, ahead of the attached documents, the facts and
+  your section, in the copy each group of seats shares from the cache.
+  Streamed and batched seats still differ only in how long that copy is kept.
+  Their instructions list the block among what they treat as data, never as
+  instructions, and a recorded basis that happens to contain the block's own
+  tag is defused before any lens or seat reads it, as attached documents and
+  facts already are.
+- **A retained result reads out of date once, at the update.** The editions
+  were already a recorded Final QC input, so nothing new is recorded and the
+  review protocol is unchanged. The app version is part of every result's
+  recorded inputs, so updating to the release that carries this reads an
+  older result out of date once: run Final QC again before applying its
+  fixes.
+- **Cost.** A few hundred tokens more in each group's cached copy, written
+  once per group: under a cent per review on the streamed default, and about
+  eight cents on the batched transport at the measured read rate.
+
+No paid request was sent to build or test this; whether the reviewers now
+uphold more correct edition findings is unmeasured.
+
 ## Current Status — every edit says why
 
 No release entry yet: v1.24.0 is published and its entry is frozen, so the

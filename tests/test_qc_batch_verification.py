@@ -255,6 +255,11 @@ def test_a_batched_seat_sends_the_same_request_bytes_as_a_streamed_one():
         ]
 
     for sent_stream, sent_batch in zip(stream_reqs, batch_reqs):
+        # The seat prefix carries the standards in effect the lenses read
+        # (2026-10-08), so the comparison below covers that block too.
+        assert "<standards_in_effect>\nStandards editions in effect" in (
+            sent_stream["messages"][0]["content"][0]["text"]
+        )
         for key in ("model", "system", "tools", "thinking", "output_config"):
             assert without_markers(sent_stream[key]) == without_markers(
                 sent_batch[key]

@@ -117,6 +117,14 @@ test("a native open binds its folder only for the session its load produced", ()
     load,
     /if \(!applyLoadedProject\(result, file\.name\)\) return;[\s\S]*?const token = nativeOpenTokens\.get\(file\);\s*if \(token\) await bindNativeProjectHome\(token, result\.generation\);/,
   );
+  // A brief picked natively to start a new section names its folder too:
+  // bound after the seed is applied, with the generation the seed reported.
+  const seed = /async function doStartFromBrief\([\s\S]*?\n  \}\n/.exec(app)?.[0];
+  assert.ok(seed, "doStartFromBrief must exist");
+  assert.match(
+    seed,
+    /if \(!applySessionBundle\(session\)\) return;[\s\S]*?const token = nativeOpenTokens\.get\(file\);\s*if \(token\) await bindNativeProjectHome\(token, session\.generation\);/,
+  );
   const bind = /const bindNativeProjectHome = async[\s\S]*?\n  \};/.exec(app)?.[0];
   assert.ok(bind, "bindNativeProjectHome must exist");
   assert.match(bind, /api\.bind_project_home\(token, generation\)/);

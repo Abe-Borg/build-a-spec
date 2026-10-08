@@ -346,15 +346,20 @@ def _fold(value: Any) -> str:
     return " ".join(str(value or "").split())
 
 
-def sections_drafted(session: Any) -> list[str]:
+def sections_drafted(
+    session: Any, also: Iterable[dict[str, Any]] = ()
+) -> list[str]:
     """Section numbers this project already has, in registry order with the
     open section last: the link's registry (what the brief listed, plus
-    anything a later export upserted) and this session's own number when it
-    has one. Deduplicated, whitespace-folded, never ``"(unnumbered)"`` — an
-    unnumbered section is not a section the catalog can exclude."""
+    anything a later export upserted), then ``also`` — the registry of the
+    brief in the project folder, which lists sections another section
+    exported after this one's link was last synced — and this session's own
+    number when it has one. Deduplicated, whitespace-folded, never
+    ``"(unnumbered)"`` — an unnumbered section is not a section the catalog
+    can exclude."""
     link = session.project_link if isinstance(session.project_link, dict) else {}
     numbers: list[str] = []
-    for record in link.get("sections", []) or []:
+    for record in [*(link.get("sections", []) or []), *also]:
         number = _fold((record or {}).get("number"))
         if number and number != "(unnumbered)" and number not in numbers:
             numbers.append(number)
@@ -737,10 +742,25 @@ def brief_from_sibling_project(data: bytes) -> ProjectBrief:
     load_project(parsed.project, staged)
     brief = build_project_brief(staged, ready=False)
     own = brief.newest_section or {}
+    label = f"Section {own.get('number')}" if own.get("number") else "That section"
     brief.warnings.append(
         f"Built from section {own.get('number') or '(unnumbered)'}'s project "
         "file rather than an exported brief; its readiness was not assessed."
     )
+    if not isinstance(staged.project_link, dict):
+        # A section that never exported (or started from) a brief has no
+        # project id in its file. ``build_project_brief`` minted one for this
+        # brief alone; the new section is seeded with it, and the source file
+        # never receives it — so the two can never be joined later (no shared
+        # folder, no pull). Said before the seed, never refused: a fork is a
+        # legitimate choice once it is a known one.
+        brief.warnings.append(
+            f"{label} has never been part of a project brief, so it will not be "
+            "linked to the new section: they start as separate projects, and "
+            "Pull project changes will never join them. To keep them in one "
+            "project, open that section, export its project brief and save the "
+            "section, then start the new section from that brief."
+        )
     return brief
 
 

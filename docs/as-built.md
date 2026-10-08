@@ -21112,3 +21112,101 @@ harness was deleted. No paid API call was made.
 guide: clean a file's tracked changes and comments in Word before you import
 it, reopen your project from its .baspec instead of importing an export, and
 what to do when a reviewer's markup comes back."
+
+## A new section starts from the whole project, in its folder (2026-10-08)
+
+Owner question (Abraham): how is a section added to an existing project
+later, correctly? Tracing the two routes turned up three gaps; the owner
+chose to fix them in one change, plus a warning for a fourth.
+
+- **The file route binds the brief's folder.** `open_file` minted a token
+  only for a project open, so a section seeded through New session → *New
+  section in an existing project* had no `project_home`: no Project panel,
+  and a first Save that opened wherever the OS last pointed. `main.py`'s
+  `_FOLDER_BINDING_OPEN_KINDS` (`project`, `project_brief`) now decides which
+  dialog kinds mint a token, and `bind_project_home` accepts both.
+  `App.doStartFromBrief` binds after `applySessionBundle`, with the
+  generation the seed reported, exactly as `doLoadProject` does. Discovery is
+  unchanged (`discover_project_home`: the first brief in the picked file's
+  folder carrying the seeded link's project id), so a picked `.basproject`
+  binds its own folder, a linked sibling `.baspec` binds the folder of the
+  brief beside it, and an unlinked sibling binds nothing — the id minted for
+  it matches no brief. This is the Next-section posture: a home before the
+  first save, re-found from the file by the save that writes the link there
+  (`_discover_home_after_save`), lost honestly by a save anywhere else. The
+  PR #176 concern (a home the file can never find again) does not apply: the
+  link that file will carry is the seeded one the home was found with.
+- **Next section → joins the folder's brief.** `project_next_section` built
+  the seed from the outgoing session alone, so work a sibling saved to the
+  brief after this section was opened was missing from the next section
+  until it pulled. When the outgoing section has a home, the start route now
+  reads that brief off the guard (`_read_folder_brief`: home sampled under the
+  guard, file read under `_BRIEF_FILE_LOCK` on a worker thread) and, under the
+  seed's guard, seeds from `_join_folder_brief`: `merge_project_brief(on_disk,
+  section_brief)`, the refresh's own direction and arguments, so the seed is
+  state-for-state what the file route from the refreshed brief would give.
+  Nothing is written; the save gate's Save still refreshes the brief. A brief
+  that is gone, unreadable, another project's, refused by the merge, or a home
+  that changed between the read and the guard falls back to the section's own
+  brief, with a warning appended to `brief.warnings` (shown by the dialog's
+  manifest and the seed notice). A successful join keeps what it has to say
+  too: the folder brief's parse warnings and the merge's conflicts and
+  warnings ride the seeded brief's `warnings`, deduplicated — the lines Pull
+  project changes shows. The cap only refuses what a merge ADDS, so a
+  reference this section attached can be refused against a full folder brief
+  where the old section-only seed carried it; it is named, never silently
+  lost (Codex review on PR #297). The dialog's `GET /api/project/next-section`
+  renders its manifest through the same join, so the preview matches the
+  seed. A section with no home is byte-for-byte the old path.
+- **A number only the folder lists is drafted.** `sections_drafted(session,
+  also=…)` folds in the folder brief's registry (`_folder_registry`, only
+  while it is still this section's folder's). A section opened from a file
+  saved before a sibling existed — its own link lists only itself — used to
+  offer and accept that sibling's number, making two sections with one
+  number; the dialog now greys it and the start route returns
+  `section_already_drafted`.
+- **An unlinked `.baspec` says it will not be linked.**
+  `brief_from_sibling_project` appends a warning when the staged section has
+  no `project_link`: `build_project_brief` minted an id for this brief alone,
+  the source file never receives it, and the two can never be joined. Warned,
+  never refused: a fork is legitimate once it is known. The inspect manifest
+  and the start notice both show it.
+
+Help's "Start the next section of the same project" recipe and README
+(a Current Status entry plus a cross-reference in Phase 2's Next-section
+bullet) say the same. No request byte, no SSE event, no tour step and no
+saved-file format changed.
+
+**Found, not fixed (reported to the owner).** Next section → from a section
+that never exported a brief orphans that section: the save gate saves it
+before `_build_brief_locked` stamps the link, the session is then replaced,
+and its file never carries the project id the next section was seeded with.
+An offline probe confirmed it (the saved file's `project_link` is `None`
+after the seed). The owner's current workflow exports the brief and saves
+before Next section →, which avoids it.
+
+Tests: `tests/test_project_home.py` (a picked brief binds its folder and the
+first Save opens there and writes the link; a linked sibling binds, an
+unlinked one does not; a session replaced since the seed is never bound;
+Next section → carries a fact only the folder's brief held and writes
+nothing; the join's cap refusal, setup difference and parse warning reach
+the manifest and the notice; a number only the folder lists is refused; an
+unreadable brief falls back with the note and is never overwritten), `tests/test_close_prompt.py`
+(a brief pick mints a token), `tests/test_project_brief.py` (the unlinked
+warning in the brief, the inspect manifest and the seed; none for a linked
+sibling, whose id is its own), `frontend/tests/projectPanel.test.ts` (the
+brief-start bind is pinned after the bundle is applied). Each of these,
+reverted one at a time, failed its test and was restored: the merge in
+`_join_folder_brief`, the join's warnings, the folder registry in
+`sections_drafted`, the fallback warning, `project_brief` in `_FOLDER_BINDING_OPEN_KINDS`, the
+unlinked warning, and the frontend bind. Ruff, the touched backend files
+and `npm test` (562) pass; the full suite runs in CI. No paid API call was
+made.
+
+**Release-note draft.** "A section started with New session → New section in
+an existing project now lives in the project folder of the brief you picked:
+the Project panel shows it and its first Save opens there. Next section →
+starts the new section with everything the project's brief holds, even work
+the section you are leaving never pulled, and no longer offers a section
+number the brief already lists. Starting from a section file that never
+joined a project now warns that the two will stay separate projects."

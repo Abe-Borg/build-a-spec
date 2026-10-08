@@ -3080,6 +3080,115 @@ def refresh_project_brief(
     )
 
 
+# Next section → seeds from the whole project, not only the section being left.
+# The brief in the project folder can hold work this section never pulled (a
+# sibling saved after this section was opened), and a seed built from this
+# session alone left the next section without it — and let it take a number
+# only the folder's registry listed. When the outgoing section lives in a
+# project folder, the seed is this section JOINED with that brief: exactly the
+# merge a save of this section writes there (``refresh_project_brief``), so the
+# next section starts state-for-state where the file route from the refreshed
+# brief would. Nothing is written: the brief is read, and joined in memory.
+
+_NEXT_SECTION_ALONE = "The next section starts from what this section holds."
+
+
+def _read_folder_brief(
+    session: SessionState,
+) -> tuple[dict[str, str] | None, ProjectBrief | BriefSyncOutcome | None]:
+    """The project home and the brief in it, for Next section → — or
+    ``(None, None)`` for a section in no folder. The home is sampled under
+    the guard; the file is read and parsed off it, under the brief file lock
+    a refresh writes under. A worker thread only (disk I/O and a full parse).
+    """
+    with session.session_state_guard():
+        home = (
+            dict(session.project_home)
+            if isinstance(session.project_home, dict)
+            else None
+        )
+    if home is None:
+        return None, None
+    with _BRIEF_FILE_LOCK:
+        return home, _read_home_brief(home)
+
+
+def _folder_registry(
+    sampled_home: dict[str, str] | None,
+    current_home: dict[str, str] | None,
+    on_disk: ProjectBrief | BriefSyncOutcome | None,
+) -> list[dict[str, Any]]:
+    """The folder brief's section registry, when it is still this section's
+    folder's — what ``sections_drafted`` adds to the link's."""
+    if (
+        sampled_home is None
+        or current_home != sampled_home
+        or not isinstance(on_disk, ProjectBrief)
+    ):
+        return []
+    return list(on_disk.sections)
+
+
+def _join_folder_brief(
+    section_brief: ProjectBrief,
+    sampled_home: dict[str, str] | None,
+    current_home: dict[str, str] | None,
+    on_disk: ProjectBrief | BriefSyncOutcome | None,
+) -> ProjectBrief:
+    """What Next section → seeds from (caller holds the guard; pure CPU).
+
+    No folder: the section's own brief, unchanged. A folder whose brief was
+    read: the section merged INTO it, the refresh's direction and arguments
+    (newest export wins the setup, which is this section's: it was built just
+    now); the joined brief's warnings carry the folder brief's parse warnings
+    and the merge's conflicts and warnings. When the brief cannot be joined —
+    gone, unreadable, now another project's, a merge that would have to
+    delete, or the folder changed while it was read — the seed falls back to
+    the section alone and the brief's warnings say why. Either way they reach
+    the dialog's manifest and the seed's notice.
+    """
+    if sampled_home is None and current_home is None:
+        return section_brief
+    reason = ""
+    if current_home != sampled_home:
+        reason = "The project folder changed while the next section was being prepared."
+    elif isinstance(on_disk, BriefSyncOutcome):
+        reason = {
+            "brief_missing": "The project brief is no longer in the project folder.",
+            "different_project": (
+                "The brief in the project folder now belongs to a different project."
+            ),
+        }.get(on_disk.code, "The project brief in the project folder could not be read.")
+    elif isinstance(on_disk, ProjectBrief):
+        try:
+            merged, report = merge_project_brief(on_disk, section_brief)
+        except ProjectBriefError as exc:
+            reason = (
+                "The project brief in the project folder could not be joined with "
+                f"this section: {exc}"
+            )
+        else:
+            # Everything the join has to say travels with the seed: what the
+            # folder brief's parse degraded, and the merge's own conflicts and
+            # warnings — the lines Pull project changes shows (a reference
+            # this section added that the attachment cap refused, a setup
+            # value the two sides record differently). Codex review on PR #297.
+            merged.warnings = list(
+                dict.fromkeys(
+                    [
+                        *section_brief.warnings,
+                        *on_disk.warnings,
+                        *report.conflicts,
+                        *report.warnings,
+                    ]
+                )
+            )
+            return merged
+    if reason:
+        section_brief.warnings.append(f"{reason} {_NEXT_SECTION_ALONE}")
+    return section_brief
+
+
 def _template_binding(lease: sessions.WorkspaceLease) -> dict[str, Any]:
     return {
         "workspace_id": lease.workspace_id,
@@ -8289,17 +8398,32 @@ def create_app(
         """What the Next-section dialog shows: the module's sibling catalog
         with the sections this project already drafted flagged, the current
         section, the effective discipline, and the manifest of what a seed
-        would carry — built from THIS session, the way the export confirm's
-        manifest is. A pure read: nothing is stamped or replaced."""
+        would carry — built from THIS session joined with the brief in its
+        project folder (``_join_folder_brief``), exactly as the start route
+        seeds. A pure read: nothing is stamped, replaced or written. A plain
+        ``def``: the folder brief is read on a worker thread."""
         refusal = _brief_scope_refusal()
         if refusal is not None:
             return refusal
         session = sessions.get_session()
+        sampled_home, on_disk = _read_folder_brief(session)
         with session.session_state_guard():
             ready = bool(_readiness_payload(session)["ready"])
-            brief = build_project_brief(session, ready=ready)
+            current_home = (
+                dict(session.project_home)
+                if isinstance(session.project_home, dict)
+                else None
+            )
+            brief = _join_folder_brief(
+                build_project_brief(session, ready=ready),
+                sampled_home,
+                current_home,
+                on_disk,
+            )
             doc = session.doc.doc
-            done = sections_drafted(session)
+            done = sections_drafted(
+                session, _folder_registry(sampled_home, current_home, on_disk)
+            )
             link = session.project_link if isinstance(session.project_link, dict) else None
             payload = {
                 "ok": True,
@@ -8331,10 +8455,14 @@ def create_app(
         describes exactly the session the seed replaces (a turn or an edit
         cannot land between the two). Refuses outside the original
         workspace and while anything runs, like brief/start; the template
-        lookup happens first, on a worker thread. Nothing is written to
-        disk — the section being left behind is the caller's to save (the
-        frontend's save gate runs before this request), and the brief
-        travels only in memory.
+        lookup and the read of the brief in the project folder happen first,
+        on a worker thread. When the section lives in a project folder, the
+        seed is this section joined with that brief (``_join_folder_brief``),
+        so work another section saved there reaches the next section even if
+        this one never pulled it, and a number only the folder's registry
+        lists is refused too. Nothing is written to disk — the section being
+        left behind is the caller's to save (the frontend's save gate runs
+        before this request), and the brief travels only in memory.
         """
         refusal = _brief_scope_refusal()
         if refusal is not None:
@@ -8378,6 +8506,7 @@ def create_app(
 
         requested_module = body.module_id.strip()
         requested_discipline = " ".join(body.discipline.split())
+        sampled_home, on_disk = await run_in_threadpool(_read_folder_brief, session)
         try:
             with sessions.active_write(entry_lease.workspace_id):
                 with session.session_state_guard():
@@ -8387,14 +8516,29 @@ def create_app(
                     busy = sessions.busy_reasons(session)
                     if busy:
                         return _next_section_busy_response(busy)
+                    # The project folder the outgoing section lives in. The
+                    # seed below resets the session (which clears it), and
+                    # the next section of the same project belongs in the
+                    # same folder — so it is carried across here, inside the
+                    # same guard, once the seed has run.
+                    carried_home = (
+                        dict(session.project_home)
+                        if isinstance(session.project_home, dict)
+                        else None
+                    )
                     # A number the project already drafted is refused, and
                     # refused HERE rather than only greyed in the dialog: the
                     # typed-header path and a direct caller bypass the
                     # catalog, and two sections with one number are not two
                     # sections — build_project_brief upserts the registry by
                     # number, so the later export would silently replace the
-                    # earlier section's record (Codex, PR #174).
-                    if number and number in sections_drafted(session):
+                    # earlier section's record (Codex, PR #174). "Drafted"
+                    # includes what the folder's brief lists: a sibling
+                    # exported after this section was opened is drafted too.
+                    if number and number in sections_drafted(
+                        session,
+                        _folder_registry(sampled_home, carried_home, on_disk),
+                    ):
                         return _coded_error_response(
                             {
                                 "ok": False,
@@ -8407,23 +8551,19 @@ def create_app(
                             },
                             status_code=409,
                         )
-                    # The project folder the outgoing section lives in. The
-                    # seed below resets the session (which clears it), and
-                    # the next section of the same project belongs in the
-                    # same folder — so it is carried across here, inside the
-                    # same guard, once the seed has run.
-                    carried_home = (
-                        dict(session.project_home)
-                        if isinstance(session.project_home, dict)
-                        else None
-                    )
                     # The brief is built from the session about to be
                     # replaced, under the same guard as the seed. The link
                     # stamp is deliberate even though this session is going
                     # away: the brief's registry must carry THIS section, and
                     # _build_brief_locked is the one place the registry is
-                    # upserted the way an export upserts it.
-                    brief = _build_brief_locked(session)
+                    # upserted the way an export upserts it. It is then joined
+                    # with the brief in the project folder, when there is one.
+                    brief = _join_folder_brief(
+                        _build_brief_locked(session),
+                        sampled_home,
+                        carried_home,
+                        on_disk,
+                    )
                     newest = brief.newest_section or {}
                     chosen_module = (
                         requested_module

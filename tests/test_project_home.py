@@ -23,7 +23,8 @@ per section (decision D1). What the tests pin:
   a section that arrived with a home opens in its folder, a brief exported
   beside the saved section makes the home at once, and ``bind_project_home``
   binds a natively opened file's folder only for the session its load
-  produced.
+  produced — and a natively picked brief's folder (or a linked sibling's)
+  for the section seeded from it, so its first Save opens there.
 """
 from __future__ import annotations
 
@@ -35,6 +36,7 @@ from backend import project_brief, sessions
 from backend.llm.conversation import SessionState
 from backend.project_brief import (
     brief_bytes,
+    brief_manifest,
     build_project_brief,
     merge_section_registries,
     read_brief_on_disk,
@@ -677,6 +679,154 @@ def test_next_section_without_a_home_starts_without_one():
     assert sessions.get_session().project_home is None
 
 
+LATE_FACT = "The fire pump driver is diesel."
+
+
+def _statements(session: SessionState) -> set[str]:
+    return {fact["statement"] for fact in session.facts.to_dict()["project_facts"]}
+
+
+def test_next_section_starts_with_work_the_folder_brief_holds_that_this_one_never_pulled(
+    tmp_path,
+):
+    """A → B, then A is reopened and records a fact, and its save adds the fact
+    to the brief. B, opened later, never pulled it. Next section → from B used
+    to seed only from B, so the new section started without A's fact; it now
+    seeds from B joined with the brief in the folder — the merge B's own save
+    would write — and still writes nothing."""
+    client = _client()
+    _second, _first_file, _second_file, home = _two_section_folder(client, tmp_path)
+    opened = client.post("/api/project/open-section", json={"number": "21 13 13"})
+    assert opened.status_code == 200, opened.text
+    first = sessions.get_session()
+    first.facts.apply(
+        {
+            "record": [{"statement": LATE_FACT, "status": "confirmed", "source_kind": "user"}],
+            "supersede": [],
+        },
+        recorded_in="21 13 13",
+        recorded_at="2026-10-08",
+    )
+    refreshed = client.post("/api/project/brief/refresh")
+    assert refreshed.status_code == 200 and refreshed.json()["written"] is True
+    back = client.post("/api/project/open-section", json={"number": "21 30 00"})
+    assert back.status_code == 200, back.text
+    second = sessions.get_session()
+    assert LATE_FACT not in _statements(second), "B never pulled it"
+    held = brief_manifest(build_project_brief(second, ready=False))["facts"]["active"]
+    brief_before = (tmp_path / BRIEF_NAME).read_bytes()
+
+    options = client.get("/api/project/next-section")
+    assert options.status_code == 200, options.text
+    assert options.json()["manifest"]["facts"]["active"] == held + 1
+    resp = client.post(
+        "/api/project/next-section",
+        json={"number": "21 12 00", "title": "Standpipe Systems"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    third = sessions.get_session()
+    assert LATE_FACT in _statements(third)
+    assert third.project_home == home
+    assert not any("starts from what this section holds" in w for w in resp.json()["seed"]["warnings"])
+    assert (tmp_path / BRIEF_NAME).read_bytes() == brief_before, "nothing is written"
+
+
+def test_next_section_says_what_the_join_with_the_folder_brief_reported(
+    tmp_path, monkeypatch
+):
+    """Codex review on PR #297: the join's own findings travel with the seed.
+    A reference this section attached that the folder brief's attachment cap
+    refuses, a setup value the two record differently, and a part of the
+    folder brief its parse had to drop are each said in the dialog's manifest
+    and the start notice — never silently lost."""
+    import json
+
+    client = _client()
+    session, section_file = _project_folder(client, tmp_path)
+    _home(session, section_file)
+    brief_path = tmp_path / BRIEF_NAME
+    data = json.loads(brief_path.read_text(encoding="utf-8"))
+    data["profile"]["city"] = "Reno"
+    data["facts"].append(7)
+    brief_path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(project_brief, "MAX_REFERENCE_DOCS", 1)
+    session.references.add(
+        filename="hydrant-flow-test.pdf",
+        text="[page 1] Static 72 psi, residual 58 psi at 1,250 gpm.",
+        block_count=1,
+        title="Hydrant flow test",
+        kind="pdf",
+        token_count=200,
+    )
+
+    options = client.get("/api/project/next-section")
+    resp = client.post(
+        "/api/project/next-section", json={"number": "21 30 00", "title": "Fire Pumps"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    for warnings in (options.json()["manifest"]["warnings"], resp.json()["seed"]["warnings"]):
+        joined = " ".join(warnings)
+        assert "past the attachment cap were not carried: Hydrant flow test" in joined
+        assert "differs" in joined and "'Reno'" in joined
+        assert "malformed project fact" in joined
+        assert len(warnings) == len(set(warnings)), "each line once"
+    assert [doc.title for doc in sessions.get_session().references.docs] == [
+        "Owner fire protection standard"
+    ]
+
+
+def test_next_section_refuses_a_number_only_the_folder_brief_lists(tmp_path):
+    """A's file was saved before B existed, so A's own link lists only A. Opened
+    from the folder, A used to offer — and accept — 21 30 00 again, which would
+    have made two sections with one number; the folder's registry now counts."""
+    client = _client()
+    _two_section_folder(client, tmp_path)
+    opened = client.post("/api/project/open-section", json={"number": "21 13 13"})
+    assert opened.status_code == 200, opened.text
+    first = sessions.get_session()
+    assert [s["number"] for s in first.project_link["sections"]] == ["21 13 13"]
+
+    options = client.get("/api/project/next-section")
+    assert "21 30 00" in options.json()["done"]
+    resp = client.post(
+        "/api/project/next-section", json={"number": "21 30 00", "title": "Fire Pumps"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "section_already_drafted"
+    assert sessions.get_session() is first and first.doc.doc.number == "21 13 13"
+
+
+def test_next_section_starts_from_this_section_alone_when_the_folder_brief_cannot_be_read(
+    tmp_path,
+):
+    client = _client()
+    session, section_file = _project_folder(client, tmp_path)
+    home = _home(session, section_file)
+    held = _statements(session)
+    (tmp_path / BRIEF_NAME).write_bytes(b"not a brief")
+
+    options = client.get("/api/project/next-section")
+    assert options.status_code == 200, options.text
+    note = (
+        "The project brief in the project folder could not be read. "
+        "The next section starts from what this section holds."
+    )
+    assert note in options.json()["manifest"]["warnings"]
+    resp = client.post(
+        "/api/project/next-section", json={"number": "21 30 00", "title": "Fire Pumps"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert note in resp.json()["seed"]["warnings"]
+    seeded = sessions.get_session()
+    assert _statements(seeded) == held
+    assert seeded.project_home == home, "the folder still carries"
+    assert (tmp_path / BRIEF_NAME).read_bytes() == b"not a brief", "never overwritten"
+
+
 # ---------------------------------------------------------------------------
 # The native shell
 # ---------------------------------------------------------------------------
@@ -856,3 +1006,148 @@ def test_a_natively_opened_file_binds_its_folder_for_the_session_its_load_produc
     assert reloaded.status_code == 200
     rebound = controller.bind_project_home(again["token"], reloaded.json()["generation"])
     assert rebound["home"] == {"folder": str(moved), "brief_name": BRIEF_NAME}
+
+
+# ---------------------------------------------------------------------------
+# A new section started from a picked brief belongs in the brief's folder
+# ---------------------------------------------------------------------------
+
+
+def _start_from_picked(client, controller, picked: dict, payload: bytes, media: str):
+    """New session → New section in an existing project, natively: the file
+    the shell's dialog read is uploaded to brief/start, then bound with the
+    generation the seed reported — the order ``doStartFromBrief`` runs."""
+    started = client.post(
+        "/api/project/brief/start", files={"file": (picked["name"], payload, media)}
+    )
+    assert started.status_code == 200, started.text
+    generation = started.json()["session"]["generation"]
+    return started, controller.bind_project_home(picked["token"], generation)
+
+
+def test_a_section_started_from_a_picked_brief_lives_in_the_brief_s_folder(
+    tmp_path, monkeypatch
+):
+    """The file route used to start a section with no folder, so its first
+    Save opened wherever the OS last pointed and the Project panel stayed
+    hidden until the user found the folder themselves. A brief picked through
+    the native dialog now names the folder, the way Next section → carries
+    the outgoing one: the panel shows it, the first Save opens in it, and the
+    save that lands there re-finds the folder from the file it wrote."""
+    _fake_webview(monkeypatch)
+    folder = tmp_path / "project"
+    folder.mkdir()
+    client = _client()
+    session, _section_file = _project_folder(client, folder)
+    project_id = session.project_link["project_id"]
+    sessions.reset_session()
+    client = _client()
+    window = _FakeWindow(dialog_path=str(folder / BRIEF_NAME))
+    controller = _controller_with(window)
+    picked = controller.open_file("project_brief")
+    assert picked["token"], "a brief pick names a folder"
+
+    started, bound = _start_from_picked(
+        client,
+        controller,
+        picked,
+        (folder / BRIEF_NAME).read_bytes(),
+        project_brief.PROJECT_BRIEF_MEDIA_TYPE,
+    )
+
+    assert started.json()["session"]["project_home"] is None, "the seed alone has none"
+    assert bound == {
+        "ok": True,
+        "home": {"folder": str(folder), "brief_name": BRIEF_NAME},
+        "error": "",
+    }
+    seeded = sessions.get_session()
+    assert seeded.project_link["project_id"] == project_id
+    assert seeded.save_target == "", "the new section has not been saved anywhere yet"
+    assert client.get("/api/doc").json()["project_home"]["folder"] == str(folder)
+
+    # The first Save opens in the project folder, and saving there writes the
+    # link into the file and finds the folder again from it.
+    target = folder / "21 30 00.baspec"
+    window._dialog_path = str(target)
+    window.dialog_calls.clear()
+    saved = controller.save_project()
+    (_args, kwargs), = window.dialog_calls
+    assert kwargs["directory"] == str(folder)
+    assert saved["ok"] is True
+    assert saved["home"] == {"folder": str(folder), "brief_name": BRIEF_NAME}
+    assert _saved_link(target)["project_id"] == project_id
+
+
+def test_a_sibling_section_picked_to_start_from_binds_its_folder_only_when_linked(
+    tmp_path, monkeypatch
+):
+    """The brief dialog also takes a sibling's .baspec. A linked sibling saved
+    beside its brief names that folder; a sibling that never joined a project
+    gives the new section an id no brief carries, so there is no folder to
+    bind — an honest no-home, never a refusal."""
+    _fake_webview(monkeypatch)
+    folder = tmp_path / "project"
+    folder.mkdir()
+    client = _client()
+    _session, section_file = _project_folder(client, folder)
+    sessions.reset_session()
+    client = _client()
+    window = _FakeWindow(dialog_path=str(section_file))
+    controller = _controller_with(window)
+
+    picked = controller.open_file("project_brief")
+    _started, bound = _start_from_picked(
+        client, controller, picked, section_file.read_bytes(), "application/zip"
+    )
+    assert bound["ok"] is True
+    assert bound["home"] == {"folder": str(folder), "brief_name": BRIEF_NAME}
+
+    # An unlinked sibling, beside the same brief: nothing to bind.
+    sessions.reset_session()
+    client = _client()
+    loose = _rich_session(client)
+    assert loose.project_link is None
+    loose_file = folder / "loose.baspec"
+    loose_file.write_bytes(sessions.project_package(loose)[0])
+    sessions.reset_session()
+    client = _client()
+    window._dialog_path = str(loose_file)
+    picked = controller.open_file("project_brief")
+    _started, bound = _start_from_picked(
+        client, controller, picked, loose_file.read_bytes(), "application/zip"
+    )
+    assert bound == {"ok": True, "home": None, "error": ""}
+    assert sessions.get_session().project_home is None
+
+
+def test_a_brief_pick_never_binds_a_session_replaced_since_its_seed(tmp_path, monkeypatch):
+    _fake_webview(monkeypatch)
+    folder = tmp_path / "project"
+    folder.mkdir()
+    client = _client()
+    _project_folder(client, folder)
+    sessions.reset_session()
+    client = _client()
+    controller = _controller_with(_FakeWindow(dialog_path=str(folder / BRIEF_NAME)))
+    picked = controller.open_file("project_brief")
+    assert picked["token"], "a brief pick names a folder"
+    started = client.post(
+        "/api/project/brief/start",
+        files={
+            "file": (
+                picked["name"],
+                (folder / BRIEF_NAME).read_bytes(),
+                project_brief.PROJECT_BRIEF_MEDIA_TYPE,
+            )
+        },
+    )
+    assert started.status_code == 200, started.text
+    sessions.get_session().invalidate_model_turn()  # replaced since the seed
+
+    refused = controller.bind_project_home(
+        picked["token"], started.json()["session"]["generation"]
+    )
+
+    assert refused["ok"] is False and refused["home"] is None
+    assert sessions.get_session().project_home is None

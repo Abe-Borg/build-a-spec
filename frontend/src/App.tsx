@@ -2765,6 +2765,12 @@ export default function App() {
       if (!applySessionBundle(session)) return;
       discardPaneState();
       onboardingRef.current?.syncSessionIdentity(session);
+      // A brief picked through the native dialog names its project folder,
+      // so the new section belongs there the way Next section → keeps the
+      // outgoing folder: the Project panel shows it and the first Save opens
+      // in it. Bound with the generation the seed reported, like Open.
+      const token = nativeOpenTokens.get(file);
+      if (token) await bindNativeProjectHome(token, session.generation);
       const seed = session.seed;
       const from = session.project_link?.seeded_from ?? [];
       addNote(
@@ -3009,12 +3015,13 @@ export default function App() {
     return true;
   };
 
-  /** Bind the loaded session to the project folder of the file the native
-   *  Open dialog just read (Project workspace Phase 2). The shell holds the
-   *  path; this side holds only the token `open_file` returned, and the
-   *  generation the load reported — so a session replaced since the load is
-   *  never handed the folder. A folder that cannot be bound is a section
-   *  with no home, which the panel already says; nothing to report. */
+  /** Bind the loaded (or brief-seeded) session to the project folder of the
+   *  file the native Open dialog just read (Project workspace Phase 2). The
+   *  shell holds the path; this side holds only the token `open_file`
+   *  returned, and the generation the load or seed reported — so a session
+   *  replaced since then is never handed the folder. A folder that cannot be
+   *  bound is a section with no home, which the panel already says; nothing
+   *  to report. */
   const bindNativeProjectHome = async (
     token: string,
     generation: number | undefined,
@@ -3143,8 +3150,9 @@ export default function App() {
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       const file = new File([bytes], picked.name);
-      // A project open carries an opaque token for the picked path, so the
-      // load can bind its project folder without this side ever holding it.
+      // A project open (or a brief picked to start a new section) carries an
+      // opaque token for the picked path, so the load or seed can bind its
+      // project folder without this side ever holding it.
       if (picked.token) nativeOpenTokens.set(file, picked.token);
       return file;
     } catch {

@@ -1802,13 +1802,6 @@ function DiffElementRow({ e }: { e: ElementDiff }) {
   );
 }
 
-const statusLabels: Record<string, string> = {
-  confirmed: "confirmed",
-  assumed: "assumed",
-  needs_input: "needs input",
-  imported: "imported",
-};
-
 function DiffDocument({ diff }: { diff: SectionDiff }) {
   const section = diff.elements.find((e) => e.node_type === "section");
   const sectionNumber = section?.number_cur ?? "";
@@ -1823,29 +1816,6 @@ function DiffDocument({ diff }: { diff: SectionDiff }) {
       <p className="mt-10 text-center text-[13px] font-semibold tracking-wide">
         END OF SECTION {sectionNumber}
       </p>
-
-      {diff.status_changes.length > 0 && (
-        <div className="mt-8 border-t border-paper-edge pt-3">
-          <p className="text-[11px] font-medium tracking-wide text-paper-dim uppercase">
-            Status changes ({diff.status_changes.length})
-          </p>
-          <ul className="mt-1.5 flex flex-wrap gap-1.5">
-            {diff.status_changes.map((sc) => (
-              <li
-                key={sc.uid}
-                className="rounded border border-paper-edge bg-white/60 px-1.5 py-0.5 text-[11px] text-paper-dim"
-                title="Provenance status changed (not a text edit — no redline mark)"
-              >
-                <span className="font-medium text-paper-ink tabular-nums">
-                  {sc.ref}
-                </span>{" "}
-                {statusLabels[sc.status_base] ?? sc.status_base} →{" "}
-                {statusLabels[sc.status_cur] ?? sc.status_cur}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   );
 }

@@ -1801,11 +1801,6 @@ export default function ArtifactPanel({
               <span className="text-ok">+{diff.stats.inserted} added</span>
               <span className="text-err">−{diff.stats.deleted} removed</span>
               <span>{diff.stats.changed} edited</span>
-              {diff.status_changes.length > 0 && (
-                <span className="text-ink-faint">
-                  · {diff.status_changes.length} status
-                </span>
-              )}
             </span>
           )}
           {diffError && <span className="text-err">{diffError}</span>}

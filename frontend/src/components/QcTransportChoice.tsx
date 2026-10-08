@@ -8,10 +8,10 @@ export default function QcTransportChoice({ preference, pending, error, onChange
   onChange: (batch: boolean) => void;
 }) {
   const name = useId();
-  const batch = preference?.batch_verification ?? true;
+  const batch = preference?.batch_verification ?? false;
   const options = [
-    { batch: true, label: "Batch the reviewers — half price", detail: 'Progress is a count, like “0 of 121 seats returned”.' },
-    { batch: false, label: "Stream the reviewers — full price", detail: "Each seat shows as it works, like the five lenses." },
+    { batch: false, label: "Stream the reviewers — recommended", detail: "One seat per group goes first; the rest read its cached copy of the document. Each seat shows as it works, like the five lenses." },
+    { batch: true, label: "Batch the reviewers — half-price tokens", detail: 'The batch may re-store the document for many seats instead of reading one copy, which on a measured run cost more than streaming. Progress is a count, like “0 of 121 seats returned”.' },
   ];
   return (
     <fieldset data-capability="qc.run" disabled={!preference || pending} className="space-y-2">

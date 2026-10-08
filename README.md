@@ -290,6 +290,63 @@ INFO mutes it — and the row says so rather than reporting zero. No paid
 request was sent to build or test this; what the live provider's pressure
 looks like on real runs is unmeasured.
 
+## Current Status — Final QC streams its verifier seats, leaders first
+
+(2026-10-07. docs/as-built.md's "Final QC streams its verifier seats, leaders
+first" is the record; no release entry yet, the app version stays 1.24.0.)
+
+Final QC's second stage — the reviewer seats that try to refute each
+candidate finding — now runs **streamed by default, one seat per cache group
+first and the rest once it is answering**, the way the five lenses already
+start. The Message Batches transport is still offered in Settings and in the
+start confirmation; it is no longer the default.
+
+**Why.** Every seat in a group carries the same copy of your section, the
+attached dossier and the project facts (about 54k tokens on the first measured
+run), and a stored copy can be read only once the request that stores it has
+begun answering. The batched transport was adopted on the assumption that its
+half-price tokens came on top of that shared copy. The first measured run
+(Opus 5.5, 39 candidates, 82 seats, 2026-10-07) said otherwise: only 39% of
+the batched seats read the copy the lead had stored; the rest each stored it
+again at the one-hour rate, which was 76% of the stage's $11.62. A one-hour
+store only beats sending the text plain above a 51% read rate, so at that
+rate the batch's caching cost more than no caching at all. Modelled on the
+same run, the streamed stage with one store per group and a read on every
+other seat comes to about $5.90, with the rest of the review unchanged.
+
+**What changes for you.**
+
+- **The default is Stream.** With `BUILD_A_SPEC_QC_BATCH_VERIFICATION` unset,
+  a fresh install streams. A choice you saved earlier in Settings or the start
+  confirmation is yours and is kept: if you picked Batch before, pick Stream
+  once to move. The environment variable still locks both controls: `0`,
+  `false`, `no`, `off` select Stream; other values select Batch. In
+  PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_VERIFICATION = "1"`; in Command
+  Prompt: `set BUILD_A_SPEC_QC_BATCH_VERIFICATION=1`.
+- **Streamed seats store their copy for five minutes, batched seats for an
+  hour.** A streamed seat follows its group's first seat by seconds and every
+  read keeps the copy alive, so the hour's doubled storing price buys nothing
+  there; a batched seat may run minutes after the copy was stored, so it keeps
+  the hour. This is the one difference between the two transports' requests.
+- **Each seat shows its activity as it works**, and Stop takes effect at once,
+  as it did before batching.
+- **A Final QC result produced by the batched transport reads out of date
+  once** after updating: which transport produced a review is recorded with
+  it. Re-run Final QC to refresh it.
+- **The warm-lead self-check applies to the batched transport only.** When you
+  stream, there is no lead to judge: the first seat of each group *is* the
+  lead.
+- **Where to see it:** one activity-log line per group (Settings → Developer
+  tools → Activity log tail): "Final QC verification: 67 streamed seats share
+  a cached prefix; the 66 waiting were released (warm) after 6061 ms."
+  Developer tools → Engine state → Resource pressure lists each seat's wait for
+  its leader; a wait that ran out the 45-second limit counts as pressure, a
+  warm release never does.
+- **Measure it:** Settings → Developer tools → This session's cost keeps the
+  streamed review in the `qc` bucket; a batched one splits into `qc` and
+  `qc_batched`. `tools\qc_export_cost_profile.py` breaks a saved Final QC
+  export down the same way.
+
 ## Current Status — one writing policy for drafting and Final QC
 
 Shipped in v1.24.0; the bundled entry is in `backend/release_notes.py`.
@@ -1663,9 +1720,10 @@ the record.
 
 **The program is complete** (six chunks, closed 2026-09-24), and its release
 notes are in the unreleased 1.21.0 entry. In an ordinary run a user sees at most two changes: Final QC's first
-stage starts a few seconds later (Chunk 2, below), and on a section large
-enough, its batched verification waits for one reviewer to start answering
-first (Chunk 3, below). When a request fails for a passing reason — a rate
+stage starts a few seconds later (Chunk 2, below), and its second stage
+waits for one reviewer per cache group to start answering first — the
+streamed stage since 2026-10-07 ([above](#current-status--final-qc-streams-its-verifier-seats-leaders-first)),
+the batched one through its lead seat when Batch is chosen (Chunk 3, below). When a request fails for a passing reason — a rate
 limit, a server error, a dropped connection — a research area or a review
 carries on from the step that failed instead of starting over (Chunk 5,
 below). That has no switch, and shows only when something fails. Chunks 2
@@ -1823,8 +1881,14 @@ than the others) has a copy of its own, so it never waits.
 
 ### Final QC's batched review can warm its own copy first (Chunk 3, on by default)
 
-Final QC's verifying reviewers run as a Message Batches request at half
-price, and most of them read the same cached copy of your section: every
+*Applies when Batch is chosen. Since 2026-10-07 the verifier seats stream by
+default, one per cache group first and the rest once it is answering
+([above](#current-status--final-qc-streams-its-verifier-seats-leaders-first));
+this section describes the batched transport, which remains available.*
+
+When Batch is chosen, Final QC's verifying reviewers run as a Message
+Batches request at half token price, and most of them read the same cached
+copy of your section: every
 reviewer checking a finding from a lens without web tools reads one copy,
 and every reviewer checking a code-compliance finding (they carry web search
 and fetch) reads another. Inside a batch, how many of them read a stored
@@ -2939,13 +3003,15 @@ actions.
   the actionable retained queue; apply and dismiss independently recheck a
   current audit-complete result and remain locked while a stopped worker is
   still settling billable output.
-- **The session's Final QC cost is both halves of the bill.** Verification
+- **The session's Final QC cost is both halves of the bill.** When Batch is
+  chosen, verification
   runs through the Message Batches API at half token price — one submission
   per round, and `_run_batch_calls` adds a round whenever a seat pauses or has
   to retry — while the rest of the review runs at list price (and so does a
   streamed lead seat), so the
   meter keeps them in separate buckets —
-  one bucket can only carry one rate. The drawer's "This session's QC" line and
+  one bucket can only carry one rate. A streamed review (the default) lands
+  entirely in the list-price bucket. The drawer's "This session's QC" line and
   the launch confirmation sum **both**; reading only the list-priced one
   reported a fraction of a batched review, or nothing at all.
 - **A charge the app could not account for is disclosed, never written off.**
@@ -3717,7 +3783,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding can never be `disputed` and a single reviewer's refusal deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |
-| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | unset (GUI defaults to Batch) | When unset, Final QC phase 2 uses the Batch / Stream choice in its start confirmation or Settings, remembered on this computer in `qc_preferences.json` beside `onboarding_state.json`. Batch is half price with a count of seats returned; Stream is full price with live seat activity. Setting this variable locks both controls: `0`, `false`, `no`, `off` select Stream; other values select Batch. The choice is snapshotted for each run, never stored in a `.baspec` or the panel layout; switching it makes retained results stale through the existing input manifest. |
+| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | unset (GUI defaults to Stream) | When unset, Final QC phase 2 uses the Stream / Batch choice in its start confirmation or Settings, remembered on this computer in `qc_preferences.json` beside `onboarding_state.json`; with nothing saved it streams (the default moved from Batch on 2026-10-07; a saved choice is kept). Stream sends one seat per cache group first and the rest once it is answering, with live seat activity and a 5-minute cache entry; Batch prices tokens at half, shows a count of seats returned, stores a 1-hour entry, and may re-store the document for many seats (39% of batched seats read the shared copy on the measured run). Setting this variable locks both controls: `0`, `false`, `no`, `off` select Stream; other values select Batch. The choice is snapshotted for each run, never stored in a `.baspec` or the panel layout; switching it makes retained results stale through the existing input manifest. |
 | `BUILD_A_SPEC_QC_REFUSAL_FALLBACK` | `1` | Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7): every streamed Final QC request — the lenses, the grouping calls, streamed verifier seats and warm leads — carries `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a request the QC model's safety classifiers decline is retried by the API on the fallback model it chooses, and that model's answer is used. The record that call produced names the answering model, and the report states it on that record and under Limitations, with the cost of those calls estimated at the configured QC model's rates. Batched verifier seats never carry it (the Batches API rejects the parameter). A request the provider refuses because of the parameter is sent once more without it, and the fallback then switches off until the app restarts. Not a review input: a retained Final QC result stays current either way. `0` switches it off: a declined call fails as it did before. In PowerShell: `$env:BUILD_A_SPEC_QC_REFUSAL_FALLBACK = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0`. |
 | `BUILD_A_SPEC_QC_BATCH_WARM_LEAD` | `1` | Streamed lead seat (Chunk 3 of the cost program, on by default since the Tier 1 finish program's session WL-2): when one cache group in the batched phase has at least 8 verifier seats (the enforced floor), one of them is sent first, on its own at list price, and the batch goes out only after it starts answering (at most `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` later), so the rest can read the copy it stored. Same cached prefix and verdict rules; the streamed lead also carries the refusal fallback, whose opt-in is not documented to fork the cache key; the report prices that seat at list and says so in its methodology; a retained Final QC result stays current either way. Watched by a cost self-check: after each Final QC that sent a lead, the app reads how many batched seats read its copy, and if fewer than half did, or the lead cost more than it could have saved, leads switch off until restart for that model, tool kind and size cohort (8–19 or 20+ seats); other cohorts keep their leads (Settings → Developer tools → Cost self-checks). `0` switches it off: every seat rides the batch. In PowerShell: `$env:BUILD_A_SPEC_QC_BATCH_WARM_LEAD = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_BATCH_WARM_LEAD=0`. Inert when `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS` is `0`. |
 | `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |

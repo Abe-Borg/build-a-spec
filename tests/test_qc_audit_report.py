@@ -19,6 +19,8 @@ from types import SimpleNamespace
 from docx import Document
 from fastapi.testclient import TestClient
 
+import pytest
+
 from backend import sessions, settings
 from backend.app import create_app
 from backend.qc.engine import (
@@ -113,6 +115,35 @@ def _scripts(**per_lens: list) -> dict[str, list]:
         key: per_lens.get(lens_id, [qc_findings_response(lens_id, findings=[])])
         for lens_id, key in _LENS_KEYS.items()
     }
+
+
+@pytest.fixture(autouse=True)
+def _batched_transport(monkeypatch) -> None:
+    """Every test in this file runs Final QC on the BATCHED transport.
+
+    This file pins the audit record, and it had always built it on the
+    batch: that was the shipped default until the streamed stagger made
+    streaming the default (docs/as-built.md, "Final QC streams its verifier
+    seats, leaders first"). Its fixtures depend on batch's seat order — the
+    fakes hand a candidate's scripted verdicts out in arrival order, a batch
+    submits its seats in seat order, and the memo's "representative note"
+    is reviewer 1's — and several tests read the transport back (a seat's
+    batch cost multiplier, a seat that fails only after the batch's two
+    reminder rounds). Streamed seats arrive in thread order, so the dissent,
+    the representative note and the failing turn would wander. Setting the
+    live setting rather than passing ``batch_verification=True`` keeps the
+    runs and their currentness checks on one transport; the streamed
+    transport's own contracts are tests/test_qc_live_events.py and
+    tests/test_qc_streamed_stagger.py.
+
+    Both the live setting and the shipped default are set: ``create_app``
+    re-samples the setting from ``qc_preferences`` at startup, whose
+    fallback (no saved choice) is the default, so a test that builds the app
+    would otherwise flip back to streamed mid-test and read its own batched
+    result as stale.
+    """
+    monkeypatch.setattr(settings, "QC_BATCH_VERIFICATION_DEFAULT", True)
+    monkeypatch.setattr(settings, "QC_BATCH_VERIFICATION", True)
 
 
 def _run(
@@ -2000,7 +2031,7 @@ def test_a_verifier_seats_one_hour_cache_subtotal_is_captured_and_priced() -> No
         rates = result.cost_basis["rates_per_token"]
         # 500 five-minute + 400 one-hour, each at its own rate — not 900 at
         # either one. Scaled by the seat's own rate multiplier, which is the
-        # batch discount under the default transport: the two mechanisms
+        # batch discount on the batched transport: the two mechanisms
         # compose, and asserting the product is what pins that they do.
         assert seat.cost_multiplier == settings.BATCH_COST_MULTIPLIER
         assert seat.estimated_cost_usd == round(

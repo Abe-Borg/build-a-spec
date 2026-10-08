@@ -146,8 +146,24 @@ def test_the_reminder_request_is_the_streamed_one(monkeypatch):
 
     stream_reminder = _seat_requests(streamed)[1]
     batch_reminder = _rounds(batched)[1][0]["params"]
+
+    def without_markers(value):
+        """The same request with every ``cache_control`` marker removed: the
+        cache TTL is the one documented difference between the transports
+        (streamed seats 5 minutes, batched seats 1 hour — the streamed
+        stagger), and it is pinned in tests/test_qc_batch_verification.py."""
+        if isinstance(value, dict):
+            return {
+                k: without_markers(v) for k, v in value.items() if k != "cache_control"
+            }
+        if isinstance(value, list):
+            return [without_markers(item) for item in value]
+        return value
+
     for key in ("model", "system", "tools", "thinking", "output_config", "messages"):
-        assert stream_reminder[key] == batch_reminder[key], key
+        assert without_markers(stream_reminder[key]) == without_markers(
+            batch_reminder[key]
+        ), key
 
 
 def test_the_reminder_request_is_sanitized_like_a_pause_resume():

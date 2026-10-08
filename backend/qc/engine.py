@@ -3566,10 +3566,13 @@ def _qc_user_content(
     """The user turn as two text blocks, breakpoint on the shared one.
 
     Block 0 is identical across every call that shares this lineage (the
-    four non-web lenses, or every verifier seat), so it is written to cache
-    once and read thereafter. Block 1 is the per-call tail and is never
-    cached. ``cache_ttl`` is ``"1h"`` for the verification phase, which runs
-    longer than the 5-minute default would survive.
+    four non-web lenses, or every verifier seat of one transport), so it is
+    written to cache once and read thereafter. Block 1 is the per-call tail
+    and is never cached. ``cache_ttl`` is ``"1h"`` for the BATCHED
+    verification phase, whose seats the provider may run minutes after the
+    entry was written; streamed seats, sent seconds after their lineage's
+    leader began answering, keep the 5-minute default
+    (``_STREAMED_VERIFIER_CACHE_TTL``).
     """
     return [
         {
@@ -5200,6 +5203,85 @@ WARM_OUTCOME_TIMEOUT = "timeout"
 WARM_OUTCOME_STOPPED = "stopped"
 
 
+class _LeaderWatch:
+    """The leaders' wait, kept as state the caller polls.
+
+    ``leaders`` pairs whatever the caller needs back with the event its
+    leader sets. :meth:`poll` releases each pair exactly once through
+    ``on_release(entry, outcome, waited_ms)``: ``warm`` once its event is
+    set, or — for every one still waiting — ``stopped`` once ``should_stop``
+    answers yes, or ``timeout`` once ``wait_seconds`` have passed since the
+    watch was made. One deadline covers every leader, because they were all
+    sent together. :meth:`wait_slice` then blocks for at most one
+    ``_WARM_WAIT_SLICE_SECONDS`` or until the first pending leader fires.
+
+    Two callers share it, so the two waits cannot drift apart:
+    :func:`_await_leaders` (phase 1, the consolidation grouping calls and
+    the batched phase's streamed lead seat) loops poll → slice on the
+    calling thread; the streamed verifier pool polls between harvests of
+    its completed seats, so a release can fill a free worker while the
+    leader is still answering.
+    """
+
+    def __init__(
+        self,
+        leaders: list[tuple[Any, threading.Event]],
+        *,
+        wait_seconds: float,
+        should_stop: Callable[[], bool],
+    ) -> None:
+        self._started = time.monotonic()
+        self._deadline = self._started + float(wait_seconds)
+        self._should_stop = should_stop
+        self._pending = list(leaders)
+
+    @property
+    def pending(self) -> bool:
+        return bool(self._pending)
+
+    def waited_ms(self) -> int:
+        return max(0, int((time.monotonic() - self._started) * 1000))
+
+    def poll(self, on_release: Callable[[Any, str, int], None]) -> float:
+        """Release every leader whose wait has ended; never blocks.
+
+        Returns the seconds left before the deadline (``0.0`` once nothing
+        is pending), which :meth:`wait_slice` takes back so one clock
+        reading decides both the timeout and the slice.
+        """
+        for entry in [entry for entry in self._pending if entry[1].is_set()]:
+            self._pending.remove(entry)
+            on_release(entry[0], WARM_OUTCOME_WARM, self.waited_ms())
+        if not self._pending:
+            return 0.0
+        remaining = self._deadline - time.monotonic()
+        if self._should_stop():
+            outcome = WARM_OUTCOME_STOPPED
+        elif remaining <= 0:
+            outcome = WARM_OUTCOME_TIMEOUT
+        else:
+            return remaining
+        for entry in self._pending:
+            on_release(entry[0], outcome, self.waited_ms())
+        self._pending = []
+        return 0.0
+
+    def release_pending(
+        self, on_release: Callable[[Any, str, int], None], outcome: str
+    ) -> None:
+        """Release whatever is still pending with ``outcome``, at once."""
+        for entry in self._pending:
+            on_release(entry[0], outcome, self.waited_ms())
+        self._pending = []
+
+    def wait_slice(self, remaining: float) -> None:
+        """Block until the first pending leader fires, one slice at most."""
+        if self._pending and remaining > 0:
+            self._pending[0][1].wait(
+                timeout=min(_WARM_WAIT_SLICE_SECONDS, remaining)
+            )
+
+
 def _await_leaders(
     leaders: list[tuple[Any, threading.Event]],
     *,
@@ -5221,34 +5303,16 @@ def _await_leaders(
     worker, a Stop is noticed within one slice, and a leader that fires is
     noticed at once. Shared by the staggered launch (phase 1 and the
     consolidation grouping calls) and the batched phase's streamed lead
-    seat, so the two cannot drift into two different waits.
+    seat, so the two cannot drift into two different waits; the streamed
+    verifier pool drives the same :class:`_LeaderWatch` itself.
     """
-    started = time.monotonic()
-    deadline = started + float(wait_seconds)
-    pending = list(leaders)
-
-    def waited_ms() -> int:
-        return max(0, int((time.monotonic() - started) * 1000))
-
-    while pending:
-        for entry in [entry for entry in pending if entry[1].is_set()]:
-            pending.remove(entry)
-            on_release(entry[0], WARM_OUTCOME_WARM, waited_ms())
-        if not pending:
-            break
-        remaining = deadline - time.monotonic()
-        if should_stop():
-            outcome = WARM_OUTCOME_STOPPED
-        elif remaining <= 0:
-            outcome = WARM_OUTCOME_TIMEOUT
-        else:
-            pending[0][1].wait(
-                timeout=min(_WARM_WAIT_SLICE_SECONDS, remaining)
-            )
-            continue
-        for entry in pending:
-            on_release(entry[0], outcome, waited_ms())
-        pending = []
+    watch = _LeaderWatch(
+        leaders, wait_seconds=wait_seconds, should_stop=should_stop
+    )
+    while watch.pending:
+        remaining = watch.poll(on_release)
+        if watch.pending:
+            watch.wait_slice(remaining)
 
 
 def _launch_staggered(
@@ -6358,6 +6422,21 @@ def _verifier_tools(lens: QCLens, model: str) -> list[dict]:
     return tools
 
 
+# The verification phase's cache TTL, PER TRANSPORT. A batched seat may run
+# minutes after the request that wrote its prefix — the provider schedules
+# the batch — so its markers carry the one-hour TTL: 2× to write, and the
+# entry outlives the queue. A streamed seat is sent the moment a worker is
+# free, seconds after its lineage's leader began answering, and every read
+# refreshes the entry, so it carries the 5-minute default: 1.25× to write,
+# and the phase's dozens of reads keep it alive. The TTL forks the lineage
+# key (``_prefix_lineage_key``), so a batched lead and a streamed seat
+# never pretend to share an entry. On the run in docs/as-built.md ("Final
+# QC streams its verifier seats, leaders first") 76% of the batched phase's
+# cost was one-hour writes that the batch did not read back.
+_BATCH_VERIFIER_CACHE_TTL = "1h"
+_STREAMED_VERIFIER_CACHE_TTL = ""  # the provider's 5-minute default
+
+
 def _verifier_call_spec(
     *,
     finding: dict,
@@ -6370,8 +6449,13 @@ def _verifier_call_spec(
     today: str = "",
     reference_documents: str = "",
     project_facts: str = "",
+    cache_ttl: str = _STREAMED_VERIFIER_CACHE_TTL,
 ) -> _CallSpec:
-    """One verifier seat's request, built once for either transport."""
+    """One verifier seat's request, built once for either transport.
+
+    ``cache_ttl`` is the one field that differs between the transports (the
+    constants above say why); everything else is byte-identical.
+    """
     return _CallSpec(
         system_prompt=_verifier_system_prompt(module),
         shared_prefix=_verifier_shared_prefix(
@@ -6385,11 +6469,7 @@ def _verifier_call_spec(
         max_tokens=max_tokens,
         effort=effort,
         max_searches=settings.QC_MAX_SEARCHES_LENS if lens.web else 0,
-        # The verification phase runs longer than the 5-minute default cache
-        # entry survives, so the shared document would lapse and be rewritten
-        # mid-phase. A 1h entry costs 2x to write and breaks even after three
-        # reads; a panel run has dozens.
-        cache_ttl="1h",
+        cache_ttl=cache_ttl,
     )
 
 
@@ -6416,7 +6496,19 @@ def _verify_one(
     continuation_cache: bool = False,
     refusal_fallback: bool = False,
     pressure: resource_pressure.AgentPressure = resource_pressure.NO_AGENT,
+    spec: _CallSpec | None = None,
+    first_output: threading.Event | None = None,
 ) -> _VerifierOutcome:
+    """One streamed verifier seat. Never raises.
+
+    ``spec`` is the seat's request, prebuilt by the pool so the lineage key
+    that staggers the seats and the request that is sent are one object; a
+    direct caller may leave it out and gets the streamed shape. ``first_output``
+    is a lineage leader's release event, handed on to
+    :func:`_run_streaming_call` — it fires on the first streamed frame, when
+    a request ends, or when the pool harvests the seat, and its followers
+    enter the queue the moment it does.
+    """
     worker_fields = {
         "candidate_id": candidate_id,
         "reviewer_index": reviewer_index,
@@ -6444,18 +6536,20 @@ def _verify_one(
                 reviewer_index=reviewer_index,
             ),
         )
-    spec = _verifier_call_spec(
-        finding=finding,
-        lens=lens,
-        section_render=section_render,
-        module=module,
-        model=model,
-        max_tokens=max_tokens,
-        effort=effort,
-        today=today,
-        reference_documents=reference_documents,
-        project_facts=project_facts,
-    )
+    if spec is None:
+        spec = _verifier_call_spec(
+            finding=finding,
+            lens=lens,
+            section_render=section_render,
+            module=module,
+            model=model,
+            max_tokens=max_tokens,
+            effort=effort,
+            today=today,
+            reference_documents=reference_documents,
+            project_facts=project_facts,
+            cache_ttl=_STREAMED_VERIFIER_CACHE_TTL,
+        )
     result = _run_streaming_call(
         client,
         system_prompt=spec.system_prompt,
@@ -6473,8 +6567,12 @@ def _verify_one(
         event_fields=worker_fields,
         event_sink=event_sink,
         should_stop=lambda: should_stop() or shared_should_stop(),
+        first_output=first_output,
         # A streamed seat's continuations are seconds apart, like a lens's,
-        # so they get the tail too: 5 minutes after this seat's 1h markers.
+        # so they get the tail too: a 5-minute tail after this seat's
+        # markers (5 minutes themselves on the streamed transport; a batched
+        # lead's are 1h, and a 5-minute tail after 1h markers is the one
+        # mixed order the provider allows).
         continuation_cache=continuation_cache,
         refusal_fallback=refusal_fallback,
         pressure=pressure,
@@ -9337,6 +9435,7 @@ def _run_final_qc(
                     today=today,
                     reference_documents=reference_block,
                     project_facts=facts_block,
+                    cache_ttl=_BATCH_VERIFIER_CACHE_TTL,
                 )
                 for i, j in tasks
             }
@@ -9404,6 +9503,96 @@ def _run_final_qc(
                     shared_failure_error = outcome.verdict.error
                     shared_failure.set()
         else:
+            # Streamed seats: a bounded pool filled one free worker at a
+            # time, so a shared request failure stops the rest before they
+            # spend anything — and LEADERS FIRST. Every seat of a lineage
+            # shares one cached prefix (the document, the dossier, the
+            # facts), and a cache entry is readable only once the response
+            # that writes it begins streaming, so seats that start together
+            # all miss and each writes that prefix at the write premium.
+            # One seat per lineage therefore goes first with a
+            # ``first_output`` event, and its followers enter the queue only
+            # when it fires — or its request ends, the bounded wait expires,
+            # or a Stop lands (``_LeaderWatch``, the same wait phase 1 runs
+            # through ``_launch_staggered``). A single-seat lineage never
+            # waits. The pool polls the watch between harvests of its
+            # completed seats, so a release fills an idle worker while the
+            # leader is still answering. Nothing about any request changes.
+            # docs/as-built.md ("Final QC streams its verifier seats,
+            # leaders first") has the run this replaced: 39% of batched
+            # seats read the warm lead's copy, and 76% of the phase's cost
+            # was the prefix being written again at the one-hour rate.
+            # Lineage keys come from the real request builders, so the seats
+            # are keyed from a build of their specs; the workers then build
+            # their own (one render per seat — cheap). Only when staggering:
+            # a zero wait is the pre-stagger pool, and must behave like it.
+            lineages: dict[str, list[tuple[int, int]]] = {}
+            if warm_wait_seconds > 0 and len(tasks) > 1:
+                for i, j in tasks:
+                    spec = _verifier_call_spec(
+                        finding=raw_findings[i][1],
+                        lens=raw_findings[i][0],
+                        section_render=section_render,
+                        module=module,
+                        model=model,
+                        max_tokens=phase_max_tokens["verifier"],
+                        effort=verifier_effort,
+                        today=today,
+                        reference_documents=reference_block,
+                        project_facts=facts_block,
+                        cache_ttl=_STREAMED_VERIFIER_CACHE_TTL,
+                    )
+                    lineages.setdefault(_spec_lineage_key(spec), []).append((i, j))
+            leaders: list[tuple[list[tuple[int, int]], threading.Event]] = [
+                (members, threading.Event())
+                for members in lineages.values()
+                if len(members) > 1
+            ]
+            first_output_for: dict[tuple[int, int], threading.Event] = {
+                members[0]: released for members, released in leaders
+            }
+            if leaders:
+                held = {
+                    seat for members, _released in leaders for seat in members[1:]
+                }
+                # Leaders first, then every single-seat lineage in task
+                # order; followers join the queue when their leader
+                # releases them. Submission order is all that changes.
+                pending_tasks.clear()
+                pending_tasks.extend(members[0] for members, _released in leaders)
+                pending_tasks.extend(
+                    seat
+                    for seat in tasks
+                    if seat not in held and seat not in first_output_for
+                )
+            watch = (
+                _LeaderWatch(
+                    leaders, wait_seconds=warm_wait_seconds, should_stop=should_stop
+                )
+                if leaders
+                else None
+            )
+
+            def release_followers(
+                members: list[tuple[int, int]], outcome: str, waited_ms: int
+            ) -> None:
+                _log.info(
+                    "Final QC verification: %d streamed seats share a cached "
+                    "prefix; the %d waiting were released (%s) after %d ms.",
+                    len(members),
+                    len(members) - 1,
+                    outcome,
+                    waited_ms,
+                )
+                lead_key = _seat_key(*members[0])
+                for follower in members[1:]:
+                    # How long the follower waited and how the wait ended;
+                    # ``timeout`` is pressure, ``warm`` is the launch working.
+                    pressure_run.agent(
+                        _seat_key(*follower), kind=resource_pressure.AGENT_VERIFIER
+                    ).warm_wait(outcome=outcome, waited_ms=waited_ms, lead=lead_key)
+                pending_tasks.extend(members[1:])
+
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 futures: dict[Any, tuple[int, int]] = {}
 
@@ -9443,16 +9632,30 @@ def _run_final_qc(
                             continuation_cache=continuation_cache,
                             refusal_fallback=refusal_fallback,
                             pressure=seat_pressure,
+                            first_output=first_output_for.get((i, j)),
                         )
                         futures[future] = (i, j)
 
                 fill_available_slots()
                 while futures:
                     completed_futures, _ = wait(
-                        tuple(futures), return_when=FIRST_COMPLETED
+                        tuple(futures),
+                        # While a lineage is still gated, wake once a slice
+                        # to poll its leader; a Stop is noticed within one.
+                        timeout=(
+                            _WARM_WAIT_SLICE_SECONDS
+                            if watch is not None and watch.pending
+                            else None
+                        ),
+                        return_when=FIRST_COMPLETED,
                     )
                     for future in completed_futures:
                         i, j = futures.pop(future)
+                        released = first_output_for.get((i, j))
+                        if released is not None:
+                            # A leader's task ended: its entry is written or
+                            # never will be, so its followers wait no longer.
+                            released.set()
                         try:
                             outcome = future.result()
                         except Exception as exc:  # noqa: BLE001 — failed seat retained
@@ -9474,7 +9677,17 @@ def _run_final_qc(
                             shared_failure_error = outcome.verdict.error
                             shared_failure.set()
 
+                    if watch is not None and watch.pending:
+                        watch.poll(release_followers)
                     fill_available_slots()
+
+            if watch is not None and watch.pending:
+                # The pool emptied with a lineage still gated: a shared
+                # request failure stopped the fill before its leader was
+                # sent. Its followers never reached the queue, so put them
+                # there now and the drain below records every seat, as
+                # before.
+                watch.release_pending(release_followers, WARM_OUTCOME_STOPPED)
 
         if shared_failure.is_set():
             root_error = shared_failure_error or "Unknown invalid request."

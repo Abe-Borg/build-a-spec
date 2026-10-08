@@ -109,7 +109,16 @@ def _run(
     sink=None,
     version_index=0,
     source_guard=None,
+    batch_verification=None,
 ):
+    """``batch_verification`` None follows the live setting, as the engine
+    does (tests/test_refusal_handling.py toggles it through this helper).
+    A test whose 3-seat script must land its dissent on a known reviewer
+    passes True: the fakes hand a candidate's scripted verdicts out in
+    arrival order, a batch submits its seats in seat order, and streamed
+    seats arrive in thread order — which was invisible while batch was the
+    shipped default and is a race since the streamed stagger made streaming
+    the default."""
     return run_final_qc(
         store.doc,
         profile,
@@ -123,6 +132,7 @@ def _run(
         source_guard=source_guard,
         remembered_dismissed=remembered,
         event_sink=sink or (lambda _e: None),
+        batch_verification=batch_verification,
     )
 
 
@@ -669,7 +679,13 @@ def test_a_dismissed_dispute_stays_dismissed_across_a_rerun():
     where a re-run has to re-derive one from the carried record.
     """
     store = _section()
-    first = _run(SequencedFakeClient(_high_scripts(_split_panel_verdicts())), store)
+    # Batched: the content-addressed id hashes the votes by reviewer, so the
+    # split script must land identically on both runs (see ``_run``).
+    first = _run(
+        SequencedFakeClient(_high_scripts(_split_panel_verdicts())),
+        store,
+        batch_verification=True,
+    )
     runner = QCRunner()
     runner.restore(first)
     disputed = runner.result.disputed[0]
@@ -691,6 +707,7 @@ def test_a_dismissed_dispute_stays_dismissed_across_a_rerun():
         SequencedFakeClient(_high_scripts(_split_panel_verdicts())),
         store,
         remembered=remembered,
+        batch_verification=True,
     )
     regenerated = second.disputed[0]
     # The same disagreement: same votes, same claim, so the same id.
@@ -783,6 +800,8 @@ def test_a_reloaded_v4_report_re_adjudicates_to_the_same_outcome():
             )
         ),
         _section(),
+        # Batched, so the dissent is reviewer 3's (see ``_run``).
+        batch_verification=True,
     )
     restored = QCResult.from_dict(result.to_dict())
     assert restored is not None
@@ -1368,7 +1387,10 @@ def test_qc_usage_rolls_up_under_the_qc_model_pricing(monkeypatch):
         qc_verdict_response(True, tokens={"input": 500}),
     ]
     monkeypatch.setattr("backend.app.get_client", lambda: SequencedFakeClient(scripts))
-    client.post("/api/qc/start")
+    # Batch the verification explicitly: the shipped default is streamed
+    # (every seat then rolls up under ``qc`` at list price), and this test
+    # is about the two-rate split the batched transport needs.
+    client.post("/api/qc/start", json={"batch_verification": True})
     _wait_qc(client)
 
     usage = client.get("/api/usage").json()
@@ -1630,14 +1652,17 @@ def test_qc_requests_cache_the_shared_prefix_across_the_whole_fan_out(
     assert len({request["messages"][0]["content"][0]["text"] for request in non_web}) == 1
     assert len({request["system"][0]["text"] for request in non_web}) == 1
 
-    # Every verifier seat shares one lineage, and its entry has to outlive
-    # the 5-minute default: the verification phase runs far longer than that.
+    # Every verifier seat shares one lineage. Streamed seats (the default
+    # transport) keep the 5-minute default TTL: one seat per lineage goes
+    # first and the rest follow within seconds, each read refreshing the
+    # entry. The one-hour TTL belongs to the batched transport, whose seats
+    # the provider may run minutes later (tests/test_qc_batch_verification.py).
     assert (
         len({r["messages"][0]["content"][0]["text"] for r in verifier_requests})
         == 1
     )
     assert all(
-        r["messages"][0]["content"][0]["cache_control"]["ttl"] == "1h"
+        "ttl" not in r["messages"][0]["content"][0]["cache_control"]
         for r in verifier_requests
     )
 
@@ -1668,8 +1693,10 @@ def test_qc_requests_cache_the_shared_prefix_across_the_whole_fan_out(
         assert ttls, "a QC request with no breakpoint at all caches nothing"
         assert len(set(ttls)) == 1, f"mixed cache TTLs in one request: {ttls}"
 
+    # Streamed seats carry the 5-minute default on every marker, like the
+    # lenses; only the batched transport's seats carry the one-hour TTL.
     assert all(
-        block["cache_control"]["ttl"] == "1h"
+        "ttl" not in block["cache_control"]
         for request in verifier_requests
         for block in (
             *request["tools"],

@@ -141,7 +141,9 @@ def _run(client: object, *, batch: bool = True, should_stop=lambda: False,
         # The batch contract itself: every seat rides the batch. A streamed
         # lead seat (cost Tier 1, Chunk 3) is pinned off here so these tests
         # keep meaning what they say whichever way its switch ships; its own
-        # contract is tests/test_qc_batch_warm_lead.py.
+        # contract is tests/test_qc_batch_warm_lead.py. The streamed path's
+        # own stagger (tests/test_qc_streamed_stagger.py) is left at its
+        # default: it changes submission order, never a request.
         batch_warm_lead=False,
         event_sink=(events.append if events is not None else (lambda e: None)),
         should_stop=should_stop,
@@ -228,10 +230,45 @@ def test_a_batched_seat_sends_the_same_request_bytes_as_a_streamed_one():
     stream_reqs = verifier_requests(streamed)
     batch_reqs = verifier_requests(batched)
     assert len(stream_reqs) == len(batch_reqs) == 2
+
+    def without_markers(value):
+        """The same request with every ``cache_control`` marker removed."""
+        if isinstance(value, dict):
+            return {
+                key: without_markers(item)
+                for key, item in value.items()
+                if key != "cache_control"
+            }
+        if isinstance(value, list):
+            return [without_markers(item) for item in value]
+        return value
+
+    def marker_ttls(request):
+        return [
+            block["cache_control"].get("ttl")
+            for block in (
+                *request["tools"],
+                *request["system"],
+                *request["messages"][0]["content"],
+            )
+            if "cache_control" in block
+        ]
+
     for sent_stream, sent_batch in zip(stream_reqs, batch_reqs):
         for key in ("model", "system", "tools", "thinking", "output_config"):
-            assert sent_stream[key] == sent_batch[key], key
-        assert sent_stream["messages"] == sent_batch["messages"]
+            assert without_markers(sent_stream[key]) == without_markers(
+                sent_batch[key]
+            ), key
+        assert without_markers(sent_stream["messages"]) == without_markers(
+            sent_batch["messages"]
+        )
+        # The ONE documented difference: the cache TTL. A batched seat may
+        # run minutes after its prefix was written, so its markers are
+        # one-hour; a streamed seat follows its lineage's leader by seconds
+        # and keeps the 5-minute default (engine._BATCH_VERIFIER_CACHE_TTL /
+        # _STREAMED_VERIFIER_CACHE_TTL). Three explicit markers each.
+        assert marker_ttls(sent_batch) == ["1h", "1h", "1h"]
+        assert marker_ttls(sent_stream) == [None, None, None]
 
 
 @pytest.mark.parametrize("batch", [False, True])
@@ -584,8 +621,13 @@ def test_a_retained_batched_result_reads_stale_once_the_transport_flips(
         finished_at="2026-08-19T10:01:00-07:00",
         batch_verification=True,
     )
+    # Current while the setting still names the transport that produced
+    # it (the shipped default is streamed, so pin batch explicitly)...
+    monkeypatch.setattr(settings, "QC_BATCH_VERIFICATION", True)
     assert result.matches_inputs(store.index, store.doc, None, DEFAULT_MODULE)
 
+    # ...and stale once the transport flips — which is also what a batched
+    # result retained before the default moved to streamed reads as.
     monkeypatch.setattr(settings, "QC_BATCH_VERIFICATION", False)
     assert not result.matches_inputs(
         store.index, store.doc, None, DEFAULT_MODULE
@@ -1451,7 +1493,11 @@ def test_the_disclosure_does_not_stale_a_retained_review():
     to describe something the reviewers never read.
     """
     store = _store()
-    result = _run(SequencedFakeClient(_one_finding_scripts()))
+    # On whichever transport the setting names, so the result reads current.
+    result = _run(
+        SequencedFakeClient(_one_finding_scripts()),
+        batch=settings.QC_BATCH_VERIFICATION,
+    )
     assert result.matches_inputs(store.index, store.doc, None, DEFAULT_MODULE)
     manifest_text = repr(result.input_manifest)
     for key in (

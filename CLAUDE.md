@@ -1105,6 +1105,77 @@ scripted batch's missing reasons (`reasons=False` opts out). Full record,
 reversion evidence and the release-note draft are in `docs/as-built.md`
 under the same heading. No paid API call was made.
 
+## Final QC streams its verifier seats, leaders first — implemented notes (2026-10-07)
+
+Owner decision (Abraham, after the first measured Final QC on 1.24.0: $11.62
+for the batched verification phase). Every verifier seat of a lineage shares
+one ~54k-token prefix (section render, attached dossier, facts, policy); a
+cache entry is readable only once the response that writes it begins
+streaming. The batched transport assumed its 50% rate came on top of that
+shared prefix. The run said otherwise: 26 of 66 measured no-web seats (39%)
+read the warm lead's copy; the rest each wrote the prefix again at the 1h
+rate, 2.21M tokens, $8.86 of $11.62 (76%). A 1h write beats plain input only
+above a 51% hit rate, so the batch's caching cost more than no caching.
+Modelled on the same usage: streamed with a stagger ≈ $5.93.
+
+- **The streamed verifier pool staggers.** The streamed branch of the
+  verification phase builds every seat's `_CallSpec` once, groups seats by
+  `_spec_lineage_key` (no-web and web-tooled are separate lineages), and
+  queues leaders first, then single-seat lineages; followers enter the
+  slot-filling queue only when their lineage's `first_output` fires, its
+  request ends, the pool harvests the leader, `QC_WARM_WAIT_SECONDS` runs
+  out, or a Stop lands. `_await_leaders` is now a thin loop over
+  `_LeaderWatch`, whose `poll` the pool calls between harvests (the
+  `wait(FIRST_COMPLETED)` carries a `_WARM_WAIT_SLICE_SECONDS` timeout while
+  a lineage is gated), so a release fills an idle worker while the leader is
+  still answering. A lineage still gated when the pool empties (a shared
+  request failure stopped the fill) is released `stopped` so the drain
+  records every seat. The slot-filling contract is unchanged: bounded
+  concurrency, `shared_failure` checked before every submission, queue wait
+  measured from submission. One INFO line per lineage on `buildaspec.qc`
+  ("Final QC verification: N streamed seats share a cached prefix; the N-1
+  waiting were released (warm) after M ms."); followers' waits go to the
+  pressure ledger as `warm_wait` (a `timeout` is pressure, `warm`/`stopped`
+  are numbers). No new SSE event: a held follower is simply still queued.
+- **TTL per transport.** `_verifier_call_spec(..., cache_ttl)`:
+  `_BATCH_VERIFIER_CACHE_TTL = "1h"` for batched seats (the provider may run
+  them minutes after the write), `_STREAMED_VERIFIER_CACHE_TTL = ""` (5m)
+  for streamed seats, which follow their leader by seconds and refresh the
+  entry on every read. The TTL is in the lineage key, so a batched lead and
+  a streamed seat never pretend to share an entry. `_verify_one` takes the
+  prebuilt `spec` and `first_output`. This is the one byte-level difference
+  between the transports' requests; `tests/test_qc_batch_verification.py`
+  compares them with markers stripped and pins the TTLs explicitly.
+- **Streaming is the default.** `settings.QC_BATCH_VERIFICATION_DEFAULT =
+  False`; `QC_BATCH_VERIFICATION` reads the env var against it;
+  `qc_preferences.load_batch_verification` falls back to it (a saved choice
+  is the user's and is kept, so someone who chose Batch keeps it until they
+  pick again). `QcTransportChoice` lists Stream first as recommended and
+  says what Batch does to the document copy. The transport is in the hashed
+  QC input manifest, so a retained batched result reads stale once (release-
+  noted). The warm-lead self-check is batch-only and untouched.
+- **Unchanged.** Every request byte but the streamed TTL, the budgets, panel
+  sizes, adjudication, the batched path and its warm lead, the QC protocol
+  version, readiness, the SSE protocol.
+
+Never let the streamed pool submit a follower before its lineage has
+released it while the wait is on, never give the two transports' seats the
+same cache TTL, and never record a `warm`/`stopped` release as pressure.
+Tests: `tests/test_qc_streamed_stagger.py` (when: followers wait, a failed
+leader releases, a Stop cancels unsent followers, a leader's 400 trips the
+breaker after one request, zero wait launches at once, two lineages have two
+leaders, waits reach the ledger; what: identical bytes across the wait,
+streamed 5m vs batched 1h, the default pinned from source). Tests that had
+run batched without saying so now say so: `tests/test_qc.py`'s two
+seat-order-sensitive tests ask for batch, `tests/test_qc_audit_report.py`
+pins the setting and the default for the whole file, and the batch-reminder
+bytes test strips `cache_control` before comparing — the fakes hand scripted
+verdicts out in arrival order, which a batch fixes to seat order and streamed
+threads do not. Full record,
+reversion evidence and the release-note draft are in `docs/as-built.md` under
+the same heading. No paid API call was made; the streamed saving is modelled
+from the measured run's usage, not yet measured live.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

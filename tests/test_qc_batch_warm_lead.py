@@ -1004,6 +1004,10 @@ def test_a_retained_result_stays_current_across_the_switch(monkeypatch) -> None:
     assert qc_streamed_lead_seats(led.to_dict()) == 1
     assert led.input_fingerprint == plain.input_fingerprint
     assert "lead" not in json.dumps(led.input_manifest).lower()
+    # Both results are batched; the TRANSPORT is a review input (pinned in
+    # tests/test_qc_batch_verification.py) and the shipped default is now
+    # streamed, so name the batched regime before asking "current?".
+    monkeypatch.setattr(settings, "QC_BATCH_VERIFICATION", True)
     for switch in (False, True):
         monkeypatch.setattr(settings, "QC_BATCH_WARM_LEAD", switch)
         assert led.matches_inputs(store.index, store.doc, None, DEFAULT_MODULE)

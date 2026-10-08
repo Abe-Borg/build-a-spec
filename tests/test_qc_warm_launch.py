@@ -715,10 +715,13 @@ def test_staggering_changes_no_request_bytes(monkeypatch) -> None:
 
     assert len(staggered.requests) == len(at_once.requests)
     assert _canonical_requests(staggered) == _canonical_requests(at_once)
-    # The consolidation calls and the verifier batch really ran, so the
-    # comparison covers every staggered phase, not only the lenses.
+    # The consolidation calls and the streamed verifier seats really ran,
+    # so the comparison covers every staggered phase, not only the lenses —
+    # the seats included, since the streamed transport is the default and
+    # staggers too (tests/test_qc_streamed_stagger.py is its own contract).
     assert any("[[QC-CONSOLIDATE:" in user_text(r["messages"]) for r in staggered.requests)
-    assert staggered.batches.created
+    assert any("[[QC-VERIFY:" in user_text(r["messages"]) for r in staggered.requests)
+    assert not staggered.batches.created
 
 
 def test_a_retained_result_stays_current_across_the_switch(monkeypatch) -> None:

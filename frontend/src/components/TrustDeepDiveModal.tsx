@@ -1027,23 +1027,31 @@ function Dossier() {
               (critical/high refutations additionally need at least one
               validated citation to count). Survivors
               take the median of the original and the upheld revised severities.
-              This stage is submitted as <em>batches</em> of independent
-              requests — one per round, with another round only when a seat
-              pauses or has to retry — which the API prices at half. Nothing
-              about the review changes; batched requests are not streamed, so
-              the panel board reports how many seats have returned instead of
-              showing each seat’s activity as it happens. When eight or more
-              seats read the same copy of your document, one of them is sent
-              first, streamed at full price, and the batch goes out once it
-              begins answering (after at most 45 seconds), so the rest can
-              read its cached copy instead of each paying to store their own;
-              that seat shows its activity like any streamed one, and the
-              report prices it at full price. After each such review the app
-              reads the batch’s own usage report, and if the batch did not
-              read that copy, or the seat cost more than it could have saved,
-              it stops doing this for that model, tool kind, and group size
-              (8–19 seats or 20 or more) until you restart it; other groups
-              keep their leads (Settings → Developer
+              Every seat in a group reads the same copy of your document, so
+              this stage is <em>streamed, leaders first</em>: one seat per
+              group is sent on its own, and the rest go out once it begins
+              answering (after at most 45 seconds), so they read the copy it
+              stored instead of each paying to store their own — the way the
+              five lenses already start. Each seat shows its activity as it
+              works, and Stop takes effect at once. The Message Batches
+              transport, which prices tokens at half but may store the
+              document again for many seats, is still offered in Settings and
+              in the start confirmation; it is no longer the default, because
+              on the first measured review only 39% of the batched seats read
+              the shared copy and the rest rewrote it at the one-hour rate.
+              When you choose Batch, nothing about the review changes;
+              batched requests are not streamed, so the panel board reports
+              how many seats have returned instead of each seat’s activity.
+              When eight or more seats read the same copy of your document
+              in a batch, one of them is sent first, streamed at full price,
+              and the batch goes out once it begins answering; that seat shows
+              its activity like
+              any streamed one, and the report prices it at full price. After
+              each such review the app reads the batch’s own usage report,
+              and if the batch did not read that copy, or the seat cost more
+              than it could have saved, it stops doing this for that model,
+              tool kind, and group size (8–19 seats or 20 or more) until you
+              restart it; other groups keep their leads (Settings → Developer
               tools → Cost self-checks shows what it found).
               Refuted findings are kept and shown in the report rather than
               quietly deleted. The verifiers also judge the proposed fix as

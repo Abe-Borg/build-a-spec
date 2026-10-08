@@ -20181,3 +20181,174 @@ operation is refused and resent, and your own typed edits stay yours."
 No paid API call was made. The live model's compliance with the new
 `reason` field — how often a first batch is refused and resent — is
 unmeasured; the refusal costs one round and the resend lands the batch.
+
+## Final QC streams its verifier seats, leaders first — implemented notes (2026-10-07)
+
+**Owner decision (Abraham).** After the first measured Final QC on a 1.24.0
+build — $14.87 for the review, $11.62 of it the batched verification phase —
+the owner asked for the cost to come down without changing what the review
+asks. The verifier seats now stream by default, one seat per cache lineage
+first and the rest once it is answering; the Message Batches transport
+remains available and is no longer the default.
+
+**The run that motivated it.** Diagnostics bundle
+`buildaspec-diagnostics-2026-10-07-151216`, session `9dbb5786`, Final QC run
+`qc-run-5f739bcc747d4641bfc16bc5557425da`: Opus 5.5, 39 candidates (21 low,
+14 medium, 4 high), 82 seats (67 no-web, 15 web-tooled), 80 batched + 2
+streamed leads, batch wall clock 6.4 minutes. The phase's usage, priced at the
+app's own Opus 5.5 batch rates (input $4, output $20, cache read $0.20,
+5-minute write $5, 1-hour write $8 per MTok, ×0.5), reproduces the meter:
+
+| Component | Tokens | Cost |
+|---|---|---|
+| One-hour cache writes | 2,214,586 | $8.86 |
+| Other cache writes | 610,239 | $1.53 |
+| Output incl. thinking | 84,347 | $0.84 |
+| Cache reads | 2,558,414 | $0.26 |
+| Plain input | 56,754 | $0.11 |
+| Web searches | 4 | $0.04 |
+
+The warm-lead self-check (`cost_checks`, WL-1) measured the no-web lineage: 66
+seats measured, 26 (39%) read the shared prefix (53,919 tokens median), the
+rest wrote it; break-even read share 37.2%; verdict `not_read`, cohort
+`claude-opus-5-5 / no-web / 20+` latched off for the process. The web-tooled
+lineage was `too_few` (7 measured). The 2.21M one-hour write tokens are ~41
+seats × the prefix. Anthropic's documentation calls cache hits inside a
+concurrent batch best-effort; this is the first live number the app has for
+it. At the 1h write rate a cached prefix beats plain input only above a 51%
+hit rate (`(1−h)·2 + h·0.05 < 1`), so at 39% the batch's caching cost more
+than not caching at all.
+
+**Modelled alternatives, same seats, model, effort and adjudication:**
+
+| Scenario | Verifier phase | Final QC total |
+|---|---|---|
+| Observed: batch, 39% prefix hits | $11.64 | $14.89 |
+| Batch, prefix at 5-minute TTL instead of 1h | $8.31 | $11.56 |
+| Batch, perfect sharing (the design bet) | $3.21 | $6.46 |
+| Streamed, 8 workers, seats start together (the pre-change `=0` path) | $8.88 | $11.09 |
+| Streamed with the stagger (1 prefix write, 81 reads) | $5.93 | $8.15 |
+| Streamed + stagger + 1-seat panels for low (not done; owner lever) | $4.53 | $6.75 |
+
+The streamed rows assume what the lens phase, consolidation and research
+already show on every run: followers released `warm` within seconds and the
+prefix read on every other call. The "Final QC total" column drops the two
+list-price leads ($1.03) on the streamed rows.
+
+**What changed.**
+
+- *`backend/qc/engine.py`.* `_await_leaders` is a thin loop over a new
+  `_LeaderWatch` (`poll` releases every leader whose wait ended and returns
+  the seconds left; `wait_slice` blocks one slice; `release_pending` releases
+  the rest with a given outcome). The streamed verification branch builds each
+  seat's `_CallSpec` once, groups seats by `_spec_lineage_key`, queues leaders
+  first then single-seat lineages, and holds followers until their lineage is
+  released: on the leader's `first_output` (set by `_run_streaming_call` on
+  the first streamed frame or when a request ends), when the pool harvests the
+  leader's future, after `warm_wait_seconds`, or on a Stop. The pool's
+  `wait(FIRST_COMPLETED)` carries a `_WARM_WAIT_SLICE_SECONDS` timeout while a
+  lineage is gated and polls the watch between harvests, so a release fills an
+  idle worker while the leader is still answering. A lineage still gated when
+  the pool empties (a shared request failure stopped the fill before its
+  leader was sent) is released `stopped`, so the existing drain records every
+  seat. The slot-filling contract is unchanged: bounded concurrency,
+  `shared_failure` checked before each submission, queue wait measured from
+  submission. One INFO line per lineage on `buildaspec.qc`; followers' waits
+  reach the pressure ledger through `warm_wait(outcome, waited_ms, lead)`.
+  `_verifier_call_spec` takes `cache_ttl`: `_BATCH_VERIFIER_CACHE_TTL = "1h"`
+  (the batch branch passes it), `_STREAMED_VERIFIER_CACHE_TTL = ""` (the
+  default, the provider's 5 minutes). `_verify_one` accepts the prebuilt
+  `spec` and `first_output`.
+- *`backend/settings.py`.* `QC_BATCH_VERIFICATION_DEFAULT = False`;
+  `QC_BATCH_VERIFICATION = _bool_env("BUILD_A_SPEC_QC_BATCH_VERIFICATION",
+  QC_BATCH_VERIFICATION_DEFAULT)`; the comment block records the measured
+  reason. An explicit env value keeps its documented reading (`0/false/no/off`
+  → Stream, anything else → Batch).
+- *`backend/qc_preferences.py`.* Lenient reads fall back to the shipped
+  default instead of a hard-coded `True`. A saved choice is never rewritten.
+- *`frontend/src/components/QcTransportChoice.tsx`.* Stream listed first as
+  recommended, with what each transport does to the document copy; the
+  unloaded default is Stream. `TrustDeepDiveModal` describes the streamed
+  stage and the batched option; `types.ts` documents `"stream"` as the
+  default.
+- *Docs.* README gains "Current Status — Final QC streams its verifier seats,
+  leaders first"; the Chunk 3 section, the cost bullet and the env table row
+  say the batched transport is the chosen-not-default one. CLAUDE.md gains the
+  implemented notes.
+
+**Unchanged.** Every request byte except the streamed seats' TTL; the
+budgets, panel sizes (`QC_VERIFIERS_STANDARD` 2, `QC_VERIFIERS_CRITICAL` 3),
+adjudication (final-qc/4), the QC protocol version, the batched path and its
+warm lead and self-check, `_launch_staggered` and the lens phase, readiness,
+the SSE protocol (a held follower is still "queued"). The transport was
+already in the hashed QC input manifest, so a retained batched result reads
+stale once after the default flips, as any transport change does.
+
+**Tests.** `tests/test_qc_streamed_stagger.py` (12): followers start only
+after the leader streams; a leader that fails before streaming releases them
+at its request's end; a Stop during the wait sends no follower request and
+records them cancelled; a leader's invalid request trips the shared breaker
+after ONE request (cheaper than the old pool's worth); zero wait launches
+every seat at once (a barrier of four); two lineages have two leaders;
+follower waits reach the pressure ledger as `warm` with the lead named and no
+pressure; the lineage key groups by builder output (same lens → same key, web
+tools or the other TTL → another); staggering changes no request bytes; the
+retained result stays current across the wait setting; streamed seats carry
+no TTL and batched seats `1h`; the default is pinned from the settings source.
+Seven existing tests were updated for the new default and TTL
+(`test_qc.py`, `test_qc_batch_verification.py`, `test_qc_batch_warm_lead.py`,
+`test_qc_live_events.py`, `test_qc_preferences.py`, `test_qc_verifier_v3.py`,
+`test_qc_warm_launch.py`); the synchronized circuit-breaker test now passes
+`warm_wait_seconds=0`, since its client releases a full pool together.
+**Tests that had been running on the batch without saying so.** The
+shipped default was batch, so every QC test that named no transport ran
+batched, and some depend on what the batch guarantees: the fakes hand a
+candidate's scripted verdicts out in arrival order, a batch submits its
+seats in seat order, and streamed seats arrive in thread order. Once the
+default flipped, a `[True, True, False]` script landed its dissent on a
+random reviewer and the first CI run found four failures the targeted runs
+had missed (three deterministic, one a 1-in-5 race). What changed:
+`tests/test_qc.py`'s `_run` passes `batch_verification` through (None
+follows the live setting, which `tests/test_refusal_handling.py` toggles
+through it) and its two seat-order-sensitive tests — one reads
+`verdicts[2]`, one hashes the votes into a content-addressed id — ask for
+batch explicitly; `tests/test_qc_audit_report.py` gets an autouse fixture
+that sets both `QC_BATCH_VERIFICATION` and `QC_BATCH_VERIFICATION_DEFAULT`
+to True for every test (its fixtures depend on seat order through the
+memo's "representative note", two tests read the batch's multiplier and
+reminder rounds back, and `create_app` re-samples the setting from
+`qc_preferences`, whose fallback is the default); and
+`tests/test_prompt55_batch_reminder.py` compares the streamed and batched
+reminder requests with their `cache_control` markers stripped, the TTL
+being the one documented difference. The streamed transport's own
+contracts are `test_qc_live_events.py` and `test_qc_streamed_stagger.py`.
+(The lineage keys are also built only when the wait is on, so a zero wait
+is byte-for-byte the pre-stagger pool.)
+
+**Reversion evidence.** Four probes, each applied, run and restored:
+(1) stagger off (`if False and warm_wait_seconds > 0`) — the four "when" tests
+fail; (2) streamed TTL back to `"1h"` — the TTL test, the live-events
+continuation test and the batched-vs-streamed bytes test fail; (3)
+`QC_BATCH_VERIFICATION_DEFAULT = True` — the three default tests fail (9
+failures across the two files); (4) followers' `warm_wait` not recorded — the
+ledger test fails. Ruff clean; `npm test` and `npm run build` pass.
+
+**Release-note draft.** "Final QC's reviewer seats now stream by default,
+one seat per group first and the rest once it is answering, so they read one
+stored copy of your section instead of each storing their own. On the first
+measured review the batched transport stored the copy again for most seats at
+the one-hour rate, which was three quarters of that stage's cost; streaming
+with the stagger is modelled at about half. Batch is still offered in
+Settings and the start confirmation, and a choice you saved is kept. A Final
+QC result produced by the batched transport reads out of date once after
+updating; re-run it."
+
+**Not measured.** No paid API call was made. The streamed saving is modelled
+from the measured run's usage; the owner can compare the next review's `qc`
+bucket (Settings → Developer tools → This session's cost) against this run's
+$14.87, or run `tools\qc_export_cost_profile.py` on both exports. The 610,239
+"other" cache-write tokens could not be attributed to a TTL from the trace
+aggregates. Deferred, deliberately: a 1-seat panel for low-severity
+candidates (42 of the 82 seats here) and a cheaper verifier model, both
+already recorded as deferred levers because they change what the review
+means.

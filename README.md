@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.25.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.25.1** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -170,7 +170,7 @@ on it.
 ## Current Status — Final QC's verifier seats run on Sonnet 5.5; condensing and the fact harvest think harder
 
 (2026-10-08. docs/as-built.md's "Final QC's verifier seats run on Sonnet 5.5
-at high" is the record; shipped in v1.25.0.)
+at high" is the record; shipped in v1.25.1.)
 
 The owner's cost review (2026-10-08) asked where the app could still save
 money without giving up rigor or quality. Four changes came out of it.
@@ -235,7 +235,7 @@ tools → This session's cost against the measured $14.87, or run
 ## Current Status — Final QC's reviewers see the standards editions in effect
 
 (2026-10-08. docs/as-built.md's "Final QC's verifier seats read the standards
-in effect" is the record; shipped in v1.25.0.)
+in effect" is the record; shipped in v1.25.1.)
 
 Final QC's second stage — the reviewer seats that try to refute each
 candidate finding — now reads the **standards editions in effect, with the
@@ -269,7 +269,7 @@ uphold more correct edition findings is unmeasured.
 
 ## Current Status — every edit says why
 
-Shipped in v1.25.0; docs/as-built.md ("Every edit carries its reason")
+Shipped in v1.25.1; docs/as-built.md ("Every edit carries its reason")
 records the implementation.
 
 The owner's rule (2026-10-07): the software states the reason for every
@@ -323,7 +323,7 @@ did not change. No paid API call was made.
 
 ## Current Status — the diagnostics say whether an agent was starved
 
-Shipped in v1.25.0; docs/as-built.md ("The diagnostics say whether an
+Shipped in v1.25.1; docs/as-built.md ("The diagnostics say whether an
 agent was starved") records the implementation.
 
 Research runs four areas at once, Final QC runs lenses, grouping calls and
@@ -392,7 +392,7 @@ looks like on real runs is unmeasured.
 ## Current Status — Final QC streams its verifier seats, leaders first
 
 (2026-10-07. docs/as-built.md's "Final QC streams its verifier seats, leaders
-first" is the record; shipped in v1.25.0.)
+first" is the record; shipped in v1.25.1.)
 
 Final QC's second stage — the reviewer seats that try to refute each
 candidate finding — now runs **streamed by default, one seat per cache group

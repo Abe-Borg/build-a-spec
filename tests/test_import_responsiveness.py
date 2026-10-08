@@ -689,11 +689,28 @@ def test_the_qc_report_download_never_waits_out_the_permission_sweep(monkeypatch
         # change (the edit itself goes through the real gate inline, not the
         # sweep, so it stays fast; its response starts the held warm).
         release = threading.Event()
+        sweep_entered = threading.Event()
+        sweep_finished = threading.Event()
+        downloads_finished = threading.Event()
+        downloads: dict = {}
         real_sweep = SessionState._sweep_and_publish
 
         def held_sweep(self, *args, **kwargs):
-            release.wait(_BLOCK_SECONDS)
-            return real_sweep(self, *args, **kwargs)
+            sweep_entered.set()
+            try:
+                release.wait(_BLOCK_SECONDS * 6)
+                return real_sweep(self, *args, **kwargs)
+            finally:
+                sweep_finished.set()
+
+        def download_reports():
+            try:
+                downloads["word"] = client.get("/api/qc/export")
+                downloads["json"] = client.get("/api/qc/export.json")
+            finally:
+                downloads_finished.set()
+
+        downloader = threading.Thread(target=download_reports, daemon=True)
 
         monkeypatch.setattr(SessionState, "_sweep_and_publish", held_sweep)
         try:
@@ -714,23 +731,19 @@ def test_the_qc_report_download_never_waits_out_the_permission_sweep(monkeypatch
                 },
             )
             assert edited.json().get("ok") is True, edited.text
-
-            started = time.perf_counter()
-            word = client.get("/api/qc/export")
-            word_elapsed = time.perf_counter() - started
-            started = time.perf_counter()
-            envelope = client.get("/api/qc/export.json")
-            json_elapsed = time.perf_counter() - started
+            assert sweep_entered.wait(_BLOCK_SECONDS * 2), "the sweep never started"
+            downloader.start()
+            # Prove the dependency is absent rather than benchmark Word ZIP
+            # generation on a shared runner. The sweep stays held for longer
+            # than this bound, and is released explicitly in the finally.
+            assert downloads_finished.wait(_BLOCK_SECONDS * 2), (
+                "the report downloads did not finish while the sweep was held"
+            )
+            assert not sweep_finished.is_set(), "the downloads waited out the sweep"
+            word = downloads["word"]
+            envelope = downloads["json"]
             assert word.status_code == 200, word.text
             assert envelope.status_code == 200, envelope.text
-            assert word_elapsed < _RESPONSIVE_SECONDS, (
-                f"the Word download took {word_elapsed:.2f}s — it is waiting "
-                "out the capability sweep again"
-            )
-            assert json_elapsed < _RESPONSIVE_SECONDS, (
-                f"the JSON download took {json_elapsed:.2f}s — it is waiting "
-                "out the capability sweep again"
-            )
 
             # The conservative verdict is DISCLOSED, in both projections.
             state = envelope.json()["current_state"]
@@ -745,6 +758,8 @@ def test_the_qc_report_download_never_waits_out_the_permission_sweep(monkeypatch
             )
         finally:
             release.set()
+            if downloader.ident is not None:
+                downloader.join(_BLOCK_SECONDS * 2)
 
         # Once the sweep settles, the same download states the exact verdict:
         # still stale (the body really did change) but no longer provisional.

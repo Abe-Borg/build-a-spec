@@ -20836,6 +20836,37 @@ Ruff, `npm test` and `npm run build` pass. No paid API call was made.
 status changed (for example, imported → confirmed) below the end of the
 section. It shows what changed in the words."
 
+## "Ask model" and "Resolve in chat" quote the whole text (2026-10-08)
+
+Owner report (Abraham): the review queue's Ask model seemed to cut off the
+provision it dropped into the chat. It did. `ReviewDrawer.ask` clipped the
+quoted text at 80 characters and added an ellipsis, so a long provision
+reached the model ending mid-sentence. Final QC's Resolve in chat had the
+same habit: it clipped the provision, issue, rationale and proposed-edit
+list at 800 characters each, and each proposed edit's text at 80 (it reused
+the drawer's chip renderer).
+
+- `lib/reviewQueue.askModelPrefill(entry)` builds the queue's prefill:
+  `Regarding <ref> "<whole text>": `. The drawer calls it.
+- `lib/qcRemediation.qcResolveInChatPrompt(finding, signals, context)`
+  builds the Final QC prompt, moved out of `QCDrawer` unchanged in wording.
+  Whitespace still folds so each evidence field stays on one line; nothing
+  is clipped.
+- `qcRemediation.qcOperationText(op, limit?)` is the one operation
+  renderer. The drawer's chips pass 80 (unchanged on screen); the prompt
+  passes none.
+- Unchanged: the composer (it already scrolled past nine lines), the chat
+  API (it has no length cap), and the backend.
+
+Tests: `frontend/tests/reviewQueue.test.ts`,
+`frontend/tests/qcRemediation.test.ts`. Restoring either clip fails them;
+both probes were restored. `npm test` and `npm run build` pass. No paid API
+call was made.
+
+**Release-note draft.** "Ask model in the review queue and Resolve in chat
+in Final QC now quote the whole provision in the chat, not its first 80 or
+800 characters."
+
 ## The Review Room shows what each lens and reviewer is doing — implemented notes (2026-10-08)
 
 Owner request (Abraham, 2026-10-08, with a screenshot of five lens cards all

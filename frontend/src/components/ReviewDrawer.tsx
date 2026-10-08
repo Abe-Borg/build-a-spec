@@ -32,6 +32,7 @@ import {
 } from "../lib/sourceCapabilities";
 import { sourceChipTitle } from "../lib/sourceChip";
 import {
+  askModelPrefill,
   buildQueue,
   reviewCounts,
   type QueueEntry,
@@ -322,11 +323,7 @@ export default function ReviewDrawer({
 
   const ask = useCallback(() => {
     if (locked || !current) return;
-    const snippet =
-      current.text.length > 80
-        ? `${current.text.slice(0, 80).trimEnd()}…`
-        : current.text;
-    onAskModel(`Regarding ${current.ref} "${snippet}": `);
+    onAskModel(askModelPrefill(current));
     setEditing(false);
   }, [locked, current, onAskModel]);
 

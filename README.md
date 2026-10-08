@@ -3318,8 +3318,8 @@ From-scratch drafting is a first-class path, not the fallback.
   master import, `assumed` blocks after drafting — one at a time, in document
   order, at keyboard speed: **K**eep (confirm), **E**dit (rewrite → confirmed,
   research provenance preserved), **D**elete, **A**sk the model (prefills the
-  chat with a targeted "Regarding 1.2.A …" so you just say what to change),
-  **S**/→ skip, ← back. Each decision advances to the next block; the queue
+  chat with a targeted "Regarding 1.2.A …" quoting the whole provision, so
+  you just say what to change), **S**/→ skip, ← back. Each decision advances to the next block; the queue
   recomputes straight from the live document, so it survives undo, model
   edits, and resets with nothing to drift out of sync. A per-article
   press-and-hold confirms the rest of an article you've read in one undo

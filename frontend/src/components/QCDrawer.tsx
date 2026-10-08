@@ -57,6 +57,8 @@ import { useQcReportDownloads } from "../lib/useQcReportDownloads";
 import {
   classifyQcRemediation,
   qcDecisionContextByElement,
+  qcOperationText,
+  qcResolveInChatPrompt,
   type QcRemediationBucket,
 } from "../lib/qcRemediation";
 import {
@@ -167,24 +169,10 @@ const sevChip: Record<Severity, string> = {
   low: "border-ink-faint/50 bg-ink-faint/10 text-ink-faint",
 };
 
+/** A compact chip: the drawer clips an operation's text at 80 characters.
+ *  A chat prompt never does (`qcResolveInChatPrompt`). */
 function opPreview(op: Record<string, unknown>): string {
-  const action = String(op.action ?? "");
-  const target = String(op.target_id ?? "");
-  const text = op.text != null ? String(op.text) : "";
-  const trimmed = text.length > 80 ? `${text.slice(0, 80)}…` : text;
-  if (action === "delete") return `delete ${target}`;
-  if (action === "set_status")
-    return `mark ${target} → ${String(op.status ?? "")}`;
-  if (action === "set_standard_edition")
-    return `${String(op.standard ?? "")} → ${String(op.edition ?? "")}`;
-  if (trimmed) return `${action} ${target}: “${trimmed}”`;
-  return `${action} ${target}`;
-}
-
-function promptExcerpt(value: string | undefined, limit = 800): string {
-  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
-  if (normalized.length <= limit) return normalized;
-  return `${normalized.slice(0, limit - 1).trimEnd()}…`;
+  return qcOperationText(op, 80);
 }
 
 const QC_ACTIVITY_LABELS: Record<string, string> = {
@@ -1666,35 +1654,14 @@ export default function QCDrawer({
                             }}
                             onResolveInChat={
                               isDecision
-                                ? () => {
-                                    const target = f.element_id || "the section";
-                                    const signal =
-                                      classification.decisionSignals.join("; ");
-                                    const currentProvision = promptExcerpt(
-                                      decisionContexts.get(f.element_id)?.text,
-                                    );
-                                    const proposedChanges = f.proposed_ops
-                                      .map((operation) => opPreview(operation))
-                                      .join("; ");
-                                    const evidence = [
-                                      `Finding: ${f.title} (${f.finding_id})`,
-                                      `Affected provision: ${target}`,
-                                      `Issue identified by Final QC: ${promptExcerpt(f.issue)}`,
-                                      `Review rationale: ${promptExcerpt(f.rationale)}`,
-                                      currentProvision
-                                        ? `Current provision text: ${currentProvision}`
-                                        : "",
-                                      proposedChanges
-                                        ? `Proposed-operation context: ${promptExcerpt(proposedChanges)}`
-                                        : "Proposed-operation context: Final QC did not supply an executable fix.",
-                                      `Missing-decision signal: ${signal}`,
-                                    ]
-                                      .filter(Boolean)
-                                      .join("\n");
+                                ? () =>
                                     onAskModel(
-                                      `Help me resolve this Final QC finding using the retained review evidence below.\n\n${evidence}\n\nAsk only for the missing project fact or confirmation; do not invent or silently default a value. Once I answer, update the specification to resolve the finding and briefly explain what changed and why.`,
-                                    );
-                                  }
+                                      qcResolveInChatPrompt(
+                                        f,
+                                        classification.decisionSignals,
+                                        decisionContexts.get(f.element_id),
+                                      ),
+                                    )
                                 : undefined
                             }
                             onJump={onJump}

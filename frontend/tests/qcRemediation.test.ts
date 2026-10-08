@@ -6,6 +6,8 @@ import {
   classifyQcRemediation,
   qcDecisionContextByElement,
   qcFindingDecisionSignals,
+  qcOperationText,
+  qcResolveInChatPrompt,
 } from "../src/lib/qcRemediation.ts";
 import type { QcReportFinding } from "../src/lib/qcReport.ts";
 import type { SpecDoc } from "../src/types.ts";
@@ -232,4 +234,39 @@ test("application digest handles empty and large batches without hiding totals",
   assert.match(large.text, /Applied finding 12/);
   assert.doesNotMatch(large.text, /Applied finding 13/);
   assert.match(large.text, /and 2 more/i);
+});
+
+test("Resolve in chat carries the provision, issue and proposed edits whole", () => {
+  // Each field used to clip at 800 characters and each proposed edit's text
+  // at 80, so a long provision or fix reached the chat cut short.
+  const provision = `Provide ${"listed quick-response pendent sprinklers ".repeat(30)}throughout.`;
+  const issue = `The basis is unstated. ${"The density lacks its adoption basis. ".repeat(30)}`;
+  const fixText = `Design the system to ${"the stated density and remote area ".repeat(10)}per NFPA 13.`;
+  assert.ok(provision.length > 800 && issue.length > 800 && fixText.length > 80);
+  const prompt = qcResolveInChatPrompt(
+    finding({
+      element_id: "pt1.a1.p2",
+      issue,
+      rationale: "Needs the owner's\n  criterion.",
+      proposed_ops: [
+        { action: "replace", target_id: "pt1.a1.p2", text: fixText, status: "assumed" },
+      ],
+    }),
+    ["the current provision is an unconfirmed assumption"],
+    { status: "assumed", text: provision },
+  );
+  assert.ok(prompt.includes(`Current provision text: ${provision}`));
+  assert.ok(prompt.includes(`Issue identified by Final QC: ${issue.trim()}`));
+  assert.ok(prompt.includes(`replace pt1.a1.p2: “${fixText}”`));
+  // Whitespace still folds so each evidence field stays on one line.
+  assert.ok(prompt.includes("Review rationale: Needs the owner's criterion."));
+  assert.ok(prompt.includes("Missing-decision signal: the current provision is an unconfirmed assumption"));
+  assert.ok(!prompt.includes("…"));
+});
+
+test("the drawer's operation chip still clips; the prompt's never does", () => {
+  const op = { action: "replace", target_id: "pt1.a1.p1", text: "x".repeat(100) };
+  assert.equal(qcOperationText(op, 80), `replace pt1.a1.p1: “${"x".repeat(80)}…”`);
+  assert.equal(qcOperationText(op), `replace pt1.a1.p1: “${"x".repeat(100)}”`);
+  assert.equal(qcOperationText({ action: "delete", target_id: "pt1.a1.p1" }), "delete pt1.a1.p1");
 });

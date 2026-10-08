@@ -148,3 +148,12 @@ export function reviewCounts(doc: SpecDoc | null): {
   const assumed = all.filter((e) => e.status === "assumed").length;
   return { imported, assumed, total: all.length };
 }
+
+/** The composer prefill for the queue's "Ask model": the block's ref and its
+ *  WHOLE text, quoted, with the caret left after it for the user's ask. It
+ *  used to clip at 80 characters with an ellipsis, so a long provision
+ *  reached the chat cut short and the model was asked about a sentence it
+ *  could not see the end of. Nothing clips it now — the composer scrolls. */
+export function askModelPrefill(entry: Pick<QueueEntry, "ref" | "text">): string {
+  return `Regarding ${entry.ref} "${entry.text}": `;
+}

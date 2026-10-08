@@ -216,6 +216,44 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — Next section → no longer leaves the section behind outside the project
+
+(2026-10-08. docs/as-built.md's "Next section → joins the project before it
+saves" is the record; in the next release.)
+
+Pressing **Next section →** in a section that had never exported a project
+brief, or started from one, split the project in two. That section had no
+project id yet. The save offered before the switch wrote its file without
+one, and only afterwards did the app create the id the new section started
+with. Reopened later, the section you left had no project folder, no Project
+panel and no Pull project changes. A brief it exported later got a different
+id, and the two briefs could never be merged. Exporting the brief and saving
+before pressing Next section → avoided the problem, which is why it went
+unnoticed.
+
+- **The section joins the project first.** Next section → now gives the open
+  section its project id before the save prompt appears
+  (`POST /api/project/link`). It stamps the same project link that exporting
+  a brief does, so Save writes the id into the file and the next section
+  starts with the same id. A section that already belongs to a project is
+  left unchanged, so pressing Next section → again, or cancelling, never
+  creates a second id. The route is refused during a tour and while a reply
+  is streaming. If it is refused, Next section → stops and says why, rather
+  than saving the section without its project.
+- **The save prompt says what Save does for it.** When the section joins a
+  project at that moment, the prompt says so. *Start without saving* is still
+  your choice. It leaves a copy you saved earlier outside the project, and
+  the prompt says that too.
+- **A cancelled Next section leaves only the link.** Cancelling leaves the
+  section with the same project link a brief export gives it, and nothing is
+  written to disk.
+
+The workaround is no longer needed. Starting a section from an unlinked
+`.baspec` through New session → *New section in an existing project* still
+warns, as described below: that file is not open, so it cannot be linked.
+
+No paid API call was made.
+
 ## Current Status — a new section starts from the whole project, in its folder
 
 (2026-10-08. docs/as-built.md's "A new section starts from the whole project,
@@ -3679,6 +3717,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/project-facts (+ {pid}, {pid}/supersede),
                          /api/project/brief (+ manifest/inspect/start),
                          /api/project/next-section (GET options / POST seed),
+                         POST /api/project/link (join a project before Next
+                         section → saves the section it leaves),
                          /api/project/sections + /api/project/open-section
                          (the project folder, Project workspace Phase 2),
                          POST /api/project/brief/merge|refresh +

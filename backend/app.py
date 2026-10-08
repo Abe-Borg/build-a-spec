@@ -8443,6 +8443,67 @@ def create_app(
             }
         return JSONResponse(payload)
 
+    @app.post("/api/project/link")
+    def project_link_stamp() -> JSONResponse:
+        """Join THIS section to a project before it is saved — what Next
+        section → calls before its save gate.
+
+        The start route seeds the next section with this section's project
+        id, minting one (``build_project_brief``) when the section has no
+        link. Minted there, the id reached only the in-memory session being
+        replaced: the save gate had already written this section's file
+        without it, so the section left behind could never be joined to the
+        project it started — no folder, no Project panel, and a brief it
+        exported later would mint a second id the merge refuses. Stamped
+        here first, the gate's Save writes the link the next section is
+        seeded with, and the start route reuses it (``build_project_brief``
+        keeps an existing link's id).
+
+        The stamp is ``_build_brief_locked``'s, the one exporting a project
+        brief makes, so a Next section cancelled after it leaves exactly the
+        link an export would have left. Idempotent: a section that already
+        has a link is not touched (``stamped`` is false), so pressing Next
+        section → twice never mints twice. Refused inside a tour and while a
+        turn streams, like the brief export. Nothing is written to disk.
+        """
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        session = sessions.get_session()
+        with session.session_state_guard():
+            if session.turn_active:
+                return _coded_error_response(
+                    {
+                        "ok": False,
+                        "code": "turn_active",
+                        "error": (
+                            "Wait for the current reply to finish before "
+                            "starting the next section."
+                        ),
+                    },
+                    status_code=409,
+                )
+            stamped = not isinstance(session.project_link, dict)
+            if stamped:
+                _build_brief_locked(session)
+            link = dict(session.project_link or {})
+        if stamped:
+            _trace_capture.app_event(
+                "project_brief",
+                action="link",
+                project_id=link.get("project_id", ""),
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "stamped": stamped,
+                "project": {
+                    "project_id": link.get("project_id", ""),
+                    "name": link.get("name", ""),
+                },
+            }
+        )
+
     @app.post("/api/project/next-section")
     async def project_next_section_start(
         body: NextSectionRequest | None = None,

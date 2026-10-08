@@ -676,6 +676,13 @@ export interface NextSectionOptions {
   manifest: ProjectBriefManifest;
 }
 
+/** Answer of `POST /api/project/link`: the project this section belongs to,
+ *  and whether this call is what joined it (false when it already had one). */
+export interface ProjectLinkStamp {
+  stamped: boolean;
+  project: { project_id: string; name: string };
+}
+
 /** Body of `POST /api/project/next-section`; every field optional. */
 export interface NextSectionRequest {
   number?: string;

@@ -2861,13 +2861,14 @@ baseline is the extracted SectionFormat tree — not the uploaded Word package.
   toggle: pick the imported extraction baseline (pinned first when present),
   the blank start, or any prior version, and the paper surface renders the diff inline —
   green/underline insertions, red/strikethrough deletions, whole-block
-  insert/delete badges, a provenance **status-changes** strip, and a
-  `+N added / −M removed / K edited` stat line. It matches the exported
-  redline run-for-run because both read the same diff.
+  insert/delete badges, and a `+N added / −M removed / K edited` stat line.
+  It matches the exported redline run-for-run because both read the same
+  diff. A provision whose only change is its review status (imported →
+  confirmed, assumed → confirmed) is not listed: Compare shows what changed
+  in the words, not in the stamps.
 - **Stable ids make semantic alignment deterministic.** Baseline↔current
   alignment is an id join on the never-reused element uids, not a text match — so a provision
-  that only had its status confirmed shows as a status change, never a
-  spurious edit. The imported-extraction version is remembered as the redline
+  that only had its status confirmed is never shown as a spurious edit. The imported-extraction version is remembered as the redline
   baseline and survives save/resume; this baseline contains normalized
   provision data, not the original DOCX package.
 - **Export menu.** The single Export button becomes a small menu. P1 adds

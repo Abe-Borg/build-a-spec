@@ -21499,3 +21499,102 @@ iterations, not three searches, and the note weighed only overshoot. Its
 context reserve each request needs (8 × 5,000 + 4 × 50,000 tokens) leaves
 the window clip idle until … roughly 580k tokens" are superseded by this
 note.
+
+## Research's near-window clip shortens pages — implemented notes (2026-10-08)
+
+**Owner request (Abraham).** "Handle it and make a PR": the follow-up named
+by "Research's per-request web allowance sits above the provider's pause".
+
+**What was left.** Each research request must leave room in the window for
+its answer (`max_tokens`), a 50k margin, and the results the provider's
+ten-call pause lets it add (`_web_tool_reserve_tokens`): ten full pages at
+50k with the fetch tool as shipped, 500k. Past about 322k tokens of input
+at the default 128k output ceiling that no longer fits, and the one-way
+clip switched the conversation to `near_window_tools`, which cut the fetch
+allowance to ONE per request. One is a cap the model can meet: its second
+fetch in a request comes back `max_uses_exceeded`, and the model reads a
+refusal as a spent budget and hands in — the mechanism behind the original
+early-submission bug. Before the allowance fix the reserve counted only
+four fetches and the clip sat near 582k; counting the pause honestly moved
+it to 322k, which the heaviest area (governing codes, 12 fetches and an
+80-search ceiling, every result re-sent on each continuation) can plausibly
+reach mid-round.
+
+**The change.**
+
+- `RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS = 9_000`. `near_window_tools`
+  is built by the same `_research_tools` call as `tools`, with the same
+  12/12 allowance and `fetch_content_tokens` set to it; only the fetch
+  tool's `max_content_tokens` differs. The provider truncates a longer page
+  and the call succeeds, so nothing new can be met. Final QC's verifier
+  seats already send `max_content_tokens: 5000`.
+- `_web_tool_reserve_tokens` reads each fetch tool's own page cap and fills
+  the pause's ten slots dearest kind first (fetch at its cap, search at
+  `_SEARCH_RESULT_RESERVE_TOKENS`), instead of assuming fetches at the
+  module constant come first.
+- The clip condition compares reserves (`_web_tool_reserve_tokens(near) <
+  _web_tool_reserve_tokens(tools)`) instead of fetch counts.
+- `_research_tools` gains `fetch_content_tokens`, defaulting to
+  `WEB_FETCH_MAX_CONTENT_TOKENS`: the opening's bytes and the staggered
+  launch's lineage key are unchanged.
+- Copy: README (two passages), the dossier's research card, the pressure
+  ledger's `near_window_clip` label, CLAUDE.md.
+
+**Numbers** (1M window, 128k output, 50k margin):
+
+| | Before | After |
+|---|---|---|
+| Clip trips at input of | ~322k | ~322k |
+| After the clip, per request | 1 fetch, 50k pages | 12 fetches, 9k pages |
+| Reserve after the clip | 95k | 90k |
+| Forced hand-in at input of | ~727k | ~732k |
+| Can the model meet a cap after the clip? | yes, its second fetch | no |
+
+9k is the largest round thousand whose reserve is no larger than the old
+clip's, pinned so the hand-in never moves earlier. A 9k page still carries
+an adoption ordinance's amendment list or a code section; a long PDF arrives
+cut, and the model may fetch a more specific URL. Below the threshold
+nothing changes.
+
+**The parallel-calls commit rides this PR.** PR #299 merged at the head
+before its parallel-calls commit (`RESEARCH_WEB_TOOL_CHOICE`, the Codex
+follow-up) was pushed, so master shipped the 12/12 allowance without it.
+This PR carries that commit unchanged (cherry-picked); its as-built
+addendum under the previous heading describes it.
+
+**Tests.** `tests/test_research_budget.py`: the near-window test is now
+`test_near_the_window_the_conversation_switches_once_to_shorter_pages`
+(same allowance on every request, page caps 50k then 9k, only
+`max_content_tokens` differs, bindings as before); the opening-clip and
+resume/restart tests check the page cap; the reserve test adds a 9k case
+and a page cap below a search result's reserve (searches fill the slots
+first); `test_the_shorter_pages_keep_the_allowance_and_hand_in_no_earlier_than_one_fetch_did`;
+and the opening's tools must equal `_research_tools` called the way the
+lineage key calls it.
+
+**Reversion evidence**, each against the three research test files and
+restored:
+
+| Reversion | Failed |
+|---|---|
+| The clip back to one fetch per request | 3 |
+| Page cap 10k (hand-in earlier than the one-fetch clip) | 1 |
+| The reserve ignoring the tool's own page cap | 6 |
+| The reserve always filling fetches first | 1 |
+| `_research_tools`' default page cap shortened | 2 (after adding the lineage pin; 0 before it) |
+
+**Validation.** Ruff clean; the research, resource-pressure and docs test
+files pass (168 tests); `npm
+test` and `npm run build` pass. The full suite runs in CI. No paid API call
+was made.
+
+**Release-note draft for the next release:** "A research area working
+through a very long conversation no longer slows to one page read per
+request near the context window. It keeps its full 12 searches and 12 page
+reads and reads shorter pages instead, so it never hits a limit it could
+mistake for the end of its budget."
+
+**Errata.** "Research web tools keep their bytes (2026-10-05)" says the
+clip switches "to one fetch per request"; "Research's per-request web
+allowance sits above the provider's pause" says "past it the one-fetch tool
+can be met". Both are superseded by this note.

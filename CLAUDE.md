@@ -563,7 +563,9 @@ tail could not pay off, and each change set `thinking_edited`.
   overshoot by its allowance less one; that is the documented trade.
 - The context clip is one-way. When the full allowance no longer fits, the
   conversation switches once to `near_window_tools` (fetch `max_uses: 1`)
-  and never back; when one fetch no longer fits, it submits. Only that
+  and never back; when one fetch no longer fits, it submits. (Superseded
+  2026-10-08: the clip keeps the allowance and shortens pages instead; see
+  "Research's near-window clip shortens pages" below.) Only that
   switch, made after a response, and sanitizer edits set `thinking_edited`.
   Spending the allowance never does.
 - All four areas share identical tool bytes and are byte-identical up to the
@@ -1425,7 +1427,11 @@ one deliberate cross-round influence, capped at 20k tokens).
   322k of input at the default output ceiling (it was about 582k); past it
   the one-fetch tool can be met, and an area that meets it winds down there.
   Documented trade; a content-cap clip (shrink `max_content_tokens`, not
-  `max_uses`) is the follow-up if that bites.
+  `max_uses`) is the follow-up if that bites. (Done the same day, before it
+  was measured: see "Research's near-window clip shortens pages" below.)
+- **Merge note.** PR #299 merged at its first head plus the master merge;
+  the parallel-calls commit landed on the branch a moment later and reached
+  master with the near-window PR, which carried it.
 - **Unchanged.** Every ceiling (2× searches, declared fetches, 16
   continuations, 2 reminders, 1 resend), the submission, grounding, the
   merge, the SSE protocol, the QC manifest, and `RESEARCH_EFFORT` (`medium`,
@@ -1442,6 +1448,46 @@ pins the dossier's and README's numbers. Full record, reversion evidence and
 the release-note draft are in `docs/as-built.md` under the same heading. No
 paid API call was made; the depth the change restores is unmeasured until
 the owner runs a round.
+
+## Research's near-window clip shortens pages — implemented notes (2026-10-08)
+
+Follow-up to the per-request allowance fix (owner: "handle it"). The
+context-window clip was the one place left where a research area could be
+handed a cap it can meet: past the input size at which a full request's
+worst case no longer fits (about 322k at the default output ceiling), the
+conversation switched to ONE fetch per request, its second fetch in a
+request came back `max_uses_exceeded`, and the model reads a refusal as a
+spent budget and hands in.
+
+- **The clip keeps the allowance.** `near_window_tools` is the same 12/12
+  allowance with the fetch tool's `max_content_tokens` at
+  `RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS = 9_000` (50k otherwise); the
+  search and output tools are byte-identical. A shortened page is truncated
+  by the provider, never refused. Final QC's seats already send a 5k cap,
+  so the shape is one the provider takes.
+- **Sized for parity.** 9k is the largest round thousand whose reserve
+  (10 × 9k = 90k) is no larger than the one-fetch clip's (50k + 9 × 5k =
+  95k), so the clipped conversation's forced hand-in moves from about 727k
+  to about 732k of input, never earlier. The clip itself still trips at
+  about 322k.
+- **The reserve reads each tool's own page cap** and fills the pause's ten
+  slots with the dearest kind first (`_web_tool_reserve_tokens`); the clip
+  fires when the shorter pages reserve less than the full ones.
+  `_research_tools(fetch_content_tokens=…)` defaults to
+  `WEB_FETCH_MAX_CONTENT_TOKENS`, which is what the opening sends and what
+  the staggered launch's lineage key hashes (pinned).
+- **Unchanged.** The clip is still one way and once, edits the prefix after
+  a response (`thinking_edited`, `drop_block`), records `near_window_clip`
+  in the pressure ledger (Developer tools now says "had its fetched pages
+  shortened near the context window"), and a restart reopens with full
+  pages. Budgets, ceilings, effort, the submission and the request before
+  the threshold are unchanged.
+
+Never clip a research conversation by shrinking a web tool's `max_uses`;
+shrink what each call returns. Tests: `tests/test_research_budget.py`. Full
+record, reversion evidence and the release-note draft are in
+`docs/as-built.md` under the same heading. No paid API call was made; how
+often real rounds reach the clip is unmeasured.
 
 ## As-built history
 

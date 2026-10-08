@@ -33,7 +33,9 @@ What is preserved exactly, because it is the hard-won part:
   above the provider's own per-request pause, with one web call per step
   (parallel calls off), so the model never meets it
   (a met allowance reads to the model as a spent budget, and it answers
-  with an early submission).
+  with an early submission). Near the context window the one tool change a
+  conversation can see shortens fetched pages, never the allowance, for
+  the same reason.
 - Structured-tool-then-tagged-JSON parsing, newest response first.
 - Accepted-vs-cited URL grounding pooled across every response in the
   dimension. Grounding proves retrieval, not truth — ungrounded items are
@@ -338,6 +340,24 @@ RESEARCH_SEARCHES_PER_REQUEST = 12
 RESEARCH_FETCHES_PER_REQUEST = 12
 
 
+# The context-window clip's page cap: past the input size at which a full
+# request's worst case (:func:`_web_tool_reserve_tokens` at
+# ``WEB_FETCH_MAX_CONTENT_TOKENS``) no longer fits, a conversation switches,
+# once and for good, to fetch tools whose ``max_content_tokens`` is this —
+# the SAME allowance, shorter pages. The switch used to cut the fetch
+# allowance to one per request instead; one is a cap the model can meet
+# (its second fetch in a request comes back ``max_uses_exceeded``), and a
+# met cap reads to it as a spent budget, so an area past the clip could
+# wind down with its declared fetches unspent. A shortened page is never a
+# refusal: the provider truncates it and the call succeeds. Sized as the
+# largest round thousand whose reserve is no larger than the one-fetch
+# clip's (1 × 50k + 9 × 5k = 95k), so the input size at which the clipped
+# conversation must hand in is no earlier than it was: 10 × 9k = 90k
+# reserved. Not a knob; the provider accepts smaller caps (Final QC's
+# verifier seats send 5k).
+RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS = 9_000
+
+
 def _per_request_allowance(dimension: ResearchDimension) -> tuple[int, int]:
     """``(searches, fetches)`` every request of this area's conversation
     declares: the fixed allowance, the same for every area (the constants say
@@ -352,25 +372,39 @@ def _per_request_allowance(dimension: ResearchDimension) -> tuple[int, int]:
 def _web_tool_reserve_tokens(web_tools: list[dict]) -> int:
     """The context one request's web tools may add, at the worst case the
     provider's pause allows: at most :data:`SERVER_TOOL_ITERATIONS_PER_REQUEST`
-    tool results, the dearest first — every fetch the allowance permits up to
-    that bound, at the fetch content cap, then searches in what remains of
-    it. Bounded by the pause rather than the whole allowance because the
-    allowance is sized above the pause on purpose: reserving for all of it
-    (twelve fetches at 50k each) would clip every conversation to one fetch
-    per request past about 160k tokens of input, and the clipped tool is one
-    the model can meet. One result per iteration holds because every web
-    request turns parallel calls off (:data:`RESEARCH_WEB_TOOL_CHOICE`)."""
-    searches, fetches = web_tools[0]["max_uses"], web_tools[1]["max_uses"]
-    fetch_slots = min(fetches, SERVER_TOOL_ITERATIONS_PER_REQUEST)
-    search_slots = min(searches, SERVER_TOOL_ITERATIONS_PER_REQUEST - fetch_slots)
-    return (
-        fetch_slots * WEB_FETCH_MAX_CONTENT_TOKENS
-        + search_slots * _SEARCH_RESULT_RESERVE_TOKENS
+    tool results, the dearest kind first — fetches at the fetch tool's own
+    page cap (``max_content_tokens``, so the near-window tools reserve for
+    their shorter pages), searches at :data:`_SEARCH_RESULT_RESERVE_TOKENS` —
+    each kind up to what its allowance permits. Bounded by the pause rather
+    than the whole allowance because the allowance is sized above the pause
+    on purpose: reserving for all of it (twelve fetches at 50k each) would
+    shorten every conversation's pages past about 160k tokens of input. One
+    result per iteration holds because every web request turns parallel
+    calls off (:data:`RESEARCH_WEB_TOOL_CHOICE`)."""
+    search, fetch = web_tools[0], web_tools[1]
+    kinds = sorted(
+        [
+            (fetch["max_content_tokens"], fetch["max_uses"]),
+            (_SEARCH_RESULT_RESERVE_TOKENS, search["max_uses"]),
+        ],
+        reverse=True,
     )
+    slots = SERVER_TOOL_ITERATIONS_PER_REQUEST
+    reserve = 0
+    for cost, uses in kinds:
+        taken = min(uses, slots)
+        reserve += taken * cost
+        slots -= taken
+    return reserve
 
 
 def _research_tools(
-    *, searches: int, fetches: int, profile: ProjectProfile, model: str
+    *,
+    searches: int,
+    fetches: int,
+    profile: ProjectProfile,
+    model: str,
+    fetch_content_tokens: int = WEB_FETCH_MAX_CONTENT_TOKENS,
 ) -> list[dict]:
     """The three tools a research request declares, built fresh per call.
 
@@ -379,13 +413,17 @@ def _research_tools(
     :func:`_run_dimension`, which sends them, and the staggered launch,
     which hashes them into each area's lineage key — so an area whose tool
     bytes differ is never made to wait for an entry it could not read.
+    ``fetch_content_tokens`` is the fetch tool's page cap: the default on
+    every opening (so the lineage key's bytes are the request's), and
+    :data:`RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS` only for the
+    conversation the context-window clip has switched.
     """
     built = [
         build_web_search_tool(
             max_uses=searches,
             user_location=profile.web_search_user_location(),
         ),
-        build_web_fetch_tool(max_uses=fetches),
+        build_web_fetch_tool(max_uses=fetches, max_content_tokens=fetch_content_tokens),
         # Output tool last so the trailing cache breakpoint lands on it.
         requirements_research_tool(model=model),
     ]
@@ -2675,8 +2713,10 @@ def _run_dimension(
     (the pause's ten calls less one, in practice). The one exception is the
     context window: a request that cannot reserve room for the tool results
     the pause lets it add (:func:`_web_tool_reserve_tokens`) switches the
-    conversation, once and for good, to one fetch per request, and one that
-    cannot reserve even that submits.
+    conversation, once and for good, to the same allowance with shorter
+    pages (:data:`RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS`) — never to a
+    smaller allowance, which the model could meet — and one that cannot
+    reserve even that submits.
 
     Once the resend sanitizer has EDITED the conversation (a fetched PDF
     over the page limit elided, an unpaired server-tool call dropped), or
@@ -2784,20 +2824,22 @@ def _run_dimension(
     # budgets are enforced by the cumulative ceilings below, between requests.
     searches_per_request, fetches_per_request = _per_request_allowance(dimension)
 
-    def _web_tools(fetches: int) -> list[dict]:
+    def _web_tools(fetch_content_tokens: int) -> list[dict]:
         return _research_tools(
             searches=searches_per_request,
-            fetches=fetches,
+            fetches=fetches_per_request,
             profile=profile,
             model=model,
+            fetch_content_tokens=fetch_content_tokens,
         )
 
-    tools = _web_tools(fetches_per_request)
+    tools = _web_tools(WEB_FETCH_MAX_CONTENT_TOKENS)
     # The context-window clip's one alternative (see ``conversation_tools``):
-    # one fetch per request, which reserves the least context a web request
-    # can. Equal to ``tools`` when the dimension allows one fetch anyway, and
-    # then never used.
-    near_window_tools = _web_tools(1)
+    # the same allowance with shorter pages, so the model can never meet a
+    # cap it could not meet before. Only the fetch tool's
+    # ``max_content_tokens`` differs; the search and output tools are
+    # byte-identical.
+    near_window_tools = _web_tools(RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS)
     # ``tool_choice`` is automatic with parallel calls off
     # (RESEARCH_WEB_TOOL_CHOICE says why: one call per step is what makes the
     # provider's pause a bound on calls). Never a forcing choice: the system
@@ -2896,15 +2938,17 @@ def _run_dimension(
     thinking_edited = False
     # The web tools this CONVERSATION sends: ``tools`` on every request,
     # unless the context-window clip finds the next request cannot reserve
-    # room for ``tools``' fetches. It then switches to ``near_window_tools``
-    # for the rest of the conversation — one way, at most once, so the bytes
-    # cannot flip back and forth however the context grows or shrinks — and
-    # a request that cannot reserve even one fetch submits instead. That
-    # switch is the only tool change a conversation can see before its
-    # submission, and only past ~580k tokens of context; made after a
-    # response it edits the prefix replayed thinking was bound to, so it sets
-    # ``thinking_edited`` the way a sanitizer edit does. A resume keeps it; a
-    # restart is a new conversation and opens with ``tools`` again.
+    # room for the full pages ``tools``' fetches may bring. It then switches
+    # to ``near_window_tools`` (the same allowance, shorter pages) for the
+    # rest of the conversation — one way, at most once, so the bytes cannot
+    # flip back and forth however the context grows or shrinks — and a
+    # request that cannot reserve even the shorter pages submits instead.
+    # That switch is the only tool change a conversation can see before its
+    # submission, and only past ~322k tokens of input at the default output
+    # ceiling; made after a response it edits the prefix replayed thinking
+    # was bound to, so it sets ``thinking_edited`` the way a sanitizer edit
+    # does. A resume keeps it; a restart is a new conversation and opens
+    # with ``tools`` again.
     conversation_tools = tools
     submission_reason = ""
     submission_prepared = False
@@ -2997,7 +3041,8 @@ def _run_dimension(
                     if (
                         not _reserve_fits(input_count, conversation_tools)
                         and conversation_tools is tools
-                        and near_window_tools[1]["max_uses"] < tools[1]["max_uses"]
+                        and _web_tool_reserve_tokens(near_window_tools)
+                        < _web_tool_reserve_tokens(tools)
                         and _reserve_fits(input_count, near_window_tools)
                     ):
                         # The clip: one way, once (``conversation_tools``
@@ -3006,7 +3051,7 @@ def _run_dimension(
                         conversation_tools = near_window_tools
                         stream_kwargs["tools"] = conversation_tools
                         # Context pressure, for the ledger: the window no
-                        # longer holds a full allowance of fetches.
+                        # longer holds a full request's worth of full pages.
                         pressure.pressure(
                             resource_pressure.KIND_NEAR_WINDOW_CLIP,
                             input_tokens=input_count,

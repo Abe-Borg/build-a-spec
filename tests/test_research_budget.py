@@ -214,14 +214,15 @@ def test_an_area_declaring_less_than_the_allowance_keeps_it_and_is_ended_by_its_
 
 def test_the_context_reserve_counts_no_more_tool_results_than_the_pause_allows():
     """Reserving for the whole allowance (twelve fetches at the content cap)
-    would clip every conversation to one fetch per request past ~160k tokens
-    of input — and the clipped tool is one the model can meet. The reserve
-    counts the provider's pause instead: at most ten results, fetches first."""
+    would shorten every conversation's pages past ~160k tokens of input. The
+    reserve counts the provider's pause instead: at most ten results, the
+    dearest kind first, each fetch at its own tool's page cap."""
     pause = engine.SERVER_TOOL_ITERATIONS_PER_REQUEST
 
-    def tools(searches, fetches):
+    def tools(searches, fetches, content=engine.WEB_FETCH_MAX_CONTENT_TOKENS):
         return engine._research_tools(
-            searches=searches, fetches=fetches, profile=PROFILE, model="claude-sonnet-5",
+            searches=searches, fetches=fetches, profile=PROFILE,
+            model="claude-sonnet-5", fetch_content_tokens=content,
         )
 
     assert engine._web_tool_reserve_tokens(tools(_SEARCHES, _FETCHES)) == (
@@ -233,6 +234,15 @@ def test_the_context_reserve_counts_no_more_tool_results_than_the_pause_allows()
     )
     assert engine._web_tool_reserve_tokens(tools(2, 1)) == (
         engine.WEB_FETCH_MAX_CONTENT_TOKENS + 2 * engine._SEARCH_RESULT_RESERVE_TOKENS
+    )
+    # Each fetch costs its own tool's page cap…
+    near = engine.RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS
+    assert engine._web_tool_reserve_tokens(tools(_SEARCHES, _FETCHES, near)) == pause * near
+    # …and the dearest kind fills the pause first, whichever it is: a page
+    # cap below a search result's reserve leaves the slots to searches.
+    small = engine._SEARCH_RESULT_RESERVE_TOKENS // 2
+    assert engine._web_tool_reserve_tokens(tools(4, _FETCHES, small)) == (
+        4 * engine._SEARCH_RESULT_RESERVE_TOKENS + (pause - 4) * small
     )
     # The full allowance leaves the clip idle until well past 300k of input
     # at the default output ceiling; the old reserve for 12 fetches would
@@ -274,6 +284,12 @@ def test_every_request_of_a_conversation_sends_the_opening_tool_bytes(model):
     assert len(client.requests) == 4
     assert len(set(client.tool_bytes)) == 1
     opening = client.requests[0]
+    # The staggered launch's lineage key builds the tools this way, naming no
+    # page cap: its bytes must be the ones the opening actually sends, or
+    # the key would hash a prefix no request carries.
+    assert opening["tools"] == engine._research_tools(
+        searches=_SEARCHES, fetches=_FETCHES, profile=PROFILE, model=model,
+    )
     for request in client.requests:
         assert _web_allowance(request) == (_SEARCHES, _FETCHES)
         assert not _carries_binding(request)
@@ -373,13 +389,21 @@ def test_the_request_that_crosses_a_ceiling_overshoots_by_at_most_its_allowance(
     assert result.status.web_fetch_requests == budget - 1 + _FETCHES
 
 
+def _page_cap(request) -> int:
+    fetch = request["tools"][1]
+    assert fetch["name"] == "web_fetch"
+    return fetch["max_content_tokens"]
+
+
 @pytest.mark.parametrize("model", ["claude-sonnet-5", settings.RESEARCH_MODEL])
-def test_near_the_window_the_conversation_switches_once_to_one_fetch(model):
-    """The first continuation cannot reserve room for the full allowance's
-    fetches but can for one: the conversation switches to one fetch per
-    request — after a response, an edit of the prefix replayed thinking is
-    bound to, so it carries drop_block — and never switches back, even when
-    a later request (its context shrunk) would fit the full allowance."""
+def test_near_the_window_the_conversation_switches_once_to_shorter_pages(model):
+    """The first continuation cannot reserve room for full pages but can for
+    shorter ones: the conversation switches to the same allowance with a
+    smaller page cap — never a smaller allowance, which the model could meet
+    and read as a spent budget. After a response the switch edits the prefix
+    replayed thinking is bound to, so it carries drop_block, and it never
+    switches back, even when a later request (its context shrunk) would fit
+    full pages."""
     client = _ToolBytesClient(
         [pause_response(searched_urls=[_URL]), pause_response(searched_urls=[_URL]), _final()],
         counts=[1_000, 800_000, 800_000, 1_000],
@@ -389,8 +413,13 @@ def test_near_the_window_the_conversation_switches_once_to_one_fetch(model):
     assert result.status.status == "completed", result.status.error
     assert len(client.count_requests) == 4
     opening, clipped, later = client.requests
-    assert _web_allowance(opening) == (_SEARCHES, _FETCHES)
-    assert _web_allowance(clipped) == _web_allowance(later) == (_SEARCHES, 1)
+    for request in (opening, clipped, later):
+        assert _web_allowance(request) == (_SEARCHES, _FETCHES)
+    assert _page_cap(opening) == engine.WEB_FETCH_MAX_CONTENT_TOKENS
+    assert _page_cap(clipped) == _page_cap(later) == engine.RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS
+    assert {k for k in opening["tools"][1] if opening["tools"][1][k] != clipped["tools"][1][k]} == {
+        "max_content_tokens",
+    }
     assert client.tool_bytes[1] == client.tool_bytes[2] != client.tool_bytes[0]
     assert clipped["tools"][0] == opening["tools"][0]
     assert clipped["tools"][2] == opening["tools"][2]
@@ -413,7 +442,8 @@ def test_a_clip_at_the_opening_request_edits_nothing():
     )
     assert _run(client).status.status == "completed"
     opening, continuation = client.requests
-    assert _web_allowance(opening) == (_SEARCHES, 1)
+    assert _web_allowance(opening) == (_SEARCHES, _FETCHES)
+    assert _page_cap(opening) == engine.RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS
     assert client.tool_bytes[0] == client.tool_bytes[1]
     assert not _carries_binding(opening) and not _carries_binding(continuation)
 
@@ -429,8 +459,31 @@ def test_a_resume_keeps_the_clip_and_a_restart_reopens_with_the_full_allowance(m
     assert resumed["messages"] == clipped["messages"]
     assert client.tool_bytes[1] == client.tool_bytes[2] != client.tool_bytes[0]
     assert client.tool_bytes[3] == client.tool_bytes[0]
+    assert _page_cap(restarted) == engine.WEB_FETCH_MAX_CONTENT_TOKENS
     assert _carries_binding(clipped) and _carries_binding(resumed)
     assert not _carries_binding(restarted)
+
+
+def test_the_shorter_pages_keep_the_allowance_and_hand_in_no_earlier_than_one_fetch_did():
+    """The clip replaced cutting the fetch allowance to one per request. Its
+    page cap is sized so the clipped reserve is no larger than that clip's,
+    so the input size at which a clipped conversation must hand in is no
+    earlier than before — and the clipped tools keep the full allowance, so
+    the model can meet nothing new."""
+    def tools(fetches, content):
+        return engine._research_tools(
+            searches=_SEARCHES, fetches=fetches, profile=PROFILE,
+            model=settings.RESEARCH_MODEL, fetch_content_tokens=content,
+        )
+
+    shorter = tools(_FETCHES, engine.RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS)
+    one_fetch = tools(1, engine.WEB_FETCH_MAX_CONTENT_TOKENS)
+    full = tools(_FETCHES, engine.WEB_FETCH_MAX_CONTENT_TOKENS)
+    assert (shorter[0]["max_uses"], shorter[1]["max_uses"]) == (_SEARCHES, _FETCHES)
+    assert engine._web_tool_reserve_tokens(shorter) <= engine._web_tool_reserve_tokens(one_fetch)
+    assert engine._web_tool_reserve_tokens(shorter) < engine._web_tool_reserve_tokens(full)
+    # Still a useful page: more than a search result's reserve.
+    assert engine.RESEARCH_NEAR_WINDOW_FETCH_CONTENT_TOKENS > engine._SEARCH_RESULT_RESERVE_TOKENS
 
 
 def test_counter_uses_supported_equivalent_and_reserves_server_tool_overhead():
@@ -508,7 +561,7 @@ def test_counter_rejects_invalid_counts(invalid):
 
 
 def test_near_full_context_submits_instead_of_sending_another_web_request():
-    # Past even the one-fetch reserve, so the clip has nothing to switch to.
+    # Past even the shorter pages' reserve, so the clip has nothing to switch to.
     client = _CountedClient([
         pause_response(searched_urls=[_URL]), _final(),
     ], counts=[1_000, 900_000, 900_000])

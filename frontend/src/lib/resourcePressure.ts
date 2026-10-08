@@ -51,7 +51,7 @@ export const PRESSURE_KIND_TEXT: Readonly<Record<string, string>> = {
   batch_round_ceiling: "hit the batch round ceiling",
   batch_wall_clock: "hit the batch wall-clock ceiling",
   context_reserve: "ran out of context window",
-  near_window_clip: "clipped to one fetch per request by the context window",
+  near_window_clip: "had its fetched pages shortened near the context window",
   submission_elided: "dropped raw sources to fit its submission",
   prompt_too_long: "sent a request the window would not take, then a shorter one",
   output_truncated: "cut at max_tokens",

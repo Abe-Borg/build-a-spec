@@ -21067,10 +21067,13 @@ run showed what the guide now says:
   sides) is read as two provisions. The primary export then emits tracked
   changes in the user's name that re-split it, even with zero edits. This is
   the remap compromise documented in `tracked_export.py`; it is unchanged.
-- Moving a provision that carries a Word comment refuses the tracked export
-  (`moved_annotation`). That includes the "Reason:" comments a re-imported
-  export brings back. Deleting the provision and adding it back exports
-  fine.
+- Moving a provision that carries a Word comment, footnote or endnote
+  reference refuses the tracked export (`moved_annotation`). That includes
+  the "Reason:" comments a re-imported export brings back. Deleting a
+  commented provision and adding it back exports fine. A re-added provision
+  is plain text, so the same trick would drop a footnote or endnote; the
+  guide says to leave those where they are (Codex review on PR #296 caught
+  the guide naming comments only).
 
 The owner chose documented habits over code changes for now: clean the file
 in Word before its first import, import once, reopen the `.baspec`, and
@@ -21090,7 +21093,9 @@ treat exports as outputs.
   (`NextSectionDialog.tsx`), the import notice (`importer.py`) and the move
   refusal (`source_render.py`). It also pins the behaviours behind the
   warnings: the pending-revisions refusal and the disabled menu item, the
-  second-import refusal, and Redline vs version's compare-mode requirement.
+  second-import refusal, the footnote and endnote references in the move
+  refusal's annotation list, and Redline vs version's compare-mode
+  requirement.
 - README gains "Working with Word files: best practices" after the primary
   Word export section.
 - Unchanged: every backend path, the import and export behaviour, the API,

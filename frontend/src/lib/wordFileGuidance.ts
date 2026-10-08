@@ -14,8 +14,10 @@
  * * a reviewer's tracked paragraph merge is read as two provisions, which the
  *   primary export then "re-splits" in the user's name — the troubleshooting
  *   row names the symptom;
- * * moving a provision that carries a Word comment refuses the tracked
- *   export (`moved_annotation`), while deleting and re-adding it does not.
+ * * moving a provision that carries a Word comment, footnote or endnote
+ *   refuses the tracked export (`moved_annotation`). Deleting and re-adding a
+ *   commented one exports fine; a re-added provision is plain text, so the
+ *   same trick would drop a footnote or endnote — those stay put.
  *
  * `frontend/tests/wordFileGuidance.test.ts` pins every UI label and server
  * message quoted here to the file that shows it, so renaming one fails the
@@ -126,6 +128,10 @@ export const WORD_FILE_STAGES: readonly WordFileStage[] = [
         t: "To reorder a provision that has a Word comment, delete it and add it back",
         d: "where you want it. A move can block the export. This only applies if you kept comments.",
       },
+      {
+        t: "Leave a provision with a footnote or endnote where it is.",
+        d: "Moving it blocks the export too, and deleting and re-adding it would drop the note.",
+      },
     ],
   },
 ];
@@ -206,7 +212,7 @@ export const WORD_FILE_TROUBLESHOOTING: readonly { see: string; fix: string }[] 
     fix: "Same cause, same fix.",
   },
   {
-    see: "Export refused: “A provision you moved carries a comment…”",
-    fix: "Undo the move, then delete the provision and add it back where you want it.",
+    see: "Export refused: “A provision you moved carries a comment or a footnote reference…”",
+    fix: "Undo the move. A commented provision can be deleted and added back where you want it; one with a footnote or endnote has to stay where it is.",
   },
 ];

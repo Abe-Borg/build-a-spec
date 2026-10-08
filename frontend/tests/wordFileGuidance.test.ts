@@ -33,7 +33,11 @@ const QUOTED: Array<[string, string, string]> = [
   ["Next section", "ArtifactPanel.tsx", artifact],
   ["Leave it unnamed", "NextSectionDialog.tsx", nextSection],
   ["The master carries pending tracked changes", "importer.py", importer],
-  ["A provision you moved carries a comment", "source_render.py", sourceRender],
+  [
+    "A provision you moved carries a comment or a footnote reference",
+    "source_render.py",
+    sourceRender,
+  ],
 ];
 
 test("every label and message the guide quotes is still shown where the guide says", () => {
@@ -55,6 +59,12 @@ test("the behaviours the guide's warnings rest on are still there", () => {
   // "A section with content can't take a second import."
   assert.match(app, /if session\.doc\.doc\.has_body_content\(\):\s*return JSONResponse/);
   assert.match(app, /"The document already has content — a master "/);
+  // "Leave a provision with a footnote or endnote where it is": a move
+  // carrying either is refused like a commented one.
+  assert.match(
+    sourceRender,
+    /_ANNOTATION_TAGS = \([\s\S]*?w:footnoteReference[\s\S]*?w:endnoteReference[\s\S]*?\)/,
+  );
   // "Redline vs version… (pick the version in Compare mode)".
   assert.match(artifact, /Enter compare mode and pick a version first/);
 });

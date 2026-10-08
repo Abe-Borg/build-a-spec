@@ -134,7 +134,9 @@ from how the app behaves today:
   with content cannot take a second import.
 - **Edit in Build-a-Spec.** To reorder a provision that carries a Word
   comment, delete it and add it back: moving it refuses the tracked export
-  ("A provision you moved carries a comment…").
+  ("A provision you moved carries a comment or a footnote reference…"). A
+  provision with a footnote or endnote is refused the same way, and
+  re-adding it would drop the note, so it stays where it is.
 - **Exports are outputs.** Every tracked change appears under the export
   author name, dated at export and measured against the original master.
   Changes since an earlier version come from **Redline vs version…** (in

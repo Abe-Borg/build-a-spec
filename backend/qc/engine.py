@@ -4288,6 +4288,19 @@ _ACTIVITY_FOR_TYPE: dict[str, str] = {
     "tool_use": "writing",
 }
 
+# Reasoning summaries reach the Review Room's click-through for these
+# workers only. The grouping call's frames are not folded into anything a
+# user can open, so its summaries would only grow the run's event log.
+_THINKING_RELAY_PREFIXES = frozenset({"lens", "verifier"})
+# At most one ``*_thinking`` frame per this interval per stream, plus one at
+# the end of each thinking block. The log replays from seq 0 on every
+# reconnect and every status snapshot carries it, so summary text travels in
+# a few coarse chunks rather than one frame per delta.
+_THINKING_RELAY_INTERVAL_S = 2.0
+# Per request: summary text past this is dropped, and the frame that reaches
+# it says so (``truncated``). A runaway guard on the log, not a quality limit.
+_THINKING_RELAY_MAX_CHARS = 24_000
+
 
 def _relay_stream_activity(
     stream: Any,
@@ -4297,11 +4310,20 @@ def _relay_stream_activity(
     event_sink: EventSink,
     activity_state: dict[str, str],
     first_output: threading.Event | None = None,
+    relay_thinking: bool = False,
 ) -> None:
     """Drain raw SDK frames and relay observable QC worker activity.
 
-    Only server-tool input JSON is buffered; generated text/thinking deltas
-    and output-tool payloads are never emitted or accumulated. A server-tool
+    Server-tool input JSON is buffered, and — when ``relay_thinking`` — the
+    reasoning summary of each thinking block (``thinking.display:
+    "summarized"``, see :func:`_qc_thinking`), relayed as
+    ``{event_prefix}_thinking`` frames: ``text`` is the summary written since
+    the last frame, ``final`` marks a block's last frame, ``truncated`` the
+    frame that reached :data:`_THINKING_RELAY_MAX_CHARS`. Summaries are what
+    a person reads to see what a lens or seat is weighing; generated answer
+    text and output-tool payloads (the findings and verdicts themselves) are
+    still never emitted or accumulated — those reach the board through the
+    lifecycle events, after parsing. A server-tool
     input arrives either as streamed ``input_json_delta`` frames (the
     direct-caller shape) or complete on the start frame (the code-execution
     caller); both are tracked, streamed deltas win when a stream supplies
@@ -4320,6 +4342,42 @@ def _relay_stream_activity(
     json_buffers: dict[int, str] = {}
     start_inputs: dict[int, dict[str, Any]] = {}
     block_kinds: dict[int, tuple[str, str]] = {}
+    # index -> summary text not yet relayed; present only while the block is
+    # open. ``thought_blocks`` holds the indexes that relayed anything, so an
+    # empty block (``omitted`` display) never emits a lone ``final``.
+    thinking_buffers: dict[int, str] = {}
+    thought_blocks: set[int] = set()
+    relayed_chars = 0
+    relay_capped = False
+    last_flush = time.monotonic()
+
+    def flush_thinking(index: int, *, final: bool) -> None:
+        nonlocal relayed_chars, relay_capped, last_flush
+        text = thinking_buffers.get(index, "")
+        thinking_buffers[index] = ""
+        last_flush = time.monotonic()
+        if relay_capped:
+            return
+        room = _THINKING_RELAY_MAX_CHARS - relayed_chars
+        truncated = len(text) > room
+        if truncated:
+            text = text[:room]
+            relay_capped = True
+        relayed_chars += len(text)
+        if not (text or truncated or (final and index in thought_blocks)):
+            return
+        thought_blocks.add(index)
+        frame: dict[str, Any] = {
+            "type": f"{event_prefix}_thinking",
+            **event_fields,
+            "text": text,
+        }
+        if final or truncated:
+            frame["final"] = True
+        if truncated:
+            frame["truncated"] = True
+        event_sink(frame)
+
     for event in stream:
         try:
             event_type = getattr(event, "type", None)
@@ -4336,6 +4394,8 @@ def _relay_stream_activity(
                     started = _start_block_input(block)
                     if started:
                         start_inputs[index] = started
+                elif block_type == "thinking" and relay_thinking:
+                    thinking_buffers[index] = ""
                 kind = _ACTIVITY_FOR_BLOCK.get(
                     (block_type, block_name)
                 ) or _ACTIVITY_FOR_TYPE.get(block_type, "")
@@ -4350,17 +4410,30 @@ def _relay_stream_activity(
                     )
             elif event_type == "content_block_delta":
                 delta = getattr(event, "delta", None)
-                if getattr(delta, "type", None) == "input_json_delta":
-                    index = getattr(event, "index", 0)
+                delta_type = getattr(delta, "type", None)
+                index = getattr(event, "index", 0)
+                if delta_type == "input_json_delta":
                     if index in json_buffers:
                         json_buffers[index] += (
                             getattr(delta, "partial_json", "") or ""
                         )
+                elif delta_type == "thinking_delta" and index in thinking_buffers:
+                    text = getattr(delta, "thinking", "") or ""
+                    if isinstance(text, str) and text:
+                        thinking_buffers[index] += text
+                        if (
+                            time.monotonic() - last_flush
+                            >= _THINKING_RELAY_INTERVAL_S
+                        ):
+                            flush_thinking(index, final=False)
             elif event_type == "content_block_stop":
                 index = getattr(event, "index", 0)
                 block_type, block_name = block_kinds.pop(index, ("", ""))
                 streamed = _safe_stream_json(json_buffers.pop(index, ""))
                 started = start_inputs.pop(index, {})
+                if index in thinking_buffers:
+                    flush_thinking(index, final=True)
+                    del thinking_buffers[index]
                 if block_type != "server_tool_use":
                     continue
                 payload = streamed or started
@@ -4444,9 +4517,29 @@ def _qc_request_kwargs(
         "tools": tools,
         # Opus 5 runs adaptive thinking by default; state it + the effort
         # level explicitly. A manual thinking budget would 400.
-        "thinking": {"type": "adaptive"},
+        "thinking": _qc_thinking(model),
         "output_config": {"effort": effort},
     }
+
+
+def _qc_thinking(model: str) -> dict[str, Any]:
+    """Adaptive thinking, with reasoning summaries where they are documented.
+
+    ``display: "summarized"`` is what lets the Review Room show what a lens
+    or seat is reasoning about (``_relay_stream_activity`` relays it); the
+    default, ``omitted``, streams thinking blocks with empty text. It changes
+    visibility only — the thinking and its bill are the same. Decided per
+    model from :data:`settings.QC_THINKING_DISPLAY_MODELS` (documented ids,
+    no runtime probe) and the shared ``THINKING_DISPLAY`` switch. It lives in
+    this builder so both transports keep sending identical seat requests.
+    """
+    thinking: dict[str, Any] = {"type": "adaptive"}
+    if (
+        settings.THINKING_DISPLAY == "summarized"
+        and model in settings.QC_THINKING_DISPLAY_MODELS
+    ):
+        thinking["display"] = "summarized"
+    return thinking
 
 
 def _run_streaming_call(
@@ -4754,6 +4847,9 @@ def _run_streaming_call(
                                 event_sink=event_sink,
                                 activity_state=activity_state,
                                 first_output=first_output,
+                                relay_thinking=(
+                                    event_prefix in _THINKING_RELAY_PREFIXES
+                                ),
                             )
                             response = stream.get_final_message()
                     finally:
@@ -9202,7 +9298,17 @@ def _run_final_qc(
             "type": "qc_started",
             "run_id": run_id,
             "protocol_version": QC_PROTOCOL_VERSION,
-            "lenses": [{"lens_id": l.lens_id, "title": l.title} for l in QC_LENSES],
+            # The brief is the lens's assignment, verbatim — what the Review
+            # Room's click-through shows under "What this specialist checks".
+            "lenses": [
+                {
+                    "lens_id": l.lens_id,
+                    "title": l.title,
+                    "brief": l.brief,
+                    "web": l.web,
+                }
+                for l in QC_LENSES
+            ],
             "research_profile_present": profile is not None,
         }
     )
@@ -9457,6 +9563,21 @@ def _run_final_qc(
         index: f"candidate-{index + 1}"
         for index in range(len(raw_findings))
     }
+    # Every lens behind each candidate, canonical lens first: consolidation
+    # can give several lenses' claims one panel, and the click-through lists
+    # it under each of them.
+    origin_lens = {
+        origin.origin_id: origin.lens_id for origin in consolidation.origins
+    }
+
+    def origin_lens_ids(index: int) -> list[str]:
+        lens_ids = [candidates[index].lens.lens_id]
+        for origin_id in candidates[index].origin_ids:
+            lens_id = origin_lens.get(origin_id, "")
+            if lens_id and lens_id not in lens_ids:
+                lens_ids.append(lens_id)
+        return lens_ids
+
     candidate_roster = [
         {
             "candidate_id": candidate_ids[index],
@@ -9464,6 +9585,11 @@ def _run_final_qc(
             "original_severity": finding["severity"],
             "lens_id": lens.lens_id,
             "origin_count": len(candidates[index].origin_ids),
+            "origin_lens_ids": origin_lens_ids(index),
+            # The claim the panel tries to refute, as the seats read it —
+            # what the Review Room's click-through shows above the votes.
+            "issue": str(finding.get("issue") or ""),
+            "element_id": str(finding.get("element_id") or ""),
             "panel_size": _panel_size(finding["severity"]),
             # v4 upholds only on a unanimous panel; an integer "threshold"
             # cannot express the rest of the table, so the rule travels with
@@ -9545,6 +9671,10 @@ def _run_final_qc(
                         "upholds": verdict.upholds,
                         "revised_severity": verdict.revised_severity or None,
                         "ops_adequate": verdict.ops_adequate,
+                        # The seat's own one-line reasons, so a vote reads
+                        # with its why while the panel is still sitting.
+                        "note": verdict.note,
+                        "ops_note": verdict.ops_note,
                     }
                 )
             event_sink(complete_event)

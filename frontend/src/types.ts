@@ -1701,6 +1701,14 @@ export interface QcCandidateRosterEntry {
    *  consolidation gave several lenses' claims one shared panel. Absent on
    *  a replayed pre-5.2 log, where every candidate was one claim. */
   origin_count?: number;
+  /** Every lens behind this candidate, `lens_id` first (consolidation can
+   *  merge several lenses' claims). Absent on a replayed older log. */
+  origin_lens_ids?: string[];
+  /** The claim the panel tries to refute, as the seats read it. Absent on
+   *  a replayed log from before the Review Room's click-through. */
+  issue?: string;
+  /** The element the claim is anchored to; "" for a section-level claim. */
+  element_id?: string;
   panel_size: number;
   /** v4: seats that must uphold for a clean uphold — always the panel size,
    *  since v4 upholds only unanimously. */
@@ -1742,13 +1750,17 @@ interface QcVerifierEventBase extends QcEventBase {
 
 /** Every Final QC frame the current and legacy backends can emit. Keeping the
  * discriminator closed makes live-state folding exhaustive without treating
- * model- or tool-authored payload text as displayable UI. */
+ * model- or tool-authored payload text as displayable UI. The few text
+ * fields a person does read (a query, a URL, a reasoning summary, a seat's
+ * note) render as React text, never as markup. */
 export type QcEvent =
   | (QcEventBase & {
       type: "qc_started";
       run_id: string;
       protocol_version?: string;
-      lenses: { lens_id: string; title: string }[];
+      /** `brief` is the lens's assignment, verbatim; `web` whether it may
+       *  search. Both absent on a replayed older log. */
+      lenses: { lens_id: string; title: string; brief?: string; web?: boolean }[];
       research_profile_present?: boolean;
     })
   | (QcLensEventBase & {
@@ -1763,6 +1775,17 @@ export type QcEvent =
     })
   | (QcLensEventBase & { type: "lens_search"; query?: string })
   | (QcLensEventBase & { type: "lens_fetch"; url?: string })
+  /** A slice of the lens's reasoning summary (`thinking.display:
+   *  "summarized"`), relayed in coarse chunks: `text` is what was written
+   *  since the previous frame, `final` marks a thinking block's last frame,
+   *  `truncated` the frame that hit the per-request relay cap. Shown only
+   *  in the click-through, as plain text. */
+  | (QcLensEventBase & {
+      type: "lens_thinking";
+      text?: string;
+      final?: boolean;
+      truncated?: boolean;
+    })
   | (QcLensEventBase & {
       type: "lens_retry";
       attempt?: number;
@@ -1860,6 +1883,14 @@ export type QcEvent =
     })
   | (QcVerifierEventBase & { type: "verifier_search"; query?: string })
   | (QcVerifierEventBase & { type: "verifier_fetch"; url?: string })
+  /** A reviewer seat's reasoning summary, the `lens_thinking` shape. A
+   *  batched seat streams nothing, so it never emits one. */
+  | (QcVerifierEventBase & {
+      type: "verifier_thinking";
+      text?: string;
+      final?: boolean;
+      truncated?: boolean;
+    })
   | (QcVerifierEventBase & {
       type: "verifier_retry";
       attempt?: number;
@@ -1876,6 +1907,10 @@ export type QcEvent =
       upholds?: boolean;
       revised_severity?: string | null;
       ops_adequate?: boolean;
+      /** The seat's one-line reasons for its vote and for its fix decision.
+       *  Completed seats only; absent on a replayed older log. */
+      note?: string;
+      ops_note?: string;
     })
   | (QcEventBase & {
       type: "candidate_complete";

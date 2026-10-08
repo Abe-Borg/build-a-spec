@@ -381,6 +381,27 @@ def _display_env(name: str, default: str) -> str:
 
 THINKING_DISPLAY = _display_env("BUILD_A_SPEC_THINKING_DISPLAY", "summarized")
 
+# The models Final QC asks for reasoning summaries on (the Review Room's
+# click-through, 2026-10-08). Anthropic's documentation names these as taking
+# ``thinking.display`` (default ``omitted``, ``summarized`` on request) —
+# literal ids, never inferred from another table. A QC model override outside
+# the list sends no ``display`` and runs exactly as before, its lenses and
+# seats showing activity without reasoning. Final QC has no runtime probe
+# like the chat's: a rejected ``display`` would be a 400 on every lens, so
+# the list is the guard. ``BUILD_A_SPEC_THINKING_DISPLAY=omitted`` switches
+# the summaries off here too. Billing is identical either way.
+QC_THINKING_DISPLAY_MODELS: tuple[str, ...] = (
+    MODEL_OPUS_55,
+    MODEL_OPUS_5,
+    MODEL_OPUS_48,
+    "claude-opus-4-7",
+    MODEL_SONNET_55,
+    MODEL_SONNET_5,
+    MODEL_HAIKU_55,
+    MODEL_FABLE_5,
+    "claude-fable-5-1",
+)
+
 # --- Interview web lookups ---------------------------------------------------
 
 # Per-request allowances for the interview loop's web_search / web_fetch

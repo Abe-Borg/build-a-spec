@@ -517,14 +517,14 @@ export const TOUR: readonly TourChunk[] = [
     steps: [
       {
         id: "qc-run",
-        capabilities: ["qc.preflight", "qc.run", "qc.stop"],
+        capabilities: ["qc.preflight", "qc.run", "qc.stop", "qc.agent-detail"],
         mode: "optional",
         anchor: "qc-drawer",
         drawer: "qc",
         placement: "top",
         title: "A deliberate, expensive final pass",
         body:
-          "The preflight estimates cost/time and requires confirmation; a curated-module mismatch requires acknowledgement. Five lenses run live and an adversarial verifier challenges candidates. Rerun anytime; Stop retains the paid partial audit and reports stale, partial, no-research, and latest-attempt states honestly.",
+          "The preflight estimates cost/time and requires confirmation; a curated-module mismatch requires acknowledgement. Five lenses run live, then an adversarial panel of reviewers tries to refute each candidate. Click any lens card to see what it checks and its reasoning, searches and sources as it works; click a reviewer on a panel to see the claim, how the panel decides, and that reviewer's vote and reasons. Rerun anytime; Stop retains the paid partial audit and reports stale, partial, no-research, and latest-attempt states honestly.",
         optionalReason: "Final QC is the most expensive model workflow and requires explicit consent.",
       },
       {

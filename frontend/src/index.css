@@ -491,6 +491,21 @@ body {
 .qc-seat-active {
   animation: qc-seat-glow 1.6s ease-in-out infinite;
 }
+/* The Review Room's click-through: lens cards, settled lens chips and
+   reviewer seats are buttons that open the agent's live activity. */
+.qc-agent-button {
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+.qc-agent-button:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-edge));
+}
+.qc-agent-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
 .qc-recap-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

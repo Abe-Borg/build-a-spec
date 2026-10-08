@@ -34,6 +34,9 @@ export const QC_MILESTONE_TYPES: ReadonlySet<QcEvent["type"]> = new Set([
 ]);
 
 const RECENT_CAP = 3;
+/** The live state keeps only the start of each thinking block — enough for
+ *  a card's headline. The click-through folds the full text from the log. */
+const THOUGHT_CAP = 4000;
 
 export type QcLivePhase =
   | "idle"
@@ -76,6 +79,10 @@ export interface QcLiveRetry {
 export interface QcLensLiveState {
   id: string;
   title: string;
+  /** The lens's assignment, verbatim from `qc_started`; "" on an older log. */
+  brief: string;
+  /** Whether the lens may search the web; null when the log does not say. */
+  web: boolean | null;
   status: QcLensLiveStatus;
   activity: QcWorkerActivityKind | "";
   recent: QcLiveRecentItem[];
@@ -87,6 +94,8 @@ export interface QcLensLiveState {
   grounded: number;
   requests: number;
   error: string;
+  /** The latest thinking block's reasoning summary so far (capped). */
+  thought: string;
 }
 
 export interface QcVerifierSeatLiveState {
@@ -98,6 +107,11 @@ export interface QcVerifierSeatLiveState {
   revisedSeverity: string | null;
   opsAdequate: boolean | null;
   error: string;
+  /** The seat's one-line reasons, once it has voted. */
+  note: string;
+  opsNote: string;
+  /** The latest thinking block's reasoning summary so far (capped). */
+  thought: string;
 }
 
 export interface QcCandidateLiveState {
@@ -105,6 +119,11 @@ export interface QcCandidateLiveState {
   title: string;
   originalSeverity: string;
   lensId: string;
+  /** The claim under review; "" on a replayed older log. */
+  issue: string;
+  elementId: string;
+  /** A refutation must carry validated evidence (critical/high). */
+  evidenceGated: boolean;
   panelSize: number;
   /** Seats that must uphold for a clean uphold. v4: every one of them. */
   threshold: number;
@@ -623,6 +642,8 @@ function blankLens(id: string, title = ""): QcLensLiveState {
   return {
     id,
     title,
+    brief: "",
+    web: null,
     status: "queued",
     activity: "",
     recent: [],
@@ -634,6 +655,7 @@ function blankLens(id: string, title = ""): QcLensLiveState {
     grounded: 0,
     requests: 0,
     error: "",
+    thought: "",
   };
 }
 
@@ -647,6 +669,9 @@ function blankSeat(index: number): QcVerifierSeatLiveState {
     revisedSeverity: null,
     opsAdequate: null,
     error: "",
+    note: "",
+    opsNote: "",
+    thought: "",
   };
 }
 
@@ -658,6 +683,9 @@ function blankCandidate(entry: QcCandidateRosterEntry): QcCandidateLiveState & {
     title: entry.title,
     originalSeverity: entry.original_severity,
     lensId: entry.lens_id,
+    issue: entry.issue ?? "",
+    elementId: entry.element_id ?? "",
+    evidenceGated: entry.evidence_gated === true,
     panelSize: entry.panel_size,
     // v4 sends `uphold_requires` (always the panel size); `threshold` is
     // the v3 field, kept as a fallback so a replayed older log still folds.
@@ -739,6 +767,26 @@ export function foldQcLiveState(
     error: "",
   };
 
+  // Which agents' latest thinking block is still open, keyed like the
+  // timeline's agent keys. A frame for a closed (or never-opened) block
+  // starts a new thought; one for an open block extends it.
+  const openThoughts = new Set<string>();
+  const foldThought = (
+    key: string,
+    previous: string,
+    event: { text?: string; final?: boolean },
+  ): string => {
+    const text = event.text ?? "";
+    const next = openThoughts.has(key)
+      ? previous.length >= THOUGHT_CAP
+        ? previous
+        : (previous + text).slice(0, THOUGHT_CAP)
+      : text.slice(0, THOUGHT_CAP);
+    if (event.final) openThoughts.delete(key);
+    else openThoughts.add(key);
+    return next;
+  };
+
   const ensureLens = (id: string, title = ""): QcLensLiveState => {
     let lens = lenses.get(id);
     if (!lens) {
@@ -785,7 +833,9 @@ export function foldQcLiveState(
         phase = "lenses";
         runState = "running";
         for (const entry of event.lenses ?? []) {
-          ensureLens(entry.lens_id, entry.title);
+          const lens = ensureLens(entry.lens_id, entry.title);
+          lens.brief = entry.brief ?? lens.brief;
+          lens.web = typeof entry.web === "boolean" ? entry.web : lens.web;
         }
         break;
       case "lens_started": {
@@ -825,11 +875,20 @@ export function foldQcLiveState(
         );
         break;
       }
+      case "lens_thinking": {
+        const lens = ensureLens(event.lens_id);
+        lens.status = "running";
+        lens.activity = "thinking";
+        lens.retry = null;
+        lens.thought = foldThought(`lens:${lens.id}`, lens.thought, event);
+        break;
+      }
       case "lens_retry": {
         const lens = ensureLens(event.lens_id);
         lens.status = "running";
         lens.activity = "";
         lens.retry = retryFrom(event);
+        openThoughts.delete(`lens:${lens.id}`);
         break;
       }
       case "lens_complete":
@@ -945,6 +1004,25 @@ export function foldQcLiveState(
         );
         break;
       }
+      case "verifier_thinking": {
+        const seat = ensureSeat(
+          ensureCandidate(event.candidate_id),
+          event.reviewer_index,
+        );
+        seat.status = "active";
+        seat.activity = "thinking";
+        seat.retry = null;
+        seat.thought = foldThought(
+          qcAgentKey({
+            kind: "seat",
+            candidateId: event.candidate_id,
+            reviewerIndex: event.reviewer_index,
+          }),
+          seat.thought,
+          event,
+        );
+        break;
+      }
       case "verifier_retry": {
         const seat = ensureSeat(
           ensureCandidate(event.candidate_id),
@@ -953,6 +1031,13 @@ export function foldQcLiveState(
         seat.status = "active";
         seat.activity = "";
         seat.retry = retryFrom(event);
+        openThoughts.delete(
+          qcAgentKey({
+            kind: "seat",
+            candidateId: event.candidate_id,
+            reviewerIndex: event.reviewer_index,
+          }),
+        );
         break;
       }
       case "verifier_complete": {
@@ -971,6 +1056,8 @@ export function foldQcLiveState(
         seat.opsAdequate =
           event.status === "completed" ? (event.ops_adequate ?? null) : null;
         seat.error = event.error ?? "";
+        seat.note = event.note ?? "";
+        seat.opsNote = event.ops_note ?? "";
         break;
       }
       case "candidate_complete": {
@@ -1229,4 +1316,230 @@ export function foldQcLiveState(
     liveMessage,
     error,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The click-through: one agent's full activity (a lens, or one reviewer seat
+// on an adversarial panel), folded from the same log as the board so the two
+// can never disagree. Pure, like `foldQcLiveState`.
+// ---------------------------------------------------------------------------
+
+export type QcAgentTarget =
+  | { kind: "lens"; lensId: string }
+  | { kind: "seat"; candidateId: string; reviewerIndex: number };
+
+export function qcAgentKey(target: QcAgentTarget): string {
+  return target.kind === "lens"
+    ? `lens:${target.lensId}`
+    : `seat:${target.candidateId}#${target.reviewerIndex}`;
+}
+
+interface QcTimelineBase {
+  seq: number;
+  ts: string;
+}
+
+export type QcAgentTimelineEntry =
+  | (QcTimelineBase & { kind: "started"; maxSearches: number; maxFetches: number })
+  /** A bare activity marker. Only "thinking" (when no summary followed it)
+   *  and "writing" appear: searches and reads have entries of their own. */
+  | (QcTimelineBase & { kind: "activity"; activity: QcWorkerActivityKind })
+  /** One thinking block's reasoning summary, merged across its frames.
+   *  `open` until the block's final frame (or another entry) arrives. */
+  | (QcTimelineBase & {
+      kind: "thinking";
+      text: string;
+      open: boolean;
+      truncated: boolean;
+    })
+  | (QcTimelineBase & { kind: "search"; query: string })
+  | (QcTimelineBase & { kind: "fetch"; url: string })
+  | (QcTimelineBase & { kind: "retry"; retry: QcLiveRetry })
+  | (QcTimelineBase & {
+      kind: "lens_done";
+      failed: boolean;
+      error: string;
+      reviewedChecks: number;
+      candidates: number;
+      grounded: number;
+    })
+  | (QcTimelineBase & {
+      kind: "verdict";
+      status: string;
+      upholds: boolean | null;
+      revisedSeverity: string | null;
+      opsAdequate: boolean | null;
+      note: string;
+      opsNote: string;
+      error: string;
+    });
+
+function eventTarget(event: QcEvent): string {
+  switch (event.type) {
+    case "lens_started":
+    case "lens_activity":
+    case "lens_search":
+    case "lens_fetch":
+    case "lens_thinking":
+    case "lens_retry":
+    case "lens_complete":
+    case "lens_failed":
+      return qcAgentKey({ kind: "lens", lensId: event.lens_id });
+    case "verifier_started":
+    case "verifier_activity":
+    case "verifier_search":
+    case "verifier_fetch":
+    case "verifier_thinking":
+    case "verifier_retry":
+    case "verifier_complete":
+      return qcAgentKey({
+        kind: "seat",
+        candidateId: event.candidate_id,
+        reviewerIndex: event.reviewer_index,
+      });
+    default:
+      return "";
+  }
+}
+
+/**
+ * Everything one agent did, oldest first, with the log's own timestamps.
+ *
+ * Reasoning-summary frames merge into one entry per thinking block, and a
+ * "thinking" activity marker is replaced by the summary that follows it, so
+ * the feed reads as what the agent was weighing rather than as a ticker. A
+ * marker with no summary after it stays: the model or setting sent none
+ * (`thinking.display` omitted), and saying "thinking" is still true.
+ */
+export function foldQcAgentTimeline(
+  rawEvents: readonly QcEvent[],
+  target: QcAgentTarget,
+): QcAgentTimelineEntry[] {
+  const key = qcAgentKey(target);
+  const timeline: QcAgentTimelineEntry[] = [];
+  const closeOpenThought = () => {
+    const last = timeline[timeline.length - 1];
+    if (last?.kind === "thinking") last.open = false;
+  };
+  for (const event of normalizedEvents(rawEvents)) {
+    if (eventTarget(event) !== key) continue;
+    const base = { seq: event.seq ?? -1, ts: event.ts ?? "" };
+    switch (event.type) {
+      case "lens_started":
+        closeOpenThought();
+        timeline.push({
+          ...base,
+          kind: "started",
+          maxSearches: event.max_searches ?? 0,
+          maxFetches: event.max_fetches ?? 0,
+        });
+        break;
+      case "verifier_started":
+        closeOpenThought();
+        timeline.push({ ...base, kind: "started", maxSearches: 0, maxFetches: 0 });
+        break;
+      case "lens_activity":
+      case "verifier_activity": {
+        const activity = event.kind;
+        if (activity !== "thinking" && activity !== "writing") break;
+        closeOpenThought();
+        timeline.push({ ...base, kind: "activity", activity });
+        break;
+      }
+      case "lens_thinking":
+      case "verifier_thinking": {
+        const text = event.text ?? "";
+        const last = timeline[timeline.length - 1];
+        if (last?.kind === "thinking" && last.open) {
+          last.text += text;
+          last.open = !event.final;
+          last.truncated = last.truncated || event.truncated === true;
+          break;
+        }
+        if (!text && !event.truncated) break;
+        const entry: QcAgentTimelineEntry = {
+          ...base,
+          kind: "thinking",
+          text,
+          open: !event.final,
+          truncated: event.truncated === true,
+        };
+        if (last?.kind === "activity" && last.activity === "thinking") {
+          timeline[timeline.length - 1] = { ...entry, ts: last.ts, seq: last.seq };
+        } else {
+          timeline.push(entry);
+        }
+        break;
+      }
+      case "lens_search":
+      case "verifier_search":
+        closeOpenThought();
+        timeline.push({ ...base, kind: "search", query: event.query ?? "" });
+        break;
+      case "lens_fetch":
+      case "verifier_fetch":
+        closeOpenThought();
+        timeline.push({ ...base, kind: "fetch", url: event.url ?? "" });
+        break;
+      case "lens_retry":
+      case "verifier_retry":
+        closeOpenThought();
+        timeline.push({ ...base, kind: "retry", retry: retryFrom(event) });
+        break;
+      case "lens_complete":
+      case "lens_failed":
+        closeOpenThought();
+        timeline.push({
+          ...base,
+          kind: "lens_done",
+          failed: event.type === "lens_failed",
+          error: event.error ?? "",
+          reviewedChecks: event.reviewed_check_count ?? 0,
+          candidates: event.candidate_count ?? event.finding_count ?? 0,
+          grounded: event.grounded_count ?? 0,
+        });
+        break;
+      case "verifier_complete": {
+        closeOpenThought();
+        const completed = event.status === "completed";
+        timeline.push({
+          ...base,
+          kind: "verdict",
+          status: event.status,
+          upholds: completed ? (event.upholds ?? null) : null,
+          revisedSeverity: completed ? (event.revised_severity ?? null) : null,
+          opsAdequate: completed ? (event.ops_adequate ?? null) : null,
+          note: event.note ?? "",
+          opsNote: event.ops_note ?? "",
+          error: event.error ?? "",
+        });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return timeline;
+}
+
+/** One line a card can show for "what is it weighing right now".
+ *
+ *  Reasoning summaries usually open with a short bolded heading, so the
+ *  first non-empty line — markdown emphasis and heading marks stripped — is
+ *  the headline; a long first line is cut at a word. "" when there is none. */
+export function qcThinkingHeadline(text: string, limit = 140): string {
+  const line = text
+    .split(/\r?\n/)
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  if (!line) return "";
+  const plain = line
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (plain.length <= limit) return plain;
+  const cut = plain.slice(0, limit - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > limit * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }

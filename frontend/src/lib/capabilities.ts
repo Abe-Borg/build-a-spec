@@ -62,6 +62,7 @@ export const END_USER_CAPABILITIES = [
   "qc.preflight",
   "qc.run",
   "qc.stop",
+  "qc.agent-detail",
   "qc.findings",
   "qc.actions",
   "qc.remediation",

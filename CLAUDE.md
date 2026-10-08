@@ -204,7 +204,9 @@ view plus `module_section_compatibility`), `GET /api/qc/stream` (replay +
 follow + `stream_end`; event types `qc_started`, `lens_complete`,
 `lens_failed`, `consolidation_started`, `consolidation_complete`
 {status, raw/grouped/panels_avoided counts}, `verify_progress` {done,total},
-`qc_complete`, `qc_failed`),
+`qc_complete`, `qc_failed`, plus the Review Room's per-worker frames —
+`lens_*`/`verifier_*` started, activity, search, fetch, thinking (a reasoning
+summary chunk, 2026-10-08), retry and complete),
 `POST /api/qc/apply` (`{finding_ids}` → one undoable version; per-finding
 `applied`/`stale`/`no_ops`/`not_open`/`unknown` outcomes; duplicate ids and
 identical operations are deduplicated; different operations claiming the same
@@ -387,7 +389,9 @@ already resolved and does nothing). 409 when nothing is running.
   effort change (see "Final QC's verifier seats run on Sonnet 5.5 at high"
   below). Final QC's lenses run `QC_MODEL` (Opus 5.5) at `QC_LENS_EFFORT`
   (`medium`), its verifier seats `QC_VERIFIER_MODEL` (Sonnet 5.5) at
-  `QC_VERIFIER_EFFORT` (`high`).
+  `QC_VERIFIER_EFFORT` (`high`); both ask for `display: "summarized"` on the
+  documented models (see "The Review Room shows what each lens and reviewer
+  is doing" below).
   Thinking blocks are preserved **verbatim** across continuation rounds —
   the API requires them during tool use; `_serialize` round-trips every
   block type exactly (SDK `model_dump`, `vars()` for test fakes).
@@ -1316,6 +1320,62 @@ Full record, reversion evidence and the release-note draft are in
 `docs/as-built.md` under the same heading. No paid API call was made; the
 savings are modelled from the measured run's usage, and how much more the
 seats and the summary think at `high` is unmeasured.
+
+## The Review Room shows what each lens and reviewer is doing — implemented notes (2026-10-08)
+
+Owner request (Abraham): click the Review Room's cards and see what each
+agent is up to. Opus 5.5 and Sonnet 5.5 stream thinking with empty text
+unless a request asks for `thinking.display: "summarized"`, so a card could
+only ever say "Thinking through the specification…".
+
+- **The request.** `_qc_request_kwargs` — the one builder both transports
+  share — sends `qc.engine._qc_thinking(model)`: adaptive plus
+  `display: "summarized"` when `settings.THINKING_DISPLAY` is `summarized`
+  and the model is in `settings.QC_THINKING_DISPLAY_MODELS` (literal ids from
+  Anthropic's documentation; no runtime probe, so the list is the guard
+  against a 400 on every lens). Visibility only: thinking and billing are
+  unchanged. A batched and a streamed seat still send identical requests. The
+  thinking config is part of every QC request's bytes, so each lineage's
+  cached prefix is new once (QC caches live within a run). Not in the QC
+  manifest: retained reports stay current.
+- **The relay.** `_relay_stream_activity(relay_thinking=…)`, on for
+  `_THINKING_RELAY_PREFIXES` (`lens`, `verifier`), relays each thinking
+  block's summary as `{prefix}_thinking` frames: `text` written since the
+  last frame, at most one per `_THINKING_RELAY_INTERVAL_S` (2 s) plus one at
+  block stop (`final`), `_THINKING_RELAY_MAX_CHARS` (24,000) per request,
+  after which one frame says `truncated`. An empty block emits nothing.
+  Answer text and output-tool payloads are still never relayed. Grouping
+  calls relay none (nothing folds them).
+- **Context frames.** `qc_started.lenses[]` gains `brief` (verbatim) and
+  `web`; roster rows gain `issue` and `element_id`; `verifier_complete` for a
+  completed seat gains `note` and `ops_note` (already in the audit report).
+- **Contract amendment.** The 2026-07 Review Room contract kept "submitted
+  notes, thinking/token text" off the live channel. Provider summaries and
+  seat notes now cross it, on the owner's request. The audit report, its
+  exports and the project file are unchanged: the event log stays in memory,
+  per run (the local trace records each frame as `qc_progress`, as it
+  already did queries and URLs, beside the prompts it already holds). The
+  raw chain of thought is never returned by the API; prompts still never ask
+  a model to explain its reasoning.
+- **Frontend.** `lib/qcLive`: the live fold carries `brief`/`web`/`thought`
+  per lens, `issue`/`elementId`/`evidenceGated` per candidate,
+  `note`/`opsNote`/`thought` per seat; `foldQcAgentTimeline(events, target)`
+  is the click-through's pure fold (one entry per thinking block, a bare
+  "thinking" marker replaced by its summary); `qcThinkingHeadline` is the
+  card's one line. `QcAgentActivityModal` (lens view: brief, feed, raised
+  candidates; panel view: claim, rule, reviewer tabs, vote with reasons,
+  feed). `QCDrawer`: lens cards, settled lens chips, candidate titles and
+  reviewer chips are buttons with capability `qc.agent-detail` (in the
+  `qc-run` tour step; no step order change, so `TOUR_VERSION` stays 9).
+  Summaries render as React text with `**bold**` spans only.
+
+Never relay answer text or output-tool payloads, never put the relayed
+summaries into `QCResult`, the project file or an export, and never send
+`display` to a model outside the documented list.
+Tests: `tests/test_qc_live_reasoning.py`, `tests/test_qc_live_events.py`,
+`frontend/tests/qcLive.test.ts`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
 
 ## As-built history
 

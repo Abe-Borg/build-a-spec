@@ -241,9 +241,9 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
     verdict_one = qc_verdict_response(
         True,
         severity="low",
-        note="private verifier reasoning",
+        note="The edition reference is stale.",
         ops_adequate=True,
-        ops_note="private fix reasoning",
+        ops_note="The replacement keeps the clause intact.",
     )
     verdict_one.events = [
         block_start_event(0, "thinking"),
@@ -293,6 +293,9 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
             "lens_id": "code_compliance",
             # One lens claim behind this candidate — nothing was grouped.
             "origin_count": 1,
+            # The claim the seats try to refute, for the click-through.
+            "issue": f"Issue for {title}.",
+            "element_id": "pt1.a1.p1",
             "panel_size": 2,
             "uphold_requires": 2,
             "rule": VERIFICATION_RULE_V4,
@@ -317,8 +320,11 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
     assert completed["upholds"] is True
     assert completed["revised_severity"] == "low"
     assert completed["ops_adequate"] is True
-    assert "note" not in completed
-    assert "ops_note" not in completed
+    # The seat's submitted one-line reasons ride its vote (the Review Room's
+    # click-through, 2026-10-08) — the same notes the audit report records.
+    assert completed["note"] == "The edition reference is stale."
+    assert completed["ops_note"] == "The replacement keeps the clause intact."
+    # The findings payload itself is still never streamed.
     assert "private" not in str(events)
 
     candidate = _events_for(events, type="candidate_complete")[0]

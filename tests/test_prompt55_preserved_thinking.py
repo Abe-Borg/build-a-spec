@@ -438,7 +438,13 @@ def _pause(*, pdf: bool = False):
     return research_response(items=None, extra_blocks=extra, stop_reason="pause_turn")
 
 
-def _engine_thinking() -> dict:
+def _engine_thinking(harness) -> dict:
+    """The thinking config an engine sends before any edit: research's bare
+    adaptive; streamed Final QC's from its one request builder, which asks
+    for reasoning summaries on the documented models (the Review Room's
+    click-through, 2026-10-08)."""
+    if isinstance(harness, _QcHarness):
+        return qc_engine._qc_thinking(settings.QC_MODEL)
     return {"type": "adaptive"}
 
 
@@ -451,12 +457,15 @@ def test_the_edit_marks_that_request_and_every_later_one(harness):
     assert call.status == "completed"
     first, *later = call.requests
     assert len(later) == 2
-    assert _untouched(first, _REQUEST_KEYS, _engine_thinking())
+    assert _untouched(first, _REQUEST_KEYS, _engine_thinking(harness))
     assert "extra_headers" not in first
     for request in later:
         assert _pdf_elided(request)
         assert _carries_drop_block(request)
-        assert request["thinking"] == {"type": "adaptive", "block_binding": _DROP}
+        assert request["thinking"] == {
+            **_engine_thinking(harness),
+            "block_binding": _DROP,
+        }
         assert request["extra_headers"] == _BETA_HEADERS
         for key in ("model", "max_tokens", "system", "tools", "output_config"):
             assert request[key] == first[key]
@@ -467,7 +476,7 @@ def test_a_conversation_the_sanitizer_never_edits_is_byte_identical(harness):
     assert call.status == "completed"
     assert len(call.requests) == 3
     for request in call.requests:
-        assert _untouched(request, _REQUEST_KEYS, _engine_thinking())
+        assert _untouched(request, _REQUEST_KEYS, _engine_thinking(harness))
         dumped = json.dumps(request, default=str)
         assert "block_binding" not in dumped
         assert PRESERVED_THINKING_BETA not in dumped
@@ -485,7 +494,7 @@ def test_a_resume_keeps_the_flag_and_a_restart_clears_it(harness):
     assert not _carries_drop_block(opening)
     assert _carries_drop_block(failed) and _carries_drop_block(resumed)
     assert resumed["messages"] == failed["messages"]
-    assert _untouched(restarted, _REQUEST_KEYS, _engine_thinking())
+    assert _untouched(restarted, _REQUEST_KEYS, _engine_thinking(harness))
     assert "extra_headers" not in restarted
 
 
@@ -610,7 +619,9 @@ def test_the_one_request_shape_carries_nothing_of_it():
         effort="medium",
         cache_ttl="1h",
     )
-    assert kwargs["thinking"] == {"type": "adaptive"}
+    # Reasoning summaries ride the builder (the Review Room's click-through);
+    # the binding and its beta never do.
+    assert kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert "extra_headers" not in kwargs
 
 

@@ -256,7 +256,7 @@ function HowToUse({
           },
           {
             t: "Send to Final QC",
-            d: "A spare-no-expense, adversarially-verified review that hands back verified findings, each with a ready-to-apply fix.",
+            d: "A spare-no-expense, adversarially-verified review that hands back verified findings, each with a ready-to-apply fix. While it runs, click any card in the Review Room to see what that specialist or reviewer is checking, its reasoning as it works, and every search and source it reads.",
           },
           {
             t: "Export",
@@ -534,7 +534,7 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
           },
           {
             t: "QC findings are adversarially verified",
-            d: "Every candidate finding faces a panel of independent Opus 5.5 refuters — three for critical and high findings, two for medium and low. A finding survives only when every seat upholds it. A majority refuting kills it — except that a critical or high finding is only refuted when at least one refuting seat backs the refutation with a validated citation. Anything else — a split panel, or a critical/high refutation no seat could cite evidence for — is recorded as disputed and blocks issue readiness until you adjudicate it yourself. Refuted and disputed findings stay in the report rather than being quietly deleted.",
+            d: "Every candidate finding faces a panel of independent refuters (Claude Sonnet 5.5 by default) — three for critical and high findings, two for medium and low. Each one tries to show the finding is wrong, already handled elsewhere, out of scope, or trivial, and refutes when unsure. A finding survives only when every seat upholds it. A majority refuting kills it — except that a critical or high finding is only refuted when at least one refuting seat backs the refutation with a validated citation. Anything else — a split panel, or a critical/high refutation no seat could cite evidence for — is recorded as disputed and blocks issue readiness until you adjudicate it yourself. Refuted and disputed findings stay in the report rather than being quietly deleted. During the run, click a reviewer on a panel to see the claim, its vote, its one-line reasons and its reasoning.",
           },
           {
             t: "The checks that gate a section aren’t model output",

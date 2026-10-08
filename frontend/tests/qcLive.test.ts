@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
+  foldQcAgentTimeline,
   foldQcLiveState,
+  qcThinkingHeadline,
   isQcActiveSnapshot,
   isQcStopSettling,
   mergeQcEvent,
@@ -1181,4 +1186,220 @@ test("a streamed lead seat folds its own frames on the batch transport", () => {
   // The lead's search stays on its card as history; its live activity ended.
   assert.equal(ended.candidates[0].seats[0].activity, "");
   assert.equal(ended.candidates[0].seats[0].recent.length, 1);
+});
+
+
+// ---------------------------------------------------------------------------
+// The Review Room's click-through (2026-10-08): what a lens or reviewer seat
+// is weighing, folded from the same log as the board.
+// ---------------------------------------------------------------------------
+
+const roster = (seq: number): QcEvent => ({
+  type: "verification_started",
+  seq,
+  transport: "stream",
+  candidates: [
+    {
+      candidate_id: "candidate-1",
+      title: "Stale NFPA 13 edition",
+      original_severity: "high",
+      lens_id: "code_compliance",
+      issue: "PART 1 cites NFPA 13-2019; the recorded basis is 2025.",
+      element_id: "pt1.a2.p1",
+      panel_size: 3,
+      uphold_requires: 3,
+      evidence_gated: true,
+    },
+  ],
+});
+
+test("a lens's reasoning frames merge into one entry per thinking block", () => {
+  const events: QcEvent[] = [
+    { ...started(), lenses: [{ lens_id: "completeness", title: "Completeness", brief: "Judge completeness.", web: false }] },
+    { type: "lens_started", seq: 1, ts: "10:00:01", lens_id: "completeness", max_searches: 0, max_fetches: 0 },
+    { type: "lens_activity", seq: 2, ts: "10:00:03", lens_id: "completeness", kind: "thinking" },
+    { type: "lens_thinking", seq: 3, ts: "10:00:05", lens_id: "completeness", text: "**Comparing scope**\n\nPART 2 " },
+    // Another agent's frame interleaves; it must not join this block.
+    { type: "lens_thinking", seq: 4, ts: "10:00:05", lens_id: "code_compliance", text: "Elsewhere." },
+    { type: "lens_thinking", seq: 5, ts: "10:00:07", lens_id: "completeness", text: "lacks density.", final: true },
+    { type: "lens_activity", seq: 6, ts: "10:00:08", lens_id: "completeness", kind: "thinking" },
+    { type: "lens_thinking", seq: 7, ts: "10:00:09", lens_id: "completeness", text: "Second block." },
+    { type: "lens_activity", seq: 8, ts: "10:00:10", lens_id: "completeness", kind: "writing" },
+    {
+      type: "lens_complete",
+      seq: 9,
+      ts: "10:00:12",
+      lens_id: "completeness",
+      reviewed_check_count: 4,
+      candidate_count: 1,
+      grounded_count: 0,
+    },
+  ];
+  const timeline = foldQcAgentTimeline(events, { kind: "lens", lensId: "completeness" });
+  assert.deepEqual(
+    timeline.map((entry) => entry.kind),
+    ["started", "thinking", "thinking", "activity", "lens_done"],
+  );
+  const [, first, second] = timeline;
+  assert.equal(first.kind === "thinking" && first.text, "**Comparing scope**\n\nPART 2 lacks density.");
+  // The summary replaced the bare "thinking" marker and kept its time.
+  assert.equal(first.ts, "10:00:03");
+  assert.equal(first.kind === "thinking" && first.open, false);
+  // An unfinished block is closed by the next entry, not left "open".
+  assert.equal(second.kind === "thinking" && second.open, false);
+
+  const live = foldQcLiveState(events);
+  const lens = live.lenses.find((item) => item.id === "completeness");
+  assert.equal(lens?.brief, "Judge completeness.");
+  assert.equal(lens?.web, false);
+  // The card's headline reads the latest block only.
+  assert.equal(lens?.thought, "Second block.");
+});
+
+test("a thinking marker with no summary after it stays as said", () => {
+  const timeline = foldQcAgentTimeline(
+    [
+      started(),
+      { type: "lens_activity", seq: 1, lens_id: "code_compliance", kind: "thinking" },
+      { type: "lens_search", seq: 2, lens_id: "code_compliance", query: "NFPA 13 2025" },
+      { type: "lens_fetch", seq: 3, lens_id: "code_compliance", url: "https://nfpa.org/13" },
+      {
+        type: "lens_retry",
+        seq: 4,
+        lens_id: "code_compliance",
+        attempt: 1,
+        max_attempts: 3,
+        reason: "rate_limit",
+        backoff_s: 4,
+      },
+    ],
+    { kind: "lens", lensId: "code_compliance" },
+  );
+  assert.deepEqual(
+    timeline.map((entry) => entry.kind),
+    ["activity", "search", "fetch", "retry"],
+  );
+});
+
+test("a truncated summary says so and a later frame starts nothing new", () => {
+  const timeline = foldQcAgentTimeline(
+    [
+      started(),
+      { type: "lens_thinking", seq: 1, lens_id: "code_compliance", text: "Long." },
+      { type: "lens_thinking", seq: 2, lens_id: "code_compliance", text: "", final: true, truncated: true },
+    ],
+    { kind: "lens", lensId: "code_compliance" },
+  );
+  assert.equal(timeline.length, 1);
+  assert.equal(timeline[0].kind === "thinking" && timeline[0].truncated, true);
+});
+
+test("a reviewer seat folds its claim, reasoning and vote with reasons", () => {
+  const events: QcEvent[] = [
+    started(),
+    roster(1),
+    { type: "verifier_started", seq: 2, candidate_id: "candidate-1", reviewer_index: 2 },
+    { type: "verifier_thinking", seq: 3, candidate_id: "candidate-1", reviewer_index: 2, text: "**Trying to refute**" },
+    // Reviewer 1 interleaves on the same panel.
+    { type: "verifier_thinking", seq: 4, candidate_id: "candidate-1", reviewer_index: 1, text: "Other seat." },
+    { type: "verifier_thinking", seq: 5, candidate_id: "candidate-1", reviewer_index: 2, text: " — nothing covers it.", final: true },
+    {
+      type: "verifier_complete",
+      seq: 6,
+      candidate_id: "candidate-1",
+      reviewer_index: 2,
+      status: "completed",
+      upholds: true,
+      revised_severity: null,
+      ops_adequate: false,
+      note: "The edition is stale.",
+      ops_note: "No fix proposed.",
+    },
+  ];
+  const timeline = foldQcAgentTimeline(events, {
+    kind: "seat",
+    candidateId: "candidate-1",
+    reviewerIndex: 2,
+  });
+  assert.deepEqual(timeline.map((entry) => entry.kind), ["started", "thinking", "verdict"]);
+  assert.equal(
+    timeline[1].kind === "thinking" && timeline[1].text,
+    "**Trying to refute** — nothing covers it.",
+  );
+  const verdict = timeline[2];
+  assert.equal(verdict.kind === "verdict" && verdict.note, "The edition is stale.");
+  assert.equal(verdict.kind === "verdict" && verdict.opsNote, "No fix proposed.");
+
+  const live = foldQcLiveState(events);
+  const candidate = live.candidates[0];
+  assert.equal(candidate.issue, "PART 1 cites NFPA 13-2019; the recorded basis is 2025.");
+  assert.equal(candidate.elementId, "pt1.a2.p1");
+  assert.equal(candidate.evidenceGated, true);
+  const seat = candidate.seats.find((item) => item.index === 2);
+  assert.equal(seat?.status, "upheld");
+  assert.equal(seat?.note, "The edition is stale.");
+  assert.equal(seat?.opsNote, "No fix proposed.");
+  assert.equal(
+    candidate.seats.find((item) => item.index === 1)?.thought,
+    "Other seat.",
+  );
+});
+
+test("an older log without the new fields still folds", () => {
+  const live = foldQcLiveState([
+    { ...started(), lenses: [{ lens_id: "completeness", title: "Completeness" }] },
+    {
+      type: "verification_started",
+      seq: 1,
+      candidates: [
+        {
+          candidate_id: "candidate-1",
+          title: "T",
+          original_severity: "low",
+          lens_id: "completeness",
+          panel_size: 2,
+        },
+      ],
+    },
+    {
+      type: "verifier_complete",
+      seq: 2,
+      candidate_id: "candidate-1",
+      reviewer_index: 1,
+      status: "completed",
+      upholds: false,
+    },
+  ]);
+  const lens = live.lenses.find((item) => item.id === "completeness");
+  assert.equal(lens?.brief, "");
+  assert.equal(lens?.web, null);
+  assert.equal(live.candidates[0].issue, "");
+  assert.equal(live.candidates[0].seats[0].note, "");
+});
+
+test("a card's headline is the summary's first line, plain and bounded", () => {
+  assert.equal(qcThinkingHeadline("**Checking the edition**\n\nThe draft cites…"), "Checking the edition");
+  assert.equal(qcThinkingHeadline("\n\n## Heading here\nbody"), "Heading here");
+  assert.equal(qcThinkingHeadline(""), "");
+  const long = qcThinkingHeadline("word ".repeat(60), 40);
+  assert.ok(long.length <= 40, long);
+  assert.ok(long.endsWith("…"));
+});
+
+test("the Review Room's cards, chips and seats open the click-through", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const read = (name: string) =>
+    readFileSync(join(here, "..", "src", "components", name), "utf8");
+  const drawer = read("QCDrawer.tsx");
+  const modal = read("QcAgentActivityModal.tsx");
+  // Lens card, settled lens chip, candidate title, reviewer seat.
+  const opens = drawer.match(/data-capability="qc\.agent-detail"/g) ?? [];
+  assert.ok(opens.length >= 4, `expected four openers, found ${opens.length}`);
+  assert.match(drawer, /<QcAgentActivityModal\b/);
+  // The lens card and seat are real buttons, not clickable spans/articles.
+  assert.match(drawer, /function QcLensCard[\s\S]*?<button\s+type="button"/);
+  assert.match(drawer, /function QcVerifierSeat[\s\S]*?<button\s+type="button"/);
+  // Model-authored text renders as React text, never as markup.
+  assert.doesNotMatch(modal, /dangerouslySetInnerHTML/);
+  assert.match(modal, /useDialogFocus\(/);
 });

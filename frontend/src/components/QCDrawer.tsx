@@ -63,6 +63,8 @@ import {
   foldQcLiveState,
   isQcStopSettling,
   qcRecapDisposition,
+  qcThinkingHeadline,
+  type QcAgentTarget,
   type QcCandidateLiveState,
   type QcLensLiveState,
   type QcLiveState,
@@ -70,6 +72,7 @@ import {
 } from "../lib/qcLive";
 import { useDialogFocus } from "../lib/dialogFocus";
 import ConfirmDialog from "./ConfirmDialog";
+import QcAgentActivityModal from "./QcAgentActivityModal";
 import QcTransportChoice from "./QcTransportChoice";
 import { useQcTransportPreference } from "../lib/useQcTransportPreference";
 import QCReportModal from "./QCReportModal";
@@ -215,7 +218,13 @@ function lensStatusLabel(lens: QcLensLiveState): string {
   return "Queued";
 }
 
-function QcLensCard({ lens }: { lens: QcLensLiveState }) {
+function QcLensCard({
+  lens,
+  onOpen,
+}: {
+  lens: QcLensLiveState;
+  onOpen: () => void;
+}) {
   const dotClass =
     lens.status === "completed"
       ? "bg-ok"
@@ -224,57 +233,82 @@ function QcLensCard({ lens }: { lens: QcLensLiveState }) {
         : lens.status === "running"
           ? "agent-dot"
           : "bg-ink-faint";
+  const headline =
+    lens.status === "running" && lens.activity === "thinking"
+      ? qcThinkingHeadline(lens.thought)
+      : "";
+  // A real <button> (the research board's AgentCard idiom), so every inner
+  // block is a span — a button allows no p/ul/li/h4 descendants. A column
+  // flex keeps its content top-aligned: a stretched grid cell would centre a
+  // button's content, unlike the article it replaced.
   return (
-    <article className={`qc-lens-card ${lens.status === "running" ? "is-active" : ""}`}>
-      <div className="flex items-start gap-2">
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-haspopup="dialog"
+      data-capability="qc.agent-detail"
+      title="View this specialist's live activity and reasoning"
+      className={`qc-lens-card qc-agent-button flex w-full flex-col justify-start text-left ${lens.status === "running" ? "is-active" : ""}`}
+    >
+      <span className="flex w-full items-start gap-2">
         <span
           className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}
           aria-hidden="true"
         />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <h4 className="text-[11px] font-semibold leading-snug text-ink">
+        <span className="block min-w-0 flex-1">
+          <span className="flex items-start justify-between gap-2">
+            <span className="text-[11px] font-semibold leading-snug text-ink">
               {lens.title}
-            </h4>
+            </span>
             <span className="shrink-0 text-[9px] font-medium tracking-wide text-ink-faint uppercase">
               {lensStatusLabel(lens)}
+              <span className="ml-1 text-ink-faint/70" aria-hidden="true">›</span>
             </span>
-          </div>
+          </span>
           {lens.status === "queued" && (
-            <p className="mt-1 text-[10px] text-ink-faint">Waiting for a specialist…</p>
+            <span className="mt-1 block text-[10px] text-ink-faint">Waiting for a specialist…</span>
           )}
           {lens.status === "running" && lens.retry && (
-            <p className="mt-1 text-[10px] leading-relaxed text-warn">
+            <span className="mt-1 block text-[10px] leading-relaxed text-warn">
               Retrying {lens.retry.attempt}/{lens.retry.maxAttempts} —{" "}
               {QC_RETRY_LABELS[lens.retry.reason] || lens.retry.reason || "temporary failure"}
-            </p>
+            </span>
           )}
           {lens.status === "running" && !lens.retry && (
-            <p className="mt-1 flex items-center gap-1.5 text-[10px] text-ink-dim">
+            <span className="mt-1 flex items-center gap-1.5 text-[10px] text-ink-dim">
               <span className="status-dots" aria-hidden="true"><span /><span /><span /></span>
               <span className="status-shimmer">
                 {QC_ACTIVITY_LABELS[lens.activity] || "Starting the review…"}
               </span>
-            </p>
+            </span>
+          )}
+          {headline && (
+            <span
+              key={headline}
+              className="prompt-chip-in mt-1 block truncate text-[10px] text-ink-faint italic"
+              title={headline}
+            >
+              {headline}
+            </span>
           )}
           {lens.status === "running" && lens.recent.length > 0 && (
-            <ul className="mt-1.5 space-y-0.5">
+            <span className="mt-1.5 block space-y-0.5">
               {lens.recent.map((item) => (
-                <li
+                <span
                   key={`${item.kind}-${item.seq}`}
-                  className="prompt-chip-in truncate text-[10px] text-ink-faint"
+                  className="prompt-chip-in block truncate text-[10px] text-ink-faint"
                   title={item.text}
                 >
                   <span className="mr-1 text-ink-faint/70" aria-hidden="true">
                     {item.kind === "search" ? "⌕" : "▤"}
                   </span>
                   {item.kind === "search" ? `“${item.text}”` : displayLiveSource(item.text)}
-                </li>
+                </span>
               ))}
-            </ul>
+            </span>
           )}
           {lens.status === "completed" && (
-            <p className="mt-1 text-[10px] leading-relaxed text-ink-faint">
+            <span className="mt-1 block text-[10px] leading-relaxed text-ink-faint">
               <span className="text-ok">✓</span> {lens.reviewedChecks} checks ·{" "}
               <span key={`c-${lens.candidates}`} className="tally-flash">
                 {lens.candidates} candidate{lens.candidates === 1 ? "" : "s"}
@@ -283,16 +317,16 @@ function QcLensCard({ lens }: { lens: QcLensLiveState }) {
               {lens.searches === 1 ? "" : "es"} · {lens.fetches} fetch
               {lens.fetches === 1 ? "" : "es"} · {lens.requests} request
               {lens.requests === 1 ? "" : "s"}
-            </p>
+            </span>
           )}
           {lens.status === "failed" && (
-            <p className="mt-1 text-[10px] leading-relaxed text-err">
+            <span className="mt-1 block text-[10px] leading-relaxed text-err">
               × {lens.error || "This specialist did not complete."}
-            </p>
+            </span>
           )}
-        </div>
-      </div>
-    </article>
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -317,7 +351,13 @@ function seatDisplay(seat: QcVerifierSeatLiveState): {
   return { label: "queued", tone: "text-ink-faint border-edge/70 bg-bg/20" };
 }
 
-function QcVerifierSeat({ seat }: { seat: QcVerifierSeatLiveState }) {
+function QcVerifierSeat({
+  seat,
+  onOpen,
+}: {
+  seat: QcVerifierSeatLiveState;
+  onOpen: () => void;
+}) {
   const display = seatDisplay(seat);
   const recent = seat.recent[0];
   const details = [
@@ -331,16 +371,20 @@ function QcVerifierSeat({ seat }: { seat: QcVerifierSeatLiveState }) {
     seat.error,
     recent?.text ?? "",
   ].filter(Boolean);
-  const title = details.join(" · ");
+  const title = `${details.join(" · ")} — click to see this reviewer's reasoning`;
   return (
-    <span
-      className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${display.tone}`}
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-haspopup="dialog"
+      data-capability="qc.agent-detail"
+      className={`qc-agent-button inline-flex min-w-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${display.tone}`}
       title={title}
-      aria-label={details.slice(0, 3).join(", ")}
+      aria-label={`${details.slice(0, 3).join(", ")}. View this reviewer's activity`}
     >
       <span className="font-semibold tabular-nums">{seat.index}</span>
       <span className="truncate">{display.label}</span>
-    </span>
+    </button>
   );
 }
 
@@ -362,10 +406,18 @@ function candidateOutcome(candidate: QcCandidateLiveState): {
 function QcCandidateCard({
   candidate,
   lensTitle,
+  onOpenAgent,
 }: {
   candidate: QcCandidateLiveState;
   lensTitle: string;
+  onOpenAgent: (target: QcAgentTarget) => void;
 }) {
+  // The title opens the panel on the reviewer most worth watching: the
+  // first still at work, else the first.
+  const focusSeat =
+    candidate.seats.find((seat) => seat.status === "active")?.index ??
+    candidate.seats[0]?.index ??
+    1;
   const outcome = candidateOutcome(candidate);
   const severity = candidate.originalSeverity.toLowerCase() as Severity;
   const severityClass = sevChip[severity] ?? sevChip.low;
@@ -378,7 +430,22 @@ function QcCandidateCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <h5 className="min-w-0 text-[11px] font-medium leading-snug text-ink">
-              {candidate.title}
+              <button
+                type="button"
+                onClick={() =>
+                  onOpenAgent({
+                    kind: "seat",
+                    candidateId: candidate.id,
+                    reviewerIndex: focusSeat,
+                  })
+                }
+                aria-haspopup="dialog"
+                data-capability="qc.agent-detail"
+                className="text-left hover:text-accent hover:underline"
+                title="Open this candidate's adversarial panel"
+              >
+                {candidate.title}
+              </button>
             </h5>
             <span className={`shrink-0 text-[9px] font-semibold ${outcome.tone}`}>
               {candidate.outcome ? (candidate.outcome === "upheld" ? "● " : candidate.outcome === "refuted" ? "— " : "! ") : ""}
@@ -390,7 +457,17 @@ function QcCandidateCard({
           </p>
           <div className="mt-1.5 flex flex-wrap gap-1">
             {candidate.seats.map((seat) => (
-              <QcVerifierSeat key={seat.index} seat={seat} />
+              <QcVerifierSeat
+                key={seat.index}
+                seat={seat}
+                onOpen={() =>
+                  onOpenAgent({
+                    kind: "seat",
+                    candidateId: candidate.id,
+                    reviewerIndex: seat.index,
+                  })
+                }
+              />
             ))}
           </div>
         </div>
@@ -448,10 +525,12 @@ function QcCandidateGroup({
   title,
   candidates,
   live,
+  onOpenAgent,
 }: {
   title: string;
   candidates: QcCandidateLiveState[];
   live: QcLiveState;
+  onOpenAgent: (target: QcAgentTarget) => void;
 }) {
   if (candidates.length === 0) return null;
   const lensTitles = new Map(live.lenses.map((lens) => [lens.id, lens.title]));
@@ -471,6 +550,7 @@ function QcCandidateGroup({
             key={candidate.id}
             candidate={candidate}
             lensTitle={lensTitles.get(candidate.lensId) || titleFromLens(candidate.lensId)}
+            onOpenAgent={onOpenAgent}
           />
         ))}
       </div>
@@ -486,7 +566,13 @@ function titleFromLens(id: string): string {
     .join(" ");
 }
 
-function QcReviewRoom({ live }: { live: QcLiveState }) {
+function QcReviewRoom({
+  live,
+  onOpenAgent,
+}: {
+  live: QcLiveState;
+  onOpenAgent: (target: QcAgentTarget) => void;
+}) {
   const phaseTitle =
     live.phase === "verification"
       ? "Adversarial panels"
@@ -578,7 +664,13 @@ function QcReviewRoom({ live }: { live: QcLiveState }) {
               </span>
             </div>
             <div className="qc-lens-grid">
-              {live.lenses.map((lens) => <QcLensCard key={lens.id} lens={lens} />)}
+              {live.lenses.map((lens) => (
+                <QcLensCard
+                  key={lens.id}
+                  lens={lens}
+                  onOpen={() => onOpenAgent({ kind: "lens", lensId: lens.id })}
+                />
+              ))}
             </div>
           </section>
         ) : (
@@ -593,20 +685,24 @@ function QcReviewRoom({ live }: { live: QcLiveState }) {
             </div>
             <div className="flex flex-wrap gap-1">
               {live.lenses.map((lens) => (
-                <span
+                <button
+                  type="button"
                   key={lens.id}
-                  className={`rounded-full border px-1.5 py-0.5 text-[8px] ${
+                  onClick={() => onOpenAgent({ kind: "lens", lensId: lens.id })}
+                  aria-haspopup="dialog"
+                  data-capability="qc.agent-detail"
+                  className={`qc-agent-button rounded-full border px-1.5 py-0.5 text-[8px] ${
                     lens.status === "completed"
                       ? "border-ok/30 bg-ok/5 text-ok"
                       : lens.status === "failed"
                         ? "border-err/30 bg-err/5 text-err"
                         : "border-edge bg-bg/25 text-ink-faint"
                   }`}
-                  title={`${lens.title}: ${lensStatusLabel(lens)}`}
+                  title={`${lens.title}: ${lensStatusLabel(lens)} — click to see what it checked`}
                 >
                   {lens.status === "completed" ? "✓" : lens.status === "failed" ? "×" : "○"}{" "}
                   {lens.title} · {lens.status === "completed" ? "done" : lens.status}
-                </span>
+                </button>
               ))}
             </div>
           </section>
@@ -632,9 +728,9 @@ function QcReviewRoom({ live }: { live: QcLiveState }) {
             ) : (
               <div className="space-y-2.5">
                 <QcBatchLine live={live} />
-                <QcCandidateGroup title="In review" candidates={live.inReview} live={live} />
-                <QcCandidateGroup title="Waiting" candidates={live.waiting} live={live} />
-                <QcCandidateGroup title="Resolved" candidates={live.resolved} live={live} />
+                <QcCandidateGroup title="In review" candidates={live.inReview} live={live} onOpenAgent={onOpenAgent} />
+                <QcCandidateGroup title="Waiting" candidates={live.waiting} live={live} onOpenAgent={onOpenAgent} />
+                <QcCandidateGroup title="Resolved" candidates={live.resolved} live={live} onOpenAgent={onOpenAgent} />
               </div>
             )}
           </section>
@@ -811,6 +907,8 @@ export default function QCDrawer({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  // The Review Room's click-through: which lens or reviewer seat is open.
+  const [agentTarget, setAgentTarget] = useState<QcAgentTarget | null>(null);
   const [selectedReadyIds, setSelectedReadyIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -935,6 +1033,12 @@ export default function QCDrawer({
     () => foldQcLiveState(qc?.events ?? [], qc ?? undefined),
     [qc],
   );
+  // A new run replaces the log the click-through reads: close it rather than
+  // show a lens or seat from a run that no longer exists.
+  const liveRunId = live.runId;
+  useEffect(() => {
+    setAgentTarget(null);
+  }, [liveRunId]);
   const active = running || settling;
 
   const previewSelectedFixes = async () => {
@@ -1240,7 +1344,7 @@ export default function QCDrawer({
             <p className="text-[11px] text-ink-faint italic">{costLine}</p>
           )}
 
-          {active && <QcReviewRoom live={live} />}
+          {active && <QcReviewRoom live={live} onOpenAgent={setAgentTarget} />}
 
           {primaryReport && !active && !result && (
             <div className="rounded-lg border border-warn/40 bg-warn/10 p-2.5 text-[11px] text-warn">
@@ -1761,6 +1865,17 @@ export default function QCDrawer({
         onCancel={() => setConfirmOpen(false)}
       />
     )}
+    <QcAgentActivityModal
+      open={agentTarget !== null}
+      target={agentTarget}
+      events={qc?.events ?? []}
+      live={live}
+      lensModelName={model.name}
+      seatModelName={seats.name}
+      onSelect={setAgentTarget}
+      onClose={() => setAgentTarget(null)}
+      restoreFallbackRef={drawerToggleRef}
+    />
     <QCReportModal
       open={reportOpen}
       snapshot={qc}

@@ -167,6 +167,65 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — click a Final QC card to see what it is doing
+
+(2026-10-08. docs/as-built.md's "The Review Room shows what each lens and
+reviewer is doing" is the record; in the next release.)
+
+The owner asked to click the cards in Final QC's Review Room and see what
+each agent is up to. Until now a card could only say "Thinking through the
+specification…" for minutes: Claude Opus 5.5 and Claude Sonnet 5.5 send their
+thinking with empty text unless a request asks for a summary of it.
+
+- **Click a lens card** (or, once the lenses finish, its chip) to open that
+  specialist's live view: **What this specialist checks** (the brief it was
+  given, word for word, and whether it may search the web), then a timestamped
+  feed of its reasoning summaries, every search it ran, every source it read
+  (as a link), any retries, and its result. **Raised for adversarial review**
+  lists the candidates it raised; each opens its panel. While a lens thinks,
+  its card shows the headline of what it is weighing right now.
+- **What the adversarial panel stage does.** Every candidate the lenses raise
+  goes to a panel of reviewers (Claude Sonnet 5.5 by default; two for a
+  medium or low finding, three for a critical or high one). Each reviewer
+  reads the same specification and, independently, tries to refute the claim:
+  is it wrong on the facts, already handled elsewhere in the document, out of
+  this section's scope, or trivial? A reviewer refutes when unsure. The
+  finding is **upheld** only if every reviewer upholds it; a majority
+  refutation **refutes** it; any other split is **disputed** and comes to you.
+  A critical or high finding can be refuted only with validated evidence (a
+  source the reviewer actually read, or a cited place in the specification
+  or an attached document); otherwise it is disputed instead of dropped. Each reviewer also judges
+  whether the proposed fix is safe and complete — that vote feeds the fix
+  validation stage.
+- **Click a candidate's title or any reviewer chip** to watch that panel: the
+  claim under review and the element it is about, how the panel decides, one
+  tab per reviewer, and the selected reviewer's vote with its one-line reason
+  and its fix decision, above the same reasoning, search and source feed.
+- **Where the reasoning comes from.** Final QC's lens and reviewer requests
+  now ask for `thinking.display: "summarized"`, the provider's own readable
+  summary (the raw chain of thought is never returned by the API). It changes
+  what is shown, not the thinking or the bill. Only the models Anthropic
+  documents as taking it get it (`QC_THINKING_DISPLAY_MODELS` in
+  `backend/settings.py`); an override outside that list runs as before. The
+  summaries travel in chunks every two seconds, at most 24,000 characters per
+  request, on the live Review Room channel. They are not saved in the project
+  file, the audit report or its exports; like the searches and sources, they
+  are written to the local activity trace when tracing is on (the default,
+  `BUILD_A_SPEC_TRACE`), which already records the prompts themselves.
+- **A reviewer's one-line reasons now arrive with its vote**, live. They were
+  already in the audit report.
+- **Batched reviewers do not stream**, so a run that uses Batch shows their
+  votes and reasons as the batch returns, without live reasoning.
+- **To turn the summaries off** (here and in the chat's Thinking blocks), set
+  `BUILD_A_SPEC_THINKING_DISPLAY` to `omitted` before starting the app. In
+  PowerShell: `$env:BUILD_A_SPEC_THINKING_DISPLAY = "omitted"`; in Command
+  Prompt: `set BUILD_A_SPEC_THINKING_DISPLAY=omitted`.
+
+Final QC results made before this update stay current: what a reviewer
+decides and what the report records are unchanged. No paid API call was
+made; what the summaries look like on a real Final QC run is unseen until
+the next one.
+
 ## Current Status — Final QC's verifier seats run on Sonnet 5.5; condensing and the fact harvest think harder
 
 (2026-10-08. docs/as-built.md's "Final QC's verifier seats run on Sonnet 5.5

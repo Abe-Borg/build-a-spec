@@ -20809,3 +20809,173 @@ Both probes were restored. Ruff and the targeted resource-pressure,
 import-responsiveness, release-note, update and documentation tests passed.
 No paid model call, interactive Windows installation or Word visual check
 was run.
+
+## The Review Room shows what each lens and reviewer is doing — implemented notes (2026-10-08)
+
+Owner request (Abraham, 2026-10-08, with a screenshot of five lens cards all
+reading "Thinking through the specification…"): "I want the user to be able
+to click on these buttons and see what the agent is up to", and, in the same
+session, "what exactly is happening during the adversarial panel stage? is
+that something the user can view too?"
+
+**Why a card could say nothing more.** Opus 5.5 and Sonnet 5.5 default
+`thinking.display` to `omitted`: thinking blocks stream with empty text. The
+only signal the relay had was the block's type, so "thinking" was all a card
+could say; four of the five lenses have no web tools, so for them there were
+no queries or URLs either. Anthropic documents `display: "summarized"` as the
+way to get a readable summary of the reasoning, billed the same (the raw
+chain of thought is never returned on any model). The chat has asked for it
+since Batch 2 (`settings.THINKING_DISPLAY`, its Thinking disclosure).
+
+**The request.**
+
+- `qc.engine._qc_thinking(model)` builds every QC request's `thinking`, from
+  `_qc_request_kwargs` — the one builder both transports share, so a batched
+  and a streamed seat still send identical requests and share a lineage.
+  Adaptive, plus `display: "summarized"` when `settings.THINKING_DISPLAY` is
+  `summarized` and the model is in `settings.QC_THINKING_DISPLAY_MODELS`:
+  Opus 5.5, Opus 5, Opus 4.8, Opus 4.7, Sonnet 5.5, Sonnet 5, Haiku 5.5,
+  Fable 5 and Fable 5.1 — the documentation's list of models whose
+  `display` defaults to `omitted`, as literal ids. Final QC has no runtime
+  probe like the chat's `_enter_stream`: a refused `display` would be a
+  non-retryable 400 on every lens, so an override outside the list sends
+  exactly what it always did.
+- `with_drop_block` adds `block_binding` beside `display` (the chat already
+  sends that pair). The refusal fallback re-runs the same body on a model
+  that also takes `display`.
+- Bytes: the thinking config is part of every QC request, so each lineage's
+  cached prefix is written new once. QC's cache entries live within a run
+  (5 minutes, refreshed by reads), so this costs nothing a run did not
+  already pay. The stable chat prompt, research and the chat request are
+  unchanged.
+- Not in the QC input manifest, deliberately: display changes what is shown,
+  not the review's inputs or rules. Retained reports stay current.
+
+**The relay.** `_relay_stream_activity` gains `relay_thinking`, passed as
+`event_prefix in _THINKING_RELAY_PREFIXES` (`lens`, `verifier`) by
+`_run_streaming_call`. With it on, a `thinking` block's `thinking_delta`
+text is buffered per block index and emitted as a `{prefix}_thinking` frame
+with the worker's own fields (`lens_id`, or `candidate_id` +
+`reviewer_index`) and:
+
+- `text` — the summary written since the previous frame. At most one frame
+  per `_THINKING_RELAY_INTERVAL_S` (2.0 s, measured from the stream's open
+  and every flush), so the first chunk lands as soon as prefill ends.
+- `final: true` on the frame at `content_block_stop`; a block that relayed
+  everything already closes with an empty `final` frame; an empty block
+  (`omitted` display) emits nothing.
+- `_THINKING_RELAY_MAX_CHARS` (24,000) per request; the frame that reaches
+  it carries `truncated: true` (and `final`), even when it lands on a fresh
+  block, and nothing more relays for that request.
+
+Answer text deltas and output-tool JSON (the findings and verdicts) are
+still never relayed: they reach the board through the parsed lifecycle
+frames. The grouping call relays no summaries (its frames fold into
+nothing a user can open). The batched transport has no stream, so a batched
+seat emits none; the streamed warm lead does.
+
+Why coarse chunks: the runner's log replays from seq 0 on every SSE
+reconnect, every `/api/qc/status` snapshot carries it, and
+`audit_record_snapshot` deep-copies it. One frame per delta would multiply
+the log; one per two seconds per active worker keeps a run's frame count in
+the same range as its existing activity frames. The log stays per run and in
+memory: `save_project` takes the report and latest attempt, never `events`,
+and the audit report and both exports are built from `QCResult`. The runner
+also hands every frame to the local trace (`capture.qc_event` →
+`qc_progress`, tracing on by default), so summary chunks are written there
+beside the queries and URLs it already recorded; the trace already holds the
+full prompts (`prompts.jsonl`), and a diagnostics bundle sanitizes it as
+before. The diagnostics snapshot itself only counts QC events.
+
+**Context frames.**
+
+- `qc_started.lenses[]` adds `brief` (the `QCLens.brief`, verbatim) and
+  `web`.
+- `verification_started.candidates[]` adds `issue` and `element_id`: the
+  claim the seats are handed.
+- `verifier_complete` for a completed seat adds `note` and `ops_note`, the
+  seat's submitted one-line reasons — the same text the audit report already
+  records per verdict.
+
+**Contract amendment.** "Final QC Review Room — live three-stage contract"
+above said "Prompts, submitted notes, thinking/token text and hidden
+reasoning never cross this channel" and that `verifier_complete` carries
+"never the submitted verifier note". On the owner's request, provider
+reasoning summaries and seat notes now cross the live channel. What stays:
+prompts never ask a model to explain its reasoning (the reviewed-check note
+schema still says "Do not include private reasoning or chain-of-thought"),
+nothing relays answer text or output-tool payloads, and the audit report's
+reporting boundary ("Audit-grade Final QC report extension") is untouched —
+no summary is serialized into `QCResult`, the Word report or the JSON
+envelope. `tests/test_qc_live_events.py` pinned the old rule
+(`"note" not in completed`); it now pins the notes and keeps the
+findings-payload check (`"private" not in str(events)`).
+
+**Frontend.**
+
+- `types.ts`: `lens_thinking` / `verifier_thinking` frames; the new optional
+  fields above (absent on a replayed older log).
+- `lib/qcLive.ts`: the board's fold carries `brief`, `web` and `thought` (the
+  latest block's summary, first 4,000 characters) per lens; `issue`,
+  `elementId` and `evidenceGated` per candidate; `note`, `opsNote` and
+  `thought` per seat. `foldQcAgentTimeline(events, target)` is the
+  click-through's own pure fold: started, a bare activity marker (only
+  `thinking` with no summary after it, or `writing`), one `thinking` entry
+  per block (frames merged; the preceding marker replaced, keeping its time;
+  closed by its `final` frame or by any later entry), search, fetch, retry,
+  the lens result, and the seat's verdict. `qcThinkingHeadline` is a card's
+  one line: the summary's first non-empty line, markdown emphasis stripped,
+  cut at a word.
+- `QcAgentActivityModal`: the lens view (assignment, web access, feed,
+  "Raised for adversarial review" whose rows open each panel) and the panel
+  view (the claim and its element, how the panel decides — the v4 rule in
+  words, the evidence gate when the candidate is critical/high, a batch note
+  when the run batched — reviewer tabs, the selected reviewer's vote with
+  its reasons and fix decision, its feed). Follow-bottom while live, keyed on
+  the feed's growth since a summary grows in place. `useDialogFocus`; the
+  drawer toggle is the restore fallback because the Review Room unmounts
+  when the run ends. Summaries render as React text; only `**bold**` spans
+  are styled.
+- `QCDrawer`: lens cards (now buttons, top-aligned with a column flex — a
+  stretched grid cell centres a button's content), settled lens chips,
+  candidate titles and reviewer chips open it. A lens card shows the
+  headline of its current reasoning. A new run's id closes it.
+- Capability `qc.agent-detail`, listed in the `qc-run` tour step, whose
+  body now says what clicking does. No step order changed: `TOUR_VERSION`
+  stays 9.
+- Help: "Send to Final QC" and "QC findings are adversarially verified" say
+  what clicking shows. The second also stopped calling the panel "Opus 5.5
+  refuters", stale since the seats moved to Sonnet 5.5 earlier the same day;
+  it now names Sonnet 5.5 as the default and says what a refuter tries.
+
+**Verification.** Ruff clean. Backend: `tests/test_qc*.py`,
+`tests/test_prompt55*.py`, `tests/test_settings.py`,
+`tests/test_fake_request_validator.py` (958 tests) and the twenty other test
+files that run Final QC (557) pass; `tests/test_prompt55_preserved_thinking.py`
+now reads the engine's thinking config per harness instead of a literal.
+Frontend: `npm test` (553) and `npm run build` pass. The modal was rendered
+in a throwaway Vite harness with a synthetic log and driven with Playwright
+(lens view, panel view, a reviewer-tab switch keeping focus, a card click,
+Escape restoring focus to the card); the harness was deleted.
+
+**Reversion evidence.** Backend, each restored after: no `display` — the
+documented-models test fails; relay off at the call site — the end-to-end
+test fails; no `final` on a block's last frame — two relay tests fail; no
+throttle — the chunk test fails; no `note` on `verifier_complete`, no
+`brief` on `qc_started`, no `issue` on the roster — the end-to-end and
+live-events tests fail; no `truncated` flag — the cap tests fail. Frontend:
+`qc.agent-detail` dropped from the tour step — the tour contract fails; a
+seat back to a `<span>` — the source pin fails; summary frames not merged,
+the marker not replaced, the note not folded — the fold tests fail.
+
+**Release-note draft.** "Final QC's Review Room cards are clickable. Open a
+specialist to see what it was asked to check and follow its reasoning,
+searches and sources as it works; open any reviewer on an adversarial panel
+to see the claim it is trying to refute, how the panel decides, and that
+reviewer's vote with its reasons. The reasoning shown is the model's own
+summary, requested from the provider at no extra cost; set
+BUILD_A_SPEC_THINKING_DISPLAY=omitted to turn summaries off."
+
+**Not measured.** No paid API call was made. How long, how frequent and how
+useful the summaries are on a real Final QC run, and whether asking for them
+changes latency, are unseen until the next run.

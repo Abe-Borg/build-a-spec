@@ -1403,3 +1403,44 @@ test("the Review Room's cards, chips and seats open the click-through", () => {
   assert.doesNotMatch(modal, /dangerouslySetInnerHTML/);
   assert.match(modal, /useDialogFocus\(/);
 });
+
+test("a merged candidate belongs to every lens behind it", () => {
+  const live = foldQcLiveState([
+    started(),
+    {
+      type: "verification_started",
+      seq: 1,
+      candidates: [
+        {
+          candidate_id: "candidate-1",
+          title: "Merged",
+          original_severity: "medium",
+          lens_id: "code_compliance",
+          origin_lens_ids: ["code_compliance", "completeness"],
+          panel_size: 2,
+        },
+        // An older log names one lens only.
+        {
+          candidate_id: "candidate-2",
+          title: "Single",
+          original_severity: "low",
+          lens_id: "provenance_hygiene",
+          panel_size: 2,
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(live.candidates[0].originLensIds, ["code_compliance", "completeness"]);
+  assert.deepEqual(live.candidates[1].originLensIds, ["provenance_hygiene"]);
+});
+
+test("the click-through lists merged candidates per lens and never calls a batch seat live", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const modal = readFileSync(join(here, "..", "src", "components", "QcAgentActivityModal.tsx"), "utf8");
+  // Raised candidates and the attribution read every origin lens.
+  assert.match(modal, /originLensIds\.includes\(target\.lensId\)/);
+  assert.match(modal, /candidate\.originLensIds/);
+  // A batch seat with no stream frame of its own is waiting, not thinking.
+  assert.match(modal, /const batchWaiting =/);
+  assert.match(modal, /!batchWaiting &&/);
+});

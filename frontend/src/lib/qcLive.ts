@@ -119,6 +119,9 @@ export interface QcCandidateLiveState {
   title: string;
   originalSeverity: string;
   lensId: string;
+  /** Every lens behind the candidate, `lensId` first: consolidation can give
+   *  several lenses' claims one panel. `[lensId]` on an older log. */
+  originLensIds: string[];
   /** The claim under review; "" on a replayed older log. */
   issue: string;
   elementId: string;
@@ -683,6 +686,11 @@ function blankCandidate(entry: QcCandidateRosterEntry): QcCandidateLiveState & {
     title: entry.title,
     originalSeverity: entry.original_severity,
     lensId: entry.lens_id,
+    originLensIds: entry.origin_lens_ids?.length
+      ? entry.origin_lens_ids
+      : entry.lens_id
+        ? [entry.lens_id]
+        : [],
     issue: entry.issue ?? "",
     elementId: entry.element_id ?? "",
     evidenceGated: entry.evidence_gated === true,

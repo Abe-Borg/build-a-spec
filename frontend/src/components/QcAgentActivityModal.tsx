@@ -131,10 +131,20 @@ function SourceLink({ url }: { url: string }) {
   );
 }
 
-function entryContent(entry: QcAgentTimelineEntry, seat: boolean): ReactNode {
+function entryContent(
+  entry: QcAgentTimelineEntry,
+  seat: boolean,
+  batch: boolean,
+): ReactNode {
   switch (entry.kind) {
     case "started":
-      if (seat) return <span className="text-ink-dim">Reviewer started</span>;
+      if (seat) {
+        return (
+          <span className="text-ink-dim">
+            {batch ? "Sent for review with the batch" : "Reviewer started"}
+          </span>
+        );
+      }
       return (
         <span className="text-ink-dim">
           Specialist started
@@ -216,10 +226,12 @@ function entryContent(entry: QcAgentTimelineEntry, seat: boolean): ReactNode {
 function Timeline({
   timeline,
   seat,
+  batch,
   emptyLabel,
 }: {
   timeline: QcAgentTimelineEntry[];
   seat: boolean;
+  batch: boolean;
   emptyLabel: string;
 }) {
   if (timeline.length === 0) {
@@ -230,7 +242,7 @@ function Timeline({
       {timeline.map((entry) => (
         <li key={`${entry.kind}-${entry.seq}`} className="prompt-chip-in flex gap-2 text-[11px] leading-relaxed">
           <span className="w-14 shrink-0 text-ink-faint tabular-nums">{entry.ts}</span>
-          <span className="min-w-0 flex-1 break-words">{entryContent(entry, seat)}</span>
+          <span className="min-w-0 flex-1 break-words">{entryContent(entry, seat, batch)}</span>
         </li>
       ))}
     </ol>
@@ -331,8 +343,22 @@ export default function QcAgentActivityModal({
     target?.kind === "seat"
       ? candidate?.seats.find((item) => item.index === target.reviewerIndex)
       : undefined;
+  // On the batch transport every seat is announced up front, but only a
+  // warm lead streams: a seat with no stream frame of its own is waiting on
+  // the batch, not thinking (Codex review on PR #295).
+  const streamedFrames = timeline.some(
+    (entry) => entry.kind !== "started" && entry.kind !== "verdict",
+  );
+  const batchWaiting =
+    isSeat &&
+    runLive &&
+    live.transport === "batch" &&
+    (seat?.status === "active" || seat?.status === "queued" || !seat) &&
+    !streamedFrames;
   const agentLive = isSeat
-    ? runLive && (seat?.status === "active" || seat?.status === "queued" || !seat)
+    ? runLive &&
+      !batchWaiting &&
+      (seat?.status === "active" || seat?.status === "queued" || !seat)
     : runLive && (lens?.status === "running" || lens?.status === "queued" || !lens);
 
   // Follow-bottom while live (the research modal's pattern), keyed on the
@@ -378,7 +404,7 @@ export default function QcAgentActivityModal({
       : lens?.title || target.lensId;
   const raised =
     target.kind === "lens"
-      ? live.candidates.filter((item) => item.lensId === target.lensId)
+      ? live.candidates.filter((item) => item.originLensIds.includes(target.lensId))
       : [];
 
   let pillKey: string;
@@ -435,6 +461,12 @@ export default function QcAgentActivityModal({
               )}
               {!isSeat && <span>{lensModelName}</span>}
             </p>
+            {batchWaiting && (
+              <p className="mt-1.5 text-[11px] text-ink-dim" aria-live="polite">
+                Sent with the batch — this reviewer does not stream; its vote
+                and reasons land when the batch returns.
+              </p>
+            )}
             {agentLive && (currentActivity || (isSeat ? seat?.status === "active" : lens?.status === "running")) && (
               <p
                 className="mt-1.5 flex items-center gap-1.5 text-[11px] text-ink-dim"
@@ -539,7 +571,13 @@ export default function QcAgentActivityModal({
                   {candidate.issue || candidate.title}
                 </p>
                 <p className="mt-1 text-[10px] text-ink-faint">
-                  Raised by {lensTitle(candidate.lensId)}
+                  Raised by{" "}
+                  {(candidate.originLensIds.length
+                    ? candidate.originLensIds
+                    : [candidate.lensId]
+                  )
+                    .map(lensTitle)
+                    .join(" and ")}
                   {candidate.originalSeverity ? ` as ${candidate.originalSeverity}` : ""}
                   {candidate.elementId ? ` · about ${candidate.elementId}` : ""}
                 </p>
@@ -617,6 +655,7 @@ export default function QcAgentActivityModal({
             <Timeline
               timeline={timeline}
               seat={isSeat}
+              batch={live.transport === "batch"}
               emptyLabel={
                 isSeat
                   ? live.transport === "batch"
@@ -641,7 +680,9 @@ export default function QcAgentActivityModal({
           <p className="text-[11px] text-ink-faint">
             {agentLive
               ? "Streaming live — reasoning summaries, searches and sources appear as they happen."
-              : runLive
+              : batchWaiting
+                ? "Waiting on the batch — results arrive together."
+                : runLive
                 ? `This ${isSeat ? "reviewer has voted" : "specialist has finished"}; the run is still going.`
                 : "The full record for this run. Reasoning shown is the model's own summary."}
           </p>

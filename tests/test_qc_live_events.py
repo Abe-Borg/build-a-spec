@@ -293,6 +293,7 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
             "lens_id": "code_compliance",
             # One lens claim behind this candidate — nothing was grouped.
             "origin_count": 1,
+            "origin_lens_ids": ["code_compliance"],
             # The claim the seats try to refute, for the click-through.
             "issue": f"Issue for {title}.",
             "element_id": "pt1.a1.p1",

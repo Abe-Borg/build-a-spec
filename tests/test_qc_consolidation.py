@@ -1128,6 +1128,16 @@ def test_live_counts_reconcile_with_the_final_report():
     roster = next(e for e in events if e["type"] == "verification_started")
     assert roster["total_candidates"] == 1
     assert roster["candidates"][0]["origin_count"] == 2
+    # Both lenses behind the merged panel, canonical lens first — the Review
+    # Room's click-through lists it under each (Codex review on PR #295).
+    assert roster["candidates"][0]["origin_lens_ids"] == [
+        roster["candidates"][0]["lens_id"],
+        *(
+            lens_id
+            for lens_id in ("code_compliance", "completeness")
+            if lens_id != roster["candidates"][0]["lens_id"]
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------

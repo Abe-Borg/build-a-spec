@@ -1701,6 +1701,9 @@ export interface QcCandidateRosterEntry {
    *  consolidation gave several lenses' claims one shared panel. Absent on
    *  a replayed pre-5.2 log, where every candidate was one claim. */
   origin_count?: number;
+  /** Every lens behind this candidate, `lens_id` first (consolidation can
+   *  merge several lenses' claims). Absent on a replayed older log. */
+  origin_lens_ids?: string[];
   /** The claim the panel tries to refute, as the seats read it. Absent on
    *  a replayed log from before the Review Room's click-through. */
   issue?: string;

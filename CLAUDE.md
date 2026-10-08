@@ -1347,7 +1347,8 @@ only ever say "Thinking through the specification…".
   Answer text and output-tool payloads are still never relayed. Grouping
   calls relay none (nothing folds them).
 - **Context frames.** `qc_started.lenses[]` gains `brief` (verbatim) and
-  `web`; roster rows gain `issue` and `element_id`; `verifier_complete` for a
+  `web`; roster rows gain `issue`, `element_id` and `origin_lens_ids` (every
+  lens behind a consolidated candidate, canonical first); `verifier_complete` for a
   completed seat gains `note` and `ops_note` (already in the audit report).
 - **Contract amendment.** The 2026-07 Review Room contract kept "submitted
   notes, thinking/token text" off the live channel. Provider summaries and

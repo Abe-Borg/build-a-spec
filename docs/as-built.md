@@ -20891,8 +20891,13 @@ before. The diagnostics snapshot itself only counts QC events.
 
 - `qc_started.lenses[]` adds `brief` (the `QCLens.brief`, verbatim) and
   `web`.
-- `verification_started.candidates[]` adds `issue` and `element_id`: the
-  claim the seats are handed.
+- `verification_started.candidates[]` adds `issue` and `element_id` (the
+  claim the seats are handed) and `origin_lens_ids`: every lens behind the
+  candidate, its canonical `lens_id` first, from the consolidation record's
+  origins. Consolidation can give several lenses' claims one panel while
+  the roster's `lens_id` names only the first; without the list a merged
+  candidate was missing from every other lens's click-through and credited
+  to one lens (Codex review on PR #295).
 - `verifier_complete` for a completed seat adds `note` and `ops_note`, the
   seat's submitted one-line reasons — the same text the audit report already
   records per verdict.
@@ -20931,7 +20936,10 @@ findings-payload check (`"private" not in str(events)`).
   view (the claim and its element, how the panel decides — the v4 rule in
   words, the evidence gate when the candidate is critical/high, a batch note
   when the run batched — reviewer tabs, the selected reviewer's vote with
-  its reasons and fix decision, its feed). Follow-bottom while live, keyed on
+  its reasons and fix decision, its feed). On the batch transport every seat
+  gets `verifier_started` up front but only a warm lead streams, so a seat
+  with no stream frame of its own reads "Sent with the batch" and waiting,
+  never "Thinking…" or "Streaming live" (Codex review on PR #295). Follow-bottom while live, keyed on
   the feed's growth since a summary grows in place. `useDialogFocus`; the
   drawer toggle is the restore fallback because the Review Room unmounts
   when the run ends. Summaries render as React text; only `**bold**` spans

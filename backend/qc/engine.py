@@ -9563,6 +9563,21 @@ def _run_final_qc(
         index: f"candidate-{index + 1}"
         for index in range(len(raw_findings))
     }
+    # Every lens behind each candidate, canonical lens first: consolidation
+    # can give several lenses' claims one panel, and the click-through lists
+    # it under each of them.
+    origin_lens = {
+        origin.origin_id: origin.lens_id for origin in consolidation.origins
+    }
+
+    def origin_lens_ids(index: int) -> list[str]:
+        lens_ids = [candidates[index].lens.lens_id]
+        for origin_id in candidates[index].origin_ids:
+            lens_id = origin_lens.get(origin_id, "")
+            if lens_id and lens_id not in lens_ids:
+                lens_ids.append(lens_id)
+        return lens_ids
+
     candidate_roster = [
         {
             "candidate_id": candidate_ids[index],
@@ -9570,6 +9585,7 @@ def _run_final_qc(
             "original_severity": finding["severity"],
             "lens_id": lens.lens_id,
             "origin_count": len(candidates[index].origin_ids),
+            "origin_lens_ids": origin_lens_ids(index),
             # The claim the panel tries to refute, as the seats read it —
             # what the Review Room's click-through shows above the votes.
             "issue": str(finding.get("issue") or ""),

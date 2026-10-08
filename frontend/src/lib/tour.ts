@@ -441,7 +441,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Compare any two versions",
         body:
-          "Compare mode sets any prior version or the normalized import baseline against the current one, with word-level insertions and deletions, statistics, and provenance-status changes. The same semantic diff powers the Word redline.",
+          "Compare mode sets any prior version or the normalized import baseline against the current one, with word-level insertions and deletions and statistics. The same semantic diff powers the Word redline.",
       },
     ],
   },

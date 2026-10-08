@@ -20809,3 +20809,29 @@ Both probes were restored. Ruff and the targeted resource-pressure,
 import-responsiveness, release-note, update and documentation tests passed.
 No paid model call, interactive Windows installation or Word visual check
 was run.
+
+## Compare stops listing status-only changes (2026-10-08)
+
+Owner request (Abraham): the status-changes strip under END OF SECTION in
+Compare mode ("STATUS CHANGES (382)", one chip per provision such as
+`1.1.A imported → confirmed`) is not something the user needs to see. After
+confirming an imported master it ran to hundreds of chips below the end of
+the section.
+
+- `SpecDocument.DiffDocument` no longer renders `diff.status_changes`; the
+  diff ends at END OF SECTION, as the exported specification does. Its
+  `statusLabels` map went with it.
+- The Compare bar's `· N status` count went too, since it counted the list
+  that is gone. The bar reads `+N added −M removed K edited`.
+- The Compare tour step no longer promises provenance-status changes. Its
+  copy changed but no step was added or removed, so `TOUR_VERSION` stays 9.
+- Unchanged: `GET /api/doc/diff` still returns `status_changes` (the payload
+  shape in CLAUDE.md and `types.SectionDiff` are as before), the backend
+  diff, both redline exports, the provision badges and ✓ Confirm in the
+  live document, and the review report's schedules.
+
+Ruff, `npm test` and `npm run build` pass. No paid API call was made.
+
+**Release-note draft.** "Compare no longer lists every provision whose
+status changed (for example, imported → confirmed) below the end of the
+section. It shows what changed in the words."

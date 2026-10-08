@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.25.1** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.26.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -219,7 +219,7 @@ on it.
 ## Current Status — Next section → no longer leaves the section behind outside the project
 
 (2026-10-08. docs/as-built.md's "Next section → joins the project before it
-saves" is the record; in the next release.)
+saves" is the record; shipped in v1.26.0.)
 
 Pressing **Next section →** in a section that had never exported a project
 brief, or started from one, split the project in two. That section had no
@@ -257,7 +257,7 @@ No paid API call was made.
 ## Current Status — a new section starts from the whole project, in its folder
 
 (2026-10-08. docs/as-built.md's "A new section starts from the whole project,
-in its folder" is the record; in the next release.)
+in its folder" is the record; shipped in v1.26.0.)
 
 The owner asked how to add another section to a project later on. Working
 through the answer turned up four gaps:
@@ -316,7 +316,7 @@ No paid API call was made.
 ## Current Status — click a Final QC card to see what it is doing
 
 (2026-10-08. docs/as-built.md's "The Review Room shows what each lens and
-reviewer is doing" is the record; in the next release.)
+reviewer is doing" is the record; shipped in v1.26.0.)
 
 The owner asked to click the cards in Final QC's Review Room and see what
 each agent is up to. Until now a card could only say "Thinking through the
@@ -367,10 +367,11 @@ thinking with empty text unless a request asks for a summary of it.
   PowerShell: `$env:BUILD_A_SPEC_THINKING_DISPLAY = "omitted"`; in Command
   Prompt: `set BUILD_A_SPEC_THINKING_DISPLAY=omitted`.
 
-Final QC results made before this update stay current: what a reviewer
-decides and what the report records are unchanged. No paid API call was
-made; what the summaries look like on a real Final QC run is unseen until
-the next one.
+The live display does not change the review's inputs or decisions. The
+v1.26.0 version bump makes earlier Final QC results read out of date; run
+Final QC again before applying their fixes. No paid API call was made;
+what the summaries look like on a real Final QC run is unseen until the
+next one.
 
 ## Current Status — Final QC's verifier seats run on Sonnet 5.5; condensing and the fact harvest think harder
 

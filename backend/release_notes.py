@@ -89,6 +89,114 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.26.0",
+        date="2026-10-08",
+        headline="Sections stay with their project, and research keeps going",
+        summary=(
+            "New sections start with the whole project's brief and stay in its "
+            "folder. Research no longer hands in early after meeting a "
+            "per-request web limit, and Final QC's clickable Review Room "
+            "shows each specialist's work. Research rounds may take longer "
+            "and cost more than in 1.23.0–1.25.1."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Keeping sections together",
+                items=(
+                    ReleaseItem(
+                        title="Next section keeps the section you leave in the project",
+                        body=(
+                            "A section that never exported or started from a "
+                            "project brief now joins the project before Next "
+                            "section offers to save it. Save records that link "
+                            "in its .baspec; the prompt explains that starting "
+                            "without saving leaves an earlier copy outside "
+                            "the project."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A new section starts with the whole project",
+                        body=(
+                            "Starting from a project brief opens the Project "
+                            "panel and puts the first Save in its folder. Next "
+                            "section carries work other sections saved to that "
+                            "brief, refuses section numbers it already lists, "
+                            "and shows merge warnings; starting from an unlinked "
+                            "section file warns that the projects stay separate."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Research",
+                items=(
+                    ReleaseItem(
+                        title="Research no longer mistakes a web limit for a finished job",
+                        body=(
+                            "Research areas can continue through their declared "
+                            "budget instead of handing in after about eight "
+                            "searches. Rounds may take longer and cost more "
+                            "than in 1.23.0–1.25.1; near the context limit "
+                            "they read shorter pages while keeping their "
+                            "full page-read allowance."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Reviewing and working with Word files",
+                items=(
+                    ReleaseItem(
+                        title="Open a Final QC card to follow its work",
+                        body=(
+                            "Click a Review Room specialist or reviewer to "
+                            "see its brief or claim, reasoning summaries, "
+                            "searches and sources, and its vote with reasons. "
+                            "Batched reviewers show their votes when the batch "
+                            "returns, without live reasoning."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Ask model and Resolve in chat quote the whole text",
+                        body=(
+                            "The review queue's Ask model and Final QC's "
+                            "Resolve in chat carry the whole provision and "
+                            "supporting details into the chat, including long "
+                            "proposed edits."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Compare ends with the specification",
+                        body=(
+                            "Compare shows added, removed and edited words "
+                            "without listing hundreds of status-only changes "
+                            "below END OF SECTION."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Help explains how to work with Word files",
+                        body=(
+                            "Help → How to use includes a Working with Word "
+                            "files guide: clean tracked changes and comments "
+                            "before the first import, reopen the .baspec "
+                            "instead of importing an export, and bring a "
+                            "reviewer's decisions back into your section."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Run saved Final QC reviews again after updating",
+                        body=(
+                            "Final QC results made with an earlier app version "
+                            "read out of date after this update. Older reports "
+                            "still open; run Final QC again before applying "
+                            "their fixes."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.25.1",
         date="2026-10-07",
         headline="Recent diagnostics runs stay in order",

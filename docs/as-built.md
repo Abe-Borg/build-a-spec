@@ -21598,3 +21598,33 @@ mistake for the end of its budget."
 clip switches "to one fetch per request"; "Research's per-request web
 allowance sits above the provider's pause" says "past it the one-fetch tool
 can be met". Both are superseded by this note.
+
+## Release 1.26.0 — 2026-10-08
+
+Release preparation includes all merged work after the published `v1.25.1`
+through `2bb436d` (PRs #293–#300): project-folder binding and joined briefs
+for new sections, linking the outgoing section before Next section saves
+it, clickable Final QC specialists and reviewer panels, complete chat
+prefills, removal of status-only Compare rows, the Word-file help guide,
+and research's corrected web allowance and shorter-page context clip.
+
+The backend version, frontend package and lockfile, and README headline
+advance together to `1.26.0`. Bundled notes feed the What's-new modal,
+update manifest and release page through the existing renderer. They name
+research's expected increase in time and cost over 1.23.0–1.25.1 and tell
+users to re-run earlier Final QC results before applying fixes. README's
+three newly shipped status entries and its review-freshness wording now
+match the release.
+
+Validation: version/tag consistency, Ruff and release-note rendering since
+`v1.25.1` passed; release-note and documentation tests passed (41); frontend
+tests passed (564) and the production build passed. The local Node 24 test
+runner required `--test-isolation=none` to execute the individual tests in
+this sandbox. The initial local full backend run was stopped to follow the
+owner's CI preference; complete Python 3.11/3.12 validation and Windows
+build checks run in the existing workflows.
+
+The tag-triggered Windows workflow builds and smoke-tests the frozen app,
+compiles the installer, and publishes `BuildASpecSetup.exe` with its SHA-256
+`latest.json`. No paid API call or interactive Windows installation was
+performed during preparation.

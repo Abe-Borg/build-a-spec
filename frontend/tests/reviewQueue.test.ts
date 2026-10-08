@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { buildQueue, siblingRefs } from "../src/lib/reviewQueue.ts";
+import { askModelPrefill, buildQueue, siblingRefs } from "../src/lib/reviewQueue.ts";
 import type { DocParagraph, SpecDoc } from "../src/types";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -70,4 +70,18 @@ test("the queue carries those refs, imported first, then assumed", () => {
     buildQueue(fixture.doc, "all").map((entry) => [entry.ref, entry.elementId]),
     expected,
   );
+});
+
+test("Ask model quotes the whole provision, however long", () => {
+  // It used to clip at 80 characters with an ellipsis, so a long provision
+  // reached the chat cut short.
+  const text =
+    "Provide a hydraulically calculated wet-pipe sprinkler system for the " +
+    "data hall, designed to the density and remote area stated in Article " +
+    "1.4, with the system demand plotted against the flow test adjusted " +
+    "for a 10 psi safety margin.";
+  assert.ok(text.length > 200);
+  const prefill = askModelPrefill({ ref: "2.3.B", text });
+  assert.equal(prefill, `Regarding 2.3.B "${text}": `);
+  assert.ok(!prefill.includes("…"));
 });

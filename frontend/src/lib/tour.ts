@@ -567,7 +567,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Take the specification to Word",
         body:
-          "Export clean gives you the specification as a Word file, ending at END OF SECTION. For an imported master, Export Word - Tracked Changes ON returns your own file, formatting kept, with every edit since import as a tracked change, and the exact original stays downloadable. What still needs your eye — assumptions, unreviewed imports, the Final QC summary — is a separate file: Download review report. Export project brief hands the profile, research and facts to the project's next section. Help → How to use explains every export in full.",
+          "Export clean gives you the specification as a Word file, ending at END OF SECTION. For an imported master, Export Word - Tracked Changes ON returns your own file, formatting kept, with every edit since import as a tracked change; Open in Word opens it, and Redline on your original shows the same changes on a copy of your upload. A redline against a saved version comes in Build-a-Spec's own styles. Download review report holds the assumptions, unreviewed imports and Final QC summary. Export project brief carries the project to its next section. Help → How to use explains each one in full.",
         optionalReason: "The tour points at the real menu but never downloads anything.",
       },
       {

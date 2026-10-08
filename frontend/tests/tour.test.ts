@@ -587,9 +587,19 @@ test("no step carries a glossary, and no step body is a wall", () => {
   for (const step of steps) assert.ok(!("details" in step), `${step.id} carries a glossary`);
   const exported = steps.find((step) => step.id === "export");
   assert.ok(exported);
-  assert.match(exported.body, /Download review report/);
-  assert.match(exported.body, /Export project brief/);
-  assert.match(exported.body, /Help → How to use/);
+  // Short, but it still names every export its capabilities claim to teach.
+  for (const label of [
+    /Export clean/,
+    /Export Word - Tracked Changes ON/,
+    /Open in Word/,
+    /Redline on your original/,
+    /redline against a saved version/,
+    /Download review report/,
+    /Export project brief/,
+    /Help → How to use/,
+  ]) {
+    assert.match(exported.body, label);
+  }
   const imported = steps.find((step) => step.id === "source-permissions");
   assert.ok(imported);
   // The legacy permission rules belong to Help, not to the import walkthrough.

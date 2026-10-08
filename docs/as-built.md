@@ -21639,14 +21639,18 @@ tour card never runs off the window") kept its buttons in view, but the card
 still filled the window and scrolled. Owner direction: shorten it; the user
 needs only the important bits there.
 
-- **The export step** is now "Take the specification to Word" (539
+- **The export step** is now "Take the specification to Word" (594
   characters): Export clean ends at END OF SECTION; for an imported master,
   Export Word - Tracked Changes ON returns your own file with every edit
-  since import as a tracked change, and the exact original stays
-  downloadable; Download review report holds assumptions, unreviewed imports
-  and the Final QC summary; Export project brief carries the profile,
-  research and facts to the next section; Help → How to use explains every
-  export in full. Its six capabilities are unchanged.
+  since import as a tracked change, Open in Word opens it, and Redline on
+  your original shows the same changes on a copy of the upload; a redline
+  against a saved version comes in Build-a-Spec's own styles; Download
+  review report holds assumptions, unreviewed imports and the Final QC
+  summary; Export project brief carries the project to its next section;
+  Help → How to use explains each one in full. Its six capabilities are
+  unchanged, and the body names an export for each (Codex review on PR #301:
+  the first cut dropped Open in Word and both redlines while the step still
+  claimed them).
 - **No glossary in the tour.** `TourStep.details`, the tour's import of
   `sourceOutputGuidance.ts`, and the overlay's `<dl>` rendering are gone.
   Help (How to use → "Know what each source option means") and the trust
@@ -21667,14 +21671,17 @@ needs only the important bits there.
 Tests, in `frontend/tests/tour.test.ts`: "no step carries a glossary, and no
 step body is a wall" replaces "the export glossary is shown once": no step
 has `details`, the tour does not import the glossary, the overlay does not
-render one, the export step names Download review report, Export project
-brief and Help → How to use, the import step keeps its pinned wording, and
+render one, the export step names every export its capabilities claim
+(Export clean, Export Word - Tracked Changes ON, Open in Word, Redline on
+your original, the saved-version redline, Download review report, Export
+project brief) and Help → How to use, the import step keeps its pinned
+wording, and
 every step body is at most 700 characters (was 1,300). The scroller test's
 tail pin now matches the body ternary's close instead of the removed `</dl>`.
 Restoring the old `tour.ts` failed the new test; restoring the old overlay
 failed both; both were put back. `npm test` (564) and `npm run build`
 passed. The export, project-facts and project-panel cards were rendered in
-headless Chromium against the built CSS: the export card is about 420px
+headless Chromium against the built CSS: the export card is about 440px
 tall with no scrolling. No backend file changed and no paid API call was
 made.
 

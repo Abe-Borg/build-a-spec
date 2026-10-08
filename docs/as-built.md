@@ -21308,3 +21308,170 @@ leaving outside the project. A section that had never exported or started
 from a project brief used to be saved without the project's id, so it and
 the next section could never be joined again. It now joins the project before
 the save prompt, and the prompt says so."
+
+## Research's per-request web allowance sits above the provider's pause — implemented notes (2026-10-08)
+
+**Owner report (Abraham).** Research "has been completing a little too fast
+lately", where it "used to take a long ass time". Two questions followed:
+does pressing Research several times in one project use up a shared budget,
+and is `medium` research effort inadequate.
+
+**What was wrong.** "Research web tools keep their bytes (2026-10-05)",
+shipped in v1.23.0, pinned the web tools' `max_uses` to a fixed per-request
+allowance — `RESEARCH_SEARCHES_PER_REQUEST = 8`, `RESEARCH_FETCHES_PER_REQUEST
+= 4`, `min` with the declared budget — so the tool bytes at the head of every
+cached prefix never changed within a conversation. Its analysis assumed the
+provider paused a turn "about every 3 searches", considered only overshoot
+(the crossing request running past a ceiling), and never asked what the
+model does when it meets the allowance. Anthropic's server-tools reference
+(read 2026-10-08): the server-side tool loop pauses the turn
+(`stop_reason: pause_turn`) at a default limit of ten iterations, and a call
+past `max_uses` is answered with a `web_search_tool_result` error
+`max_uses_exceeded`, an ordinary tool result the model reads. So an area
+could run its eight searches before the tenth iteration paused it; the ninth
+came back refused; the model — told nothing about the allowance renewing on
+the next request — read the refusal as a spent budget, did what its protocol
+says to do at the end, and called `submit_requirements_research`. The
+response ended `end_turn` with a payload, `_run_dimension` accepted it as a
+completed area, and the cumulative ceilings (2× searches, declared fetches,
+16 continuations), the reminders and the final submission never ran. By
+construction an area researched for one or two requests — about eight
+searches and at most four page reads — against the 16–40 searches and 8–12
+fetches its module declares. `max_uses_exceeded` appeared once in the
+backend, in a comment; no fake ever handed the model one; the UI kept
+announcing the declared budget ("N searches of 40"). Before v1.23.0,
+`max_uses` was the whole declared budget, so the model never saw a refusal
+until it had genuinely spent it. `RESEARCH_EFFORT` moving to `medium` in the
+same release compounds it only mildly (lower effort means fewer tool calls)
+and is not the cause.
+
+**Shared budgets: none.** Every ceiling (`searches_used`, `fetches_used`,
+`len(all_responses)`, `reminders_sent`, `submission_resends`, the retry
+attempts) is a local of one `_run_dimension` call — one area, one round.
+`max_uses` is per request and renews on each. The runner builds each round
+from the module's declared dimensions and passes nothing cumulative; the
+profile's `rounds[]` are a record, not an allowance; the pressure ledger is
+telemetry; the continuation-tail latch affects caching only and clears on
+restart; the Research button is gated by profile completeness and a running
+round only; the `gaps` scope refuses only when nothing is left to retry, and
+`all` always runs everything. The one deliberate cross-round influence is
+the `<already_established>` brief (per area, capped at 20k tokens, trimmed
+never refused), which tells a later round not to re-derive what earlier
+rounds settled — so a fourth round in one project legitimately searches less
+than the first. The chat's own 8/4 per-turn web tools are a separate tool
+set.
+
+**The change** (owner's numbers: "make the per request caps 12 each").
+
+- `SERVER_TOOL_ITERATIONS_PER_REQUEST = 10`: the provider's documented
+  default, a module constant, not a knob. Two readers.
+- `RESEARCH_SEARCHES_PER_REQUEST = 12`, `RESEARCH_FETCHES_PER_REQUEST = 12`:
+  both above the pause, so a request ends by pausing and the resumed request
+  renews the allowance unseen; the research runs until a cumulative ceiling
+  or the model's own judgment ends it.
+- `_per_request_allowance(dimension)` returns the constants for every area:
+  the `min` with the declared budget is gone. A smaller `max_uses` is one the
+  model can meet; the declared budgets remain the ceilings, enforced between
+  requests, so an area declaring 8 fetches is ended the request after it
+  crosses 8. Identical bytes for all four areas keep the staggered launch's
+  single shared prefix (with `min`, the shipped modules' 12/10/8/8 fetch
+  budgets would have split the four areas into three cache lineages). The
+  function keeps its `dimension` parameter as the one seam a caller that
+  must give an area different bytes can use; the warm-launch test uses it.
+- `_web_tool_reserve_tokens(web_tools)`: the context one request may add,
+  bounded by the pause — at most ten tool results, fetches first (every
+  fetch the allowance permits up to ten, at `WEB_FETCH_MAX_CONTENT_TOKENS`,
+  then searches in what remains). `_reserve_fits` reads it. Reserving for
+  the whole allowance (12 × 50k + 12 × 5k = 660k) would have tripped the
+  one-way clip past about 160k of input and handed the model a one-fetch
+  tool it can meet.
+- The app's overshoot bound is the allowance less one (11 of either kind);
+  the pause bounds a request to ten calls in practice, so nine.
+- Docstrings and comments: the module docstring, the continuation cap's
+  sizing (the pause, not "~3 searches per pause"), the allowance block, the
+  `_run_dimension` docstring, the lineage-key docstring.
+
+**Numbers.** Reserve per request with the full tools: 10 × 50k = 500k (was
+8 × 5k + 4 × 50k = 240k). At the default output ceiling (128k) and margin
+(50k) against the 1M window, the clip to one fetch per request now trips
+past about 322k tokens of input (was about 582k); the clip-to-submission
+point is about 727k (was about 732k). Past the clip the one-fetch tool can be
+met, and an area that meets it winds down there — a documented trade. If it
+bites, the follow-up is a content-cap clip (shrink the fetch tool's
+`max_content_tokens`, not its `max_uses`), which the model cannot meet.
+
+**Unchanged.** Every ceiling, the reminders and resend, the final
+submission's per-model shape, grounding, the merge, the retry policy, the
+staggered launch, the SSE protocol, readiness, the QC manifest,
+`RESEARCH_EFFORT` (`medium`: the owner's cost choice, and not the cause; the
+effort question is answered in chat — Anthropic's guidance starts multistep
+tool use at `medium` on Sonnet 5.5, and the depth difference is unmeasured).
+The tool bytes changed once, so each area's cache lineage is new once after
+upgrade; QC's tools are untouched.
+
+**Copy.** The dossier's research card (`TrustDeepDiveModal`) and the two
+README passages quote 12 and 12, the overshoot of 11 (nine in practice), and
+say why the allowance sits above the pause. The chat card's "8 web searches
+and 4 fetches per round" is the interview's own per-turn budget
+(`CHAT_MAX_SEARCHES`/`CHAT_MAX_FETCHES`) and is unchanged.
+
+**Tests.** `tests/test_research_budget.py`:
+`test_every_area_declares_the_same_allowance_above_the_providers_pause`
+(both constants at or above the pause; every area of every shipped module
+gets the same allowance) replaces the test that required each declared
+budget to cover the allowance;
+`test_an_area_declaring_less_than_the_allowance_keeps_it_and_is_ended_by_its_ceiling`
+(a 3-search, 2-fetch area still sends 12/12 and is ended by its fetch
+ceiling the request after it crosses it);
+`test_the_context_reserve_counts_no_more_tool_results_than_the_pause_allows`
+(the reserve's three shapes, the clip idle past 300k, the whole-allowance
+reserve below 200k). The conversation tests that spent a whole fetch
+allowance in one request now spend half (a whole one is the fetch ceiling
+itself), the ceiling test spends ten searches per pause (80 is not a
+multiple of 12), and the near-window test asserts the full reserve does not
+fit and the clipped one does through the engine's own helper.
+`tests/test_research_warm_launch.py`: `_give_own_allowance` monkeypatches
+`_per_request_allowance` for one area (the declared budget no longer gives
+an area its own bytes).
+
+**Reversion evidence**, each run against the three research test files
+(127 tests) and restored:
+
+| Reversion | Failed |
+|---|---|
+| Allowance back to 8 and 4 | 3 |
+| Fetch allowance below the pause (12 and 9) | 3 |
+| `min` with the declared budget restored | 11 |
+| Reserve for the whole allowance | 1 |
+| Reserve counting searches before fetches | 5 |
+
+`frontend/tests/verificationCopy.test.ts` reads the constants from the
+engine file and fails when the dossier's or README's numbers disagree.
+
+**Validation.** Ruff clean. The three research test files: 127 passed.
+`npm test`: 562 passed. `npm run build` passed. The full backend suite runs
+in CI. No paid API call was made; how much depth the change restores is
+unmeasured until the owner runs a round and compares per-area billed
+searches (the activity modal, the completed card, or
+`tools/research_cost_profile.py` on saved projects).
+
+**Release-note draft for the next release** (the version stays `1.25.1`):
+"Research areas no longer hand in early. Each request of a research area may
+now run up to 12 searches and 12 page reads — more than the provider lets
+one request make before pausing it — so an area never runs into its
+per-request limit and keeps researching until its declared budget or its own
+judgment ends it. From v1.23.0 to v1.25.1 the limit was 8 searches and 4
+page reads; an area could use them all before the pause, and when it did it
+read the refused next search as a spent budget and handed in what it had,
+about 8 searches against the 16 to 40 each area is allowed. Expect research
+rounds to take longer and cost more again, as they did before v1.23.0, and
+to find more."
+
+**Errata.** "Research web tools keep their bytes (2026-10-05)", here and in
+CLAUDE.md, says the numbers 8 and 4 "sit above what one research request was
+sized to use: about 3 searches per pause". The provider pauses at ten
+iterations, not three searches, and the note weighed only overshoot. Its
+"a dimension that declares less gets its own budget instead" and "the
+context reserve each request needs (8 × 5,000 + 4 × 50,000 tokens) leaves
+the window clip idle until … roughly 580k tokens" are superseded by this
+note.

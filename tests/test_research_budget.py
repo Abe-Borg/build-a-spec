@@ -1,6 +1,7 @@
 """Guard exhaustion salvages grounded research without buying another loop."""
 from __future__ import annotations
 
+import dataclasses
 import json
 from types import SimpleNamespace
 
@@ -100,8 +101,12 @@ def test_each_guard_requests_one_submission_and_retains_grounding_and_usage(guar
 # conversation — opening, continuations, reminders, a resumed request, and a
 # restart's new opening — sends the same tool bytes: a fixed per-request
 # allowance, with the declared budgets enforced between requests by the
-# cumulative ceilings. The one exception is the context-window clip, which
-# switches once, near the window, and never back.
+# cumulative ceilings. The allowance sits above the provider's per-request
+# pause (SERVER_TOOL_ITERATIONS_PER_REQUEST), so the model never meets
+# ``max_uses`` — which it reads as a spent budget and answers with an early
+# submission, as every area did at 8 searches and 4 fetches (v1.23.0 to
+# v1.25.1). The one exception is the context-window clip, which switches
+# once, near the window, and never back.
 # ---------------------------------------------------------------------------
 
 _SEARCHES = engine.RESEARCH_SEARCHES_PER_REQUEST
@@ -142,28 +147,92 @@ def _reset():
 
 
 @pytest.mark.parametrize("module", list(AVAILABLE_MODULES.values()), ids=lambda m: m.module_id)
-def test_every_declared_budget_covers_the_per_request_allowance(module):
-    # So every area of a shipped module sends the same tool bytes, and no
-    # area's single request may spend more than the area declared.
-    assert 1 < _FETCHES < _SEARCHES
-    for dimension in module.research_dimensions:
-        searches = dimension.max_searches or engine.RESEARCH_DEFAULT_MAX_SEARCHES
-        fetches = dimension.max_fetches or engine.RESEARCH_DEFAULT_MAX_FETCHES
-        assert searches >= _SEARCHES and fetches >= _FETCHES
+def test_every_area_declares_the_same_allowance_above_the_providers_pause(module):
+    # The allowance is a transport detail, never a budget: every area of a
+    # shipped module sends the same tool bytes whatever it declares (so the
+    # staggered launch shares one cached prefix), and both numbers sit above
+    # the provider's per-request pause, so the model never meets max_uses.
+    pause = engine.SERVER_TOOL_ITERATIONS_PER_REQUEST
+    assert _SEARCHES >= pause and _FETCHES >= pause
+    allowances = {engine._per_request_allowance(d) for d in module.research_dimensions}
+    assert allowances == {(_SEARCHES, _FETCHES)}
+
+
+def test_an_area_declaring_less_than_the_allowance_keeps_it_and_is_ended_by_its_ceiling():
+    """A budget below the allowance never shrinks the tools (a smaller
+    ``max_uses`` is one the model can meet, and it quits when it does); the
+    cumulative ceiling ends the conversation between requests instead, so a
+    small budget costs at most one request's calls past itself."""
+    small = dataclasses.replace(_DIMENSION, max_searches=3, max_fetches=2)
+    assert engine._per_request_allowance(small) == (_SEARCHES, _FETCHES)
+    client = _ToolBytesClient([
+        research_response(
+            items=None, searched_urls=[_URL], extra_blocks=fetch_blocks(_URL),
+            searches=4, fetches=2, stop_reason="pause_turn",
+        ),
+        _final(),
+    ])
+    result = engine._run_dimension(
+        client, module=HYPERSCALE_FIRE, profile=PROFILE, dimension=small,
+        model="claude-sonnet-5", max_tokens=4096,
+    )
+
+    assert result.status.status == "completed", result.status.error
+    assert result.items[0].grounded
+    opening, submission = client.requests
+    assert _web_allowance(opening) == (_SEARCHES, _FETCHES)
+    assert [tool["name"] for tool in submission["tools"]] == [RESEARCH_TOOL_NAME]
+    assert "web_fetch budget ceiling reached" in str(submission["messages"][-1])
+    assert result.status.web_fetch_requests == 2
+
+
+def test_the_context_reserve_counts_no_more_tool_results_than_the_pause_allows():
+    """Reserving for the whole allowance (twelve fetches at the content cap)
+    would clip every conversation to one fetch per request past ~160k tokens
+    of input — and the clipped tool is one the model can meet. The reserve
+    counts the provider's pause instead: at most ten results, fetches first."""
+    pause = engine.SERVER_TOOL_ITERATIONS_PER_REQUEST
+
+    def tools(searches, fetches):
+        return engine._research_tools(
+            searches=searches, fetches=fetches, profile=PROFILE, model="claude-sonnet-5",
+        )
+
+    assert engine._web_tool_reserve_tokens(tools(_SEARCHES, _FETCHES)) == (
+        pause * engine.WEB_FETCH_MAX_CONTENT_TOKENS
+    )
+    assert engine._web_tool_reserve_tokens(tools(_SEARCHES, 1)) == (
+        engine.WEB_FETCH_MAX_CONTENT_TOKENS
+        + (pause - 1) * engine._SEARCH_RESULT_RESERVE_TOKENS
+    )
+    assert engine._web_tool_reserve_tokens(tools(2, 1)) == (
+        engine.WEB_FETCH_MAX_CONTENT_TOKENS + 2 * engine._SEARCH_RESULT_RESERVE_TOKENS
+    )
+    # The full allowance leaves the clip idle until well past 300k of input
+    # at the default output ceiling; the old reserve for 12 fetches would
+    # have tripped it below 200k.
+    window = settings.RESEARCH_CONTEXT_WINDOW
+    full = engine._web_tool_reserve_tokens(tools(_SEARCHES, _FETCHES))
+    idle_until = window - settings.RESEARCH_MAX_TOKENS - engine._CONTEXT_MARGIN_TOKENS - full
+    assert idle_until > 300_000
+    assert window - settings.RESEARCH_MAX_TOKENS - engine._CONTEXT_MARGIN_TOKENS - (
+        _FETCHES * engine.WEB_FETCH_MAX_CONTENT_TOKENS
+        + _SEARCHES * engine._SEARCH_RESULT_RESERVE_TOKENS
+    ) < 200_000
 
 
 @pytest.mark.parametrize("model", ["claude-sonnet-5", settings.RESEARCH_MODEL])
 def test_every_request_of_a_conversation_sends_the_opening_tool_bytes(model):
     """Searches and fetches spent, two pauses and a reminder: every request
     carries the opening request's tool bytes (the old engine shrank the
-    fetch allowance 12 → 8 → 6 here, rewriting the cached prefix each time),
+    fetch allowance 12 → 6 → 4 here, rewriting the cached prefix each time),
     and spending the allowance edits nothing, so no request carries a
     thinking binding. The cached prefix behind the tools is unchanged too,
     and the continuations carry the tail that can read the rest."""
     client = _ToolBytesClient([
         research_response(
             items=None, searched_urls=[_URL], extra_blocks=fetch_blocks(_URL),
-            searches=_SEARCHES, fetches=_FETCHES, stop_reason="pause_turn",
+            searches=_SEARCHES, fetches=_FETCHES // 2, stop_reason="pause_turn",
         ),
         research_response(
             items=None, extra_blocks=fetch_blocks(_URL + "/2"),
@@ -199,7 +268,7 @@ def test_a_resume_and_a_restart_send_the_opening_tool_bytes(monkeypatch):
     client = _ToolBytesClient([
         research_response(
             items=None, searched_urls=[_URL], extra_blocks=fetch_blocks(_URL),
-            searches=_SEARCHES, fetches=_FETCHES, stop_reason="pause_turn",
+            searches=_SEARCHES, fetches=_FETCHES // 2, stop_reason="pause_turn",
         ),
         _reset(), _reset(), _final(),
     ])
@@ -217,12 +286,14 @@ def test_a_resume_and_a_restart_send_the_opening_tool_bytes(monkeypatch):
 
 
 @pytest.mark.parametrize(("guard", "spent", "reason"), [
-    ("search", {"searches": _SEARCHES}, "web_search budget ceiling reached"),
-    ("fetch", {"fetches": _FETCHES}, "web_fetch budget ceiling reached"),
+    ("search", {"searches": engine.SERVER_TOOL_ITERATIONS_PER_REQUEST},
+     "web_search budget ceiling reached"),
+    ("fetch", {"fetches": _FETCHES // 2}, "web_fetch budget ceiling reached"),
 ])
 def test_the_cumulative_ceilings_still_end_the_conversation(guard, spent, reason):
-    """Each pause spends one request's whole allowance; the tools never
-    shrink, and the request after the ceiling is the submission."""
+    """Each pause spends what the provider's pause lets one request spend;
+    the tools never shrink, and the request after the ceiling is the
+    submission."""
     ceiling = 2 * _DIMENSION.max_searches if guard == "search" else _DIMENSION.max_fetches
     per_pause = next(iter(spent.values()))
     pauses = ceiling // per_pause
@@ -299,12 +370,14 @@ def test_near_the_window_the_conversation_switches_once_to_one_fetch(model):
     assert clipped["tools"][2] == opening["tools"][2]
     assert not _carries_binding(opening)
     assert _carries_binding(clipped) and _carries_binding(later)
-    assert (
-        800_000 + 2 * _SERVER_TOOL_OVERHEAD_TOKENS
-        + clipped["max_tokens"] + engine._CONTEXT_MARGIN_TOKENS
-        + _SEARCHES * engine._SEARCH_RESULT_RESERVE_TOKENS
-        + 1 * engine.WEB_FETCH_MAX_CONTENT_TOKENS
-    ) <= settings.RESEARCH_CONTEXT_WINDOW
+    counted = 800_000 + 2 * _SERVER_TOOL_OVERHEAD_TOKENS
+    fixed = clipped["max_tokens"] + engine._CONTEXT_MARGIN_TOKENS
+    assert counted + fixed + engine._web_tool_reserve_tokens(opening["tools"]) > (
+        settings.RESEARCH_CONTEXT_WINDOW
+    )
+    assert counted + fixed + engine._web_tool_reserve_tokens(clipped["tools"]) <= (
+        settings.RESEARCH_CONTEXT_WINDOW
+    )
 
 
 def test_a_clip_at_the_opening_request_edits_nothing():

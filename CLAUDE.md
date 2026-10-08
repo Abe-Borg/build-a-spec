@@ -552,7 +552,11 @@ tail could not pay off, and each change set `thinking_edited`.
 
 - Every request of an area's conversation now declares the same tools:
   `RESEARCH_SEARCHES_PER_REQUEST = 8`, `RESEARCH_FETCHES_PER_REQUEST = 4`
-  (`min` with the declared budget). That covers the opening, continuations,
+  (`min` with the declared budget). (Superseded 2026-10-08: 12 and 12, the
+  same for every area, no `min` — an allowance of 8 and 4 was one the model
+  could meet within a request, and it read a met allowance as a spent
+  budget and submitted; see "Research's per-request web allowance sits
+  above the provider's pause" below.) That covers the opening, continuations,
   reminders, a resumed request and a restart's opening. The cumulative
   ceilings (2× searches, the declared fetches, 16 continuations) are checked
   between requests and request the submission. The crossing request may
@@ -1377,6 +1381,58 @@ Tests: `tests/test_qc_live_reasoning.py`, `tests/test_qc_live_events.py`,
 `frontend/tests/qcLive.test.ts`. Full record, reversion evidence and the
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
+
+## Research's per-request web allowance sits above the provider's pause — implemented notes (2026-10-08)
+
+Owner report (Abraham): research had been finishing "a little too fast"
+since v1.23.0. Cause: the fixed per-request allowance that keeps research's
+tool bytes stable (8 searches, 4 fetches) was one the model could meet
+within a request. The provider pauses a server-tool turn only at its tenth
+iteration; an area could run all 8 searches before that, the ninth came back
+`max_uses_exceeded`, and the model — told nothing about renewal — read it as
+a spent budget and submitted. The loop accepted the completed response, so an
+area researched for one or two requests against the 16–40 searches it
+declared, and no cumulative ceiling ever fired. The owner's second question,
+whether rounds share a budget: no — every limit is per area per round, and
+nothing carries spend across rounds (the "already established" brief is the
+one deliberate cross-round influence, capped at 20k tokens).
+
+- **The allowance.** `RESEARCH_SEARCHES_PER_REQUEST = 12`,
+  `RESEARCH_FETCHES_PER_REQUEST = 12` (the owner's numbers), both above
+  `SERVER_TOOL_ITERATIONS_PER_REQUEST = 10`, the provider's documented
+  default, so a request ends by pausing and the resumed request renews the
+  allowance unseen. The same for EVERY area: `_per_request_allowance` no
+  longer takes `min` with the declared budget — a smaller `max_uses` is one
+  the model can meet, and the declared budgets are the ceilings, enforced
+  between requests as before (an area declaring 8 fetches is ended by its
+  ceiling the request after it crosses it). Identical bytes across areas
+  keep the staggered launch's one shared prefix. Still not a knob.
+- **Overshoot.** The app's bound is still the allowance less one (11 of
+  either kind); in practice the pause bounds a request to ten calls, so nine.
+- **The context reserve** (`_web_tool_reserve_tokens`) counts what the pause
+  lets one request add — at most ten results, fetches first (10 × 50k) — not
+  the whole allowance (12 × 50k + 12 × 5k would have clipped every
+  conversation to one fetch per request past about 160k tokens of input, and
+  the clipped tool is one the model can meet). The clip now trips past about
+  322k of input at the default output ceiling (it was about 582k); past it
+  the one-fetch tool can be met, and an area that meets it winds down there.
+  Documented trade; a content-cap clip (shrink `max_content_tokens`, not
+  `max_uses`) is the follow-up if that bites.
+- **Unchanged.** Every ceiling (2× searches, declared fetches, 16
+  continuations, 2 reminders, 1 resend), the submission, grounding, the
+  merge, the SSE protocol, the QC manifest, and `RESEARCH_EFFORT` (`medium`,
+  the owner's cost choice: the allowance, not the effort, was the cause).
+  The tool bytes changed once, so each area's cache lineage is new once.
+
+Never let a per-request web allowance sit at or below
+`SERVER_TOOL_ITERATIONS_PER_REQUEST`, never shrink it to an area's budget,
+and never reserve context for more results than the pause lets a request
+add. Tests: `tests/test_research_budget.py`,
+`tests/test_research_warm_launch.py`; `frontend/tests/verificationCopy.test.ts`
+pins the dossier's and README's numbers. Full record, reversion evidence and
+the release-note draft are in `docs/as-built.md` under the same heading. No
+paid API call was made; the depth the change restores is unmeasured until
+the owner runs a round.
 
 ## As-built history
 

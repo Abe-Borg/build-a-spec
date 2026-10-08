@@ -106,6 +106,53 @@ Reject All restores that accepted import view. The exact original and the saved
 project stay unchanged; the separate original-format redline still refuses
 pending revisions.
 
+## Working with Word files: best practices
+
+Help → **How to use** carries this guide as the **Working with Word files**
+card (`frontend/src/lib/wordFileGuidance.ts`). The short version: clean every
+file in Word before its first import, import it once, always reopen the
+`.baspec`, and treat exported Word files as outputs only. Each rule follows
+from how the app behaves today:
+
+- **Before the first import, clean the file in Word.** Resolve every tracked
+  change (Review → Accept → *Accept All Changes*, or one by one), delete every
+  comment (Review → Delete → *Delete All Comments in Document*), confirm the
+  Reviewing Pane shows 0 revisions, and save a new copy. Keep the marked-up
+  file as the record of who asked for what. The importer reads pending
+  changes as accepted and the primary export accepts them in its copy, so a
+  change you meant to reject is kept and a reviewer's markup never survives
+  as markup. Track Changes switched on with nothing pending is fine.
+- **Import once.** Next section → *Leave it unnamed* → **Import Spec** with the
+  clean copy, then save the `.baspec`. Two warning signs mean the file still
+  carried pending changes: the import notice "The master carries pending
+  tracked changes…", and **Redline on your original** greyed out. Either one
+  means starting that section over from a cleaned copy, before editing.
+- **Every session after that, open the `.baspec`.** It keeps the original
+  upload as the redline's starting point, so every export shows every change
+  since the first import. Importing an exported file starts the section's
+  history over and reads every tracked change in it as accepted. A section
+  with content cannot take a second import.
+- **Edit in Build-a-Spec.** To reorder a provision that carries a Word
+  comment, delete it and add it back: moving it refuses the tracked export
+  ("A provision you moved carries a comment…").
+- **Exports are outputs.** Every tracked change appears under the export
+  author name, dated at export and measured against the original master.
+  Changes since an earlier version come from **Redline vs version…** (in
+  Build-a-Spec's styles); changes since the last issue in your own
+  formatting come from Word's Review → Compare.
+- **When markup comes back,** don't import it: resolve it in Word, enter the
+  decisions in Build-a-Spec (by hand, or **Attach Document** with the resolved
+  file and ask the chat to bring the spec in line), check the next Tracked
+  Changes ON export against the markup, and save the `.baspec`.
+
+The troubleshooting rows name one known limit: a reviewer's tracked
+paragraph merge (a deleted ¶ mark between two provisions) is read as two
+provisions, and the primary export then shows changes in your name that
+re-split it — a provision starting mid-sentence after one missing its
+ending. Cleaning the file in Word first avoids it.
+`frontend/tests/wordFileGuidance.test.ts` pins every label and message the
+guide quotes to the file that shows it.
+
 ## The 5.5 prompting upgrade (in the next release)
 
 No release entry of its own: every user-visible item rides the newest

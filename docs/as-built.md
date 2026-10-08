@@ -21044,3 +21044,66 @@ BUILD_A_SPEC_THINKING_DISPLAY=omitted to turn summaries off."
 **Not measured.** No paid API call was made. How long, how frequent and how
 useful the summaries are on a real Final QC run, and whether asking for them
 changes latency, are unseen until the next run.
+
+## Working with Word files: best practices in Help (2026-10-08)
+
+Owner request (Abraham), after an investigation of how tracked changes
+survive import, edit and export. Importing a spec that already carried
+another author's tracked changes, editing it and exporting it with the
+primary Word export was run end to end through the app (TestClient). That
+run showed what the guide now says:
+
+- The importer reads pending tracked changes as accepted, and **Export Word -
+  Tracked Changes ON** accepts them in its export-only copy
+  (`tracked_export.accepted_revision_baseline`). A reviewer's markup never
+  survives as markup, and Reject All returns the accepted import view.
+  **Redline on your original** refuses the file (`pending_revisions`). The
+  retained upload is untouched.
+- A project reopened from its `.baspec` keeps the original upload as the
+  redline's starting point, so a later export shows every change since the
+  first import. Importing an exported file starts the history over and reads
+  Build-a-Spec's own earlier changes as accepted.
+- A reviewer's tracked paragraph merge (a deleted ¶ mark with text on both
+  sides) is read as two provisions. The primary export then emits tracked
+  changes in the user's name that re-split it, even with zero edits. This is
+  the remap compromise documented in `tracked_export.py`; it is unchanged.
+- Moving a provision that carries a Word comment refuses the tracked export
+  (`moved_annotation`). That includes the "Reason:" comments a re-imported
+  export brings back. Deleting the provision and adding it back exports
+  fine.
+
+The owner chose documented habits over code changes for now: clean the file
+in Word before its first import, import once, reopen the `.baspec`, and
+treat exports as outputs.
+
+- `frontend/src/lib/wordFileGuidance.ts` holds the guide as data (stages,
+  exports, the markup-return steps, do/don't, troubleshooting), the
+  `sourceOutputGuidance.ts` pattern.
+- `HelpModal.WordFilesGuide` renders it as a card in How to use, between the
+  getting-started steps and the source-option definitions. The "Pick a
+  starting point" step points at it. The card has no controls, so it needs
+  no capability or tour step.
+- `frontend/tests/wordFileGuidance.test.ts` (registered in
+  `frontend/package.json`) pins every label and message the guide quotes to
+  the file that shows it: the Export menu items, **Import Spec**, **Attach
+  Document** and **Next section** (`ArtifactPanel.tsx`), *Leave it unnamed*
+  (`NextSectionDialog.tsx`), the import notice (`importer.py`) and the move
+  refusal (`source_render.py`). It also pins the behaviours behind the
+  warnings: the pending-revisions refusal and the disabled menu item, the
+  second-import refusal, and Redline vs version's compare-mode requirement.
+- README gains "Working with Word files: best practices" after the primary
+  Word export section.
+- Unchanged: every backend path, the import and export behaviour, the API,
+  the tour (`TOUR_VERSION` stays 9).
+
+Each of these, reverted one at a time, failed the new test and was restored:
+renaming **Import Spec**, rewording the import notice or the move refusal,
+renaming *Leave it unnamed*, and removing the card from How to use. `npm
+test` (562) and `npm run build` pass. The card was rendered in a throwaway
+Vite harness and screenshotted with Playwright at 900 px and 420 px wide; the
+harness was deleted. No paid API call was made.
+
+**Release-note draft.** "Help → How to use has a Working with Word files
+guide: clean a file's tracked changes and comments in Word before you import
+it, reopen your project from its .baspec instead of importing an export, and
+what to do when a reviewer's markup comes back."

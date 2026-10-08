@@ -5,6 +5,18 @@ import {
   SOURCE_CAPABILITY_GUIDANCE,
   SOURCE_OUTPUT_GUIDANCE,
 } from "../lib/sourceOutputGuidance";
+import {
+  WORD_FILES_SHORT_VERSION,
+  WORD_FILE_DO,
+  WORD_FILE_DONT,
+  WORD_FILE_EXPORTS,
+  WORD_FILE_EXPORT_RULES,
+  WORD_FILE_MARKUP_STEPS,
+  WORD_FILE_STAGES,
+  WORD_FILE_TROUBLESHOOTING,
+  type WordFileRule,
+  type WordFileStage,
+} from "../lib/wordFileGuidance";
 import TrustDeepDiveModal from "./TrustDeepDiveModal";
 import { useDialogFocus } from "../lib/dialogFocus";
 
@@ -157,6 +169,184 @@ function SourceOutputGuide() {
   );
 }
 
+/** One numbered stage of the Word-files guide, under a hairline. */
+function GuideStage({
+  n,
+  title,
+  children,
+}: {
+  n?: number;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-4 border-t border-edge pt-3">
+      <h5 className="flex items-baseline gap-2 text-sm font-medium text-ink">
+        {n !== undefined && (
+          <span className="text-accent tabular-nums">{n}</span>
+        )}
+        {title}
+      </h5>
+      {children}
+    </div>
+  );
+}
+
+/** A guide's rules: tick-boxes, numbered steps, or plain points. */
+function RuleList({
+  kind,
+  rules,
+}: {
+  kind: WordFileStage["kind"];
+  rules: readonly WordFileRule[];
+}) {
+  return (
+    <ol className="mt-2 space-y-2">
+      {rules.map((rule, i) => (
+        <li key={i} className="flex gap-2.5">
+          {kind === "checklist" ? (
+            <span
+              aria-hidden
+              className="mt-[5px] h-3 w-3 flex-none rounded-[3px] border border-accent/70"
+            />
+          ) : kind === "steps" ? (
+            <span className="mt-0.5 flex h-4 w-4 flex-none items-center justify-center rounded-full bg-accent/15 text-[10px] font-semibold text-accent tabular-nums">
+              {i + 1}
+            </span>
+          ) : (
+            <span className="mt-[8px] h-1.5 w-1.5 flex-none rounded-full bg-accent" />
+          )}
+          <div className="text-sm leading-relaxed text-ink-dim">
+            <span className="font-medium text-ink">{rule.t}</span>
+            {rule.d ? <> {rule.d}</> : null}
+            {rule.sub && (
+              <ul className="mt-1 space-y-0.5">
+                {rule.sub.map((line) => (
+                  <li key={line} className="flex gap-2 text-xs">
+                    <span aria-hidden className="text-ink-faint">
+                      –
+                    </span>
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Best practices for imports, exports and marked-up files
+ *  (lib/wordFileGuidance.ts holds the words, and why each rule exists). */
+function WordFilesGuide() {
+  return (
+    <section className="rounded-xl border border-edge bg-raised/40 p-4">
+      <h4 className="font-[family-name:var(--font-display)] text-[15px] font-semibold text-ink">
+        Working with Word files
+      </h4>
+      <p className="mt-0.5 text-xs text-ink-faint">
+        Best practices for imports, exports and marked-up files. Follow them
+        and a reviewer’s tracked changes, your history and your redlines stay
+        straight.
+      </p>
+      <p className="mt-3 rounded-lg border-l-2 border-accent bg-accent/10 px-3 py-2 text-xs leading-relaxed text-ink-dim">
+        <span className="font-medium text-ink">The short version:</span>{" "}
+        {WORD_FILES_SHORT_VERSION}
+      </p>
+      {WORD_FILE_STAGES.map((stage, index) => (
+        <GuideStage key={stage.id} n={index + 1} title={stage.title}>
+          <RuleList kind={stage.kind} rules={stage.rules} />
+          {stage.note && (
+            <p
+              className={
+                "mt-2 rounded-lg border-l-2 px-3 py-1.5 text-xs leading-relaxed text-ink-dim " +
+                (stage.note.tone === "warn"
+                  ? "border-warn bg-warn/10"
+                  : "border-edge bg-surface")
+              }
+            >
+              <span
+                className={
+                  "font-medium " +
+                  (stage.note.tone === "warn" ? "text-warn" : "text-ink")
+                }
+              >
+                {stage.note.label}
+              </span>{" "}
+              {stage.note.text}
+            </p>
+          )}
+        </GuideStage>
+      ))}
+      <GuideStage n={WORD_FILE_STAGES.length + 1} title="Exporting">
+        <dl className="mt-2 overflow-hidden rounded-lg border border-edge text-xs">
+          {WORD_FILE_EXPORTS.map((row, i) => (
+            <div
+              key={row.use}
+              className={
+                "grid gap-1 px-3 py-2 sm:grid-cols-2 sm:gap-3" +
+                (i > 0 ? " border-t border-edge" : "")
+              }
+            >
+              <dt className="leading-relaxed text-ink-dim">{row.need}</dt>
+              <dd className="font-medium leading-relaxed text-ink">{row.use}</dd>
+            </div>
+          ))}
+        </dl>
+        <RuleList kind="points" rules={WORD_FILE_EXPORT_RULES} />
+      </GuideStage>
+      <GuideStage
+        n={WORD_FILE_STAGES.length + 2}
+        title="When markup comes back (your Word edits or a reviewer’s)"
+      >
+        <RuleList kind="steps" rules={WORD_FILE_MARKUP_STEPS} />
+      </GuideStage>
+      <GuideStage title="Quick reference">
+        <div className="mt-2 grid gap-3 text-xs sm:grid-cols-2">
+          {(
+            [
+              ["Do", "✓", "text-ok", WORD_FILE_DO],
+              ["Don’t", "✕", "text-err", WORD_FILE_DONT],
+            ] as const
+          ).map(([heading, mark, tone, lines]) => (
+            <div key={heading} className="rounded-lg border border-edge bg-surface p-3">
+              <p className={`font-medium ${tone}`}>{heading}</p>
+              <ul className="mt-1.5 space-y-1">
+                {lines.map((line) => (
+                  <li key={line} className="flex gap-2 leading-relaxed text-ink-dim">
+                    <span aria-hidden className={tone}>
+                      {mark}
+                    </span>
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </GuideStage>
+      <GuideStage title="Troubleshooting">
+        <dl className="mt-2 overflow-hidden rounded-lg border border-edge text-xs">
+          {WORD_FILE_TROUBLESHOOTING.map((row, i) => (
+            <div
+              key={row.see}
+              className={
+                "grid gap-1 px-3 py-2 sm:grid-cols-2 sm:gap-3" +
+                (i > 0 ? " border-t border-edge" : "")
+              }
+            >
+              <dt className="leading-relaxed text-ink">{row.see}</dt>
+              <dd className="leading-relaxed text-ink-dim">{row.fix}</dd>
+            </div>
+          ))}
+        </dl>
+      </GuideStage>
+    </section>
+  );
+}
+
 /* --- per-topic content --- */
 
 function HowToUse({
@@ -206,7 +396,8 @@ function HowToUse({
                 each imported-body action only when the server can prove that
                 exact operation is safe. A disabled control shows the reason;
                 review status and project metadata can remain editable even
-                when body text is read-only.
+                when body text is read-only. Importing a master? Clean it in
+                Word first — see Working with Word files below.
               </>
             ),
           },
@@ -281,6 +472,7 @@ function HowToUse({
           },
         ]}
       />
+      <WordFilesGuide />
       <SourceOutputGuide />
       {/* A second, richer entry point into the tutorial than the header
           button: this one can start at any named chapter. */}

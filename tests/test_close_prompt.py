@@ -609,12 +609,13 @@ def test_open_file_unknown_kind_degrades_to_the_project_filter(
     assert kwargs.get("file_types") == main._PROJECT_OPEN_FILE_TYPES
 
 
-def test_open_file_mints_a_token_only_for_a_project_open_and_bounds_the_map(
+def test_open_file_mints_a_token_only_for_a_folder_naming_open_and_bounds_the_map(
     tmp_path, monkeypatch
 ):
     """A token names a picked path the frontend never holds (Project workspace
-    Phase 2). Only a project open can live in a project folder, so only it
-    mints one; the map keeps the newest few and evicts the oldest first."""
+    Phase 2). Only a project open, and the brief (or sibling section) a new
+    section is started from, can name a project folder, so only they mint
+    one; the map keeps the newest few and evicts the oldest first."""
     _fake_webview(monkeypatch)
     project = tmp_path / "p.baspec"
     project.write_bytes(b"PK\x03\x04 project")
@@ -632,8 +633,12 @@ def test_open_file_mints_a_token_only_for_a_project_open_and_bounds_the_map(
     assert tokens[0] not in controller._recent_opens, "the oldest goes first"
     assert tokens[-1] in controller._recent_opens
     assert controller._recent_opens[tokens[-1]] == (str(project), "project")
-    # A master import, an attachment or a brief pick names no section folder.
-    for kind in ("docx", "reference", "project_brief", "template"):
+    # A brief pick names the folder the new section belongs in.
+    brief_token = controller.open_file("project_brief")["token"]
+    assert len(brief_token) == 32
+    assert controller._recent_opens[brief_token] == (str(project), "project_brief")
+    # A master import, an attachment or a template names no project folder.
+    for kind in ("docx", "reference", "template"):
         assert controller.open_file(kind)["token"] == "", kind
     # An evicted token is simply unknown.
     evicted = controller.bind_project_home(tokens[0], 0)

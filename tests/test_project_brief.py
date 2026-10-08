@@ -381,11 +381,35 @@ def test_a_brief_can_be_built_straight_from_a_sibling_section_file():
     assert brief.sections[0]["number"] == "21 13 13"
     assert brief.sections[0]["ready"] is False
     assert any("Built from section 21 13 13" in w for w in brief.warnings)
+    # A section that never joined a project says the new one will not be
+    # linked to it, before anything is seeded.
+    assert session.project_link is None
+    assert any(
+        w.startswith("Section 21 13 13 has never been part of a project brief")
+        for w in brief.warnings
+    ), brief.warnings
     # The live session was never touched.
     assert sessions.get_session() is session
     assert session.history[-1]["content"][0]["text"] == "hello"
     with pytest.raises(ValueError):
         brief_from_sibling_project(b"not a project")
+
+
+def test_a_linked_sibling_section_file_carries_its_project_without_the_unlinked_warning():
+    """Once a section has exported a brief and been saved, its file carries
+    the project id: a section started from that file is the same project, so
+    there is nothing to warn about — and the id is the source's own."""
+    client = _client()
+    session = _rich_session(client)
+    assert client.get("/api/project/brief").status_code == 200  # stamps the link
+    project_id = session.project_link["project_id"]
+    package = sessions.project_package_bytes(session)
+
+    brief = brief_from_sibling_project(package)
+
+    assert brief.project_id == project_id
+    assert any("Built from section 21 13 13" in w for w in brief.warnings)
+    assert not any("never been part of a project brief" in w for w in brief.warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +717,7 @@ def test_inspect_reads_a_brief_or_a_sibling_project_without_touching_the_session
     assert body["source"] == "project"
     assert body["manifest"]["facts"]["active"] == 2
     assert any("21 13 13" in w for w in body["warnings"]), body["warnings"]
+    assert any("never been part of a project brief" in w for w in body["manifest"]["warnings"])
     assert sessions.get_session().doc.doc.is_empty()
 
 
@@ -780,6 +805,8 @@ def test_the_start_route_takes_the_sibling_project_file_too():
     assert seed["source"] == "project"
     assert seed["facts_restored"] == 3 and seed["research_rounds"] == 1
     assert any("21 13 13" in w for w in seed["warnings"]), seed["warnings"]
+    # The start notice repeats what the preview card said.
+    assert any("never be" in w and "join them" in w for w in seed["warnings"])
     session = sessions.get_session()
     assert session.project_link["seeded_from"] == ["21 13 13"]
     assert session.history == []

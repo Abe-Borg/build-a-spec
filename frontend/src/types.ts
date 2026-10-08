@@ -2943,9 +2943,10 @@ declare global {
         ) => Promise<{ name: string; data_b64: string; token?: string } | null>;
         /** Bind the session to the project folder of a file `open_file`
          *  just read (Project workspace Phase 2). `token` is the opaque name
-         *  `open_file` returned for a project open — the path never reaches
-         *  this side — and `generation` the one the load reported, so a
-         *  session replaced since the load is never handed the folder. */
+         *  `open_file` returned for a project open or a project-brief pick —
+         *  the path never reaches this side — and `generation` the one the
+         *  load or seed reported, so a session replaced since then is never
+         *  handed the folder. */
         bind_project_home?: (
           token: string,
           generation?: number,

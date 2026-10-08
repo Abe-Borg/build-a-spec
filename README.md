@@ -216,6 +216,65 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — a new section starts from the whole project, in its folder
+
+(2026-10-08. docs/as-built.md's "A new section starts from the whole project,
+in its folder" is the record; in the next release.)
+
+The owner asked how to add another section to a project later on. Working
+through the answer turned up four gaps:
+
+- **A section started from a picked brief now lives in its folder.** In the
+  desktop app, New session → *New section in an existing project* used to
+  start the section with no folder. The Project panel stayed hidden, and the
+  first Save opened wherever Windows last pointed, so the section could land
+  outside the project and never update its brief. The file you pick now names
+  the folder, the way Next section → carries the folder of the section you
+  leave: the panel appears at once and the first Save opens beside the brief.
+  Picking a finished section's `.baspec` instead binds its folder only when
+  that section belongs to the brief beside it. A browser session never knows
+  a folder, so it is unchanged.
+- **Next section → starts with everything the project's brief holds.** It
+  used to build the next section from the open section alone. Facts, research
+  rounds and reference documents another section had saved to the brief since
+  this one was opened were missing until the new section pulled them. When
+  the open section lives in a project folder, the next one now starts from
+  this section joined with the folder's brief, which is the same merge a Save
+  of this section writes there. The dialog's list of what will carry counts
+  that work too. Nothing is written: saving the section you leave still
+  updates the brief, as before. When the brief cannot be read (moved,
+  damaged, or replaced by another project's), the next section starts from
+  this section alone, and the dialog and the start notice say so.
+- **Next section → refuses a number the folder's brief already lists.** A
+  section opened from a file saved before a sibling existed knew only its own
+  section list, so the catalog could offer, and the server accept, a section
+  another session had already drafted. The folder's list now counts in the
+  dialog and in the server's check.
+- **Starting from a section that never joined a project says so.** *New
+  section in an existing project* also accepts a finished section's `.baspec`.
+  When that section never exported or started from a project brief, its file
+  holds no project id, so the new section gets one the old file never
+  receives: the two stay separate projects for good, and Pull project changes
+  can never join them. The manifest card and the start notice now warn, and
+  say how to keep them together: open that section, export its project brief
+  and save it, then start the new section from that brief.
+
+**Adding a section to an existing project later**, in the desktop app:
+
+1. Open the most recent section's `.baspec` from the project folder with
+   **Open**. The Project panel names the folder and lists the sections.
+2. Press **Next section →**, pick or type the section (or leave it unnamed
+   for an office-master import), and save the section you leave when asked.
+   You no longer need to pull project changes first.
+3. Save the new section. The first Save opens in the project folder; keep it
+   there, and the save adds the section to the brief.
+
+The file route works too: New session → *New section in an existing project*
+→ pick the `.basproject` in the project folder. It is the only route that
+pairs a template, and its first Save now opens in that folder as well.
+
+No paid API call was made.
+
 ## Current Status — click a Final QC card to see what it is doing
 
 (2026-10-08. docs/as-built.md's "The Review Room shows what each lens and
@@ -1137,7 +1196,11 @@ with Open — and shows it in a **Project** panel directly above Project facts:
   path Open uses.
 - **Next section →** at the bottom is the v1.20.0 dialog. The new section
   carries the folder with it, and its first Save opens in that folder, so it
-  lands beside the brief by default.
+  lands beside the brief by default. Since 2026-10-08 it also starts with
+  everything the folder's brief holds, and a section started from a brief
+  picked with New session → *New section in an existing project* lives in
+  that brief's folder the same way (see "Current Status — a new section
+  starts from the whole project, in its folder").
 
 How the folder is found, and why nothing records it:
 

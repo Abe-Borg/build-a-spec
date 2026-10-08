@@ -81,6 +81,13 @@ _PROJECT_BRIEF_FALLBACK_NAME = "buildaspec-project.basproject"
 # without ever holding the path itself; eight is far more than a window has
 # in flight at once, and the oldest is evicted first.
 _RECENT_OPENS_LIMIT = 8
+# The dialog kinds whose picked file can name a project folder, so ``open_file``
+# mints a token for them: a section opened with Open ("project"), and the brief
+# (or sibling section file) a new section is started from ("project_brief") —
+# that file's folder is the project folder the new section belongs in, the way
+# Next section → carries the outgoing section's. A master import, an attachment
+# or a template names no project folder.
+_FOLDER_BINDING_OPEN_KINDS = frozenset({"project", "project_brief"})
 _OPEN_FILE_TYPES_BY_KIND = {
     "docx": _DOCX_OPEN_FILE_TYPES,
     "reference": _REFERENCE_OPEN_FILE_TYPES,
@@ -1057,11 +1064,13 @@ class _CloseController:
         exactly like a cancelled HTML picker.
 
         ``token`` (Project workspace Phase 2) is an opaque name for the
-        picked path, minted only for a PROJECT open — the one kind that can
-        live in a project folder — and ``""`` otherwise. The frontend hands
-        it to :meth:`bind_project_home` after the load succeeds, so the
-        project folder is found without the path ever reaching JavaScript.
-        Existing callers simply ignore the key.
+        picked path, minted only for the kinds that can name a project
+        folder (``_FOLDER_BINDING_OPEN_KINDS``: a project open, and the brief
+        or sibling section a new section is started from) and ``""``
+        otherwise. The frontend hands it to :meth:`bind_project_home` after
+        the load (or the seed) succeeds, so the project folder is found
+        without the path ever reaching JavaScript. Existing callers simply
+        ignore the key.
         """
         if self._window is None or not self._trusted_page():
             return None
@@ -1093,7 +1102,7 @@ class _CloseController:
         if not self._trusted_page():
             return None
         token = ""
-        if kind == "project":
+        if kind in _FOLDER_BINDING_OPEN_KINDS:
             token = self._remember_open(os.path.abspath(os.fspath(target)), kind)
         return {
             "name": os.path.basename(os.fspath(target)),
@@ -1105,15 +1114,25 @@ class _CloseController:
         """Bind the session to the project folder of a file ``open_file`` read.
 
         The frontend calls this right after ``/api/project/load-file``
-        succeeds for a file picked through the native Open dialog, passing
-        the token ``open_file`` returned and the ``generation`` the load
-        response reported. The token resolves to the picked path (a token is
-        single-use, and only a project open mints one); the folder beside it
-        is searched for this project's brief (``discover_project_home``) off
-        the guard; the answer is stored under it only if the session is
-        still the one that load produced — a reset or another open since
-        then replaced it, and the replacement never asked to live in this
-        folder (the ``remember_project_save_target`` posture).
+        succeeds for a file picked through the native Open dialog — or after
+        ``/api/project/brief/start`` seeds a new section from a brief (or a
+        sibling ``.baspec``) picked through its own dialog — passing the
+        token ``open_file`` returned and the ``generation`` that response
+        reported. The token resolves to the picked path (a token is
+        single-use, and only the ``_FOLDER_BINDING_OPEN_KINDS`` mint one);
+        the folder beside it is searched for this project's brief
+        (``discover_project_home``) off the guard; the answer is stored under
+        it only if the session is still the one that load or seed produced —
+        a reset or another open since then replaced it, and the replacement
+        never asked to live in this folder (the
+        ``remember_project_save_target`` posture).
+
+        A seeded section has not been saved yet, so its link lives only in
+        the session — exactly the section Next section → hands its outgoing
+        folder to (``project_next_section_start``). Its first Save then opens in
+        that folder, and the save that writes the link there re-finds the
+        home from the file (``_discover_home_after_save``); a save anywhere
+        else loses it, honestly.
 
         ``generation`` is the LOAD's, not one sampled before the dialog: the
         load itself advances the generation, so a pre-dialog sample would
@@ -1132,8 +1151,11 @@ class _CloseController:
         if entry is None:
             return {**refusal, "error": "That file is no longer known to this window."}
         path, kind = entry
-        if kind != "project":
-            return {**refusal, "error": "Only a project file lives in a project folder."}
+        if kind not in _FOLDER_BINDING_OPEN_KINDS:
+            return {
+                **refusal,
+                "error": "Only a project file or a project brief names a project folder.",
+            }
         from backend import sessions
 
         workspace = sessions.get_workspace()

@@ -225,6 +225,14 @@ class SpecSection:
     # tree like edition_overrides: transactional, undoable, versioned,
     # persisted. Never specification text; never counted as content.
     edit_reasons: dict[str, list[str]] = field(default_factory=dict)
+    # Which of those reasons were given only for a WORKFLOW edit — a status
+    # or source-link change, Build-a-Spec state that never reaches Word:
+    # {element uid: [reason, ...]}, each one also in edit_reasons[uid]. The
+    # panel's chip says every reason; the redline on the original's comment
+    # leaves these out, because the change they explain is not one the
+    # redline shows (owner, 2026-10-08: "Reason: user cleared assumed status
+    # after review" is not for the reader of the Word file).
+    workflow_reasons: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "SpecSection":
@@ -281,6 +289,11 @@ class SpecSection:
             data["edit_reasons"] = {
                 uid: list(reasons) for uid, reasons in self.edit_reasons.items()
             }
+        if self.workflow_reasons:
+            # Likewise: absent until a model edit changes a status or link.
+            data["workflow_reasons"] = {
+                uid: list(reasons) for uid, reasons in self.workflow_reasons.items()
+            }
         return data
 
     @classmethod
@@ -299,6 +312,9 @@ class SpecSection:
                 data.get("suppressed_standards")
             )
             edit_reasons = _validate_edit_reasons_shape(data.get("edit_reasons"))
+            workflow_reasons = _validate_edit_reasons_shape(
+                data.get("workflow_reasons"), name="workflow_reasons"
+            )
             result = cls(
                 number=str(section.get("number", "")),
                 title=str(section.get("title", "")),
@@ -308,6 +324,7 @@ class SpecSection:
                 project_profile=profile,
                 suppressed_standards=suppressed,
                 edit_reasons=edit_reasons,
+                workflow_reasons=workflow_reasons,
             )
         except (KeyError, TypeError, AttributeError) as exc:
             raise ValueError(f"Malformed document data: {exc}") from exc
@@ -369,23 +386,26 @@ def _validate_profile_shape(data: Any) -> dict[str, str]:
     return clean
 
 
-def _validate_edit_reasons_shape(data: Any) -> dict[str, list[str]]:
-    """``edit_reasons`` as saved: element uid → non-empty list of non-empty
-    strings. Absent is an empty mapping; anything else malformed is refused
-    like a malformed override, never silently dropped."""
+def _validate_edit_reasons_shape(
+    data: Any, name: str = "edit_reasons"
+) -> dict[str, list[str]]:
+    """``edit_reasons`` (or ``workflow_reasons``) as saved: element uid →
+    non-empty list of non-empty strings. Absent is an empty mapping; anything
+    else malformed is refused like a malformed override, never silently
+    dropped."""
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ValueError("edit_reasons must map element ids to lists of reasons")
+        raise ValueError(f"{name} must map element ids to lists of reasons")
     result: dict[str, list[str]] = {}
     for uid, reasons in data.items():
         if not isinstance(uid, str) or not uid.strip():
-            raise ValueError("edit_reasons keys must be element ids")
+            raise ValueError(f"{name} keys must be element ids")
         if not isinstance(reasons, list) or not reasons:
-            raise ValueError(f"edit_reasons[{uid!r}] must be a non-empty list")
+            raise ValueError(f"{name}[{uid!r}] must be a non-empty list")
         for reason in reasons:
             if not isinstance(reason, str) or not reason.strip():
-                raise ValueError(f"edit_reasons[{uid!r}] must hold non-empty strings")
+                raise ValueError(f"{name}[{uid!r}] must hold non-empty strings")
         result[uid] = [str(reason) for reason in reasons]
     return result
 
@@ -883,16 +903,31 @@ def _opt_reason(op: dict[str, Any]) -> str:
     return fold_reason(value)
 
 
-def _record_edit_reason(section: SpecSection, uid: str, reason: str) -> None:
+def _record_edit_reason(
+    section: SpecSection, uid: str, reason: str, *, workflow: bool = False
+) -> None:
     """Append ``reason`` to ``uid``'s trail: a repeat of the last entry is not
-    appended, and only the newest MAX_EDIT_REASONS_PER_ELEMENT are kept."""
+    appended, and only the newest MAX_EDIT_REASONS_PER_ELEMENT are kept.
+
+    ``workflow`` — the edit changed only Build-a-Spec state (a status or a
+    source link) — marks the reason in ``workflow_reasons`` so the redline's
+    comment leaves it out. A mark is by text: a reason the element's trail
+    already holds from an edit the redline shows stays said, and one a
+    shown edit gives again loses its mark."""
     if not reason:
         return
     reasons = section.edit_reasons.setdefault(uid, [])
-    if reasons and reasons[-1] == reason:
-        return
-    reasons.append(reason)
-    del reasons[:-MAX_EDIT_REASONS_PER_ELEMENT]
+    prior = section.workflow_reasons.get(uid, [])
+    marked = workflow and (reason in prior or reason not in reasons)
+    marks = [mark for mark in prior if mark != reason] + ([reason] if marked else [])
+    if not (reasons and reasons[-1] == reason):
+        reasons.append(reason)
+        del reasons[:-MAX_EDIT_REASONS_PER_ELEMENT]
+    marks = [mark for mark in marks if mark in reasons]
+    if marks:
+        section.workflow_reasons[uid] = marks
+    else:
+        section.workflow_reasons.pop(uid, None)
 
 
 def _subtree_uids(node: Any) -> list[str]:
@@ -934,12 +969,17 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
     reason = _opt_reason(op)
 
     def done(
-        record: dict[str, Any], *uids: str, resets: bool = False
+        record: dict[str, Any],
+        *uids: str,
+        resets: bool = False,
+        workflow: bool = False,
     ) -> dict[str, Any]:
         """Finish an op: record its reason on ``uids`` (a content op's
         element, a deletion's whole subtree, the header for "sec"; nothing
         for section metadata, whose record carries it) and echo it in the
-        applied record when there is one.
+        applied record when there is one. ``workflow`` — a status or source
+        change, which never reaches Word — marks the reason so the redline's
+        comment does not say it (the chip still does).
 
         Without a reason — the user's own panel edit — an op that rewrites,
         moves or deletes what the redline shows (``resets``) drops the
@@ -950,9 +990,10 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
         assistant's."""
         for uid in uids:
             if reason:
-                _record_edit_reason(section, uid, reason)
+                _record_edit_reason(section, uid, reason, workflow=workflow)
             elif resets:
                 section.edit_reasons.pop(uid, None)
+                section.workflow_reasons.pop(uid, None)
         if reason:
             record["reason"] = reason
         return record
@@ -1336,6 +1377,7 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                 {"action": "replace", "id": node.uid, "status": node.status},
                 node.uid,
                 resets=text is not None,
+                workflow=text is None,
             )
         raise SpecEditError("replace: target must be an article or paragraph.")
 
@@ -1353,7 +1395,9 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             )
         node.status = status
         return done(
-            {"action": "set_status", "id": node.uid, "status": status}, node.uid
+            {"action": "set_status", "id": node.uid, "status": status},
+            node.uid,
+            workflow=True,
         )
 
     # action == "delete"
@@ -1825,11 +1869,15 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                                 "the user said, the research item or "
                                 "reference it follows, the code requirement, "
                                 "or the correction (a single added word "
-                                "included). It is shown beside the element "
-                                "in the panel and said in a Word comment by "
-                                "the redline on the user's original; it "
-                                "never goes into the specification text. A "
-                                "batch with an operation lacking a reason is "
+                                "included). Name a source by what it says or "
+                                "its title and a provision by its number, "
+                                "never by an id. It is shown beside the "
+                                "element in the panel and said in a Word "
+                                "comment by the redline on the user's "
+                                "original (not for a status or source-link "
+                                "change, which never reaches Word); it never "
+                                "goes into the specification text. A batch "
+                                "with an operation lacking a reason is "
                                 "rejected whole. On set_standard_edition the "
                                 "basis is the reason."
                             ),

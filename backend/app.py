@@ -1101,6 +1101,12 @@ class _ExportInputs:
     comment_profile: Any | None = None
     comment_references: tuple[dict[str, str], ...] = ()
     comment_fix_log: tuple[dict[str, Any], ...] = ()
+    #: The store's versions up to the current one: what tells, for a project
+    #: edited before workflow reasons were marked, which recorded reasons
+    #: were for a status or source change (``redline_basis._workflow_flags``).
+    #: The version records are immutable history, so the tuple of references
+    #: is already a snapshot.
+    comment_history: tuple[dict[str, Any], ...] = ()
 
 
 # The QC apply machinery moved to ``backend/qc/apply.py`` so the
@@ -5274,6 +5280,7 @@ def create_app(
                     for doc in session.references.docs
                 ),
                 comment_fix_log=tuple(copy.deepcopy(list(session.qc_fix_log))),
+                comment_history=tuple(store.versions[: store.index + 1]),
             )
         if selected_mode == "preserved":
             if not preserving_available:
@@ -5416,6 +5423,7 @@ def create_app(
                         profile=inputs.comment_profile,
                         references=inputs.comment_references,
                         fix_log=inputs.comment_fix_log,
+                        history=inputs.comment_history,
                     )
                     if settings.REDLINE_COMMENTS
                     else None

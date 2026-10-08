@@ -5,7 +5,9 @@
  * 2026-10-07; the engine refuses a batch without one on every op). The
  * server keeps them per element id on the document (`SpecDoc.edit_reasons`,
  * oldest first, the newest few), and the redline on the original says the
- * same in a Word comment. The panel shows the whole trail on hover and the
+ * same in a Word comment — all but the reasons for a status or source-link
+ * change (`SpecDoc.workflow_reasons` on the server), which never reaches
+ * Word. The panel shows the whole trail on hover and the
  * newest inline under a block changed this turn. An element no model edit
  * touched — an import, a template starter, the user's own typing — has no
  * trail and shows nothing.

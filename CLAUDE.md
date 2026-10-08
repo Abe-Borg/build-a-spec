@@ -72,8 +72,11 @@ file is the working reference for AI-assisted development sessions.
   `apply_spec_edits` op as `reason`, is required on every op
   (`model.check_edit_reasons` refuses the batch whole), is kept per element
   on the tree (`SpecSection.edit_reasons`), is shown by the panel's "why"
-  chip and said by the redline on the original. It never enters the
-  specification text. See "Every edit carries its reason" below.
+  chip and said by the redline on the original — except a status or
+  source-link edit's, which never reaches Word (`workflow_reasons`, owner,
+  2026-10-08). It never enters the specification text. See "Every edit
+  carries its reason" and "The redline's comments say nothing of the app's
+  bookkeeping" below.
 - The writing rules — where a requirement goes, how it keeps its meaning
   when it moves, how it is worded — live in ONE versioned source,
   `backend/writing_policy.py`, rendered into the drafting prompt and the
@@ -1103,7 +1106,9 @@ only in the redline on the original's comments.
   QC fix whose record already covers the element (`qc/apply.qc_fix_reason`,
   the prefix `ops_with_fix_reasons` writes) is not said twice.
   `SKIP_NO_BASIS` now means the user's own edits and content from before
-  reasons existed.
+  reasons existed. (Since 2026-10-08 a status or source-link edit's reason
+  is left out, and the app's ids are rewritten; see "The redline's comments
+  say nothing of the app's bookkeeping" below.)
 - **Bytes that changed once.** The tool's input schema (one property) and
   the stable prompt (`_TOOL_GUIDE`): every open session rewrites its cached
   prefix once after upgrade. The tool's top-level description — the op
@@ -1488,6 +1493,47 @@ shrink what each call returns. Tests: `tests/test_research_budget.py`. Full
 record, reversion evidence and the release-note draft are in
 `docs/as-built.md` under the same heading. No paid API call was made; how
 often real rounds reach the clip is unmeasured.
+
+## The redline's comments say nothing of the app's bookkeeping — implemented notes (2026-10-08)
+
+Owner report (Abraham): a redline comment said "Reason: user cleared
+assumed status after review", and research comments said "(item
+r-ec2b37e839e6, researched 2026-10-07)". The file may go to a client.
+
+- **Workflow reasons are marked.** `SpecSection.workflow_reasons {uid:
+  [reason]}` holds the trail entries given only for a status or
+  source-link change (`set_status`; a paragraph `replace` without `text`),
+  via `done(…, workflow=True)` → `_record_edit_reason(…, workflow=)`. By
+  text: a reason a shown edit gave stays said, a shown edit unmarks, a mark
+  never outlives its entry or a hand reset. Serialized only when set,
+  shape-checked on load, cleared for a template. The chip shows every
+  reason; the comment leaves marked ones out.
+- **Older projects** (1.25.0–1.26.0, no marks): the export captures
+  `store.versions[: index + 1]` (`_ExportInputs.comment_history`) and
+  `redline_basis._workflow_flags` flags the entries a committed step added
+  without changing the element's presence, words or place (order among the
+  siblings both versions hold, its own or an enclosing article's). Every
+  ambiguity is said, never hidden. Nothing is written back to the tree: the
+  QC version fingerprint hashes `to_dict()`.
+- **No ids, no bookkeeping dates.** Research heading `Basis: requirements
+  research` (no item id, no date); QC heading without `applied <date>`.
+  Reasons and QC title/issue go through `redline_basis.reader_text`: an
+  element id → its number, `ref-N` → the document's title, other app ids
+  (`r-`/`qc-` + 12 hex, `pf-`, `fu-`) and `researched/applied <date>`
+  dropped with their label; a pure-bookkeeping parenthetical goes whole;
+  id-free text is unchanged. Research text is not rewritten.
+- **Bytes that changed once.** The stable prompt's reason line and the
+  `reason` property description (name sources by what they say, provisions
+  by number, never an id): every open session rewrites its cached prefix
+  once. The tool's top-level description did not change, so retained QC
+  reports stay current.
+
+Never let an app id, a record date or a workflow edit's reason into a
+comment, and never write the history-derived flags back into the tree.
+Tests: `tests/test_redline_comment_hygiene.py`,
+`tests/test_redline_comments.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No
+paid API call was made.
 
 ## As-built history
 

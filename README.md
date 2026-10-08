@@ -216,6 +216,43 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — the redline's comments carry no bookkeeping
+
+(2026-10-08, owner request. docs/as-built.md's "The redline's comments say
+nothing of the app's bookkeeping" is the record; in the next release.)
+
+The comments in the redline on your original are for whoever reads the Word
+file, and that file may go to a client. Two kinds of line in them were the
+app talking to itself, and they are gone:
+
+- **No reason for a status change.** Confirming a provision, setting it
+  back to assumed, or re-pointing its source link changes nothing in Word,
+  so the reason the assistant gave for it — "user cleared assumed status
+  after review" — is no longer said in the comment. The provision's comment
+  keeps the reasons for the edits you can see (its words, its place, its
+  presence); a provision whose only reason was a status change gets no
+  comment. The panel's **why** chip still shows every reason. For a project
+  edited before this change (1.25.0–1.26.0) the app reads which reasons
+  were status-only off the document's version history, so its next export
+  is clean too. When one turn both reworded a provision and changed its
+  status with separate reasons, the history cannot tell them apart, so an
+  older project says both; edits made from now on are marked exactly.
+- **No ids or research dates.** The research line now reads `Basis:
+  requirements research` instead of `Basis: requirements research (item
+  r-ec2b37e839e6, researched 2026-10-07)`, and the Final QC line drops its
+  `applied <date>`. In reasons and Final QC text, a provision's element id
+  becomes its number (`pt1.a2.p3` → `1.2.C`), an attached document's id its
+  title, and any other id the app makes (a research item, a fact, a finding,
+  a follow-up) is dropped with the word that introduced it. The assistant is
+  also asked to write reasons that way in the first place.
+
+Nothing else about the redline changes: the same changes get a comment, the
+research text, sources and links are the same, and Accept All / Reject All
+are untouched. The prompt line and the tool's `reason` description changed,
+so every open session rewrites its cached prefix once after upgrade;
+retained Final QC reports stay current (the op vocabulary the lenses read
+did not change). No paid API call was made.
+
 ## Current Status — Next section → no longer leaves the section behind outside the project
 
 (2026-10-08. docs/as-built.md's "Next section → joins the project before it
@@ -505,7 +542,9 @@ closing summary covered the turn, not each edit.
   attached-document or Final QC basis the change also has. A deleted
   article's reason speaks on every provision it took with it; a pure move
   speaks too. Your own typed edits and a relettering are the only changes
-  without one.
+  without one. (Since 2026-10-08 a reason given for a status or source-link
+  change is not said there — that change never reaches Word — and the app's
+  ids are rewritten; see "the redline's comments carry no bookkeeping".)
 - **Final QC fixes say which finding.** A fix applied from the panel or
   through chat records `Final QC fix: <finding title>` as its reason, so the
   chip answers for it as well; its redline comment still comes from the
@@ -1990,7 +2029,8 @@ first.
 - **Each change that rests on something says what.** A provision the
   assistant wrote from a research finding carries a Word comment under your
   export author name, naming the finding — its requirement, authority and code
-  reference, dated, with links to the sources it was verified against. A
+  reference, with links to the sources it was verified against (no item id
+  or research date since 2026-10-08). A
   lead research could not verify is labelled so, and lists what it cited as
   not verified. One written from an attached document names the document. A
   change a Final QC fix made — an edit, a deletion, a move — names the

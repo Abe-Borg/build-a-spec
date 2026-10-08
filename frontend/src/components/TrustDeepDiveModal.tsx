@@ -1451,8 +1451,12 @@ function Dossier() {
                 grounding accepted — or, for a lead nobody verified, what it
                 cited, labelled not verified), the attached document by name,
                 or the Final QC fix (its title, severity, lens, issue and
-                sources). Web sources are clickable links. That text and those
-                links travel in the file, which may go to a client. A change
+                sources), then the reason the assistant gave for the edit. It
+                never carries the app’s bookkeeping: no record ids or research
+                dates, and no reason given for a status or source-link change,
+                which never reaches Word. Web sources are clickable links.
+                That text and those links travel in the file, which may go to
+                a client. A change
                 with no recorded basis — a hand edit, a relettering — gets no
                 comment, and a fix is only credited while the provision still
                 reads as the fix left it. The comments are added after both

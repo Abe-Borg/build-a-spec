@@ -282,6 +282,51 @@ def test_a_shared_files_journal_is_rebuilt_from_known_fields_only():
     assert sanitize_journal("nope") is None
 
 
+def test_numbers_too_large_for_a_float_are_unusable_not_an_error():
+    """A JSON integer past the float range (``float(10**400)`` raises) makes
+    a field unusable, never the load (Codex review on PR #303)."""
+    huge = 10**400
+    restored = sanitize_journal(
+        {
+            "session_uid": _uid("c"),
+            "created_at": huge,
+            "dropped_visits": huge,
+            "visits": [
+                {"visit_id": _uid("d"), "started_at": huge},
+                {
+                    "visit_id": _uid("e"),
+                    "started_at": 5.0,
+                    "turns": huge,
+                    "estimated_cost_usd": huge,
+                    "tokens": {"input_tokens": huge},
+                },
+            ],
+        }
+    )
+    assert restored.created_at is None
+    assert restored.dropped_visits == 0
+    [visit] = restored.visits
+    assert visit["turns"] == 0
+    assert visit["estimated_cost_usd"] == 0.0
+    assert visit["tokens"] == {}
+
+
+def test_a_bad_journal_never_leaves_a_half_loaded_session(monkeypatch):
+    """Identity is staged before the live session changes: if building it
+    fails, the session is exactly what it was."""
+    live = SessionState()
+    live.history.append({"role": "user", "content": [{"type": "text", "text": "mine"}]})
+    payload = sessions.project_payload(SessionState())
+
+    def boom(_project):
+        raise ValueError("unreadable journal")
+
+    monkeypatch.setattr(SessionIdentity, "from_project", staticmethod(boom))
+    with pytest.raises(ValueError):
+        load_project(payload, live)
+    assert live.history[0]["content"][0]["text"] == "mine"
+
+
 def test_the_journal_keeps_the_newest_visits_and_counts_the_rest():
     visits = [
         {"visit_id": f"{i:032x}", "started_at": float(i)}
@@ -430,6 +475,41 @@ def test_saving_tags_the_launch_and_load_file_restores_the_uid(
     assert sessions.get_session().identity.session_uid == uid
     # Tagged once, however often it is saved or opened in one launch.
     assert _run_meta()["session_uids"] == [uid]
+
+
+@pytest.mark.parametrize("route", ["legacy", "baspec"])
+def test_the_launch_is_tagged_with_the_session_the_load_committed(
+    route, log_env, trace_env, monkeypatch
+):
+    """The uid is read under the commit's guard (Codex review on PR #303):
+    a reset landing between the guard and the tag must not be what gets
+    tagged. The reset is simulated in that exact window — the project_load
+    trace event, which both routes emit after the guard and before tagging."""
+    diagnostics.init_logging(force=True)
+    client = TestClient(create_app())
+    other = SessionState()
+    uid = other.identity.session_uid
+    real_event = capture.app_event
+
+    def reset_after_load(event_type, **fields):
+        if event_type == "project_load" and fields.get("ok"):
+            sessions.get_session().reset()
+        real_event(event_type, **fields)
+
+    monkeypatch.setattr(capture, "app_event", reset_after_load)
+    if route == "legacy":
+        resp = client.post("/api/project/load", json=sessions.project_payload(other))
+    else:
+        package = sessions.render_project_package(
+            sessions.capture_project_package_inputs(other)
+        )
+        resp = client.post(
+            "/api/project/load-file",
+            files={"file": ("p.baspec", package, "application/octet-stream")},
+        )
+    assert resp.status_code == 200, resp.text
+    assert sessions.get_session().identity.session_uid != uid  # the reset won
+    assert _marker()["session_uids"] == [uid]
 
 
 def test_opening_a_baspec_tags_the_launch(log_env, trace_env):
@@ -725,12 +805,13 @@ def test_an_over_budget_launch_contributes_a_bounded_tail(
     assert log_scope["coverage"] == "bounded_tail_over_budget"
 
 
-def test_a_launch_the_journal_names_is_collected_even_untagged(
+def test_a_journal_cannot_pull_in_a_launch_that_is_not_tagged(
     log_env, trace_env
 ):
-    """A tag can go missing (a launch past the 64-session cap, a marker
-    write that failed); the journal's own record of the launch still finds
-    it, and only a launch whose folder is gone is reported as removed."""
+    """A ``.baspec`` is untrusted input: a run id its journal names selects
+    nothing on its own (Codex review on PR #303). Only the run's own tag
+    puts it in the bundle; an untagged run the journal names is listed,
+    never copied, and only a launch with no folder reads as removed."""
     diagnostics.init_logging(force=True)
     capture.app_event("server_started")
     now = time.time()
@@ -750,14 +831,24 @@ def test_a_launch_the_journal_names_is_collected_even_untagged(
     _trace_run(trace_env, untagged_trace, ended=now - 3 * DAY)
     _log_run(log_env, "7", ended=now - 3 * DAY)
 
-    names, manifest, _zf = _bundle()
+    names, manifest, _zf = _bundle(include_session_prompts=True)
 
-    assert f"traces/{untagged_trace}/events.jsonl" in names
-    assert f"logs/{untagged_log}/{diagnostics.LOG_FILENAME}" in names
-    assert manifest["scope"]["session_history"]["journal_runs_not_on_disk"] == {
-        "trace": [],
-        "log": [],
+    # Not copied as session history (it may still appear as one of the
+    # three "other recent runs" tails, which never consult the journal).
+    assert f"traces/{untagged_trace}/events.jsonl" not in names
+    assert f"traces/{untagged_trace}/prompts.jsonl" not in names
+    assert not any(n.startswith(f"logs/{untagged_log}/") for n in names)
+    scope = manifest["scope"]["session_history"]
+    assert scope["trace_runs"] == [] and scope["log_runs"] == []
+    assert scope["journal_runs_untagged"] == {
+        "trace": [untagged_trace],
+        "log": [untagged_log],
     }
+    assert scope["journal_runs_not_on_disk"] == {"trace": [], "log": []}
+    # And the snapshot does not count them as this section's either.
+    facts = diagnostics.snapshot()["session"]["session_history"]
+    assert facts["earlier_trace_runs_on_disk"] == 0
+    assert facts["earlier_log_runs_on_disk"] == 0
 
 
 def test_packaging_the_tours_practice_copy_tags_nothing(log_env, trace_env):

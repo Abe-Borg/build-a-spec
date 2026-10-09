@@ -109,18 +109,20 @@ def valid_session_uid(value: Any) -> str:
 def _finite_number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        # A JSON integer can be larger than any float (``float(10**400)``
+        # raises): unusable, not an error.
+        number = float(value)
+    except OverflowError:
+        return None
     if not math.isfinite(number) or number < 0:
         return None
     return number
 
 
 def _count(value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0
-    if not math.isfinite(float(value)) or value < 0:
-        return 0
-    return int(value)
+    number = _finite_number(value)
+    return int(number) if number is not None else 0
 
 
 def _matching(value: Any, pattern: re.Pattern[str]) -> str:

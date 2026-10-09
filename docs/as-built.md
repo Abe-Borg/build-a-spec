@@ -21895,17 +21895,17 @@ found four gaps, and the owner asked for all four fixed:
 - **The bundle.** `build_bundle(*, include_session_prompts=False)`; the
   route takes `include_prompts`. New members: `session/journal.json`,
   `traces/<run>/{run.json,events.jsonl,spans.jsonl[,prompts.jsonl]}` and
-  `logs/<process>/…` for each earlier launch tagged with the session or
-  named by its journal (a tag can be missing — a launch past the 64-uid cap,
-  a failed marker write — and the journal's own record still finds it),
-  newest first; a launch that fits in what is left of the 192 MiB trace /
-  64 MiB log source-byte budget is copied whole, one that does not gets
-  `*-tail.jsonl` and 512 KiB log tails, so one huge launch does not reduce
-  every older one to tails. `_add_redacted_text_file_if_present` gained `max_bytes`. Prior
+  `logs/<process>/…` for each earlier launch whose own tag names the
+  session, newest first; a launch that fits in what is left of the 192 MiB
+  trace / 64 MiB log source-byte budget is copied whole, one that does not
+  gets `*-tail.jsonl` and 512 KiB log tails, so one huge launch does not
+  reduce every older one to tails. (The first cut also selected launches the
+  journal named; see the Codex review below.) `_add_redacted_text_file_if_present` gained `max_bytes`. Prior
   tails now skip runs the session history copied, so the zip never holds a
   run twice. Manifest gains `session_uid` and `scope.session_history`
   (session uid, prompt choice, budgets, whether this launch is tagged, per-run
-  coverage, live-owned runs named, and the journal's runs no longer on disk);
+  coverage, live-owned runs named, the journal's runs no longer on disk,
+  and the ones it names that exist untagged);
   `included_run_ids` lists the session's trace runs. Incident index gains
   `session_uid` and `session_log_errors` (ERROR/CRITICAL lines from the
   earlier launches, by the line's own timestamp, 50 at most); the session's
@@ -21934,13 +21934,13 @@ found four gaps, and the owner asked for all four fixed:
 
 ### Tests and evidence
 
-`tests/test_session_history.py` (28 tests): identity, journal shape and
+`tests/test_session_history.py` (32 tests after the review): identity, journal shape and
 sanitizing, upsert, reopen, legacy files, tutorial clone, log and trace
 stamping, tagging through `/api/project/load`, `/api/project/load-file` and
 `/api/project/save`, a blank session tagging nothing, both retentions (age,
 count, bytes order, window off), and the bundle (full copy, prompts opt-in,
-budget tails, live-owned exclusion, journal runs not on disk, an untagged
-launch the journal names, the tour's copy tagging nothing, snapshot facts).
+budget tails, live-owned exclusion, journal runs not on disk, the tour's
+copy tagging nothing, snapshot facts; the review's four are below).
 Its fake log folders carry no pid: a made-up one belonged to a live process
 during one local run and (correctly) excluded the launch as live-owned. `frontend/tests/sessionHistory.test.ts` (6): the formatter, the URL
 against the route's parameter, the type's keys against the backend source,
@@ -21954,10 +21954,43 @@ order, log age skip, legacy-load tag, `.baspec`-load tag (needed a test of
 its own: the first probe passed because a save in the same test had tagged
 the uid), save tag, tutorial fresh identity, load identity, reset identity,
 log stamp, trace stamp, prompts gate, prior-tail dedupe, marker tags, the
-journal key, the tutorial skip, and the journal union on the trace and log
-sides — 19 probes, each a failure. Ruff clean; `npm test` 570/570;
+journal key and the tutorial skip — 17 probes, each a failure (the two
+journal-union probes went with the union; the review's are below). Ruff clean; `npm test` 570/570;
 `npm run build` clean. No paid API call was made, and no model request
 byte changed.
+
+### Codex review on PR #303 (three findings, all fixed in the PR)
+
+- *P1 — journal-named runs bypassed the tag.* The first cut also copied any
+  run the journal named, to survive a missing tag. A `.baspec` is untrusted
+  and its journal is only shape-checked, so a crafted file naming a local
+  run id would have pulled that run (and, with the box ticked, its prompts)
+  into the bundle. The path needs ids an outsider cannot realistically
+  know, but the union bought little — every journal visit comes from a save,
+  and the save tags the launch — so it is gone: selection is by the run's
+  own tag only. Journal ids now only report: `journal_runs_not_on_disk` (no
+  folder) and `journal_runs_untagged` (a folder, no tag; listed, not
+  copied). The ids passed strict patterns, so the existence check cannot
+  leave the roots.
+- *P2 — the tag re-read a mutable session after the guard.* A reset landing
+  between the load's guard and the tag would have tagged the replacement.
+  Both routes now read the uid under the commit's guard.
+- *P2 — a JSON integer past the float range raised.* `float(10**400)` raises
+  `OverflowError`; a crafted journal made the package load a 500, and the
+  legacy JSON route could fail after other live fields had been replaced.
+  `_finite_number` catches it (`_count` now goes through it), and
+  `load_project` stages the identity with the other parsed state before the
+  live session changes.
+
+Tests: the union test was inverted
+(`test_a_journal_cannot_pull_in_a_launch_that_is_not_tagged`), plus
+`test_numbers_too_large_for_a_float_are_unusable_not_an_error`,
+`test_a_bad_journal_never_leaves_a_half_loaded_session` and
+`test_the_launch_is_tagged_with_the_session_the_load_committed` (both
+routes; the reset is injected at the `project_load` trace event, which sits
+in exactly that window). Reversion probes, each restored: the trace union
+back (1 failure), no overflow catch (1), identity built late again (1), the
+legacy and `.baspec` routes re-reading the session (1 each).
 
 ### Release-note draft (for the release after 1.26.0)
 

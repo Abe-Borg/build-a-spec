@@ -557,6 +557,11 @@ def load_project(data: Any, session) -> None:
     staged = validate_project_data(data)
     history = staged.history
     doc_data = staged.doc_data
+    # The file's identity (``backend/session_history``), staged with the rest
+    # so nothing in it can fail after the live session has started changing.
+    from ..session_history import SessionIdentity
+
+    restored_identity = SessionIdentity.from_project(data)
     restored_import_report = staged.import_report
     restored_source_docx_map = None
     if staged.source_map is not None:
@@ -778,9 +783,7 @@ def load_project(data: Any, session) -> None:
     # saved before session history gets a fresh uid. Guarded for the
     # lightweight session objects format-1 compatibility callers pass.
     if hasattr(session, "identity"):
-        from ..session_history import SessionIdentity
-
-        session.identity = SessionIdentity.from_project(data)
+        session.identity = restored_identity
     # The context gauge measured the outgoing conversation; the loaded one
     # has no measurement until its first turn commits — nor a breakdown of
     # that turn's context block.

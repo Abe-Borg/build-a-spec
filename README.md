@@ -256,16 +256,18 @@ section:
 - **The bundle collects them.** With a section open, the diagnostics bundle
   adds `session/journal.json` (every visit, this one included) and, newest
   first, the logs and trace events/spans of every earlier launch still on
-  disk that opened or saved the section or that its journal names — each in
-  full while it fits in what is left of 64 MB of logs and 192 MB of trace,
-  short tails otherwise. The three "other recent runs" tails
+  disk that opened or saved the section (found by the launch's own tag,
+  never by what a file claims) — each in full while it fits in what is left
+  of 64 MB of logs and 192 MB of trace, short tails otherwise. The three "other recent runs" tails
   skip launches already included. Earlier launches' prompt text is large,
   so it is included only when you tick **Also include the full prompt text
   from this section's earlier launches** above the download button (this
   launch's prompts are always included, as before). The manifest's
   `scope.session_history` says which launches were copied in full, which as
-  tails, which were skipped because another open window owns them, and
-  which launches the journal remembers that retention already removed. The
+  tails, which were skipped because another open window owns them, which
+  launches the journal remembers that retention already removed, and which
+  it names that exist but were never tagged with the section (those are
+  listed, not copied). The
   incident index adds `session_log_errors` from the earlier launches.
 - **Developer tools shows it.** Session state gains a **Session history**
   row: visits recorded since when, total turns and estimated cost, how many

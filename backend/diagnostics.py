@@ -2204,7 +2204,8 @@ class _SessionLaunch:
 
 def _journal_run_ids(journal: dict[str, Any], key: str) -> set[str]:
     """The launches a journal's visits name (``trace_run_id`` or
-    ``process_run_id``), already shape-checked by ``session_history``."""
+    ``process_run_id``), already shape-checked by ``session_history``. Used
+    only to REPORT launches the bundle did not collect, never to select."""
     return {
         str(visit.get(key))
         for visit in journal.get("visits") or ()
@@ -2212,16 +2213,15 @@ def _journal_run_ids(journal: dict[str, Any], key: str) -> set[str]:
     }
 
 
-def _session_trace_launches(
-    session_uid: str, also: set[str] | frozenset[str] = frozenset()
-) -> list[_SessionLaunch]:
-    """Retained trace runs of a session, newest first: tagged with
-    ``session_uid``, or named in ``also`` (its journal's runs — a tag can be
-    missing, a journal entry cannot be faked onto a run it never wrote).
+def _session_trace_launches(session_uid: str) -> list[_SessionLaunch]:
+    """Retained trace runs tagged with ``session_uid``, newest first.
 
-    Excludes this launch's own run (the bundle copies it in full anyway).
-    A run owned by another live process is returned with ``live=True`` so
-    the caller can name it without copying it.
+    Selected by the run's OWN tag only, never by a journal entry: a
+    ``.baspec`` is untrusted input, and a run id it names could be any
+    local run (Codex review on PR #303). Excludes this launch's own run
+    (the bundle copies it in full anyway). A run owned by another live
+    process is returned with ``live=True`` so the caller can name it
+    without copying it.
     """
     from .session_history import run_session_uids, valid_session_uid
     from .tracing import config as trace_config
@@ -2251,7 +2251,7 @@ def _session_trace_launches(
             continue
         if not isinstance(meta, dict) or meta.get("run_id") != run_dir.name:
             continue
-        if uid not in run_session_uids(meta) and run_dir.name not in also:
+        if uid not in run_session_uids(meta):
             continue
         environment = meta.get("environment")
         raw_pid = environment.get("pid") if isinstance(environment, dict) else None
@@ -2282,12 +2282,10 @@ def _session_trace_launches(
     return launches
 
 
-def _session_log_launches(
-    session_uid: str, also: set[str] | frozenset[str] = frozenset()
-) -> list[_SessionLaunch]:
-    """Retained per-launch log directories of a session (tagged, or named in
-    its journal's ``also``), newest first, excluding this launch's own
-    (copied in full anyway)."""
+def _session_log_launches(session_uid: str) -> list[_SessionLaunch]:
+    """Retained per-launch log directories tagged with ``session_uid``
+    (their own marker's tag only, as above), newest first, excluding this
+    launch's own (copied in full anyway)."""
     from .session_history import valid_session_uid
 
     uid = valid_session_uid(session_uid)
@@ -2303,8 +2301,7 @@ def _session_log_launches(
             live=_process_is_alive(info.pid),
         )
         for info in infos
-        if info.run_id != _PROCESS_RUN_ID
-        and (uid in info.session_uids or info.run_id in also)
+        if info.run_id != _PROCESS_RUN_ID and uid in info.session_uids
     ]
     launches.sort(key=lambda launch: launch.timestamp, reverse=True)
     return launches
@@ -2322,12 +2319,8 @@ def _session_history_facts(
     from .session_history import journal_totals
 
     uid = str(journal.get("session_uid") or "")
-    trace_launches = _session_trace_launches(
-        uid, _journal_run_ids(journal, "trace_run_id")
-    )
-    log_launches = _session_log_launches(
-        uid, _journal_run_ids(journal, "process_run_id")
-    )
+    trace_launches = _session_trace_launches(uid)
+    log_launches = _session_log_launches(uid)
     return {
         **journal_totals(journal),
         "visit_began": getattr(identity, "began", ""),
@@ -2538,6 +2531,7 @@ def build_bundle(*, include_session_prompts: bool = False) -> tuple[Path, str]:
         "log_runs": [],
         "excluded_live_run_ids": [],
         "journal_runs_not_on_disk": {"trace": [], "log": []},
+        "journal_runs_untagged": {"trace": [], "log": []},
     }
     session_log_errors: list[dict[str, Any]] = []
     try:
@@ -2663,9 +2657,7 @@ def build_bundle(*, include_session_prompts: bool = False) -> tuple[Path, str]:
                 journal_log_ids = _journal_run_ids(
                     session_journal, "process_run_id"
                 )
-                trace_launches = _session_trace_launches(
-                    session_uid, journal_trace_ids
-                )
+                trace_launches = _session_trace_launches(session_uid)
                 # Newest first; a launch that fits in what is left of the
                 # budget is copied whole, one that does not gets tails (so
                 # one huge launch does not reduce every older one to tails).
@@ -2696,9 +2688,7 @@ def build_bundle(*, include_session_prompts: bool = False) -> tuple[Path, str]:
                             trace_incidents=trace_incidents,
                         )
                     )
-                log_launches = _session_log_launches(
-                    session_uid, journal_log_ids
-                )
+                log_launches = _session_log_launches(session_uid)
                 log_budget = _SESSION_LOG_BYTE_BUDGET
                 copied_logs: list[_SessionLaunch] = []
                 for launch in log_launches:
@@ -2717,18 +2707,30 @@ def build_bundle(*, include_session_prompts: bool = False) -> tuple[Path, str]:
                     )
                     copied_logs.append(launch)
                 session_log_errors = _session_log_incidents(copied_logs)
-                # Launches the journal remembers that retention (or a moved
-                # machine) already took: the manifest says so rather than
-                # letting a short history pass for the whole one.
-                on_disk_trace = {launch.run_id for launch in trace_launches}
-                on_disk_log = {launch.run_id for launch in log_launches}
-                missing = session_scope["journal_runs_not_on_disk"]
-                missing["trace"] = sorted(
-                    journal_trace_ids - on_disk_trace - {current_id or ""}
-                )
-                missing["log"] = sorted(
-                    journal_log_ids - on_disk_log - {_PROCESS_RUN_ID}
-                )
+                # Launches the journal remembers that the bundle did not
+                # collect: gone (retention, a moved machine), or present but
+                # not tagged with this session — named, never copied, since
+                # only a run's own tag says it belongs here. The ids passed
+                # ``session_history``'s strict patterns, so joining them to
+                # the roots cannot leave them.
+                from .tracing import config as _trace_config
+
+                tagged_trace = {launch.run_id for launch in trace_launches}
+                tagged_log = {launch.run_id for launch in log_launches}
+                trace_root = _trace_config.default_trace_root()
+                logs_root = log_dir()
+                for kind, ids, tagged, root_dir, own in (
+                    ("trace", journal_trace_ids, tagged_trace, trace_root, current_id),
+                    ("log", journal_log_ids, tagged_log, logs_root, _PROCESS_RUN_ID),
+                ):
+                    for run_id in sorted(ids - tagged - {own or ""}):
+                        present = (root_dir / run_id).is_dir()
+                        bucket = (
+                            "journal_runs_untagged"
+                            if present
+                            else "journal_runs_not_on_disk"
+                        )
+                        session_scope[bucket][kind].append(run_id)
 
             trace_inventory = list_trace_runs(limit=100)["runs"]
             excluded_live_trace_run_ids = [

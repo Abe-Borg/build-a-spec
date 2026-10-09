@@ -1547,9 +1547,10 @@ retention pruned a long section's first launches by age (30 days) and count.
   `SessionState.identity: SessionIdentity` — `session_uid` (32 hex),
   `created_at`, earlier `visits`, this visit (`visit_id`,
   `visit_started_at`, `began`: new/opened/tutorial). Replaced whole, never
-  mutated: `_reset_while_locked` mints a fresh one; `load_project` sets
-  `SessionIdentity.from_project(data)` (a file without a journal gets a
-  fresh uid, `created_at=None`); `clone_session_for_tutorial` gives the clone
+  mutated: `_reset_while_locked` mints a fresh one; `load_project` stages
+  `SessionIdentity.from_project(data)` before touching the live session and
+  assigns it with the rest (a file without a journal gets a fresh uid,
+  `created_at=None`); `clone_session_for_tutorial` gives the clone
   `fresh(began="tutorial")`. `tests/test_session_wipe.py` probes it.
 - **The journal.** `save_project(..., session_journal=)` writes the optional
   `session_journal` key, built by `sessions.session_journal(session,
@@ -1569,7 +1570,8 @@ retention pruned a long section's first launches by age (30 days) and count.
   (`session_uids`) and calls `capture.note_session` →
   `TraceRecorder.note_session`, which writes `run.json`'s `session_uids`
   through at once (a launch that crashes later must still be findable). It
-  is called after a load commits (both load routes) and in
+  is called after a load commits (both load routes, with the uid read under
+  the commit's guard) and in
   `sessions.project_package` after the guarded capture — never under
   `session_state_guard`. A blank session nobody opens or saves tags nothing,
   and neither does a tutorial copy (`began == "tutorial"`): the tour's round
@@ -1584,11 +1586,14 @@ retention pruned a long section's first launches by age (30 days) and count.
 - **The bundle.** `build_bundle(*, include_session_prompts=False)`
   (`GET /api/diagnostics/bundle?include_prompts=`): `session/journal.json`
   (the live visit unsaved, `last_saved_at: null`), then every earlier trace
-  run and log directory tagged with the session or named by its journal
-  (`_journal_run_ids`), newest first, each in full while it fits in what is
-  left of `_SESSION_TRACE_BYTE_BUDGET` (192 MiB) / `_SESSION_LOG_BYTE_BUDGET`
-  (64 MiB), bounded tails otherwise; earlier `prompts.jsonl` only on
-  request. A journal launch is "not on disk" only when no folder holds it.
+  run and log directory whose OWN tag names the session, newest first, each
+  in full while it fits in what is left of `_SESSION_TRACE_BYTE_BUDGET`
+  (192 MiB) / `_SESSION_LOG_BYTE_BUDGET` (64 MiB), bounded tails otherwise;
+  earlier `prompts.jsonl` only on request. The journal's run ids
+  (`_journal_run_ids`) only REPORT what was not collected —
+  `journal_runs_not_on_disk` (no folder) and `journal_runs_untagged`
+  (folder, no tag) — and never select: a `.baspec` is untrusted (Codex
+  review on PR #303).
   Live-owned runs are named, never copied. The three prior-run tails skip
   runs the session history copied. Manifest: `session_uid`,
   `scope.session_history` (per-run coverage, `journal_runs_not_on_disk`);

@@ -8721,6 +8721,9 @@ def create_app(
                 # map that cannot be checked against exact source bytes.
                 session.source_docx_map = None
                 session.source_patch_context = None
+                # The identity this load committed, read under its guard: a
+                # reset landing after the guard must not be what gets tagged.
+                loaded_uid = session.identity.session_uid
         except ValueError as exc:
             _trace_capture.app_event(
                 "project_load", mode="legacy_json", ok=False, error=str(exc)
@@ -8732,7 +8735,7 @@ def create_app(
         # Tag this launch with the opened session (outside the guard: it
         # writes the run marker and run.json) so retention keeps the launch
         # and a support bundle finds it, even if the app later crashes.
-        diagnostics.note_session(session.identity.session_uid)
+        diagnostics.note_session(loaded_uid)
         return JSONResponse(
             {
                 "ok": True,
@@ -8801,6 +8804,10 @@ def create_app(
         # are the commit point. A rejected package never reaches them.
         session = entry_lease.session
         home_kept: list[bool] = []
+        # The identity the commit installs, captured under its guard (see the
+        # legacy route): tagged after the guard, never re-read from a session
+        # a reset may already have replaced.
+        loaded_uid: list[str] = []
 
         def _commit_load() -> JSONResponse | None:
             """The commit, on a worker thread, under ONE guard.
@@ -8853,6 +8860,7 @@ def create_app(
                             status_code=409,
                         )
                 load_project(parsed.project, session)
+                loaded_uid.append(session.identity.session_uid)
                 session.source_docx_bytes = parsed.source_docx_bytes
                 session.source_docx_filename = (
                     parsed.source_docx_filename if parsed.source_docx_bytes else ""
@@ -8885,7 +8893,8 @@ def create_app(
         )
         # Tag this launch with the opened session — the legacy route's
         # reason, and outside the commit's guard for the same one.
-        diagnostics.note_session(session.identity.session_uid)
+        if loaded_uid:
+            diagnostics.note_session(loaded_uid[0])
         # Same reason as the import response: a source-backed project pays for
         # the first capability sweep here, which must not run on the loop.
         doc_payload = await run_in_threadpool(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import os
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterator, Literal
 
 from .llm.conversation import SessionState, effective_discipline
+from .session_history import SessionIdentity, register_active_session_provider
 from .spec_doc.project import load_project, save_project
 from .spec_doc.project_package import ProjectPackageError, build_project_package
 
@@ -477,6 +479,20 @@ class SessionManager:
 _manager = SessionManager()
 
 
+def active_session_uid() -> str:
+    """The active workspace's session uid, without the manager's lock.
+
+    Every log line and trace record reads this, from any thread, possibly
+    while that thread holds a lock another is waiting on — so it takes none.
+    Two attribute reads of objects that are replaced, never mutated, are
+    atomic under the GIL; the answer may be one switch stale, never torn.
+    """
+    return _manager._active.identity.session_uid
+
+
+register_active_session_provider(active_session_uid)
+
+
 def get_session() -> SessionState:
     return _manager.current().session
 
@@ -627,6 +643,27 @@ def project_payload(session: SessionState) -> dict[str, Any]:
             else None
         ),
         qc_fix_log=copy.deepcopy(list(getattr(session, "qc_fix_log", ()))),
+        session_journal=session_journal(session, saved=True),
+    )
+
+
+def session_journal(session: SessionState, *, saved: bool) -> dict[str, Any]:
+    """The session's journal with this visit upserted (``session_history``).
+
+    ``saved`` stamps the visit's save time; the support bundle describes the
+    live visit without one. Reads module globals and the usage meter only —
+    no file I/O — so it is safe under ``session_state_guard``.
+    """
+    from . import diagnostics, settings
+    from .tracing.recorder import get_recorder
+
+    recorder = get_recorder()
+    return session.identity.journal(
+        usage_snapshot=session.usage.snapshot(),
+        process_run_id=diagnostics.process_run_id(),
+        trace_run_id=recorder.run_id if recorder is not None else "",
+        app_version=settings.VERSION,
+        now=float(int(time.time())) if saved else None,
     )
 
 
@@ -708,6 +745,16 @@ def project_package(session: SessionState) -> tuple[bytes, str]:
     """
     with session.session_state_guard():
         inputs = capture_project_package_inputs(session)
+        identity = session.identity
+    # Tag this launch's log and trace runs with the session it saved, so
+    # retention keeps them and a support bundle finds them (outside the
+    # guard: it writes the run marker and run.json). Not a tutorial's
+    # practice copy: the tour's round trip packages one on every run, and
+    # tagging it would keep that launch for the history window for nothing.
+    if identity.began != "tutorial":
+        from . import diagnostics
+
+        diagnostics.note_session(identity.session_uid)
     return render_project_package(inputs), inputs.filename
 
 
@@ -1126,6 +1173,9 @@ def clone_session_for_tutorial(source: SessionState) -> SessionState:
         usage = source.usage.snapshot()
     clone = SessionState()
     load_project(payload, clone)
+    # A practice copy is a different session: it must not stamp its log
+    # lines and trace records with the user's uid, nor carry their visits.
+    clone.identity = SessionIdentity.fresh(began="tutorial")
     clone.source_docx_bytes = source_bytes
     clone.source_docx_filename = source_filename
     clone.source_docx_map = source_map

@@ -106,6 +106,7 @@ from typing import Any, Iterator
 import anthropic
 
 from .. import resource_pressure, settings
+from ..session_history import SessionIdentity
 from ..figures import CREATE_FIGURE_TOOL, FigureError, FigureStore
 from ..reference_docs import (
     READ_REFERENCE_DOC_TOOL,
@@ -511,6 +512,12 @@ class SessionState:
     qc_fix_log: list[dict[str, Any]] = field(default_factory=list)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
+    # Who this session is across app launches (``backend/session_history``):
+    # its uid, the visits its file recorded before this one, and this
+    # visit. Reset mints a new one (a new session), load brings the file's
+    # back, a tutorial clone gets its own. Replaced whole, never mutated, so
+    # the lock-free readers (log filter, trace recorder) see one identity.
+    identity: SessionIdentity = field(default_factory=SessionIdentity.fresh)
     # Context gauge, not spend (which is why it lives here and not in the
     # ledger — the ledger's snapshot/merge tutorial plumbing is additive and
     # would corrupt a gauge): the Anthropic-counted conversation size after
@@ -1910,6 +1917,9 @@ class SessionState:
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
+        # A new session is a new identity with no visits behind it: the
+        # discarded one's history stays in its own file.
+        self.identity = SessionIdentity.fresh()
         # The context gauge describes the conversation being discarded, and
         # so does the breakdown of that turn's context block.
         self.last_context_tokens = None

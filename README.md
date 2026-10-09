@@ -216,6 +216,71 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — a section's diagnostics follow it across launches
+
+(2026-10-09, owner request. docs/as-built.md's "A section's diagnostics
+follow it across launches" is the record; in the next release.)
+
+A section is often worked on for days or weeks, reopened every morning, and
+every app launch keeps its own log folder and trace run. Until now the
+diagnostics bundle carried only the current launch in full (plus short
+tails of the three most recent other runs, whatever section they were), and
+retention deleted a section's first launches after 30 days or once newer
+launches pushed them past the count limit. Now the bundle carries the whole
+section:
+
+- **Every section has an id.** A new section gets one; a saved `.baspec`
+  keeps it; reopening the file brings it back. A file saved before this
+  change gets one the first time it is opened, and keeps it from its next
+  save. Every activity-log line carries `session=<id>` and every trace record
+  `session_uid`, so a launch that worked on two sections can be split line
+  by line. The tour's practice copy is a different section with its own id,
+  and never tags a launch.
+- **The `.baspec` remembers its visits.** A new optional key,
+  `session_journal`, records each visit (from opening or creating the
+  section until it is replaced): when it started and was last saved, which
+  launch (log folder and trace run) it ran in, the app version, and its
+  turns, tokens and estimated cost. Ids, times and counts only, never text.
+  The newest 500 visits are kept and older ones counted. Spend across the
+  section's whole life is now recorded somewhere: the cost meter still
+  restarts at zero for each visit, and the journal keeps every visit's.
+- **Launches are tagged with the sections they opened or saved.** At the
+  moment a section is opened or saved, the launch's log run marker and
+  trace `run.json` record its id, so a launch that crashes later is still
+  found. A blank session that is never opened or saved tags nothing.
+- **Retention keeps a section's launches while you use it.** While any
+  launch of a section was active in the last 90 days
+  (`BUILD_A_SPEC_SESSION_HISTORY_DAYS`), all its launches are kept past the
+  age and count limits. The byte limits (512 MiB of traces, 256 MiB of logs)
+  still hold, but remove every other launch first.
+- **The bundle collects them.** With a section open, the diagnostics bundle
+  adds `session/journal.json` (every visit, this one included) and, newest
+  first, the logs and trace events/spans of every earlier launch still on
+  disk that opened or saved the section (found by the launch's own tag,
+  never by what a file claims) — each in full while it fits in what is left
+  of 64 MB of logs and 192 MB of trace, short tails otherwise. The three "other recent runs" tails
+  skip launches already included. Earlier launches' prompt text is large,
+  so it is included only when you tick **Also include the full prompt text
+  from this section's earlier launches** above the download button (this
+  launch's prompts are always included, as before). The manifest's
+  `scope.session_history` says which launches were copied in full, which as
+  tails, which were skipped because another open window owns them, which
+  launches the journal remembers that retention already removed, and which
+  it names that exist but were never tagged with the section (those are
+  listed, not copied). The
+  incident index adds `session_log_errors` from the earlier launches.
+- **Developer tools shows it.** Session state gains a **Session history**
+  row: visits recorded since when, total turns and estimated cost, how many
+  earlier launches are still on disk and their size, and whether this launch
+  is tagged yet.
+
+History starts with this version: launches from before it carry no tags and
+are not collected. Saving a copy of a file under a new name keeps the same
+id, so both copies record into one history. Work still running from a
+section after another one is opened (the UI prevents this) is stamped with
+the section that is open when each line is written. No request to the model
+changed, so no cache was touched. No paid API call was made.
+
 ## Current Status — the redline's comments carry no bookkeeping
 
 (2026-10-08, owner request. docs/as-built.md's "The redline's comments say
@@ -3691,7 +3756,7 @@ Shipped in v0.5.0 (Phase 5) and still current:
 - **Compliance audit.** One click audits the draft against the Phase 4 requirements profile, with Spec Critic's trust model intact: only **grounded** requirements control; `[UNVERIFIED]` items can at most earn a confirm-with-authority advisory; `[PROCESS]` items are excluded. Output: a coverage matrix (`represented / missing / contradicted / unclear`, every controlling requirement always classified — a skipped one reports `unclear`, never invisible) with evidence quotes + click-to-jump element ids, advisory findings, a staleness marker when the draft moves past the audited version, and a **compliance closing section in the `.docx` export**. Full multi-spec reviews still belong to Spec Critic.
 - **Windows packaging + auto-update.** Spec Critic's release pipeline, cloned: PyInstaller one-folder build (`packaging/windows/build-a-spec.spec`, bundling the built frontend + pywebview/WebView2), Inno Setup installer with its own stable AppId, and the serverless GitHub-Releases updater — `latest.json` manifest fetched https-only (redirect-downgrade guarded), installer **SHA-256-verified before it ever runs**, once-a-day throttle, skip-this-version, and an update pill in the header. `docs/RELEASE_WINDOWS.md` is the runbook; `--version`/`--selfcheck` smoke-test the frozen exe; a version-consistency gate keeps settings/package.json/tag aligned (and runs in pytest).
 - **Session tracing.** The ported Spec Critic tracing core (JSONL spans + events, background writer, credential redaction, prompt-hash dedup, deep mode) records turns — now with per-round detail and prompt material — plus every REST request and state-changing action (edits, exports, project saves/loads, QC dispositions, stops, key changes, frontend errors), research runs, audits, Final QC, and imports. Every record carries a run/process identity and monotonic sequence; requests carry a correlation id, stable outcome code, timing, and workspace generation before/after. The live run metadata checkpoints capture counts by event/span/request outcome, token totals, queue count/byte high-water marks, categorized drops, write failures, active-run storage, and open spans, so the diagnostic system reports its own gaps. Runs are local-only, env-gated (`BUILD_A_SPEC_TRACE`, default on), storage-bounded by age/count/bytes (with the byte ceiling also preventing one active run's JSONL payload from growing without bound), and viewable through the self-contained HTML viewer at `GET /api/trace/viewer` (no network, dynamic event filters).
-- **Always-on activity log + Developer tools.** Every launch writes a rotating local log beneath its own `<log-root>/process-<uuid>/` directory (`BUILD_A_SPEC_LOG`, default on: requests, errors with tracebacks, crashes via `faulthandler` and exception hooks, an unclean-shutdown marker) — the only place output survives in the packaged windowed build, where stdout/stderr go to devnull. Credential-shaped substrings are redacted from normal messages and exception text before file formatting. Historical log runs are storage-bounded by age/count/bytes without pruning the current launch, another live process, or recent unclean-shutdown evidence. **Settings → Developer tools** shows process/server identity, document shape and generation, import evidence, research/audit/QC worker state, trace coverage and writer health, recent activity, the log tail, retention results, the trace-run list, the cost self-checks (what each one has measured, and whether it has switched a saving off for the session), and the resource pressure ledger (whether any research area, Final QC call or chat turn was starved — rate limited, cut by a ceiling or the context window, truncated at `max_tokens`, left waiting for a worker or a lead — with what each one met, per run). Its one-click **diagnostics bundle** contains the point-in-time snapshot, the current launch's bounded log rotations, read-only/redacted legacy flat logs, the flushed current trace, bounded event/span tails from up to three completed prior runs, an exact inclusion/truncation manifest, and a time-ordered recent-incident index; live sibling runs are identified but never copied. The artifacts are local-only but may contain draft text, prompts, document titles, file paths, and error context; treat both folders and every exported bundle as sensitive project data.
+- **Always-on activity log + Developer tools.** Every launch writes a rotating local log beneath its own `<log-root>/process-<uuid>/` directory (`BUILD_A_SPEC_LOG`, default on: requests, errors with tracebacks, crashes via `faulthandler` and exception hooks, an unclean-shutdown marker) — the only place output survives in the packaged windowed build, where stdout/stderr go to devnull. Credential-shaped substrings are redacted from normal messages and exception text before file formatting. Historical log runs are storage-bounded by age/count/bytes without pruning the current launch, another live process, or recent unclean-shutdown evidence. **Settings → Developer tools** shows process/server identity, document shape and generation, import evidence, research/audit/QC worker state, trace coverage and writer health, recent activity, the log tail, retention results, the trace-run list, the cost self-checks (what each one has measured, and whether it has switched a saving off for the session), and the resource pressure ledger (whether any research area, Final QC call or chat turn was starved — rate limited, cut by a ceiling or the context window, truncated at `max_tokens`, left waiting for a worker or a lead — with what each one met, per run). Its one-click **diagnostics bundle** contains the point-in-time snapshot, the current launch's bounded log rotations, read-only/redacted legacy flat logs, the flushed current trace, the open section's history (its `.baspec` journal of visits plus the logs and trace events/spans of every earlier launch that opened or saved it and is still on disk, newest first, each in full while it fits in 64 MB of logs and 192 MB of trace, with those launches' prompt text only when the checkbox asks for it), bounded event/span tails from up to three other completed prior runs, an exact inclusion/truncation manifest, and a time-ordered recent-incident index; live sibling runs are identified but never copied. Retention keeps a section's launches past the age and count limits while the section was used within `BUILD_A_SPEC_SESSION_HISTORY_DAYS` (90); see "a section's diagnostics follow it across launches". The artifacts are local-only but may contain draft text, prompts, document titles, file paths, and error context; treat both folders and every exported bundle as sensitive project data.
 
 Shipped in v0.4.0 (Phase 4) and still current (the near-verbatim port of Spec Critic's requirements-research fan-out, pointed at drafting):
 
@@ -4197,6 +4262,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_LOG_MAX_RUNS` | `50` | Maximum retained per-launch log runs. `0` disables this one ceiling. |
 | `BUILD_A_SPEC_LOG_MAX_AGE_DAYS` | `30` | Maximum eligible log-run age in days. `0` disables this one ceiling. |
 | `BUILD_A_SPEC_LOG_MAX_MIB` | `256` | Aggregate per-launch log storage ceiling in MiB. `0` disables this one ceiling. Current/live runs and recent unclean-shutdown evidence are protected; invalid or negative settings use the default. |
+| `BUILD_A_SPEC_SESSION_HISTORY_DAYS` | `90` | How long a section's launches stay exempt from the trace and log age and count ceilings after the section was last used. Every launch that opened or saved a section is tagged with it; while any of those launches was active within this many days, all of them are kept, and the byte ceilings remove other launches first. `0` turns the protection off; invalid values use the default. In PowerShell: `$env:BUILD_A_SPEC_SESSION_HISTORY_DAYS = "180"`; in Command Prompt: `set BUILD_A_SPEC_SESSION_HISTORY_DAYS=180`. |
 | `BUILD_A_SPEC_UPDATE_URL` | GitHub latest | Override the update-manifest URL. |
 | `BUILD_A_SPEC_UPDATE_STATE_PATH` | config dir | Override the updater's state file (the once-a-day throttle, the skipped version, the remembered check, and the What's-new "last seen" marker). |
 | `BUILD_A_SPEC_DISABLE_UPDATE_CHECK` | off | Truthy disables update checks entirely. |

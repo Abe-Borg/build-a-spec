@@ -21828,3 +21828,176 @@ records, and not revived by a sibling's move; a deleted provision's id
 numbered from the history). Reversion probes, each restored: the repeat
 rule off (1 failure), the repeat rule counting moves (2), no history
 numbers (1), "applied" dates dropped again (1).
+
+## A section's diagnostics follow it across launches — implemented notes (2026-10-09)
+
+**Request (Abraham, 2026-10-09).** "The diagnostics log doesn't seem to track
+things over time … If I have a Build-a-Spec session that lasts over days to
+weeks, I would like all of that saved in the log bundle." The analysis
+found four gaps, and the owner asked for all four fixed:
+
+1. `build_bundle` copied only `current_log_dir()` and the current trace run
+   in full. Earlier launches contributed bounded 512 KiB event/span tails
+   for the three most recent runs (whatever section they worked on), and no
+   logs at all.
+2. Nothing tied a launch to a section. The trace run id
+   (`session-<8 hex>-<epoch>`) is minted per launch; `project_load` events
+   did not name the file; a `.baspec` had no identity of its own.
+3. Retention (traces 100 runs / 30 days / 512 MiB; logs 50 / 30 / 256 MiB)
+   deleted a long section's first launches before anyone asked for them.
+4. The cost meter resets on load, so a section's spend across visits was
+   recorded nowhere but in those pruned traces.
+
+### What was built
+
+- **`backend/session_history.py`**, a stdlib leaf imported by the session
+  store, the project serializer, diagnostics and the trace recorder.
+  `SessionIdentity` (uid, creation time, earlier visits, this visit),
+  `sanitize_journal` / `sanitize_visit` (every field re-typed and bounded;
+  unknown fields dropped, duplicate visit ids dropped, newest 500 kept and
+  the rest counted), `journal_totals`, the lock-free active-session provider,
+  and the retention helpers (`run_session_uids`, `remember_uid`,
+  `session_history_days`, `live_session_uids`).
+- **Identity on the session.** `SessionState.identity`, replaced whole on
+  reset (fresh), load (`from_project`) and tutorial clone (fresh, began
+  `tutorial`). A legacy file gets a fresh uid at load with `created_at=None`;
+  two opens without a save give two uids, and nothing was recorded under the
+  first (documented trade).
+- **The journal.** `project_payload` passes `session_journal=` (built by
+  `sessions.session_journal(session, saved=True)`) to `save_project`, which
+  writes the optional `session_journal` key. The current visit carries its
+  launch's `process_run_id` and `trace_run_id`, the app version, the meter's
+  turns, whitelisted counters (`VISIT_TOKEN_KEYS`) and estimated cost, and
+  `last_saved_at` as whole seconds (the `saved_at` granularity). Saving one
+  visit again replaces its entry.
+- **Stamping.** Log format gains `session=%(session_uid)s` (`-` before the
+  session store exists); every trace record gains `session_uid`. The provider
+  `sessions.active_session_uid` reads `_manager._active.identity.session_uid`
+  with no lock: two attribute reads of objects that are replaced, never
+  mutated. A lock there could deadlock a thread that logs while another
+  holds the manager lock waiting on it.
+- **The launch index.** `diagnostics.note_session` → run marker
+  `session_uids` (rewritten only when a uid is new) and
+  `capture.note_session` → `TraceRecorder.note_session` (`run.json`
+  `session_uids`, checkpointed at once). Called from both load routes after
+  the commit and from `sessions.project_package` after the guarded capture
+  (the HTTP save and the native save share it). Never under the guard,
+  and never for a tutorial copy: the tour's `project_roundtrip` scenario
+  packages one on every run, and tagging it would keep that launch for the
+  whole window.
+- **Retention.** Trace and log pruning gained the same rule: runs tagged
+  with a session that has any tagged run active within the window (default
+  90 days) are skipped by the age and count passes and sorted last for the
+  byte pass. Results gain `session_history_days` and `session_kept_runs`;
+  the age check behind `limits_satisfied` ignores kept runs. Count still
+  tallies kept runs (the existing "protected runs count toward each total"
+  posture), so a long section can push other launches out by count.
+- **The bundle.** `build_bundle(*, include_session_prompts=False)`; the
+  route takes `include_prompts`. New members: `session/journal.json`,
+  `traces/<run>/{run.json,events.jsonl,spans.jsonl[,prompts.jsonl]}` and
+  `logs/<process>/…` for each earlier launch whose own tag names the
+  session, newest first; a launch that fits in what is left of the 192 MiB
+  trace / 64 MiB log source-byte budget is copied whole, one that does not
+  gets `*-tail.jsonl` and 512 KiB log tails, so one huge launch does not
+  reduce every older one to tails. (The first cut also selected launches the
+  journal named; see the Codex review below.) `_add_redacted_text_file_if_present` gained `max_bytes`. Prior
+  tails now skip runs the session history copied, so the zip never holds a
+  run twice. Manifest gains `session_uid` and `scope.session_history`
+  (session uid, prompt choice, budgets, whether this launch is tagged, per-run
+  coverage, live-owned runs named, the journal's runs no longer on disk,
+  and the ones it names that exist untagged);
+  `included_run_ids` lists the session's trace runs. Incident index gains
+  `session_uid` and `session_log_errors` (ERROR/CRITICAL lines from the
+  earlier launches, by the line's own timestamp, 50 at most); the session's
+  trace incidents join `recent_trace_incidents`.
+- **Snapshot and frontend.** `session.session_history` in the snapshot.
+  `lib/sessionHistory.ts` (`sessionHistoryLines`, `diagnosticsBundleUrl`),
+  the `SessionHistoryFacts` type, the Developer tools row and checkbox, and
+  the bundle description. No capability or tour change: the modal's
+  controls sit under `session.developer-tools`.
+
+### Decisions
+
+- **Select by launch, include whole launches.** A launch that also worked on
+  another section is copied whole (the current launch always was); the
+  `session=` stamps let a reader split it. Filtering records would lose the
+  process-level context an incident usually needs.
+- **Tag at load and save only.** Every launch starts with a fresh blank
+  session; tagging on creation would make every launch "live" for 90 days
+  and defeat the age ceiling. A section that crashes before its first save
+  has no file to collect history for.
+- **Prompts off by default.** Earlier launches' `prompts.jsonl` is most of a
+  trace's bytes; the owner's analysis answer proposed a checkbox, and the
+  owner accepted it.
+- **Two budgets.** So a DEBUG-level log can never crowd out the trace, or
+  the reverse.
+
+### Tests and evidence
+
+`tests/test_session_history.py` (32 tests after the review): identity, journal shape and
+sanitizing, upsert, reopen, legacy files, tutorial clone, log and trace
+stamping, tagging through `/api/project/load`, `/api/project/load-file` and
+`/api/project/save`, a blank session tagging nothing, both retentions (age,
+count, bytes order, window off), and the bundle (full copy, prompts opt-in,
+budget tails, live-owned exclusion, journal runs not on disk, the tour's
+copy tagging nothing, snapshot facts; the review's four are below).
+Its fake log folders carry no pid: a made-up one belonged to a live process
+during one local run and (correctly) excluded the launch as live-owned. `frontend/tests/sessionHistory.test.ts` (6): the formatter, the URL
+against the route's parameter, the type's keys against the backend source,
+and the modal's use of the helpers. Updated: `tests/test_session_wipe.py`
+(the `identity` probe), `tests/test_tutorial.py` (its stable payload drops
+the journal's save time and the meter-fed counters, which take the
+tutorial's spend by design), `tests/conftest.py` (resets the launch index).
+
+Reversion probes, each restored: trace age skip, trace count skip, byte
+order, log age skip, legacy-load tag, `.baspec`-load tag (needed a test of
+its own: the first probe passed because a save in the same test had tagged
+the uid), save tag, tutorial fresh identity, load identity, reset identity,
+log stamp, trace stamp, prompts gate, prior-tail dedupe, marker tags, the
+journal key and the tutorial skip — 17 probes, each a failure (the two
+journal-union probes went with the union; the review's are below). Ruff clean; `npm test` 570/570;
+`npm run build` clean. No paid API call was made, and no model request
+byte changed.
+
+### Codex review on PR #303 (three findings, all fixed in the PR)
+
+- *P1 — journal-named runs bypassed the tag.* The first cut also copied any
+  run the journal named, to survive a missing tag. A `.baspec` is untrusted
+  and its journal is only shape-checked, so a crafted file naming a local
+  run id would have pulled that run (and, with the box ticked, its prompts)
+  into the bundle. The path needs ids an outsider cannot realistically
+  know, but the union bought little — every journal visit comes from a save,
+  and the save tags the launch — so it is gone: selection is by the run's
+  own tag only. Journal ids now only report: `journal_runs_not_on_disk` (no
+  folder) and `journal_runs_untagged` (a folder, no tag; listed, not
+  copied). The ids passed strict patterns, so the existence check cannot
+  leave the roots.
+- *P2 — the tag re-read a mutable session after the guard.* A reset landing
+  between the load's guard and the tag would have tagged the replacement.
+  Both routes now read the uid under the commit's guard.
+- *P2 — a JSON integer past the float range raised.* `float(10**400)` raises
+  `OverflowError`; a crafted journal made the package load a 500, and the
+  legacy JSON route could fail after other live fields had been replaced.
+  `_finite_number` catches it (`_count` now goes through it), and
+  `load_project` stages the identity with the other parsed state before the
+  live session changes.
+
+Tests: the union test was inverted
+(`test_a_journal_cannot_pull_in_a_launch_that_is_not_tagged`), plus
+`test_numbers_too_large_for_a_float_are_unusable_not_an_error`,
+`test_a_bad_journal_never_leaves_a_half_loaded_session` and
+`test_the_launch_is_tagged_with_the_session_the_load_committed` (both
+routes; the reset is injected at the `project_load` trace event, which sits
+in exactly that window). Reversion probes, each restored: the trace union
+back (1 failure), no overflow catch (1), identity built late again (1), the
+legacy and `.baspec` routes re-reading the session (1 each).
+
+### Release-note draft (for the release after 1.26.0)
+
+"A section's diagnostics now follow it across launches. Each saved section
+remembers its visits — when, which app launch, and what each cost — and the
+diagnostics bundle collects the logs and traces of every earlier launch
+that opened or saved the open section, while retention keeps them for as
+long as you keep working on it (`BUILD_A_SPEC_SESSION_HISTORY_DAYS`, 90
+days by default). Earlier launches' prompt text is included only when you
+tick the box. History starts with this version."

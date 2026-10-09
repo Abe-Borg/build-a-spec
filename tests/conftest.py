@@ -116,7 +116,7 @@ def _reject_refused_request_shapes():
 
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
-    from backend import cost_checks, resource_pressure, sessions
+    from backend import cost_checks, diagnostics, resource_pressure, sessions
     from backend.llm.client import reset_client_cache
     from backend.llm.conversation import (
         reset_per_message_effort_probe,
@@ -136,6 +136,9 @@ def _fresh_session(monkeypatch):
     # And the resource pressure ledger: a run one test recorded must not
     # read as this test's.
     resource_pressure.reset_for_tests()
+    # And the sessions this process tagged its launch with: a load one test
+    # made must not read as this launch's in the next.
+    diagnostics.reset_session_index_for_tests()
     # And Final QC's refusal-fallback latch (the 5.5 prompting upgrade,
     # P55-7), for the same reason.
     reset_refusal_fallback_probe()
@@ -162,5 +165,6 @@ def _fresh_session(monkeypatch):
     reset_thinking_display_probe()
     cost_checks.reset_for_tests()
     resource_pressure.reset_for_tests()
+    diagnostics.reset_session_index_for_tests()
     reset_refusal_fallback_probe()
     reset_per_message_effort_probe()

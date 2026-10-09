@@ -85,6 +85,14 @@ _INCIDENT_TAIL_BYTES = 512 * 1024
 _INCIDENT_LIMIT = 50
 _RUN_META_READ_CAP = 512 * 1024
 _BUNDLE_LOG_TEXT_BYTES = 12 * 1024 * 1024
+# The open session's earlier launches (``session_history``) are copied in
+# full, newest first, until these source-byte budgets are spent; older ones
+# then contribute bounded tails, and the manifest says which got which. Two
+# budgets so a chatty debug log can never crowd out the trace, or the
+# reverse. Prompt text from earlier launches counts against the trace budget
+# and is copied only when the person asks for it.
+_SESSION_TRACE_BYTE_BUDGET = 192 * 1024 * 1024
+_SESSION_LOG_BYTE_BUDGET = 64 * 1024 * 1024
 
 _DISABLE_TOKENS = frozenset({"0", "false", "no", "off"})
 
@@ -118,7 +126,7 @@ _TAMED_LOGGERS: dict[str, int] = {
 _LOG_FORMAT = (
     "%(asctime)s.%(msecs)03d %(levelname)-8s %(name)s "
     "[pid=%(process_id)s version=%(app_version)s trace=%(trace_run_id)s "
-    "thread=%(threadName)s] %(message)s"
+    "session=%(session_uid)s thread=%(threadName)s] %(message)s"
 )
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
@@ -144,6 +152,50 @@ _PROCESS_RUN_ID = f"process-{uuid.uuid4().hex}"
 _RUN_STARTED_AT = time.time()
 _SERVER_IDENTITY_LOCK = threading.Lock()
 _SERVER_IDENTITY: dict[str, Any] = {}
+# Sessions this launch loaded or saved (``session_history``'s launch index):
+# written into the run marker so retention and the support bundle can tell
+# which launches belong to a section without reading their logs.
+_SESSION_UIDS_LOCK = threading.Lock()
+_SESSION_UIDS: list[str] = []
+
+
+def process_run_id() -> str:
+    """This launch's log directory name (``process-<32 hex>``)."""
+    return _PROCESS_RUN_ID
+
+
+def note_session(session_uid: str) -> None:
+    """Tag this launch's log and trace runs with a session it loaded or saved.
+
+    Called after a project load commits and whenever a project is packaged
+    for saving, never under ``session_state_guard``: it rewrites the run
+    marker and checkpoints the trace ``run.json`` (which may start the
+    recorder). Idempotent per session; never raises.
+    """
+    from .session_history import remember_uid, valid_session_uid
+
+    uid = valid_session_uid(session_uid)
+    if not uid:
+        return
+    with _SESSION_UIDS_LOCK:
+        new = remember_uid(_SESSION_UIDS, uid)
+    if new:
+        try:
+            if _HOOKS_INSTALLED and log_enabled():
+                _write_run_marker(clean=False)
+        except Exception:  # noqa: BLE001 - diagnostics never block a save
+            pass
+    try:
+        from .tracing import capture
+
+        capture.note_session(uid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def noted_session_uids() -> list[str]:
+    with _SESSION_UIDS_LOCK:
+        return list(_SESSION_UIDS)
 
 
 def set_runtime_server_identity(
@@ -205,6 +257,11 @@ class _LogContextFilter(logging.Filter):
             record.trace_run_id = recorder.run_id if recorder is not None else "-"
         except Exception:  # noqa: BLE001
             record.trace_run_id = "-"
+        # The active workspace's session (``session_history``): lock-free,
+        # never imports the session store, ``-`` before it exists.
+        from .session_history import active_session_uid
+
+        record.session_uid = active_session_uid() or "-"
         return True
 
 
@@ -488,6 +545,7 @@ class _LogRunInfo:
     pid: int | None
     clean: bool
     marker: dict[str, Any]
+    session_uids: tuple[str, ...] = ()
 
 
 def _process_is_alive(pid: int | None) -> bool:
@@ -578,6 +636,8 @@ def _read_log_run_info(
             and raw_pid > 0
             else None
         )
+        from .session_history import run_session_uids
+
         return _LogRunInfo(
             path=path,
             run_id=path.name,
@@ -588,6 +648,7 @@ def _read_log_run_info(
             pid=pid,
             clean=marker.get("clean") is True,
             marker=marker,
+            session_uids=run_session_uids(marker),
         )
     except (OSError, TypeError, ValueError):
         return None
@@ -662,12 +723,20 @@ def prune_log_runs(
     """Apply bounded retention to recognized per-launch log directories.
 
     The current directory, every live PID, and a recently dead unclean run are
-    protected. Flat pre-upgrade artifacts and unrelated entries are ignored.
-    Failures are summarized and never prevent startup.
+    protected. A launch of a LIVE session (``session_history``: any launch
+    tagged with it active within ``session_history_days``) is kept past the
+    age and count ceilings and is the last the byte ceiling removes. Flat
+    pre-upgrade artifacts and unrelated entries are ignored. Failures are
+    summarized and never prevent startup.
     """
+    from .session_history import live_session_uids, session_history_days
+
     root = Path(root)
+    history_days = session_history_days()
     result: dict[str, Any] = {
         "policy": policy.to_dict(),
+        "session_history_days": history_days,
+        "session_kept_runs": 0,
         "recognized_runs": 0,
         "protected_runs": 0,
         "ignored_entries": 0,
@@ -709,6 +778,16 @@ def prune_log_runs(
             protected.add(info.path)
     result["protected_runs"] = len(protected)
     remaining: dict[Path, _LogRunInfo] = {info.path: info for info in infos}
+    live_sessions = live_session_uids(
+        ((_log_retention_timestamp(info), info.session_uids) for info in infos),
+        now=timestamp,
+        days=history_days,
+    )
+    session_kept = {
+        path
+        for path, info in eligible.items()
+        if live_sessions.intersection(info.session_uids)
+    }
 
     def remove(info: _LogRunInfo, reason: str) -> bool:
         try:
@@ -755,6 +834,8 @@ def prune_log_runs(
     if policy.max_age_days > 0:
         max_age_seconds = policy.max_age_days * 24 * 60 * 60
         for info in sorted(eligible.values(), key=_log_retention_timestamp):
+            if info.path in session_kept:
+                continue
             if timestamp - _log_retention_timestamp(info) > max_age_seconds:
                 remove(info, "age")
 
@@ -762,11 +843,22 @@ def prune_log_runs(
         for info in sorted(eligible.values(), key=_log_retention_timestamp):
             if len(remaining) <= policy.max_runs:
                 break
+            if info.path in session_kept:
+                continue
             remove(info, "count")
 
     if policy.max_bytes > 0:
         total_bytes = sum(info.size_bytes for info in remaining.values())
-        for info in sorted(eligible.values(), key=_log_retention_timestamp):
+        # Other launches first, then a live session's oldest: the byte
+        # ceiling is the disk guarantee, so it may reach a session's
+        # history, but only once nothing else is left to remove.
+        for info in sorted(
+            eligible.values(),
+            key=lambda item: (
+                item.path in session_kept,
+                _log_retention_timestamp(item),
+            ),
+        ):
             if total_bytes <= policy.max_bytes:
                 break
             if remove(info, "bytes"):
@@ -774,14 +866,20 @@ def prune_log_runs(
 
     remaining_bytes = sum(info.size_bytes for info in remaining.values())
     result["protected_runs"] = len(protected)
+    result["session_kept_runs"] = sum(
+        1 for path in session_kept if path in remaining
+    )
     result["remaining_runs"] = len(remaining)
     result["remaining_bytes"] = remaining_bytes
     age_satisfied = True
     if policy.max_age_days > 0:
         max_age_seconds = policy.max_age_days * 24 * 60 * 60
+        # A live session's launch past the age ceiling is kept by design,
+        # not a ceiling this pass failed to meet.
         age_satisfied = all(
             timestamp - _log_retention_timestamp(info) <= max_age_seconds
             for info in remaining.values()
+            if info.path not in session_kept
         )
     result["limits_satisfied"] = (
         age_satisfied
@@ -932,6 +1030,13 @@ def _teardown_locked() -> None:
     _LOG_INIT_LAST_FAILURE_AT = None
     with _SERVER_IDENTITY_LOCK:
         _SERVER_IDENTITY.clear()
+    reset_session_index_for_tests()
+
+
+def reset_session_index_for_tests() -> None:
+    """Forget which sessions this process tagged (conftest hygiene)."""
+    with _SESSION_UIDS_LOCK:
+        _SESSION_UIDS.clear()
 
 
 def _read_run_marker() -> dict[str, Any] | None:
@@ -964,6 +1069,9 @@ def _write_run_marker(*, clean: bool) -> None:
     server_identity = runtime_server_identity()
     if server_identity:
         payload["server"] = server_identity
+    session_uids = noted_session_uids()
+    if session_uids:
+        payload["session_uids"] = session_uids
     if clean:
         payload["ended_at"] = time.time()
     tmp = path.with_suffix(".json.tmp")
@@ -1589,6 +1697,10 @@ def snapshot() -> dict[str, Any]:
         }
         busy = sessions.busy_reasons(session)
         usage = session.usage.snapshot()
+        # Who this session is across launches, with this visit as it stands
+        # (``session_history``): field reads and the meter's snapshot.
+        identity = session.identity
+        journal = sessions.session_journal(session, saved=False)
         generation = session.generation
         # A shallow copy is a coherent snapshot (messages are appended,
         # truncated or replaced, never mutated in place); it is MEASURED
@@ -1602,6 +1714,10 @@ def snapshot() -> dict[str, Any]:
     # What the conversation the model re-reads every turn is made of —
     # sizes by category, never text (the compaction plan's measurement).
     session_block["history_composition"] = history_composition(history_snapshot)
+    # The section's history across app launches: what its file's journal
+    # recorded and how many of its earlier launches are still on disk (a
+    # directory scan, so outside the guard).
+    session_block["session_history"] = _session_history_facts(journal, identity)
 
     key = dict(api_key_store.key_status())
     if key.get("source") == "env":
@@ -2075,17 +2191,303 @@ def _recent_trace_incidents(
     return sorted(incidents, key=timestamp)[-bounded:]
 
 
-def build_bundle() -> tuple[Path, str]:
+@dataclass(frozen=True)
+class _SessionLaunch:
+    """One earlier launch (log or trace run) tagged with a session."""
+
+    run_id: str
+    path: Path
+    timestamp: float
+    size_bytes: int
+    live: bool
+
+
+def _journal_run_ids(journal: dict[str, Any], key: str) -> set[str]:
+    """The launches a journal's visits name (``trace_run_id`` or
+    ``process_run_id``), already shape-checked by ``session_history``. Used
+    only to REPORT launches the bundle did not collect, never to select."""
+    return {
+        str(visit.get(key))
+        for visit in journal.get("visits") or ()
+        if isinstance(visit, dict) and visit.get(key)
+    }
+
+
+def _session_trace_launches(session_uid: str) -> list[_SessionLaunch]:
+    """Retained trace runs tagged with ``session_uid``, newest first.
+
+    Selected by the run's OWN tag only, never by a journal entry: a
+    ``.baspec`` is untrusted input, and a run id it names could be any
+    local run (Codex review on PR #303). Excludes this launch's own run
+    (the bundle copies it in full anyway). A run owned by another live
+    process is returned with ``live=True`` so the caller can name it
+    without copying it.
+    """
+    from .session_history import run_session_uids, valid_session_uid
+    from .tracing import config as trace_config
+    from .tracing.recorder import get_recorder
+    from .tracing.retention import process_is_alive
+
+    uid = valid_session_uid(session_uid)
+    if not uid:
+        return []
+    root = trace_config.default_trace_root()
+    recorder = get_recorder()
+    current_id = recorder.run_id if recorder is not None else None
+    try:
+        candidates = [p for p in root.iterdir() if _is_trace_run_dir(p)]
+    except OSError:
+        return []
+    launches: list[_SessionLaunch] = []
+    for run_dir in candidates:
+        if run_dir.name == current_id:
+            continue
+        meta_path = run_dir / "run.json"
+        try:
+            if meta_path.is_symlink() or meta_path.stat().st_size > _RUN_META_READ_CAP:
+                continue
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - a torn run.json names no session
+            continue
+        if not isinstance(meta, dict) or meta.get("run_id") != run_dir.name:
+            continue
+        if uid not in run_session_uids(meta):
+            continue
+        environment = meta.get("environment")
+        raw_pid = environment.get("pid") if isinstance(environment, dict) else None
+        pid = (
+            int(raw_pid)
+            if isinstance(raw_pid, int) and not isinstance(raw_pid, bool) and raw_pid > 0
+            else None
+        )
+        size = 0
+        for name in ("spans.jsonl", "events.jsonl", "prompts.jsonl", "run.json"):
+            try:
+                size += max(0, (run_dir / name).stat().st_size)
+            except OSError:
+                continue
+        ended = _optional_number(meta.get("ended_at"))
+        launches.append(
+            _SessionLaunch(
+                run_id=run_dir.name,
+                path=run_dir,
+                timestamp=ended
+                if ended is not None
+                else _number(meta.get("started_at"), _mtime_or_zero(run_dir)),
+                size_bytes=size,
+                live=process_is_alive(pid),
+            )
+        )
+    launches.sort(key=lambda launch: launch.timestamp, reverse=True)
+    return launches
+
+
+def _session_log_launches(session_uid: str) -> list[_SessionLaunch]:
+    """Retained per-launch log directories tagged with ``session_uid``
+    (their own marker's tag only, as above), newest first, excluding this
+    launch's own (copied in full anyway)."""
+    from .session_history import valid_session_uid
+
+    uid = valid_session_uid(session_uid)
+    if not uid:
+        return []
+    infos, _ignored, _failed = _scan_log_runs(log_dir())
+    launches = [
+        _SessionLaunch(
+            run_id=info.run_id,
+            path=info.path,
+            timestamp=_log_retention_timestamp(info),
+            size_bytes=info.size_bytes,
+            live=_process_is_alive(info.pid),
+        )
+        for info in infos
+        if info.run_id != _PROCESS_RUN_ID and uid in info.session_uids
+    ]
+    launches.sort(key=lambda launch: launch.timestamp, reverse=True)
+    return launches
+
+
+def _session_history_facts(
+    journal: dict[str, Any], identity: Any
+) -> dict[str, Any]:
+    """The snapshot's ``session.session_history``: flat facts, no text.
+
+    Scans the log and trace roots for launches tagged with the session (the
+    ``list_trace_runs`` cost: one small ``run.json``/marker read per run),
+    so it runs outside ``session_state_guard``.
+    """
+    from .session_history import journal_totals
+
+    uid = str(journal.get("session_uid") or "")
+    trace_launches = _session_trace_launches(uid)
+    log_launches = _session_log_launches(uid)
+    return {
+        **journal_totals(journal),
+        "visit_began": getattr(identity, "began", ""),
+        "visit_started_at": getattr(identity, "visit_started_at", None),
+        "current_launch_tagged": uid in noted_session_uids(),
+        "earlier_trace_runs_on_disk": len(trace_launches),
+        "earlier_log_runs_on_disk": len(log_launches),
+        "earlier_runs_bytes_on_disk": sum(
+            launch.size_bytes for launch in trace_launches + log_launches
+        ),
+        "history_days": _session_history_days(),
+    }
+
+
+def _session_history_days() -> int:
+    from .session_history import session_history_days
+
+    return session_history_days()
+
+
+def _bundle_session_inputs() -> tuple[str, dict[str, Any]]:
+    """The open session's uid and journal (live visit, unsaved), captured
+    under the guard. Field reads and the meter's snapshot only."""
+    from . import sessions
+
+    session = sessions.get_workspace().session
+    with session.session_state_guard():
+        journal = sessions.session_journal(session, saved=False)
+    return str(journal.get("session_uid") or ""), journal
+
+
+def _add_session_trace_launch(
+    zf: zipfile.ZipFile,
+    launch: _SessionLaunch,
+    *,
+    full: bool,
+    include_prompts: bool,
+    artifacts: list[dict[str, Any]],
+    trace_incidents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Copy one earlier trace run of the session; returns its manifest scope."""
+    scope: dict[str, Any] = {
+        "run_id": launch.run_id,
+        "coverage": "full" if full else "bounded_tail_over_budget",
+        "source_size_bytes": launch.size_bytes,
+        "artifacts": {},
+    }
+    added = _add_sanitized_json_file_if_present(
+        zf,
+        launch.path / "run.json",
+        f"traces/{launch.run_id}/run.json",
+        coverage="full_metadata",
+    )
+    if added is not None:
+        artifacts.append(added)
+        scope["artifacts"]["run.json"] = added
+    names = ["events.jsonl", "spans.jsonl"]
+    if full and include_prompts:
+        names.append("prompts.jsonl")
+    for name in names:
+        source_path = launch.path / name
+        if full:
+            arcname = f"traces/{launch.run_id}/{name}"
+            added = _add_sanitized_jsonl_file_if_present(
+                zf, source_path, arcname, coverage="session_history_full"
+            )
+            if added is None:
+                continue
+            artifacts.append(added)
+            scope["artifacts"][name] = added
+        else:
+            tail, tail_meta = _bounded_jsonl_tail(source_path)
+            if not tail:
+                continue
+            tail_name = name.replace(".jsonl", "-tail.jsonl")
+            arcname = f"traces/{launch.run_id}/{tail_name}"
+            zf.writestr(arcname, tail)
+            added = {"path": arcname, "coverage": "bounded_tail", **tail_meta}
+            artifacts.append(added)
+            scope["artifacts"][tail_name] = added
+        if name != "prompts.jsonl":
+            incident_tail, _size, _truncated = _read_tail_bytes(
+                source_path, _INCIDENT_TAIL_BYTES
+            )
+            trace_incidents.extend(
+                _trace_incidents(
+                    incident_tail, run_id=launch.run_id, artifact=name
+                )
+            )
+    if not include_prompts:
+        scope["prompts"] = "omitted_not_requested"
+    elif not full:
+        scope["prompts"] = "omitted_over_budget"
+    return scope
+
+
+def _add_session_log_launch(
+    zf: zipfile.ZipFile,
+    launch: _SessionLaunch,
+    *,
+    full: bool,
+    artifacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Copy one earlier log directory of the session; returns its scope."""
+    scope: dict[str, Any] = {
+        "run_id": launch.run_id,
+        "coverage": "full" if full else "bounded_tail_over_budget",
+        "source_size_bytes": launch.size_bytes,
+        "artifacts": {},
+    }
+    added = _add_sanitized_json_file_if_present(
+        zf,
+        launch.path / RUN_MARKER_FILENAME,
+        f"logs/{launch.run_id}/{RUN_MARKER_FILENAME}",
+        coverage="session_history_log_run_metadata",
+    )
+    if added is not None:
+        artifacts.append(added)
+        scope["artifacts"][RUN_MARKER_FILENAME] = added
+    names = [LOG_FILENAME, CRASH_FILENAME]
+    if full:
+        names += [f"{LOG_FILENAME}.{i}" for i in range(1, _LOG_BACKUP_COUNT + 1)]
+    for name in names:
+        added = _add_redacted_text_file_if_present(
+            zf,
+            launch.path / name,
+            f"logs/{launch.run_id}/{name}",
+            max_bytes=None if full else _PRIOR_CONTEXT_BYTES,
+        )
+        if added is not None:
+            artifacts.append(added)
+            scope["artifacts"][name] = added
+    return scope
+
+
+def _session_log_incidents(
+    launches: list[_SessionLaunch],
+) -> list[dict[str, Any]]:
+    """ERROR/CRITICAL lines from the session's earlier launches, oldest
+    first by the line's own timestamp, bounded like the current launch's."""
+    incidents: list[dict[str, Any]] = []
+    for launch in launches:
+        for item in _recent_log_incidents(launch.path):
+            incidents.append({"run_id": launch.run_id, **item})
+    incidents.sort(key=lambda item: str(item.get("line", ""))[:23])
+    return incidents[-_INCIDENT_LIMIT:]
+
+
+def build_bundle(*, include_session_prompts: bool = False) -> tuple[Path, str]:
     """Assemble the diagnostics zip into a temp file; (path, filename).
 
     Contents: the scrubbed snapshot, this launch's log files plus read-only
     legacy flat logs (rotation bounds both), the CURRENT trace run through a
-    pre-copy flush barrier, and bounded JSONL tails for the three most recent
-    completed prior runs. Runs owned by another live process are identified but
-    never copied — full prior runs are unbounded
-    and the trace list in the modal names the folder for anyone who
-    needs more. A manifest declares exact inclusion/truncation scope, and a
+    pre-copy flush barrier, the open session's history, and bounded JSONL
+    tails for the three most recent completed prior runs not already in that
+    history. Runs owned by another live process are identified but never
+    copied. A manifest declares exact inclusion/truncation scope, and a
     bounded incident index points at recent errors without replacing evidence.
+
+    The session's history (``session_history``) is its journal — every
+    visit the ``.baspec`` recorded, plus this one — and every earlier launch
+    still on disk whose log marker or ``run.json`` is tagged with the
+    session: logs and trace events/spans in full, newest first, until
+    :data:`_SESSION_LOG_BYTE_BUDGET` / :data:`_SESSION_TRACE_BYTE_BUDGET`
+    are spent, bounded tails after that. Their prompt text is large and is
+    copied only with ``include_session_prompts``. The manifest names the
+    journal's launches that retention already removed.
 
     Written to a temporary FILE, not memory: a deep-trace run can be
     hundreds of MB, and an in-memory zip of it would spike (or kill) the
@@ -2109,9 +2511,29 @@ def build_bundle() -> tuple[Path, str]:
     capture_id = f"bundle-{uuid.uuid4().hex}"
     captured_at = time.time()
     captured_snapshot = snapshot()
+    try:
+        session_uid, session_journal = _bundle_session_inputs()
+    except Exception:  # noqa: BLE001 - the rest of the bundle still matters
+        _log.warning("Could not read the open session's history", exc_info=True)
+        session_uid, session_journal = "", {}
     artifacts: list[dict[str, Any]] = []
     trace_incidents: list[dict[str, Any]] = []
     prior_scopes: list[dict[str, Any]] = []
+    session_scope: dict[str, Any] = {
+        "session_uid": session_uid or None,
+        "include_prompts": bool(include_session_prompts),
+        "trace_byte_budget": _SESSION_TRACE_BYTE_BUDGET,
+        "log_byte_budget": _SESSION_LOG_BYTE_BUDGET,
+        "current_launch_tagged": bool(
+            session_uid and session_uid in noted_session_uids()
+        ),
+        "trace_runs": [],
+        "log_runs": [],
+        "excluded_live_run_ids": [],
+        "journal_runs_not_on_disk": {"trace": [], "log": []},
+        "journal_runs_untagged": {"trace": [], "log": []},
+    }
+    session_log_errors: list[dict[str, Any]] = []
     try:
         with handle, zipfile.ZipFile(
             handle, "w", compression=zipfile.ZIP_DEFLATED
@@ -2208,6 +2630,108 @@ def build_bundle() -> tuple[Path, str]:
                             )
                         )
 
+            # --- the open session's history --------------------------------
+            session_trace_ids: set[str] = set()
+            if session_journal:
+                from .tracing.redaction import scrub_data as _scrub
+
+                journal_bytes = json.dumps(
+                    _scrub(session_journal), indent=2, default=str
+                ).encode("utf-8")
+                zf.writestr("session/journal.json", journal_bytes)
+                artifacts.append(
+                    {
+                        "path": "session/journal.json",
+                        "coverage": "full_journal_with_live_visit",
+                        "included_bytes": len(journal_bytes),
+                    }
+                )
+                session_scope["journal"] = "session/journal.json"
+                session_scope["visits_recorded"] = len(
+                    session_journal.get("visits") or []
+                )
+            if session_uid:
+                journal_trace_ids = _journal_run_ids(
+                    session_journal, "trace_run_id"
+                )
+                journal_log_ids = _journal_run_ids(
+                    session_journal, "process_run_id"
+                )
+                trace_launches = _session_trace_launches(session_uid)
+                # Newest first; a launch that fits in what is left of the
+                # budget is copied whole, one that does not gets tails (so
+                # one huge launch does not reduce every older one to tails).
+                trace_budget = _SESSION_TRACE_BYTE_BUDGET
+                for launch in trace_launches:
+                    if launch.live:
+                        session_scope["excluded_live_run_ids"].append(
+                            launch.run_id
+                        )
+                        continue
+                    session_trace_ids.add(launch.run_id)
+                    cost = launch.size_bytes
+                    if not include_session_prompts:
+                        try:
+                            cost -= (launch.path / "prompts.jsonl").stat().st_size
+                        except OSError:
+                            pass
+                    full = cost <= trace_budget
+                    if full:
+                        trace_budget -= max(0, cost)
+                    session_scope["trace_runs"].append(
+                        _add_session_trace_launch(
+                            zf,
+                            launch,
+                            full=full,
+                            include_prompts=include_session_prompts,
+                            artifacts=artifacts,
+                            trace_incidents=trace_incidents,
+                        )
+                    )
+                log_launches = _session_log_launches(session_uid)
+                log_budget = _SESSION_LOG_BYTE_BUDGET
+                copied_logs: list[_SessionLaunch] = []
+                for launch in log_launches:
+                    if launch.live:
+                        session_scope["excluded_live_run_ids"].append(
+                            launch.run_id
+                        )
+                        continue
+                    full = launch.size_bytes <= log_budget
+                    if full:
+                        log_budget -= launch.size_bytes
+                    session_scope["log_runs"].append(
+                        _add_session_log_launch(
+                            zf, launch, full=full, artifacts=artifacts
+                        )
+                    )
+                    copied_logs.append(launch)
+                session_log_errors = _session_log_incidents(copied_logs)
+                # Launches the journal remembers that the bundle did not
+                # collect: gone (retention, a moved machine), or present but
+                # not tagged with this session — named, never copied, since
+                # only a run's own tag says it belongs here. The ids passed
+                # ``session_history``'s strict patterns, so joining them to
+                # the roots cannot leave them.
+                from .tracing import config as _trace_config
+
+                tagged_trace = {launch.run_id for launch in trace_launches}
+                tagged_log = {launch.run_id for launch in log_launches}
+                trace_root = _trace_config.default_trace_root()
+                logs_root = log_dir()
+                for kind, ids, tagged, root_dir, own in (
+                    ("trace", journal_trace_ids, tagged_trace, trace_root, current_id),
+                    ("log", journal_log_ids, tagged_log, logs_root, _PROCESS_RUN_ID),
+                ):
+                    for run_id in sorted(ids - tagged - {own or ""}):
+                        present = (root_dir / run_id).is_dir()
+                        bucket = (
+                            "journal_runs_untagged"
+                            if present
+                            else "journal_runs_not_on_disk"
+                        )
+                        session_scope[bucket][kind].append(run_id)
+
             trace_inventory = list_trace_runs(limit=100)["runs"]
             excluded_live_trace_run_ids = [
                 str(run["run_id"])
@@ -2215,11 +2739,14 @@ def build_bundle() -> tuple[Path, str]:
                 if run["run_id"] != current_id
                 and bool(run.get("owner_process_alive"))
             ]
+            # The most recent completed runs the session history did not
+            # already copy: context across a restart into another section.
             prior = [
                 run
                 for run in trace_inventory
                 if run["run_id"] != current_id
                 and not bool(run.get("owner_process_alive"))
+                and run["run_id"] not in session_trace_ids
             ][:_PRIOR_RUN_COUNT]
             from .tracing import config as trace_config
 
@@ -2281,6 +2808,8 @@ def build_bundle() -> tuple[Path, str]:
                         "process", {}
                     ).get("previous_run_marker"),
                     "recent_log_errors": _recent_log_incidents(directory),
+                    "session_uid": session_uid or None,
+                    "session_log_errors": session_log_errors,
                     "recent_trace_incidents": _recent_trace_incidents(
                         trace_incidents
                     ),
@@ -2306,10 +2835,15 @@ def build_bundle() -> tuple[Path, str]:
                 "current_log_run_id": _PROCESS_RUN_ID,
                 "current_trace_run_id": current_id,
                 "current_trace_flush_complete": recorder_flush_complete,
+                "session_uid": session_uid or None,
                 "included_run_ids": [
                     value
                     for value in [
                         current_id,
+                        *(
+                            scope["run_id"]
+                            for scope in session_scope["trace_runs"]
+                        ),
                         *(scope["run_id"] for scope in prior_scopes),
                     ]
                     if value
@@ -2325,6 +2859,7 @@ def build_bundle() -> tuple[Path, str]:
                         if current_id is not None
                         else "unavailable"
                     ),
+                    "session_history": session_scope,
                     "prior_traces": prior_scopes,
                     "excluded_live_trace_run_ids": excluded_live_trace_run_ids,
                     "prior_tail_byte_limit_per_artifact": _PRIOR_CONTEXT_BYTES,
@@ -2428,6 +2963,8 @@ def _add_redacted_text_file_if_present(
     zf: zipfile.ZipFile,
     path: Path,
     arcname: str,
+    *,
+    max_bytes: int | None = None,
 ) -> dict[str, Any] | None:
     """Copy a bounded text artifact with retrospective credential redaction.
 
@@ -2443,7 +2980,8 @@ def _add_redacted_text_file_if_present(
             return None
         before = path.stat()
         source, source_size, tail_truncated = _read_tail_bytes(
-            path, _BUNDLE_LOG_TEXT_BYTES
+            path,
+            _BUNDLE_LOG_TEXT_BYTES if max_bytes is None else max_bytes,
         )
         try:
             after = path.stat()

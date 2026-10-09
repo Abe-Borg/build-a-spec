@@ -15,6 +15,7 @@ import {
 import { contextMakeup } from "../lib/contextSizes";
 import { costCheckLines } from "../lib/costChecks";
 import { resourcePressureLines } from "../lib/resourcePressure";
+import { diagnosticsBundleUrl, sessionHistoryLines } from "../lib/sessionHistory";
 import { describeCompaction } from "../lib/compaction";
 import { useDialogFocus } from "../lib/dialogFocus";
 
@@ -112,6 +113,7 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [copied, setCopied] = useState<string>("");
+  const [includePrompts, setIncludePrompts] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const refreshBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -522,6 +524,11 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                   name="Spend (est.)"
                   value={`$${snapshot.usage.estimated_cost_usd.total.toFixed(3)} across ${snapshot.usage.turns} turn${snapshot.usage.turns === 1 ? "" : "s"}`}
                 />
+                {/* The section across app launches: what its file
+                    recorded, and how much of it the bundle can still copy. */}
+                {sessionHistoryLines(sess.session_history).map((line, index) => (
+                  <Row key={`history-${index}`} name={index === 0 ? "Session history" : ""} value={line} />
+                ))}
               </div>
             ) : (
               <p className="mt-2 text-xs text-ink-faint">Not loaded.</p>
@@ -732,17 +739,34 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
             <p className="mt-2 text-xs text-ink-faint">
               One .zip with the snapshot above, this launch&apos;s bounded log
               rotations, read-only legacy flat logs, the current trace through
-              a flush barrier, and bounded tails from up to three completed
-              prior runs. Live sibling processes are identified but never
-              copied. An exact inclusion manifest and time-ordered incident
-              index state what was captured. It can contain draft text,
-              prompts, document titles, file paths, and error context.
+              a flush barrier, and the open section&apos;s history: every
+              visit its file recorded, plus the logs and trace of every
+              earlier launch that opened or saved it and is still on disk
+              (newest first, within a size budget), then bounded tails from
+              up to three other recent runs. Live sibling processes are
+              identified but never copied. An exact inclusion manifest and
+              time-ordered incident index state what was captured, including
+              any earlier launches already removed. It can contain draft
+              text, prompts, document titles, file paths, and error context.
               Credential-shaped strings are redacted; the bundle is generated
               locally and saved to your
               machine only — share it deliberately.
             </p>
+            <label className="mt-2 flex items-start gap-2 text-xs text-ink-dim">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={includePrompts}
+                onChange={(e) => setIncludePrompts(e.target.checked)}
+              />
+              <span>
+                Also include the full prompt text from this section&apos;s
+                earlier launches (much larger; this launch&apos;s prompts are
+                always included)
+              </span>
+            </label>
             <a
-              href="/api/diagnostics/bundle"
+              href={diagnosticsBundleUrl(includePrompts)}
               download
               className="mt-2 inline-block rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
             >

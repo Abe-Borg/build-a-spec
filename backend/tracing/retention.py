@@ -17,6 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..session_history import (
+    live_session_uids,
+    run_session_uids,
+    session_history_days,
+)
 from .config import TraceRetentionPolicy
 
 _log = logging.getLogger(__name__)
@@ -35,6 +40,7 @@ class _RunInfo:
     updated_at: float
     size_bytes: int
     pid: int | None
+    session_uids: tuple[str, ...] = ()
 
 
 def prune_trace_runs(
@@ -46,12 +52,20 @@ def prune_trace_runs(
 ) -> dict[str, Any]:
     """Apply ``policy`` and return a compact maintenance summary.
 
+    A run tagged with a LIVE session (``session_history``: any run tagged
+    with it active within ``session_history_days``) is kept past the age and
+    count ceilings and is the last the byte ceiling removes, so a section
+    worked on for weeks keeps every launch it had.
+
     Failures are reported and logged, never raised: retention is a support
     feature and must not prevent tracing or application startup.
     """
     root = Path(root)
+    history_days = session_history_days()
     result: dict[str, Any] = {
         "policy": policy.to_dict(),
+        "session_history_days": history_days,
+        "session_kept_runs": 0,
         "recognized_runs": 0,
         "protected_runs": 0,
         "ignored_entries": 0,
@@ -107,6 +121,16 @@ def prune_trace_runs(
     result["protected_runs"] = len(protected)
 
     remaining: dict[Path, _RunInfo] = {info.path: info for info in infos}
+    live_sessions = live_session_uids(
+        ((_retention_timestamp(info), info.session_uids) for info in infos),
+        now=timestamp,
+        days=history_days,
+    )
+    session_kept = {
+        path
+        for path, info in eligible.items()
+        if live_sessions.intersection(info.session_uids)
+    }
 
     def remove(info: _RunInfo, reason: str) -> bool:
         # Re-check the containment/symlink invariants immediately before the
@@ -148,30 +172,45 @@ def prune_trace_runs(
         reasons[reason] = int(reasons.get(reason, 0)) + 1
         return True
 
-    # Age is an independent ceiling.
+    # Age is an independent ceiling. A live session's runs are exempt.
     if policy.max_age_days > 0:
         max_age_seconds = policy.max_age_days * 24 * 60 * 60
         for info in sorted(eligible.values(), key=_retention_timestamp):
+            if info.path in session_kept:
+                continue
             if timestamp - _retention_timestamp(info) > max_age_seconds:
                 remove(info, "age")
 
     # Count and bytes retain the newest eligible runs.  Protected runs count
-    # toward each total, but are never sacrificed merely to satisfy a limit.
+    # toward each total, but are never sacrificed merely to satisfy a limit;
+    # a live session's runs count too, and only the byte ceiling (the disk
+    # guarantee) may remove them, after every other eligible run.
     if policy.max_runs > 0:
         for info in sorted(eligible.values(), key=_retention_timestamp):
             if len(remaining) <= policy.max_runs:
                 break
+            if info.path in session_kept:
+                continue
             remove(info, "count")
 
     if policy.max_bytes > 0:
         total_bytes = sum(info.size_bytes for info in remaining.values())
-        for info in sorted(eligible.values(), key=_retention_timestamp):
+        for info in sorted(
+            eligible.values(),
+            key=lambda item: (
+                item.path in session_kept,
+                _retention_timestamp(item),
+            ),
+        ):
             if total_bytes <= policy.max_bytes:
                 break
             if remove(info, "bytes"):
                 total_bytes -= info.size_bytes
 
     remaining_bytes = sum(info.size_bytes for info in remaining.values())
+    result["session_kept_runs"] = sum(
+        1 for path in session_kept if path in remaining
+    )
     result["remaining_runs"] = len(remaining)
     result["remaining_bytes"] = remaining_bytes
     age_satisfied = True
@@ -180,6 +219,7 @@ def prune_trace_runs(
         age_satisfied = all(
             timestamp - _retention_timestamp(info) <= max_age_seconds
             for info in remaining.values()
+            if info.path not in session_kept
         )
     result["limits_satisfied"] = (
         age_satisfied
@@ -225,6 +265,7 @@ def _read_run_info(path: Path, root_resolved: Path) -> _RunInfo | None:
             updated_at=updated_at,
             size_bytes=size_bytes,
             pid=pid,
+            session_uids=run_session_uids(meta),
         )
     except (OSError, ValueError, TypeError):
         return None

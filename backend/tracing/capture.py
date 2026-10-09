@@ -351,6 +351,19 @@ def app_event(event_type: str, **fields: Any) -> None:
         pass
 
 
+def note_session(session_uid: str) -> None:
+    """Tag this launch's trace run with a session it loaded or saved
+    (``session_history``'s launch index). Starts the recorder like
+    :func:`app_event`; never raises."""
+    try:
+        recorder = _ensure_recorder()
+        if recorder is None:
+            return
+        recorder.note_session(session_uid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def request_event(
     *,
     method: str,

@@ -8721,6 +8721,9 @@ def create_app(
                 # map that cannot be checked against exact source bytes.
                 session.source_docx_map = None
                 session.source_patch_context = None
+                # The identity this load committed, read under its guard: a
+                # reset landing after the guard must not be what gets tagged.
+                loaded_uid = session.identity.session_uid
         except ValueError as exc:
             _trace_capture.app_event(
                 "project_load", mode="legacy_json", ok=False, error=str(exc)
@@ -8729,6 +8732,10 @@ def create_app(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
         _trace_capture.app_event("project_load", mode="legacy_json", ok=True)
+        # Tag this launch with the opened session (outside the guard: it
+        # writes the run marker and run.json) so retention keeps the launch
+        # and a support bundle finds it, even if the app later crashes.
+        diagnostics.note_session(loaded_uid)
         return JSONResponse(
             {
                 "ok": True,
@@ -8797,6 +8804,10 @@ def create_app(
         # are the commit point. A rejected package never reaches them.
         session = entry_lease.session
         home_kept: list[bool] = []
+        # The identity the commit installs, captured under its guard (see the
+        # legacy route): tagged after the guard, never re-read from a session
+        # a reset may already have replaced.
+        loaded_uid: list[str] = []
 
         def _commit_load() -> JSONResponse | None:
             """The commit, on a worker thread, under ONE guard.
@@ -8849,6 +8860,7 @@ def create_app(
                             status_code=409,
                         )
                 load_project(parsed.project, session)
+                loaded_uid.append(session.identity.session_uid)
                 session.source_docx_bytes = parsed.source_docx_bytes
                 session.source_docx_filename = (
                     parsed.source_docx_filename if parsed.source_docx_bytes else ""
@@ -8879,6 +8891,10 @@ def create_app(
             ok=True,
             source_retained=parsed.source_docx_bytes is not None,
         )
+        # Tag this launch with the opened session — the legacy route's
+        # reason, and outside the commit's guard for the same one.
+        if loaded_uid:
+            diagnostics.note_session(loaded_uid[0])
         # Same reason as the import response: a source-backed project pays for
         # the first capability sweep here, which must not run on the loop.
         doc_payload = await run_in_threadpool(
@@ -9159,11 +9175,14 @@ def create_app(
         )
 
     @app.get("/api/diagnostics/bundle", include_in_schema=False)
-    def diagnostics_bundle() -> FileResponse:
+    def diagnostics_bundle(include_prompts: bool = False) -> FileResponse:
         """Download the bounded, manifest-described local support bundle.
 
         Includes a point-in-time snapshot, this launch's bounded log rotations,
-        the current trace through a flush barrier, bounded tails from up to
+        the current trace through a flush barrier, the open session's history
+        (its journal plus every earlier launch still on disk that loaded or
+        saved it — logs and trace events/spans, within byte budgets; their
+        prompt text only with ``include_prompts``), bounded tails from up to
         three completed prior runs, an inclusion/truncation manifest, and a
         time-ordered incident index. Live sibling runs are never copied. It
         contains draft text and prompts by design (the trace posture — that is what
@@ -9173,13 +9192,19 @@ def create_app(
         hundreds of MB and an in-memory zip would spike the desktop process
         exactly when the user needs it least.
         """
-        path, filename = diagnostics.build_bundle()
+        path, filename = diagnostics.build_bundle(
+            include_session_prompts=include_prompts
+        )
         try:
             size = path.stat().st_size
         except OSError:
             size = 0
         _trace_capture.app_event(
-            "export", kind="diagnostics_bundle", bytes=size, ok=True
+            "export",
+            kind="diagnostics_bundle",
+            bytes=size,
+            include_prompts=include_prompts,
+            ok=True,
         )
         return FileResponse(
             path,

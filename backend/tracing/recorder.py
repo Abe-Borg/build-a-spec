@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from ..session_history import active_session_uid, remember_uid, valid_session_uid
 from ..usage_ledger import PRICING_USAGE_KEYS
 from .config import LEVEL_DEEP, LEVEL_DEFAULT
 from .redaction import redact_text, scrub_data
@@ -390,6 +391,28 @@ class TraceRecorder:
             _log.warning("Failed to update run.json on stop: %s", exc)
 
     # ---- public capture surface ----------------------------------------
+    def note_session(self, session_uid: str) -> None:
+        """Record in ``run.json`` that this run loaded or saved a session.
+
+        Written through at once rather than at the next idle checkpoint: the
+        point is that a launch which later crashes is still findable by the
+        session it was working on. Idempotent per session.
+        """
+        uid = valid_session_uid(session_uid)
+        if not uid:
+            return
+        with self._record_lock:
+            if self._stopped.is_set():
+                return
+            uids = self._run_meta.get("session_uids")
+            if not isinstance(uids, list):
+                uids = []
+                self._run_meta["session_uids"] = uids
+            if not remember_uid(uids, uid):
+                return
+            self._mark_metadata_dirty_locked()
+        self._checkpoint_run_meta()
+
     def open_span(
         self,
         kind: str,
@@ -687,6 +710,11 @@ class TraceRecorder:
             record["trace_run_id"] = self._run_id
             record["process_instance_id"] = self._process_instance_id
             record["record_seq"] = next_sequence
+            # The active workspace's session (``session_history``), so one
+            # launch's records can be split by section. Lock-free read.
+            session_uid = active_session_uid()
+            if session_uid:
+                record["session_uid"] = session_uid
             try:
                 line = json.dumps(
                     record,

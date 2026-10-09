@@ -204,6 +204,12 @@ def test_rich_source_backed_restore_preserves_every_original_store_exactly():
     def stable_payload(session):
         payload = copy.deepcopy(sessions.project_payload(session))
         payload.pop("saved_at", None)
+        # The journal stamps this visit's save time the same way, and its
+        # counters read the meter, which takes the tutorial's spend by
+        # design (asserted below). Its identity fields must not move.
+        for visit in payload["session_journal"]["visits"]:
+            for key in ("last_saved_at", "turns", "estimated_cost_usd", "tokens"):
+                visit.pop(key, None)
         return payload
 
     before = stable_payload(original)

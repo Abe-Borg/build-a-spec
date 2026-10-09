@@ -2599,6 +2599,32 @@ export interface ResourcePressureSnapshot {
 }
 
 /** `GET /api/diagnostics` — environment + session snapshot. */
+/** ``diagnostics._session_history_facts``: one session's history across
+ *  app launches. Ids, times and counts only. */
+export interface SessionHistoryFacts {
+  session_uid: string;
+  /** Null for a file saved before session history existed. */
+  created_at: number | null;
+  /** Visits the file recorded, this one included. */
+  visits_recorded: number;
+  /** Older visits past the journal's cap, counted rather than kept. */
+  visits_dropped: number;
+  launches_recorded: number;
+  first_visit_at: number | null;
+  turns_total: number;
+  estimated_cost_usd_total: number;
+  /** "new", "opened" or "tutorial". */
+  visit_began: string;
+  visit_started_at: number | null;
+  /** Whether this launch has loaded or saved the session yet. */
+  current_launch_tagged: boolean;
+  earlier_trace_runs_on_disk: number;
+  earlier_log_runs_on_disk: number;
+  earlier_runs_bytes_on_disk: number;
+  /** BUILD_A_SPEC_SESSION_HISTORY_DAYS; 0 = retention protection off. */
+  history_days: number;
+}
+
 export interface DiagnosticsSnapshot {
   ok: boolean;
   schema_version: number;
@@ -2774,6 +2800,10 @@ export interface DiagnosticsSnapshot {
     /** The condensed-conversation record and its runner (compaction plan
      *  Phase 3). Sizes, counts and closed tokens only, never the summary. */
     compaction?: CompactionFacts;
+    /** The section's history across app launches (session history): what
+     *  its file's journal recorded and how much of it is still on disk.
+     *  Ids, times and counts only. Absent from an older backend. */
+    session_history?: SessionHistoryFacts;
     unsaved: boolean;
     import_report_present: boolean;
     module_id: string;

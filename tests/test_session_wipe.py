@@ -26,6 +26,7 @@ from backend.app import create_app
 from backend.llm.compaction import CompactionRecord
 from backend.llm.conversation import SessionState
 from backend.research.engine import RequirementsProfile
+from backend.session_history import SessionIdentity
 from backend.spec_doc.source_format import (
     FormatAnchor,
     SourceFormatMap,
@@ -100,6 +101,16 @@ _STATE_PROBES = {
     # A home that survived a reset would list — and open by name — another
     # project's sections beside a fresh session.
     "project_home": lambda s: s.project_home,
+    # Who the session is across launches (session history). The uid and
+    # visit id are random per session, so the probe reads what a fresh one
+    # always has: no earlier visits, a "new" visit, a known creation time.
+    # That the uid itself changes is pinned in tests/test_session_history.py.
+    "identity": lambda s: (
+        s.identity.visits,
+        s.identity.dropped_visits,
+        s.identity.began,
+        s.identity.created_at is not None,
+    ),
 }
 
 # Fields a reset deliberately does NOT restore, each with the reason it is
@@ -260,6 +271,12 @@ def _dirty(session: SessionState) -> None:
         "brief_name": "the-previous-project.basproject",
         "project_id": "a" * 32,
     }
+    session.identity = SessionIdentity(
+        created_at=None,
+        visits=({"visit_id": "b" * 32, "started_at": 1.0},),
+        dropped_visits=2,
+        began="opened",
+    )
 
 
 def test_every_session_field_is_classified_as_wiped_or_kept():

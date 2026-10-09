@@ -687,6 +687,13 @@ is `BUILD_A_SPEC_REDLINE_COMMENTS`, on by default.
 - [ ] Download a diagnostics bundle from the packaged app and open it: it
       contains the snapshot, this launch's logs and the current trace, states
       what it truncated, and contains **no** key material.
+- [ ] **A section's history (next release).** Open a saved section, close
+      the app, reopen it and open the same section again, then download a
+      bundle: `session/journal.json` lists both visits, the earlier launch's
+      `logs/process-…/` folder and `traces/session-…/events.jsonl` are in
+      the zip, and the manifest's `scope.session_history` names them. Tick
+      the prompt-text box and download again: that launch's
+      `prompts.jsonl` is now included.
 - [ ] The trace viewer opens from Developer tools and renders with no network.
 
 ### Next section in one click (v1.20.0)

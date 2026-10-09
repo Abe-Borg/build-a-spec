@@ -1537,6 +1537,76 @@ Tests: `tests/test_redline_comment_hygiene.py`,
 release-note draft are in `docs/as-built.md` under the same heading. No
 paid API call was made.
 
+## A section's diagnostics follow it across launches — implemented notes (2026-10-09)
+
+Owner request (Abraham): a section worked on over days or weeks spans many
+launches, and the support bundle carried only the current launch in full;
+retention pruned a long section's first launches by age (30 days) and count.
+
+- **Identity.** `backend/session_history.py` (a stdlib leaf).
+  `SessionState.identity: SessionIdentity` — `session_uid` (32 hex),
+  `created_at`, earlier `visits`, this visit (`visit_id`,
+  `visit_started_at`, `began`: new/opened/tutorial). Replaced whole, never
+  mutated: `_reset_while_locked` mints a fresh one; `load_project` sets
+  `SessionIdentity.from_project(data)` (a file without a journal gets a
+  fresh uid, `created_at=None`); `clone_session_for_tutorial` gives the clone
+  `fresh(began="tutorial")`. `tests/test_session_wipe.py` probes it.
+- **The journal.** `save_project(..., session_journal=)` writes the optional
+  `session_journal` key, built by `sessions.session_journal(session,
+  saved=)`: earlier visits plus this one upserted by `visit_id` (ids, times,
+  turns, whitelisted token counters, estimated cost from the usage meter —
+  never text). `sanitize_journal` rebuilds a loaded one from known fields,
+  dedupes visit ids and keeps the newest `MAX_JOURNAL_VISITS` (500), counting
+  the rest. The meter still resets on load; the journal is where each
+  visit's spend survives.
+- **Stamping.** `_LogContextFilter` adds `session=<uid>` to every log line
+  (`_LOG_FORMAT`); `TraceRecorder._enqueue` adds `session_uid` to every
+  record. Both read `session_history.active_session_uid()`, a provider
+  `sessions` registers at import that reads `_manager._active.identity`
+  WITHOUT a lock (it runs on every log line, possibly under other locks).
+- **The launch index.** `diagnostics.note_session(uid)` appends to the
+  process's bounded `_SESSION_UIDS` (64), rewrites the run marker
+  (`session_uids`) and calls `capture.note_session` →
+  `TraceRecorder.note_session`, which writes `run.json`'s `session_uids`
+  through at once (a launch that crashes later must still be findable). It
+  is called after a load commits (both load routes) and in
+  `sessions.project_package` after the guarded capture — never under
+  `session_state_guard`. A blank session nobody opens or saves tags nothing,
+  and neither does a tutorial copy (`began == "tutorial"`): the tour's round
+  trip packages one on every run.
+- **Retention.** Both `prune_trace_runs` and `prune_log_runs` compute LIVE
+  sessions (`live_session_uids`: any tagged run active within
+  `BUILD_A_SPEC_SESSION_HISTORY_DAYS`, default 90, `0` = off). Eligible runs
+  of a live session skip the age and count passes; the byte pass removes
+  every other eligible run first, then the session's oldest. Their results
+  gain `session_history_days` and `session_kept_runs`; `limits_satisfied`
+  no longer counts a kept run's age against the ceiling.
+- **The bundle.** `build_bundle(*, include_session_prompts=False)`
+  (`GET /api/diagnostics/bundle?include_prompts=`): `session/journal.json`
+  (the live visit unsaved, `last_saved_at: null`), then every earlier trace
+  run and log directory tagged with the session or named by its journal
+  (`_journal_run_ids`), newest first, each in full while it fits in what is
+  left of `_SESSION_TRACE_BYTE_BUDGET` (192 MiB) / `_SESSION_LOG_BYTE_BUDGET`
+  (64 MiB), bounded tails otherwise; earlier `prompts.jsonl` only on
+  request. A journal launch is "not on disk" only when no folder holds it.
+  Live-owned runs are named, never copied. The three prior-run tails skip
+  runs the session history copied. Manifest: `session_uid`,
+  `scope.session_history` (per-run coverage, `journal_runs_not_on_disk`);
+  incident index: `session_uid`, `session_log_errors`.
+- **Snapshot and UI.** `snapshot()["session"]["session_history"]`
+  (`_session_history_facts`, flat, a directory scan outside the guard).
+  Developer tools: a "Session history" row and an "Also include the full
+  prompt text…" checkbox (`lib/sessionHistory.ts`), inside the existing
+  `session.developer-tools` capability like the modal's other controls.
+- **Unchanged.** Every model request byte (no cache moves), the SSE
+  protocol, readiness, the QC manifest, project briefs and templates.
+
+Never take a lock in `active_session_uid`, never call `note_session` under
+`session_state_guard`, and never let text of the work into the journal.
+Tests: `tests/test_session_history.py`, `frontend/tests/sessionHistory.test.ts`.
+Full record and reversion evidence in `docs/as-built.md` under the same
+heading. No paid API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

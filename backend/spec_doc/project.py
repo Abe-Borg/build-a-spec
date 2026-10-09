@@ -258,6 +258,7 @@ def save_project(
     last_harvest_bubble: int = 0,
     compaction: dict[str, Any] | None = None,
     qc_fix_log: list[dict[str, Any]] | None = None,
+    session_journal: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -342,6 +343,14 @@ def save_project(
         safe_log = sanitize_fix_log(qc_fix_log)
         if safe_log:
             payload["qc_fix_log"] = safe_log
+    # Who this session is and the visits it had across app launches
+    # (``backend/session_history``). Optional the same way: a reader that
+    # does not know the key opens the file unchanged, and this build gives a
+    # file without it a new uid at load. Ids, times and counts only.
+    if session_journal:
+        from ..session_history import JOURNAL_KEY
+
+        payload[JOURNAL_KEY] = session_journal
     return payload
 
 
@@ -759,9 +768,19 @@ def load_project(data: Any, session) -> None:
     from ..suggestions import restore_prompts
 
     session.suggested_prompts = restore_prompts(data.get("suggested_prompts"))
-    # The meter is per-session; a resumed project starts its own count (the
-    # prior session's spend lives in that session's traces, not this file).
+    # The meter counts THIS visit; a resumed project starts its own count.
+    # What earlier visits spent rides the file's session journal (below),
+    # which is also where this visit's count lands at the next save.
     session.usage.reset()
+    # The file's identity, as a new visit of it (``backend/session_history``).
+    # Assigned unconditionally like every key here: loading over a live
+    # session must not keep the outgoing session's uid or visits. A file
+    # saved before session history gets a fresh uid. Guarded for the
+    # lightweight session objects format-1 compatibility callers pass.
+    if hasattr(session, "identity"):
+        from ..session_history import SessionIdentity
+
+        session.identity = SessionIdentity.from_project(data)
     # The context gauge measured the outgoing conversation; the loaded one
     # has no measurement until its first turn commits — nor a breakdown of
     # that turn's context block.

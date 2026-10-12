@@ -1089,12 +1089,16 @@ function Dossier() {
               is a finding), the discipline, and each lens’s brief. Then, per
               finding, the finding itself plus the document context the
               verifier needs — the verifier seats get the standards editions
-              in effect with their recorded basis, the attached documents and
-              the facts too, so a reviewer asked to refute “this cites an
-              edition the jurisdiction did not adopt”, “this contradicts the
-              owner’s standard” or “this is not what the authority confirmed”
-              can actually read the record instead of dismissing the finding
-              for want of evidence.
+              in effect with their recorded basis, the research profile, the
+              attached documents and the facts too, so a reviewer asked to
+              refute “this cites an edition the jurisdiction did not adopt”,
+              “this requirement the research found is missing”, “this
+              contradicts the owner’s standard” or “this is not what the
+              authority confirmed” can actually read the record instead of
+              dismissing the finding for want of evidence. A finding that a
+              value the project never supplied is missing is kept when the
+              section cannot be right without it; only a fix that would invent
+              the value is turned down.
             </>
           }
           model={

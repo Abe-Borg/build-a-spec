@@ -22099,6 +22099,20 @@ new dependencies (`openpyxl`, `defusedxml`).
   shared-strings table is parsed by each); a generated 6 MB, 150,000-row
   workbook took about 2.4 s per load plus about 0.9 s per pass to the
   breaker on the dev container. Real schedules are well under a second.
+- **A second breaker counts what reading costs** (Codex review on PR #304,
+  P1). openpyxl yields every row between two that hold values, and blank
+  rows add no text, so the character breaker never moved while a sheet's
+  stray far-out cell was being reached: one value at row 1,048,576 walks a
+  million blank rows (0.5 s, measured), and a crafted row index past Excel's
+  limit (openpyxl's coordinate grammar caps columns at three letters, not
+  rows) would have kept the upload worker walking for hours.
+  `MAX_WORKBOOK_POSITIONS` (5,000,000) counts every row and every cell
+  position visited, blank ones included, across the whole workbook, checked
+  before a row's cells are read; a crafted `r="A999999999999"` now stops in
+  under 3 s with the same note and warning ("limit 5,000,000 rows and cells,
+  blank ones included"). It is sized past a real sheet: a value at Excel's
+  last row is still read under the default (pinned), and a legitimate
+  dense sheet reaches the character breaker first.
 - **`block_count`** is the number of rows with values read.
 - **Every list of types moved together**: the native dialog's filter
   (`main._REFERENCE_OPEN_FILE_TYPES`), the browser picker's `accept`, the
@@ -22122,7 +22136,7 @@ new dependencies (`openpyxl`, `defusedxml`).
   `ReferenceDoc.from_dict` accepts any kind and `kind_label` falls back to
   the kind, so 1.26.0 shows its type as "xlsx" and reads it normally. The
   same holds for a project brief.
-- **Tests**: `tests/test_reference_workbooks.py` (30): attach and read sheet
+- **Tests**: `tests/test_reference_workbooks.py` (33): attach and read sheet
   by sheet (kind, label, filename, rows parsed back with `csv.reader`, the
   stub and tool header); a single sheet has no contents line; cells as Excel
   shows them; a saved formula result; an empty-string result reads blank
@@ -22133,7 +22147,10 @@ new dependencies (`openpyxl`, `defusedxml`).
   values; an entity declaration refused, not expanded; the bomb; failing
   closed without the guard; the dependencies and the hidden import pinned;
   member size, member count and an encrypted member; the breaker's note and
-  warning; the breaker above the stored cap; the policy's wording.
+  warning; the breaker above the stored cap; the policy's wording; blank rows
+  counted toward the position breaker (a row past Excel's limit), cell
+  positions counted and the budget spanning the workbook, and a stray cell at
+  Excel's last row still read.
   `tests/test_reference_docs.py`: `.xlsx`/`.xlsm` added to the
   unsupported-type and every-type tests (the three-way picker/policy pin
   covers the rest unchanged). Revert matrix, each mechanism reverted in place
@@ -22146,7 +22163,9 @@ new dependencies (`openpyxl`, `defusedxml`).
   → 1; the breaker → 1; the hidden marker → 1; the contents line → 2; the
   ISO date → 1; the 15-digit number → 1; the spreadsheet refusal message →
   4; the browser `accept` → 1; the native filter → 1; the stub mark → 1;
-  `defusedxml` out of `requirements.txt` → 1; the spec's hidden import → 1.
+  `defusedxml` out of `requirements.txt` → 1; the spec's hidden import → 1;
+  for the position breaker, no check → 2, rows counted without their cells →
+  1, a per-sheet budget → 1, a default of 1,000,000 → 1.
   The policy's kinds list reverted stayed green at first ("Excel" still
   appeared in the new sentence), so `test_the_model_is_told_how_a_workbook_reads`
   was added before this was recorded: the kinds list → 1, the formula

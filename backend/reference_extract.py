@@ -50,6 +50,8 @@ Supported kinds, and why each is read the way it is
           in Excel) is read as its formula and reported, never left blank.
           Columns empty in every row of a sheet (spacer columns) and runs of
           empty rows are dropped, because a reference's tokens are budgeted.
+          Two runaway breakers bound the read: the text it yields and the
+          rows and cells it visits, blank ones included.
           Legacy ``.xls``, binary ``.xlsb`` and OpenDocument ``.ods`` are
           refused with the way out (save as ``.xlsx`` or export ``.csv``), as
           is a password-protected workbook, which Excel encrypts whole.
@@ -134,6 +136,16 @@ _UNREADABLE_SPREADSHEETS: dict[str, str] = {
 # stored truncation, which tells the model the tail was not read, is what
 # normally cuts; hitting this is reported, never silent.
 MAX_WORKBOOK_TEXT_CHARS = 1_000_000
+
+# The second breaker counts what reading costs rather than what it yields:
+# every row and every cell position visited, blank ones included. openpyxl
+# yields each row between two that hold values, so one stray cell at row
+# 1,048,576 walks a million blank rows (about half a second), and a crafted
+# row index far past Excel's limit would walk them for hours while the
+# character breaker, which only sees text, never moves (Codex review on
+# PR #304). Sized well past any real schedule: a legitimate sheet reaches
+# the character breaker first.
+MAX_WORKBOOK_POSITIONS = 5_000_000
 
 # Every OLE2 compound file starts with these bytes. An ``.xlsx`` that does is
 # either password-protected (Excel encrypts the whole package into one) or a
@@ -531,8 +543,9 @@ def _read_workbook(values_book: Any, formulas_book: Any) -> ReferenceExtraction:
 
     block_count = 0
     chars = 0
+    positions = 0
     unsaved_formulas = 0
-    stopped: tuple[str, int, int] | None = None
+    stopped: tuple[str, int, int, str] | None = None
     for position, (values_sheet, formulas_sheet) in enumerate(sheets, start=1):
         title = titles[position - 1]
         prefix = "hidden sheet" if hidden[position - 1] else "sheet"
@@ -540,14 +553,18 @@ def _read_workbook(values_book: Any, formulas_book: Any) -> ReferenceExtraction:
         sheet = _read_sheet(
             values_sheet,
             formulas_sheet,
-            budget=MAX_WORKBOOK_TEXT_CHARS - chars,
+            char_budget=MAX_WORKBOOK_TEXT_CHARS - chars,
+            position_budget=MAX_WORKBOOK_POSITIONS - positions,
         )
         lines.extend(sheet.lines)
         block_count += sheet.row_count
         chars += sheet.chars
+        positions += sheet.positions
         unsaved_formulas += sheet.unsaved_formulas
         if sheet.stopped_at_row is not None:
-            stopped = (title, sheet.stopped_at_row, total - position)
+            stopped = (
+                title, sheet.stopped_at_row, total - position, sheet.stop_limit
+            )
             break
 
     if not block_count:
@@ -558,12 +575,11 @@ def _read_workbook(values_book: Any, formulas_book: Any) -> ReferenceExtraction:
 
     warnings: list[str] = []
     if stopped is not None:
-        title, row, later = stopped
+        title, row, later, limit = stopped
         rest = f" and {later:,} later sheet(s)" if later else ""
         lines.append(
             f"[... reading stopped at row {row:,} of sheet {title!r} (limit "
-            f"{MAX_WORKBOOK_TEXT_CHARS:,} characters); the rest of that "
-            f"sheet{rest} were not read.]"
+            f"{limit}); the rest of that sheet{rest} were not read.]"
         )
         warnings.append(
             f"Reading stopped at row {row:,} of sheet {title!r}; the rest of "
@@ -600,18 +616,36 @@ def _read_workbook(values_book: Any, formulas_book: Any) -> ReferenceExtraction:
 class _SheetRead:
     """One sheet's CSV lines and what reading it found."""
 
-    __slots__ = ("chars", "lines", "row_count", "stopped_at_row", "unsaved_formulas")
+    __slots__ = (
+        "chars",
+        "lines",
+        "positions",
+        "row_count",
+        "stop_limit",
+        "stopped_at_row",
+        "unsaved_formulas",
+    )
 
     def __init__(self) -> None:
         self.lines: list[str] = []
         self.row_count = 0
         self.chars = 0
+        self.positions = 0
         self.unsaved_formulas = 0
         self.stopped_at_row: int | None = None
+        # Which breaker stopped the read, worded for the note and warning.
+        self.stop_limit = ""
 
 
-def _read_sheet(values_sheet: Any, formulas_sheet: Any, *, budget: int) -> _SheetRead:
-    """Read one sheet's rows within ``budget`` characters.
+def _read_sheet(
+    values_sheet: Any,
+    formulas_sheet: Any,
+    *,
+    char_budget: int,
+    position_budget: int,
+) -> _SheetRead:
+    """Read one sheet's rows within ``char_budget`` characters of text and
+    ``position_budget`` rows and cell positions visited.
 
     ``reset_dimensions`` first: read-only mode otherwise trusts the
     ``<dimension>`` the writing program recorded, and some record ``A1`` for
@@ -629,6 +663,16 @@ def _read_sheet(values_sheet: Any, formulas_sheet: Any, *, budget: int) -> _Shee
         values_sheet.iter_rows(), formulas_sheet.iter_rows(), fillvalue=()
     )
     for row_number, (values_row, formulas_row) in enumerate(row_pairs, start=1):
+        # Counted before the row's cells are read, blank or not: a blank row
+        # costs a visit even though it adds no text.
+        read.positions += 1 + max(len(values_row), len(formulas_row))
+        if read.positions > position_budget:
+            read.stopped_at_row = row_number
+            read.stop_limit = (
+                f"{MAX_WORKBOOK_POSITIONS:,} rows and cells, blank ones "
+                "included"
+            )
+            break
         cells: list[str] = []
         unsaved = 0
         for value_cell, formula_cell in zip_longest(values_row, formulas_row):
@@ -641,8 +685,9 @@ def _read_sheet(values_sheet: Any, formulas_sheet: Any, *, budget: int) -> _Shee
             blank_pending = bool(rows)
             continue
         row_chars = sum(len(text) + 1 for text in cells)
-        if read.chars + row_chars > budget:
+        if read.chars + row_chars > char_budget:
             read.stopped_at_row = row_number
+            read.stop_limit = f"{MAX_WORKBOOK_TEXT_CHARS:,} characters"
             break
         if blank_pending:
             rows.append([])

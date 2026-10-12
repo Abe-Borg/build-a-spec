@@ -527,3 +527,72 @@ def test_the_model_is_told_how_a_workbook_reads():
     assert "a cell that reads as a formula (=…) had no saved result" in (
         _REFERENCE_DOC_POLICY
     )
+
+
+def _with_far_row(payload: bytes, row: int) -> bytes:
+    """The first sheet's row 3 moved to ``row``, with no recorded
+    ``<dimension>`` — what a crafted (or merely stray) far-out cell looks
+    like to the reader."""
+
+    def transform(xml: str) -> str:
+        xml = re.sub(r'<dimension ref="[^"]*"\s*/>', "", xml)
+        xml = xml.replace('<row r="3"', f'<row r="{row}"', 1)
+        return xml.replace('r="A3"', f'r="A{row}"', 1)
+
+    return _rewrite(payload, "xl/worksheets/sheet1.xml", transform)
+
+
+def _far_build(workbook: Workbook) -> None:
+    workbook["Pumps"].append(["FP-1", 2500])
+    workbook["Pumps"]["A3"] = "far away"
+
+
+def test_blank_rows_count_toward_the_breaker(monkeypatch):
+    """openpyxl yields every blank row between two with values, and blank
+    rows add no text, so the character breaker alone never stops a crafted
+    row index far past Excel's last row (Codex review on PR #304). Row
+    3,000,000 rather than a billion keeps a reverted breaker a failure, not
+    a hang."""
+    monkeypatch.setattr(reference_extract, "MAX_WORKBOOK_POSITIONS", 1_000)
+    payload = _with_far_row(_xlsx(_far_build), 3_000_000)
+
+    extraction = extract_reference_document(payload, filename="far.xlsx")
+
+    assert "FP-1,2500" in extraction.text
+    assert "far away" not in extraction.text
+    assert re.search(
+        r"\[\.\.\. reading stopped at row [\d,]+ of sheet 'Pumps' \(limit "
+        r"1,000 rows and cells, blank ones included\); the rest of that "
+        r"sheet were not read\.\]$",
+        extraction.text,
+    ), extraction.text[-200:]
+    assert any("Reading stopped at row" in w for w in extraction.warnings)
+
+
+def test_cell_positions_count_and_the_budget_spans_the_workbook(monkeypatch):
+    """A wide row costs every position up to its last cell, and the budget is
+    the workbook's, not each sheet's."""
+    monkeypatch.setattr(reference_extract, "MAX_WORKBOOK_POSITIONS", 30)
+
+    def build(workbook: Workbook) -> None:
+        for n in range(1, 4):
+            workbook["Pumps"].append([f"FP-{n}", 2500, 125])  # 4 positions a row
+        workbook.create_sheet("Valves")["Z1"] = "wide"  # 27 positions
+
+    extraction = extract_reference_document(_xlsx(build), filename="wide.xlsx")
+
+    assert "FP-3,2500,125" in extraction.text
+    assert "wide" not in extraction.text
+    assert "row 1 of sheet 'Valves' (limit 30 rows and cells" in extraction.text
+
+
+def test_a_stray_cell_at_excels_last_row_is_still_read():
+    """The breaker is sized past a real sheet: one value at row 1,048,576 —
+    a million blank rows away — is read under the default limit."""
+    assert reference_extract.MAX_WORKBOOK_POSITIONS > 2 * 1_048_576
+    payload = _with_far_row(_xlsx(_far_build), 1_048_576)
+
+    extraction = extract_reference_document(payload, filename="last-row.xlsx")
+
+    assert extraction.text.endswith("FP-1,2500\n\nfar away")
+    assert extraction.warnings == ()

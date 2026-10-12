@@ -21,7 +21,10 @@ goes: the model writes the provision around the missing value, stamps it
 assumed, and tracks the question here with ``element_id`` pointing at it.
 It never writes a ``[TBD: ...]`` (``spec_doc.spec_voice`` refuses one), so
 the document's open items are only leftovers from legacy projects,
-starters, and hand edits.
+starters, and hand edits. Because the gate those placeholders used to trip
+went with them, an open ``blocking`` item now gates issue readiness itself
+(``app._readiness_payload``'s ``no_blocking_followups``); every other open
+item is an advisory line (``followups_clear``).
 
 A store, not a latest-only set
 ------------------------------
@@ -157,7 +160,10 @@ class FollowUp:
             kind=kind,
             title=str(data.get("title", "")),
             detail=str(data.get("detail", "")),
-            blocking=bool(data.get("blocking", False)),
+            # Only a JSON true blocks: the app always writes a boolean, and a
+            # hand-edited "false" must not become a readiness blocker
+            # (bool("false") is True). Anything else restores as not blocking.
+            blocking=data.get("blocking") is True,
             element_id=str(data.get("element_id", "")),
             status=status,
             resolution=str(data.get("resolution", "")),
@@ -231,6 +237,15 @@ class FollowUpStore:
                 "track_followups: 'title' is required — state the ask itself "
                 "in one line."
             )
+        # A real JSON boolean or nothing. The schema is lenient, and
+        # bool("false") is True: since the flag gates issue readiness, a
+        # string would turn an explicit "no" into a blocker.
+        blocking = payload.get("blocking")
+        if blocking is not None and not isinstance(blocking, bool):
+            raise FollowUpError(
+                "track_followups: 'blocking' must be true or false — a JSON "
+                "boolean, not a string or a number."
+            )
         key = _match_key(title)
         for item in self.items:
             if item.status == "open" and _match_key(item.title) == key:
@@ -246,7 +261,7 @@ class FollowUpStore:
             kind=str(kind),
             title=title,
             detail=_clean_str(payload.get("detail"), MAX_DETAIL_CHARS, "detail"),
-            blocking=bool(payload.get("blocking", False)),
+            blocking=blocking is True,
             element_id=_clean_str(payload.get("element_id"), 80, "element_id"),
             raised_turn=max(0, int(message_index)),
             created_at=_now(),
@@ -567,8 +582,11 @@ TRACK_FOLLOWUPS_TOOL: dict[str, Any] = {
         "'resolution' is one line saying what was settled; it is what the "
         "user sees on the checked-off row.\n\n"
         "Set 'blocking' only when the draft cannot be correct without the "
-        "answer — not merely when it is important. Set 'element_id' when the "
-        "item is about a specific provision, so the user can jump to it.\n\n"
+        "answer — not merely when it is important. A clause left out until "
+        "the answer arrives is blocking, and a blocking item holds the "
+        "section's issue readiness until it is settled. Set 'element_id' "
+        "when the item is about a specific provision, so the user can jump "
+        "to it.\n\n"
         "Call this at most once per turn, with both halves in the one call. "
         "Re-adding a title already open is a no-op, so restating is safe but "
         "pointless."
@@ -609,7 +627,9 @@ TRACK_FOLLOWUPS_TOOL: dict[str, Any] = {
                             "type": "boolean",
                             "description": (
                                 "True only when the draft cannot be correct "
-                                "until this is answered."
+                                "until this is answered (a clause left out "
+                                "until the answer arrives is). Holds issue "
+                                "readiness until settled."
                             ),
                         },
                         "element_id": {

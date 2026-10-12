@@ -304,6 +304,12 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **A blocking question holds back readiness (next release).** Ask the
+      assistant to leave a clause out until you answer something: Waiting on
+      you shows the item as blocking, and the checklist shows a required
+      "1 blocking item waiting on you — …" line and does not go green. Tick
+      the item off: the line passes. Reopen it: the line returns. A
+      non-blocking item shows only on the advisory line.
 - [ ] A large report in `QCReportModal`: no truncation, unsafe source strings
       inert rather than clickable.
 - [ ] Word **and** JSON downloads from the **packaged** app, **after applying

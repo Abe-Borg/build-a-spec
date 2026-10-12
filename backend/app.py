@@ -2126,6 +2126,24 @@ def _followups_readiness_detail(waiting) -> str:
     return f"{len(waiting)} waiting on you — {label}{lead.title}{tail}"
 
 
+def _blocking_followups_readiness_detail(blocking) -> str:
+    """One line naming the blocking item(s) that hold issue readiness.
+
+    Names the first and says how to clear it: the answer in chat (the model
+    resolves it in the same turn) or a tick in the Waiting on you panel.
+    """
+    if not blocking:
+        return "No blocking question or decision is waiting on you."
+    lead = blocking[0]
+    rest = len(blocking) - 1
+    tail = f" (+{rest} more)" if rest > 0 else ""
+    noun = "item" if len(blocking) == 1 else "items"
+    return (
+        f"{len(blocking)} blocking {noun} waiting on you — {lead.title}{tail}. "
+        "Answer it in chat or tick it off in Waiting on you."
+    )
+
+
 def _readiness_payload(
     session,
     *,
@@ -2135,10 +2153,12 @@ def _readiness_payload(
     """The deterministic issue-readiness checklist.
 
     Non-advisory checks gate ``ready`` (the "can it go out the door" bar,
-    per the batch acceptance criteria): no open items, no unreviewed
-    imported/assumed blocks, lint clean, research complete, and a current QC
-    with no open criticals. ``profile_complete`` is shown but advisory —
-    ``research_complete`` already subsumes it.
+    per the batch acceptance criteria): no open items, no blocking item
+    waiting on the user, no unreviewed imported/assumed blocks, lint clean,
+    research complete, and a current QC with no open criticals.
+    ``profile_complete`` and ``followups_clear`` are shown but advisory —
+    ``research_complete`` already subsumes the first, and the second names
+    every open item while only the blocking ones gate.
 
     ``source_guard`` is the QC export's one-capability-state threading (see
     ``_qc_source_guard``); the live ``/api/readiness`` poll omits it and
@@ -2147,6 +2167,7 @@ def _readiness_payload(
     doc = session.doc.doc
     open_items = open_questions(doc)
     waiting_followups = session.followups.open_items()
+    blocking_followups = [item for item in waiting_followups if item.blocking]
     imported = 0
     assumed = 0
     for _part, _article, p, _depth, _ref in iter_paragraphs(doc):
@@ -2474,14 +2495,29 @@ def _readiness_payload(
             "advisory": False,
         },
         {
+            "id": "no_blocking_followups",
+            # The part of Waiting on you that gates. Since 2026-10-06 an
+            # unknown is tracked there instead of being written into the
+            # document as a [TBD], which `no_open_items` used to gate, and a
+            # clause left out until the answer arrives leaves no assumed
+            # block behind for `no_assumed_left` to catch. Without this line,
+            # a question the model itself marked blocking (the draft cannot
+            # be correct without it) sat beside a green checklist. Ticking
+            # the item off in the panel clears it, the way dismissing a QC
+            # finding with a reason clears that gate.
+            "ok": not blocking_followups,
+            "detail": _blocking_followups_readiness_detail(blocking_followups),
+            "advisory": False,
+        },
+        {
             "id": "followups_clear",
-            # Questions and decisions the model is waiting on the user for.
-            # ADVISORY on purpose: an unanswered question does not make the
-            # draft wrong the way an unresolved [TBD] does, and the model may
-            # already have stamped a defensible default. It earns a line here
-            # because the checklist is the last place anyone looks before
-            # issuing — which is exactly when a forgotten decision costs the
-            # most.
+            # Everything the model is waiting on the user for. ADVISORY: a
+            # non-blocking question does not make the draft wrong (the model
+            # wrote the provision to stand without it and stamped it
+            # assumed), and the blocking ones gate through
+            # `no_blocking_followups` above. It earns a line because the
+            # checklist is the last place anyone looks before issuing, which
+            # is exactly when a forgotten decision costs the most.
             "ok": not waiting_followups,
             "detail": _followups_readiness_detail(waiting_followups),
             "advisory": True,

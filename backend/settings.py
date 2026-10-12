@@ -542,30 +542,20 @@ QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "medium")
 #
 # A verifier seat ADJUDICATES: it is handed one finding, its rationale, its
 # proposed operations and the same document, and answers a bounded question
-# about that one claim. Its default depth follows its MODEL: "high" on Claude
-# Sonnet 5.5 (owner decision, 2026-10-08) — Sonnet 5.5's own default, and its
-# guide says that at low and medium it often answers a reasoning task with a
-# structured output without thinking first; the extra thinking is cheap,
-# because a seat's cost is its input. "medium" on any other seat model, the
-# Opus 5.5 level P55-3 set, so an operator who pins the seats back to Opus
-# gets the depth they ran at before.
+# about that one claim. It runs at QC_EFFORT ("medium") too, on every seat
+# model (owner decision, 2026-10-12). From 2026-10-08 to 2026-10-12 a Claude
+# Sonnet 5.5 seat defaulted to "high", Sonnet 5.5's own default, on the
+# grounds that its guide says it often answers a structured-output reasoning
+# task without thinking first at low and medium; the owner moved the seats
+# back to "medium" for cost. "medium" is the level the Opus 5.5 seats ran at
+# (P55-3), so the seat model no longer changes the depth.
 #
 # BUILD_A_SPEC_QC_EFFORT still moves BOTH (it is each one's fallback), so the
 # existing global override keeps working; the two specific knobs override it
 # per phase. Both are recorded in the hashed input manifest, so a report
 # always states the depth each phase actually ran at.
-# Resolution order for the verifier seat, and the order matters: an operator
-# who explicitly set BUILD_A_SPEC_QC_EFFORT asked for a depth and must get it,
-# including when that depth is BELOW this default. Falling back to the
-# model's default would silently raise the verifier above a global "low".
 QC_LENS_EFFORT = _effort_env("BUILD_A_SPEC_QC_LENS_EFFORT", QC_EFFORT)
-_QC_VERIFIER_EFFORT_BY_MODEL = {MODEL_SONNET_55: "high"}
-QC_VERIFIER_EFFORT = _effort_env(
-    "BUILD_A_SPEC_QC_VERIFIER_EFFORT",
-    QC_EFFORT
-    if _effort_env("BUILD_A_SPEC_QC_EFFORT", "")
-    else _QC_VERIFIER_EFFORT_BY_MODEL.get(QC_VERIFIER_MODEL, "medium"),
-)
+QC_VERIFIER_EFFORT = _effort_env("BUILD_A_SPEC_QC_VERIFIER_EFFORT", QC_EFFORT)
 
 # Concurrent streaming calls in flight across a QC fan-out (lenses share the
 # pool with verifiers). Phase 2 is ~35 of a run's ~40 calls, so this is what

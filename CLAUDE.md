@@ -394,7 +394,9 @@ already resolved and does nothing). 409 when nothing is running.
   effort change (see "Final QC's verifier seats run on Sonnet 5.5 at high"
   below). Final QC's lenses run `QC_MODEL` (Opus 5.5) at `QC_LENS_EFFORT`
   (`medium`), its verifier seats `QC_VERIFIER_MODEL` (Sonnet 5.5) at
-  `QC_VERIFIER_EFFORT` (`high`); both ask for `display: "summarized"` on the
+  `QC_VERIFIER_EFFORT` (`medium` since 2026-10-12, `high` from 2026-10-08;
+  see "Final QC's verifier seats run at medium" below); both ask for
+  `display: "summarized"` on the
   documented models (see "The Review Room shows what each lens and reviewer
   is doing" below).
   Thinking blocks are preserved **verbatim** across continuation rounds —
@@ -495,7 +497,8 @@ still reads defaults from source with `ast`, independent of local overrides.
 said interview and research both defaulted to `high`. The interview has
 defaulted to `medium` since 2026-09-29; research now does too. Final QC's
 lenses also default to `medium` (its verifier seats moved to Sonnet 5.5 at
-`high` on 2026-10-08); the two whole-section drafting/adaptation
+`high` on 2026-10-08, and to `medium` on 2026-10-12); the two whole-section
+drafting/adaptation
 passes keep `DRAFT_PASS_EFFORT=high`. The invariant above is corrected.
 
 No paid API calls or live quality/cost comparison were run. The owner can
@@ -1252,7 +1255,10 @@ thinks at `high`.
   else `QC_VERIFIER_MODEL_DEFAULT = MODEL_SONNET_55`). `QC_VERIFIER_EFFORT`
   defaults per seat model (`_QC_VERIFIER_EFFORT_BY_MODEL`: Sonnet 5.5 →
   `high`, any other → `medium`); an explicit `BUILD_A_SPEC_QC_EFFORT` still
-  wins. Lenses and grouping stay on `QC_MODEL` (Opus 5.5) at `medium`.
+  wins. (Superseded 2026-10-12: the table is gone and the seats run at
+  `QC_EFFORT`, `medium`, on every model; see "Final QC's verifier seats run
+  at medium" below.) Lenses and grouping stay on `QC_MODEL` (Opus 5.5) at
+  `medium`.
   `run_final_qc(..., verifier_model="")` defaults to `model`, so a direct
   caller naming one model gets one model; the app passes the setting (QC
   start → `QCRunner.start` → `run_final_qc`). Every phase-2 request —
@@ -1678,6 +1684,35 @@ never add a seat path that skips it. Tests:
 `tests/test_qc_verifier_research.py`. Full record, reversion evidence and the
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
+
+## Final QC's verifier seats run at medium — implemented notes (2026-10-12)
+
+Owner decision (Abraham): the verifier seats go back to `medium`, for cost.
+They had run at Sonnet 5.5's own default, `high`, since they moved to it on
+2026-10-08.
+
+- **The setting.** `_QC_VERIFIER_EFFORT_BY_MODEL` is gone;
+  `QC_VERIFIER_EFFORT = _effort_env("BUILD_A_SPEC_QC_VERIFIER_EFFORT",
+  QC_EFFORT)`, the same shape as `QC_LENS_EFFORT`. That keeps every old
+  resolution rule that still matters: an explicit `BUILD_A_SPEC_QC_EFFORT`
+  moves both phases (a global `low` is never raised), the specific knob wins,
+  and seats pinned back to Opus stay at `medium`. The seat model no longer
+  sets the depth.
+- **Stale once.** `verifier_effort` is in the hashed QC manifest, so a
+  retained result made with seats at `high` reads stale against the new
+  default (pinned); the release's `application_version` would do the same.
+- **The trade.** Sonnet 5.5's guide says that at `low` and `medium` it often
+  answers a reasoning task with a structured output without thinking first,
+  which is why `high` was chosen. A seat's cost is mostly reading the shared
+  prefix, so the saving is the seats' thinking only; it is unmeasured.
+  `BUILD_A_SPEC_QC_VERIFIER_EFFORT=high` restores the previous depth.
+- **Unchanged.** Every other request byte, the lenses and grouping, panel
+  sizes, adjudication, the transports, the protocol version, the SSE
+  protocol, readiness.
+
+Tests: `tests/test_prompt55_effort.py`, `tests/test_qc_phase_effort.py`.
+Full record, reversion evidence and the release-note draft are in
+`docs/as-built.md` under the same heading. No paid API call was made.
 
 ## As-built history
 

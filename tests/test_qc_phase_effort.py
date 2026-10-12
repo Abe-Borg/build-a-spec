@@ -124,23 +124,24 @@ def _models(client) -> dict[str, set[str]]:
     return {"lens": lens, "verifier": verifier}
 
 
-def test_the_shipped_defaults_run_opus_lenses_at_medium_and_sonnet_seats_at_high():
+def test_the_shipped_defaults_run_opus_lenses_and_sonnet_seats_at_medium():
     """The defaults are pinned directly.
 
     The lens phase shipped at "high" from the split until the 5.5 prompting
     upgrade (P55-3, decision D4) re-based it for Opus 5.5, whose "medium"
     matches or exceeds Opus 5's "high". The seats moved to their own model,
-    Claude Sonnet 5.5, at its default "high" (owner decision, 2026-10-08):
-    a seat's cost is reading the shared section, so its per-token price is
-    the lever, and the extra thinking is cheap. Run the way the app runs it.
+    Claude Sonnet 5.5 (owner decision, 2026-10-08): a seat's cost is reading
+    the shared section, so its per-token price is the lever. They ran at
+    Sonnet 5.5's default "high" until the owner moved them to "medium"
+    (2026-10-12). Run the way the app runs it.
     """
     assert settings.QC_MODEL == settings.MODEL_OPUS_55
     assert settings.QC_LENS_EFFORT == "medium"
     assert settings.QC_VERIFIER_MODEL == settings.MODEL_SONNET_55
-    assert settings.QC_VERIFIER_EFFORT == "high"
+    assert settings.QC_VERIFIER_EFFORT == "medium"
     client = SequencedFakeClient(_scripts())
     result = _run(client, verifier_model=settings.QC_VERIFIER_MODEL)
-    assert _efforts(client) == {"lens": {"medium"}, "verifier": {"high"}}
+    assert _efforts(client) == {"lens": {"medium"}, "verifier": {"medium"}}
     assert _models(client) == {
         "lens": {settings.MODEL_OPUS_55},
         "verifier": {settings.MODEL_SONNET_55},
@@ -173,10 +174,11 @@ def test_the_seat_model_is_hashed_and_reported():
     assert sonnet.mixed_models()
 
 
-def test_the_seat_effort_follows_the_seat_model(monkeypatch):
-    """Sonnet 5.5 seats default to "high"; any other seat model keeps the
-    Opus 5.5 level ("medium"), so pinning the seats back to Opus restores the
-    depth they ran at before. An explicit global effort still wins."""
+def test_the_seat_effort_is_medium_on_every_seat_model(monkeypatch):
+    """Since 2026-10-12 the seat model no longer sets the seats' depth:
+    Sonnet 5.5 seats (which defaulted to "high" from 2026-10-08) and seats
+    pinned back to Opus both run at "medium". An explicit global effort
+    still wins."""
     import importlib
 
     try:

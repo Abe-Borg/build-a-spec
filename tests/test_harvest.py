@@ -1493,14 +1493,36 @@ def test_each_research_source_says_whether_it_is_grounded(monkeypatch):
     assert "escaped tag" not in sources
 
 
-def test_the_status_rule_names_the_grounding_labels_the_sources_carry():
-    status = HARVEST_SCHEMA["properties"]["proposals"]["items"]["properties"][
-        "status"
-    ]["description"]
-    for text in (HARVEST_SYSTEM_PROMPT, status):
+def test_confirmed_needs_a_grounded_finding_and_an_unverified_one_is_never_a_basis():
+    """The rules use the labels the source lines carry. An [UNVERIFIED]
+    finding is a lead, never a fact: it is no basis for a proposal at any
+    status (Codex review on PR #307 — an earlier draft of this change filed
+    an unverified-only fact under "assumed", and the sheet preselects every
+    proposal without a problem)."""
+    fields = HARVEST_SCHEMA["properties"]["proposals"]["items"]["properties"]
+    status = fields["status"]["description"]
+    source_ref = fields["source_ref"]["description"]
+    prompt = HARVEST_SYSTEM_PROMPT
+    do_not = prompt.split("Do NOT propose:")[1].split("For every proposal:")[0]
+    rules = prompt.split("For every proposal:")[1]
+    assert (
+        f"anything whose only basis is a research finding marked "
+        f"{RESEARCH_UNVERIFIED_LABEL}" in do_not
+    )
+    status_line = next(
+        line for line in rules.splitlines() if line.startswith("- status:")
+    )
+    for text in (status_line, status):
         assert f"research finding marked {RESEARCH_GROUNDED_LABEL}" in text
-        assert f"research finding marked {RESEARCH_UNVERIFIED_LABEL}" in text
-        # The old wording named a property no source line stated.
+        # Assumed is a default the user accepted, never an unverified lead.
+        assert RESEARCH_UNVERIFIED_LABEL not in text
+    assert f"(for research, only a finding marked {RESEARCH_GROUNDED_LABEL})" in rules
+    assert (
+        f"marked {RESEARCH_GROUNDED_LABEL}, never one marked "
+        f"{RESEARCH_UNVERIFIED_LABEL}" in source_ref
+    )
+    # The old wording named a property no source line stated.
+    for text in (prompt, status):
         assert "grounded source" not in text
 
 

@@ -90,10 +90,11 @@ HARVEST_MAX_EVIDENCE_CHARS = 300
 # discarded first. Expiry and the byte cap are the template cache's own.
 HARVEST_MAX_PREVIEWS = 16
 # How each research line in <available_sources> states its grounding, so the
-# status rule ("confirmed" needs a grounded finding) is one the model can
-# apply. Interpolated into the prompt and the schema, never retyped.
+# rules that turn on it ("confirmed" needs a grounded finding; a fact never
+# rests on an unverified one alone) are ones the model can apply.
+# Interpolated into the prompt and the schema, never retyped.
 # ``[UNVERIFIED]`` is the research report's own flag for a finding no
-# retrieved source backs.
+# retrieved source backs: a lead, never a fact.
 RESEARCH_GROUNDED_LABEL = "grounded"
 RESEARCH_UNVERIFIED_LABEL = "[UNVERIFIED]"
 
@@ -202,9 +203,7 @@ HARVEST_SCHEMA: dict[str, Any] = {
                             "provision, an attached document or a research "
                             f"finding marked {RESEARCH_GROUNDED_LABEL} "
                             "establishes it; assumed = a default the user "
-                            "accepted or did not contest, or a fact whose only "
-                            "basis is a research finding marked "
-                            f"{RESEARCH_UNVERIFIED_LABEL}."
+                            "accepted or did not contest."
                         ),
                     },
                     "source_kind": {
@@ -216,9 +215,11 @@ HARVEST_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "description": (
                             "turn:N for a reply of the transcript; an id from "
-                            "<available_sources> for research (r-…), a "
-                            "reference document (ref-…) or a Final QC finding. "
-                            "Never an id that is not listed."
+                            "<available_sources> for research (r-…, a finding "
+                            f"marked {RESEARCH_GROUNDED_LABEL}, never one marked "
+                            f"{RESEARCH_UNVERIFIED_LABEL}), a reference document "
+                            "(ref-…) or a Final QC finding. Never an id that is "
+                            "not listed."
                         ),
                     },
                     "evidence": {
@@ -582,13 +583,14 @@ Do NOT propose:
 - provision wording (it belongs in the document, not in a fact);
 - open questions, pending decisions, or anything the conversation left unsettled;
 - research findings — they already travel with the project; cite one as a source instead of restating it;
+- anything whose only basis is a research finding marked {unverified} in <available_sources> — that is a lead no retrieved source backs, not a settled fact, whatever status you would give it;
 - anything already in <project_setup> or <known_project_facts>, however it is worded.
 
 For every proposal:
 - statement: one line a stranger could act on, at most {max_statement} characters.
-- status: confirmed when the user stated it, or a confirmed provision, an attached document or a research finding marked {grounded} in <available_sources> establishes it; assumed when it is a default the user accepted or did not contest, or when its only basis is a research finding marked {unverified} (a lead no retrieved source backs).
+- status: confirmed when the user stated it, or a confirmed provision, an attached document or a research finding marked {grounded} in <available_sources> establishes it; assumed when it is a default the user accepted or did not contest.
 - scope: project (every section), discipline (every section of this discipline), or section with the section number (a coordination fact about one section).
-- source_kind and source_ref: user with turn:N when the user said it in that turn; model with turn:N when it is the assistant's default the user accepted there; research, reference or qc with an id listed in <available_sources>. Leave source_ref empty only when no turn or listed record applies. Never invent an id — a source that is not listed is refused.
+- source_kind and source_ref: user with turn:N when the user said it in that turn; model with turn:N when it is the assistant's default the user accepted there; research, reference or qc with an id listed in <available_sources> (for research, only a finding marked {grounded}). Leave source_ref empty only when no turn or listed record applies. Never invent an id — a source that is not listed is refused.
 - evidence: the line the fact rests on, quoted verbatim (at most {max_evidence} characters).
 
 Propose at most {max_proposals} facts, most important first. Proposing nothing is a correct answer when nothing new was settled. Call propose_project_facts exactly once, as the final step.

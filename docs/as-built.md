@@ -22308,19 +22308,30 @@ not see.
   `RESEARCH_UNVERIFIED_LABEL`, interpolated into the prompt and the schema,
   never retyped. Brackets are not a frame tag, so the line survives
   `neutralize_harvest_frames` unescaped (pinned).
-- **The status rule**, in the system prompt and the `status` property's
-  description alike: confirmed when the user stated it, or a confirmed
-  provision, an attached document or a research finding marked grounded
-  establishes it; assumed when it is a default the user accepted or did not
-  contest, or when its only basis is a finding marked `[UNVERIFIED]`. The old
+- **The rules**, in the system prompt and the schema alike. Status:
+  confirmed when the user stated it, or a confirmed provision, an attached
+  document or a research finding marked grounded establishes it; assumed
+  when it is a default the user accepted or did not contest. The old
   "grounded source" was ambiguous about attached documents; an attached
   document is named explicitly now, since it is the source text itself.
-- **Guidance, not a gate.** Nothing checks a proposal's status against the
-  finding's grounding: the user reviews every status on the sheet before
-  anything is recorded, and a deterministic refusal would cost the user an
-  edit for a judgment call (a fact can rest on an unverified finding AND a
-  user statement). `assess_proposal`, `evidence_found`, the commit, the
-  record tool and `FactSources` are unchanged.
+  "Do NOT propose" gains anything whose only basis is a finding marked
+  `[UNVERIFIED]` — a lead, not a settled fact, at any status — and the
+  source rule (prompt line and `source_ref` description) cites research only
+  by a finding marked grounded. A fact the user settled after seeing an
+  unverified lead cites the user's reply, not the finding.
+- **Codex review on PR #307 (P2).** The first draft filed an
+  unverified-only fact under *assumed*, which invited exactly the proposal
+  the research report's "kept as a lead, never a fact" rule forbids — and
+  the sheet preselects every proposal without a problem
+  (`lib/harvest.initialAccepted`), so one Record would carry it into later
+  sections as project input. Fixed as above: an unverified finding is no
+  basis at any status.
+- **Guidance, not a gate.** Nothing checks a proposal against the cited
+  finding's grounding: the user reviews every proposal before anything is
+  recorded. A deterministic refusal would need grounding in `FactSources`,
+  which the record tool and the panel share, so it is a wider change than
+  this one. `assess_proposal`, `evidence_found`, the commit, the record tool
+  and `FactSources` are unchanged.
 - **Bytes.** The harvest is one uncached single-shot call, so the changed
   prompt and schema move no cache. No chat, research or Final QC request
   changed, and no retained Final QC report reads stale.
@@ -22328,20 +22339,26 @@ not see.
 Tests: `tests/test_harvest.py` —
 `test_each_research_source_says_whether_it_is_grounded` (a grounded and an
 unverified finding, each line exact; nothing escaped) and
-`test_the_status_rule_names_the_grounding_labels_the_sources_carry` (prompt
-and schema both name both labels; the old "grounded source" wording is
-gone). `tests/test_harvest.py` and `tests/test_prompt55_parsing_and_harvest.py`
-pass (94). Revert matrix, each reverted in place and restored from a saved
-copy: the source line without its grounding → 1 red; every finding labelled
-grounded → 1; the prompt's old status line → 1; the schema's old status
-description → 1. Restored and green afterwards. No paid API call was made;
-whether the live model now marks research-only facts assumed is unmeasured.
+`test_confirmed_needs_a_grounded_finding_and_an_unverified_one_is_never_a_basis`
+(the "Do NOT propose" line; the status rule in prompt and schema names the
+grounded label and never the unverified one; both source rules; the old
+"grounded source" wording is gone). `tests/test_harvest.py` and
+`tests/test_prompt55_parsing_and_harvest.py` pass (94). Revert matrix, each
+reverted in place and restored from a saved copy: the source line without
+its grounding → 1 red; every finding labelled grounded → 1; the prompt's old
+status line → 1; the schema's old status description → 1; then, for the
+review fix: the "Do NOT propose" line removed → 1; the prompt's status line
+back to the reviewed draft (unverified → assumed) → 1; the schema's status
+back to that draft → 1; the source line's research qualifier removed → 1;
+the `source_ref` description back to the original → 1. Restored and green
+afterwards. No paid API call was made; whether the live model now leaves
+unverified-only facts off the sheet is unmeasured.
 
 ### Release-note draft (for the release after 1.26.0)
 
 Section "Projects", item "The fact harvest knows which research is
 verified": "When the fact harvest proposes a fact that rests on a research
-finding, it now sees whether that finding is backed by a retrieved source,
-and proposes a fact resting only on an unverified finding as assumed rather
-than confirmed. You still review every proposal's status before anything is
-recorded."
+finding, it now sees whether that finding is backed by a retrieved source.
+Only a verified finding can make a fact confirmed, and an unverified finding
+is never proposed as a fact on its own. You still review every proposal
+before anything is recorded."

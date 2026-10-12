@@ -1566,9 +1566,10 @@ facts, and makes every recorded fact name a source that exists.
   attached document or a Final QC finding), and the line it rests on, quoted
   from what was read — a quote that is not found there is flagged for you to
   check. The harvest sees whether each research finding it may cite is
-  grounded in a retrieved source or **[UNVERIFIED]**, and is told never to
-  mark a fact *confirmed* when an unverified finding is its only basis (an
-  instruction to the model, not a check — the status is yours to review like
+  grounded in a retrieved source or **[UNVERIFIED]**. It is told that only a
+  grounded finding can make a fact *confirmed*, and never to propose a fact
+  whose only basis is an unverified finding — that is a lead, not a fact (an
+  instruction to the model, not a check — review each proposal's source like
   the rest). Tick, edit or reject each one; **Record** saves the ticked ones in one
   batch, all or nothing. A proposal repeating a recorded fact is left off the
   sheet (and counted). A proposal whose source does not exist starts unchecked

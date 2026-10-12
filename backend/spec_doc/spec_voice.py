@@ -271,17 +271,35 @@ def check_drafted_edits(edits: Any) -> None:
 # proposed, unverified — current published edition per training data"), saved
 # histories carry such calls, and a model imitates its history, so the old
 # wording is refused outright. Narrow on purpose: an ordinary basis never
-# names a model proposal or training data.
+# names a model proposal, training data, the model's own knowledge or a best
+# guess. A blocklist cannot prove a basis is the user's (a "yes" confirming
+# the model's question carries no year to match), so this is the backstop
+# for the prompt's rule, not its proof; a research citation IS checked
+# against the profile (``unknown_research_citations``). Codex review on PR
+# #308 widened the phrases (an apostrophe of any kind, "my knowledge",
+# "best estimate").
 _MODEL_PROPOSED_BASIS = re.compile(
-    r"(?i)\bmodel[-\s]+propos(?:ed|al)\b|\btraining\s+data\b"
+    r"(?i)\bmodel(?:[\u2019'`]?s)?[-\s]+propos(?:ed|al)\b"
+    r"|\btraining\s+data\b"
+    r"|\b(?:my|the\s+model(?:[\u2019'`]s)?|assistant(?:[\u2019'`]s)?)\s+"
+    r"(?:own\s+)?(?:knowledge|recollection|training|understanding|memory)\b"
+    r"|\bbest\s+(?:estimate|guess)\b"
 )
+# A research citation in a basis, as the prompt's example writes one
+# ("research r-1a2b3c4d5e6f: 2021 VCC, Loudoun County VA").
+_RESEARCH_ID = re.compile(r"\br-[0-9a-f]{12}\b")
 
 
-def edition_basis_problems(edits: Any) -> list[str]:
-    """One line per ``set_standard_edition`` that records a model-proposed edition.
+def edition_basis_problems(
+    edits: Any, *, research_ids: frozenset[str] | None = None
+) -> list[str]:
+    """One line per ``set_standard_edition`` that records an unestablished edition.
 
     Only an op that records an edition counts: removing an override (no
-    ``edition``) reverts to the module default and needs no basis.
+    ``edition``) reverts to the module default and needs no basis. Refused:
+    a basis that names a model proposal (``_MODEL_PROPOSED_BASIS``), and —
+    when ``research_ids`` is given — one citing a research item id the
+    profile does not hold, which would dress a guess up as research.
     """
     if not isinstance(edits, list):
         return []
@@ -293,20 +311,36 @@ def edition_basis_problems(edits: Any) -> list[str]:
         basis = op.get("basis")
         if not (isinstance(edition, str) and edition.strip()):
             continue
-        if isinstance(basis, str) and _MODEL_PROPOSED_BASIS.search(basis):
-            problems.append(
-                f"- edit {index} (set_standard_edition {op.get('standard')!s} "
-                f"{edition.strip()}): the basis is a model proposal"
-            )
+        if not isinstance(basis, str):
+            continue
+        where = (
+            f"- edit {index} (set_standard_edition {op.get('standard')!s} "
+            f"{edition.strip()})"
+        )
+        if _MODEL_PROPOSED_BASIS.search(basis):
+            problems.append(f"{where}: the basis is a model proposal")
+        if research_ids is not None:
+            unknown = [
+                rid
+                for rid in dict.fromkeys(_RESEARCH_ID.findall(basis))
+                if rid not in research_ids
+            ]
+            if unknown:
+                problems.append(
+                    f"{where}: the basis cites {', '.join(unknown)}, which the "
+                    "research profile does not hold"
+                )
     return problems
 
 
-def check_edition_bases(edits: Any) -> None:
-    """Refuse a model batch that records an edition from the model's own knowledge.
+def check_edition_bases(
+    edits: Any, *, research_ids: frozenset[str] | None = None
+) -> None:
+    """Refuse a model batch that records an edition nobody has established.
 
     Raises :class:`SpecEditError` (all or nothing, like every edit refusal).
     """
-    problems = edition_basis_problems(edits)
+    problems = edition_basis_problems(edits, research_ids=research_ids)
     if not problems:
         return
     raise SpecEditError(

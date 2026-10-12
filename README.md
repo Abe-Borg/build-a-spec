@@ -242,11 +242,17 @@ the specification against it.
   amendments its adoption makes, not the newest edition. A newer published
   edition is mentioned separately and is never a defect in a citation that
   matches the edition in effect.
-- **Research asks which code cycle governs this project**: whether the code
-  in force when the permit application is filed (or the project vests)
+- **Research reports which code cycle would govern**: whether the code in
+  force when the permit application is filed (or the project vests)
   governs, any transition period in which the previous edition may still be
   used — a multi-phase campus can straddle a code cycle — and whether
   alterations of an existing building fall under an existing-building code.
+  It reports these as rules with their dates, and applies one to your
+  project only when your project facts give the permit date or say the work
+  is an alteration — never assuming today's code governs just because it is
+  current.
+- **Invented research citations are refused too.** An edition recorded on a
+  research item must name one the research actually found.
 
 The fire-protection module is unaffected apart from the last two points: it
 pins current editions with recorded sources. The Final QC brief changed, so a

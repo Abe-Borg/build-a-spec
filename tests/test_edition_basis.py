@@ -64,6 +64,12 @@ def _edition(basis: str, *, edition: str = "2024", standard: str = "ASHRAE 90.1"
         "Model proposed edition",
         "model proposal: latest edition",
         "current edition per my training data",
+        # Codex review on PR #308: other ways of saying the same thing.
+        "current published edition per my knowledge",
+        "my best estimate of the current edition",
+        "the model\u2019s proposed edition",
+        "the model's proposed edition",
+        "latest edition from the assistant's own recollection",
     ],
 )
 def test_a_model_proposed_basis_is_refused(basis):
@@ -86,6 +92,43 @@ def test_a_model_proposed_basis_is_refused(basis):
 def test_a_users_statement_or_a_research_item_passes(basis):
     assert edition_basis_problems([_edition(basis)]) == []
     check_edition_bases([_edition(basis)])
+
+
+def test_a_research_citation_must_name_an_item_the_profile_holds():
+    """An invented research id would dress a guess up as research. Checkable,
+    so checked; a user's statement cannot be (a "yes" carries no year), so
+    the phrase guard is a backstop for the prompt's rule, not its proof."""
+    basis = "research r-1a2b3c4d5e6f: 2021 VCC, Loudoun County VA"
+    known = frozenset({"r-1a2b3c4d5e6f"})
+    assert edition_basis_problems([_edition(basis)], research_ids=known) == []
+    problems = edition_basis_problems([_edition(basis)], research_ids=frozenset())
+    assert len(problems) == 1
+    assert "cites r-1a2b3c4d5e6f, which the research profile does not hold" in problems[0]
+    # No research cited, nothing to check.
+    assert (
+        edition_basis_problems(
+            [_edition("User stated the 2022 edition was adopted")],
+            research_ids=frozenset(),
+        )
+        == []
+    )
+
+
+def test_a_chat_batch_citing_research_that_does_not_exist_is_refused(monkeypatch):
+    bad = {"edits": [_edition("research r-0123456789ab: adopted 2022 edition")]}
+    fake = FakeClient(
+        [
+            tool_turn([], bad, tool_id="toolu_bad"),
+            text_turn(["Which edition has the City adopted?"]),
+        ]
+    )
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    events = _parse_sse(_client().post("/api/chat", json={"message": "go"}).text)
+    assert events[-1]["type"] == "turn_complete"
+    refusal = sessions.get_session().history[2]["content"][0]
+    assert refusal["is_error"] is True
+    assert "which the research profile does not hold" in refusal["content"]
+    assert sessions.get_session().doc.doc.edition_overrides == {}
 
 
 def test_removing_an_override_or_another_op_is_never_refused():
@@ -221,7 +264,13 @@ def test_research_asks_which_adoption_governs_this_project(module):
         "Fire suppression",
     )
     text = " ".join(task.split())
-    assert "which of those adoptions governs THIS project" in text
+    assert "the rules that decide which adoption governs a given project" in text
     assert "when the permit application is filed" in text
     assert "transition period" in text
     assert "existing-building code" in text
+    # Research does not know the permit date or whether the work is an
+    # alteration (Codex review on PR #308): it reports the rules, and applies
+    # one only where established project facts supply the answer.
+    assert "Report these as conditional rules" in text
+    assert "only where established project facts supply its permit or vesting date" in text
+    assert "never treat the edition currently in force as governing merely because it is current" in text

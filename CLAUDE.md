@@ -1695,13 +1695,19 @@ from its training, and lint and Final QC then treated it as verified.
 - **The guard.** `spec_voice.check_edition_bases` runs in `_run_tool` after
   `check_drafted_edits` and refuses, all or nothing, a batch whose
   `set_standard_edition` records an edition on a basis naming a model
-  proposal or training data (`_MODEL_PROPOSED_BASIS`; saved histories carry
-  the old wording). Removals and the user's panel edits are not checked.
+  proposal, training data, the model's own knowledge or a best guess
+  (`_MODEL_PROPOSED_BASIS`; saved histories carry the old wording), or that
+  cites a research id the profile does not hold (`research_ids=` from
+  `fact_sources`). A phrase list cannot prove a basis is the user's; it is
+  the prompt's backstop (Codex review on PR #308). Removals and the user's
+  panel edits are not checked.
 - **Final QC** `code_compliance` checks the actual text of the edition in
   effect for the project, with its adoption's amendments, not the newest; a
   newer edition is a separate observation. **Research** `governing_codes`
-  (both modules) asks which adoption governs this project: permit
-  application or vesting date, transition period, existing-building code.
+  (both modules) reports the rules that decide which adoption governs a
+  project (permit application or vesting date, transition period,
+  existing-building code) as conditional rules, applying one only where
+  project facts supply the date or say the work is an alteration.
 - **Stale once.** Lens briefs are in the QC manifest, and so is the
   unpinned standards render: every retained Final QC result reads stale
   once. The stable prompt changes for the generic module (cache rewrite).

@@ -4463,7 +4463,9 @@ def _run_tool(
         # with one that does not is refused whole, like a placeholder.
         check_edit_reasons(edits)
         check_drafted_edits(edits)
-        check_edition_bases(edits)
+        check_edition_bases(
+            edits, research_ids=fact_sources(session).research_ids
+        )
         applied = session.apply_doc_edits(edits)
     except SpecEditError as exc:
         _trace.tool_dispatch(

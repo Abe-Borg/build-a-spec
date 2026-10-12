@@ -22469,6 +22469,27 @@ owner chose A on 2026-10-12.
   hyperscale brief adds that a multi-phase campus can straddle a code
   cycle), and whether alterations of an existing building fall under an
   existing-building code instead.
+- **Codex review on PR #308 (two P1s).** (1) The research item asked
+  research to decide which adoption governs THIS project, but research is
+  given location, client and discipline — not the permit or vesting date,
+  nor whether the work is an alteration — so it could ground the edition in
+  force today as governing. The item now asks for "the rules that decide
+  which adoption governs a given project … Report these as conditional
+  rules; apply one to this project only where established project facts
+  supply its permit or vesting date or say the work is an alteration, and
+  never treat the edition currently in force as governing merely because it
+  is current." (2) The guard is a phrase list, so a guess worded otherwise
+  passes. Proving a basis is the user's is not possible from the batch (a
+  user's "yes" to "is it the 2022 edition?" carries no year to match, so a
+  strict check would refuse the user's own confirmation), and the prompt's
+  rule stays the primary control. What is checkable is checked: the phrase
+  list now also catches "model's proposed" with any apostrophe, "my /
+  the model's / the assistant's (own) knowledge, recollection, training,
+  understanding or memory", and "best estimate/guess"; and a basis citing a
+  research id (`r-` + 12 hex) must name an item the profile holds —
+  `check_edition_bases(edits, research_ids=fact_sources(session).research_ids)`
+  — so a guess cannot be dressed up as research. The trade (no affirmative
+  proof of a user statement) was put to the owner.
 - **Bytes that changed once.** The generic module's stable prompt (open
   sessions rewrite their cached prefix once); the per-turn standards block
   for unpinned modules; the research `governing_codes` brief (each round's
@@ -22495,7 +22516,10 @@ chat-path files (166). Revert matrix, each reverted in place and restored
 the guard missing "training data" → 1; the guard refusing removals → 1; the
 generic conventions reverted → 2; the playbook default reverted → 1; the
 standards block reverted → 2; the QC brief reverted → 1; each research brief
-reverted → 1.
+reverted → 1. For the review fixes (`tests/test_edition_basis.py`, now 23):
+the chat path skipping the research-id check → 1; the check removed → 2;
+the widened phrases reverted → 5; each research brief's conditional-rule
+sentence removed → 1.
 
 No paid API call was made; how often the live model now asks rather than
 guesses, and what the research item contributes, is unmeasured.

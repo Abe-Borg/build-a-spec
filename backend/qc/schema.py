@@ -45,8 +45,8 @@ class QCLens:
 
     ``max_searches`` / ``max_fetches`` are per-call web allowances (runaway
     guards, not budgets). Only ``code_compliance`` gets the big search
-    allowance — it USES web search to check a standard's actual current
-    content rather than recalling it.
+    allowance — it USES web search to check the actual text of the edition
+    in effect for the project rather than recalling it.
     """
 
     lens_id: str
@@ -68,12 +68,16 @@ QC_LENSES: tuple[QCLens, ...] = (
         brief=(
             "Verify every standard citation, edition, and technical "
             "requirement in the draft against the editions in effect. USE "
-            "web_search to check the standard's ACTUAL current content — do "
-            "not recall it from memory; article numbers and requirements are "
-            "renumbered across editions. Flag: requirements that contradict "
-            "the cited standard, editions that contradict the recorded basis "
-            "in <standards_in_effect>, and provisions an authority having "
-            "jurisdiction would reject. Cite the URLs you actually retrieved."
+            "web_search to check the actual text of the edition in effect "
+            "for this project, with any amendments its adoption makes — not "
+            "the newest edition, and never from memory; article numbers and "
+            "requirements are renumbered across editions. Flag: "
+            "requirements that contradict the cited standard, editions that "
+            "contradict the recorded basis in <standards_in_effect>, and "
+            "provisions an authority having jurisdiction would reject. A "
+            "newer published edition is a separate observation, never a "
+            "defect in a citation that matches the edition in effect. Cite "
+            "the URLs you actually retrieved."
         ),
     ),
     QCLens(

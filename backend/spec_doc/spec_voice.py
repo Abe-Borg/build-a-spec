@@ -263,6 +263,64 @@ def check_drafted_edits(edits: Any) -> None:
     )
 
 
+# Since 2026-10-12 (owner decision, option A of the prompt-review follow-up)
+# an edition enters only on the user's statement or a grounded research item,
+# never on a model's proposal: once recorded, lint and Final QC treat an entry
+# as authoritative, so a guess recorded as one would be checked against as if
+# verified. The generic module used to ask for exactly that wording ("model-
+# proposed, unverified — current published edition per training data"), saved
+# histories carry such calls, and a model imitates its history, so the old
+# wording is refused outright. Narrow on purpose: an ordinary basis never
+# names a model proposal or training data.
+_MODEL_PROPOSED_BASIS = re.compile(
+    r"(?i)\bmodel[-\s]+propos(?:ed|al)\b|\btraining\s+data\b"
+)
+
+
+def edition_basis_problems(edits: Any) -> list[str]:
+    """One line per ``set_standard_edition`` that records a model-proposed edition.
+
+    Only an op that records an edition counts: removing an override (no
+    ``edition``) reverts to the module default and needs no basis.
+    """
+    if not isinstance(edits, list):
+        return []
+    problems: list[str] = []
+    for index, op in enumerate(edits, start=1):
+        if not isinstance(op, dict) or op.get("action") != "set_standard_edition":
+            continue
+        edition = op.get("edition")
+        basis = op.get("basis")
+        if not (isinstance(edition, str) and edition.strip()):
+            continue
+        if isinstance(basis, str) and _MODEL_PROPOSED_BASIS.search(basis):
+            problems.append(
+                f"- edit {index} (set_standard_edition {op.get('standard')!s} "
+                f"{edition.strip()}): the basis is a model proposal"
+            )
+    return problems
+
+
+def check_edition_bases(edits: Any) -> None:
+    """Refuse a model batch that records an edition from the model's own knowledge.
+
+    Raises :class:`SpecEditError` (all or nothing, like every edit refusal).
+    """
+    problems = edition_basis_problems(edits)
+    if not problems:
+        return
+    raise SpecEditError(
+        "this batch would record an edition nobody has established:\n"
+        + "\n".join(problems)
+        + "\nAn edition's basis is the user's statement or a grounded research "
+        "item id, never an edition proposed from your own knowledge. Until "
+        "one of those supplies it, cite the standard by designation without "
+        "an edition year; tell the user what you believe the edition is and "
+        "why, offer to look it up or suggest a research round, and record the "
+        "edition once the user confirms it."
+    )
+
+
 def retired_status_problems(edits: Any) -> list[str]:
     """One line per op that would stamp a retired status.
 

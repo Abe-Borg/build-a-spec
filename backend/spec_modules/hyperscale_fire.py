@@ -454,9 +454,16 @@ _RESEARCH_DIMENSIONS = (
             "report the edition year for each standard the specifications "
             "cite — do not infer editions from the model-code year; (g) the "
             "current published edition of each standard, so drafting can "
-            "distinguish the legal minimum from current-edition practice. "
-            "Prefer official adoption sources: the state fire marshal or "
-            "building-code agency and the municipal code of {city}."
+            "distinguish the legal minimum from current-edition practice; "
+            "(h) which of those adoptions governs THIS project: whether the "
+            "code in force when the permit application is filed (or the "
+            "project otherwise vests) governs, any transition period in "
+            "which the previous edition may still be used — a multi-phase "
+            "campus can straddle a code cycle — and whether alterations of "
+            "an existing building fall under an existing-building code "
+            "instead. Prefer official adoption sources: the state fire "
+            "marshal or building-code agency and the municipal code of "
+            "{city}."
         ),
     ),
     ResearchDimension(

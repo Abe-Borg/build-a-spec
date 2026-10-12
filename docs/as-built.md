@@ -22410,3 +22410,105 @@ A finding that a value the project never supplied is missing is kept when
 the section cannot be right without it; only a fix that would invent the
 value is turned down. This adds a little to each Final QC run's cost
 (roughly $0.20–$0.40 on a typical run)."
+
+## An edition comes from the user or the research, never a guess — implemented notes (2026-10-12)
+
+Step 3 of the prompt-review follow-up. The review's point 5 was confirmed in
+code: the set_standard_edition tool description says to use it "ONLY when
+the user states the adoption or a grounded research item provides it —
+never from your own assumption", while the generic module's playbook,
+conventions and the unpinned standards block invited "an honestly-labeled
+model proposal ('model-proposed, unverified — current published edition per
+training data')". Once recorded, the entry is an edition in effect like any
+other: the `unrecorded_edition`/stale-edition lint measures citations
+against it and Final QC's `code_compliance` lens checks "editions that
+contradict the recorded basis in <standards_in_effect>". Asked to choose
+between forbidding the guess (A) and keeping it marked unverified (B), the
+owner chose A on 2026-10-12.
+
+- **The rule, three places.** `generic._DOMAIN_CONVENTIONS` (first bullet),
+  the `standards_editions` playbook topic's default, and the unpinned
+  rendering of `standards.standards_context_block` now allow only the
+  user's statement or a grounded research item id. The model still says
+  which edition it believes applies and why, offers a lookup or a research
+  round, and records the edition once the user confirms it — a lookup the
+  model made itself is told to the user, not recorded on its own authority.
+  An entry an earlier session recorded with a model-proposed basis is
+  named unverified: confirm it (user or research) and re-record it, or
+  remove it and cite year-free. The module docstring says the same. The
+  `set_standard_edition` description already carried the rule and did not
+  change (its bytes are what Final QC's lenses read).
+- **The guard.** `spec_voice.edition_basis_problems` /
+  `check_edition_bases` run in `_run_tool` after `check_drafted_edits`: a
+  model batch whose `set_standard_edition` records an edition (non-blank
+  `edition`) on a basis matching `_MODEL_PROPOSED_BASIS` — "model
+  proposed/proposal" or "training data", case-insensitive — is refused all
+  or nothing, with a message saying what the basis may be and what to do
+  instead. Saved histories carry the old wording, and a model imitates its
+  history, so the prompt alone was not trusted to retire it. Narrow on
+  purpose: an ordinary basis never names either. Removing an override (no
+  `edition`) is not checked; the user's own panel edits are not checked;
+  Final QC's proposed operations are not checked (the lenses read the tool
+  description's rule).
+- **Final QC.** The `code_compliance` brief's "check the standard's ACTUAL
+  current content" became "check the actual text of the edition in effect
+  for this project, with any amendments its adoption makes — not the newest
+  edition, and never from memory", plus "A newer published edition is a
+  separate observation, never a defect in a citation that matches the
+  edition in effect." The `QCLens` docstring and the settings comment
+  follow, as do README's Final QC description and the QC drawer's run
+  list ("against the text of the edition in effect for your project"). The
+  review's point: "current" invited a lens to measure a
+  jurisdiction's adopted earlier edition against the newest and flag the
+  renumbering as a defect. Verifier seats read the same brief.
+- **Research.** Both modules' `governing_codes` brief gains one lettered
+  item — (f) generic, (h) hyperscale — asking which of the adoptions
+  governs THIS project: whether the code in force when the permit
+  application is filed (or the project otherwise vests) governs, any
+  transition period in which the previous edition may still be used (the
+  hyperscale brief adds that a multi-phase campus can straddle a code
+  cycle), and whether alterations of an existing building fall under an
+  existing-building code instead.
+- **Bytes that changed once.** The generic module's stable prompt (open
+  sessions rewrite their cached prefix once); the per-turn standards block
+  for unpinned modules; the research `governing_codes` brief (each round's
+  cache lineage is new once). Lens briefs are hashed in the QC input
+  manifest (`configuration.lenses[].brief`), and the unpinned standards
+  render is hashed too (`standards_basis_fingerprint`), so every retained
+  Final QC result reads stale once and needs a re-run.
+- **Unchanged.** The hyperscale module's pinned editions and its standards
+  rendering, the tool description, the lint rules, the QC protocol version
+  and schemas, the SSE protocol, readiness.
+
+Tests: `tests/test_edition_basis.py` (14): four spellings of a model-proposed
+basis refused with the way out; a user statement and a research item pass;
+removals, other ops and junk input never refused; a chat batch recording a
+guess refused whole through `/api/chat`, the model correcting itself and
+nothing recorded; the generic prompt's conventions and playbook default; the
+standards block naming an earlier guess unverified (and still rendering it);
+the curated module's block untouched; the QC brief; both modules' research
+brief. `tests/test_standards.py` and `tests/test_spec_modules.py` pinned
+the old wording and now pin the new. Every standards, module, spec-voice,
+lint, research, QC and writing-policy test file passes (1,069), plus the
+chat-path files (166). Revert matrix, each reverted in place and restored
+(the three files run each time): the guard not run on chat batches → 1 red;
+the guard missing "training data" → 1; the guard refusing removals → 1; the
+generic conventions reverted → 2; the playbook default reverted → 1; the
+standards block reverted → 2; the QC brief reverted → 1; each research brief
+reverted → 1.
+
+No paid API call was made; how often the live model now asks rather than
+guesses, and what the research item contributes, is unmeasured.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Standards editions", item "Editions come from you or the research":
+"In the general (any-discipline) module the assistant no longer records a
+standard's edition from its own memory. It cites the standard without a year
+until you state the edition or requirements research establishes it, tells
+you which edition it believes applies, and records it once you confirm. An
+edition recorded earlier as 'model-proposed' is flagged for you to confirm.
+Final QC now checks citations against the edition in effect for your
+project rather than the newest one, and research asks which code cycle
+governs the project (permit date, transition period, existing buildings).
+Retained Final QC results read stale once after updating."

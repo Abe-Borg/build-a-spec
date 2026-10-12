@@ -8,9 +8,11 @@ encodes the *absence* of curation honestly:
 - **Unpinned basis.** No default editions ship with the module. Every
   referenced-standard edition enters per-project through the
   ``set_standard_edition`` operation with a mandatory stated basis — a
-  grounded research item id, the user's statement, or an honestly-labeled
-  model proposal ("model-proposed, unverified"). Until recorded,
-  designations are cited without edition years. The ``unrecorded_edition``
+  grounded research item id or the user's statement, never a model
+  proposal (owner decision, 2026-10-12: a guess recorded as an edition was
+  checked against by lint and Final QC as if verified;
+  ``spec_voice.check_edition_bases`` refuses the old wording). Until
+  recorded, designations are cited without edition years. The ``unrecorded_edition``
   lint rule (active only for unpinned modules) plus the readiness
   checklist's lint-clean gate enforce the posture without blocking a turn.
 - **Open catalog.** No fixed section list; the model establishes the
@@ -106,11 +108,12 @@ _INTERVIEW_PLAYBOOK = (
         ),
         default=(
             "Cite the discipline's conventional standards by designation "
-            "WITHOUT edition years until an edition is recorded. When the "
-            "user defers, either keep designations year-free or record a "
-            "model-proposed edition with the basis honestly labeled "
-            "'model-proposed, unverified' — never cite a year in document "
-            "text with no recorded basis."
+            "WITHOUT edition years until the user states an edition or "
+            "grounded research establishes one. When the user defers, keep "
+            "designations year-free, say which edition you believe applies "
+            "and why, and offer a lookup or a research round — never record "
+            "an edition from your own knowledge, and never cite a year in "
+            "document text with no recorded basis."
         ),
     ),
     InterviewTopic(
@@ -219,7 +222,7 @@ _DRAFTING_PERSONA = (
 
 
 _DOMAIN_CONVENTIONS = """\
-- This module pins NO standard editions. Every referenced-standard edition enters through set_standard_edition with a mandatory stated basis: a grounded research item id, the user's statement, or an honestly-labeled model proposal such as "model-proposed, unverified — current published edition per training data". Never cite an edition year in document text without a recorded entry; until one exists, cite designations year-free. The lint flags unrecorded edition years — treat those findings as drafting errors.
+- This module pins NO standard editions. Every referenced-standard edition enters through set_standard_edition with a mandatory stated basis: the user's statement or a grounded research item id — never an edition you propose from your own knowledge, however confident (the app refuses a model-proposed basis). An edition you found with a lookup of your own is something to tell the user and have them confirm, then record on their word. An entry recorded in an earlier session with a "model-proposed" basis is unverified: have the user confirm it, or research establish it, and re-record it with that basis — or remove it and cite the designation year-free. Never cite an edition year in document text without a recorded entry; until one exists, cite designations year-free. The lint flags unrecorded edition years — treat those findings as drafting errors.
 - USA projects: the I-codes are model-code context only — the governing state or local adoption (and any specialty code for the discipline) is per-project data; never assert an adoption you have not been given or grounded. Listings conventionally UL/FM; units inch-pound.
 - Canada projects: the National Building Code and National Fire Code of Canada apply as provincially adopted (several provinces publish their own codes on the NBC basis); CSA and ULC standards and ULC listings conventionally replace many US counterparts; units SI (metric). Never map a US standard to its Canadian counterpart silently — say what you substituted and why.
 - The stated discipline governs section selection, vocabulary, and conventional article structure. Where the discipline is outside your deepest specialty, draft plainly and competently from its published conventions, verify designations and listings with a quick web lookup rather than recalling them, and over-flag with assumed status.
@@ -279,9 +282,14 @@ _RESEARCH_DIMENSIONS = (
             "of each such standard, so drafting can distinguish the legal "
             "minimum from current-edition practice; (e) licensing or "
             "professional-seal requirements for {discipline} designers or "
-            "installers the specifications must reflect. Prefer official "
-            "adoption sources: the state or provincial code agency and the "
-            "municipal code of {city}."
+            "installers the specifications must reflect; (f) which of "
+            "those adoptions governs THIS project: whether the code in "
+            "force when the permit application is filed (or the project "
+            "otherwise vests) governs, any transition period in which the "
+            "previous edition may still be used, and whether alterations "
+            "of an existing building fall under an existing-building code "
+            "instead. Prefer official adoption sources: the state or "
+            "provincial code agency and the municipal code of {city}."
         ),
     ),
     ResearchDimension(

@@ -22285,3 +22285,63 @@ draft cannot be right without, such as a clause left out until you answer —
 now holds back the readiness checklist until it is settled. Answer it in
 chat or tick it off in Waiting on you. Other open items still show as a
 reminder line and never block."
+
+## The fact harvest sees which research findings are grounded — implemented notes (2026-10-12)
+
+Owner question (Abraham): does the fact harvest check or evaluate research or
+Final QC output? It does neither: it lists research findings and Final QC
+findings only as ids a proposal may cite (checked for existence by
+`resolve_fact_source`), reads Final QC only through the user's dismissal
+reasons, and is told not to restate research findings as facts. Reading the
+code for that answer turned up one gap, fixed here on the owner's say-so: the
+status rule told the model a fact is *confirmed* when "a grounded source
+establishes it", but the research lines in `<available_sources>` never said
+which findings were grounded, so the rule named a property the model could
+not see.
+
+- **The source line.** `_source_lines` now writes each research finding as
+  `r-… — research (<topic>; grounded): <summary>` or
+  `r-… — research (<topic>; [UNVERIFIED]): <summary>`, from
+  `ResearchItem.grounded`. `[UNVERIFIED]` is the research report's own flag
+  for a finding no retrieved source backs (README: "kept as a lead, never a
+  fact"). The labels are `RESEARCH_GROUNDED_LABEL` /
+  `RESEARCH_UNVERIFIED_LABEL`, interpolated into the prompt and the schema,
+  never retyped. Brackets are not a frame tag, so the line survives
+  `neutralize_harvest_frames` unescaped (pinned).
+- **The status rule**, in the system prompt and the `status` property's
+  description alike: confirmed when the user stated it, or a confirmed
+  provision, an attached document or a research finding marked grounded
+  establishes it; assumed when it is a default the user accepted or did not
+  contest, or when its only basis is a finding marked `[UNVERIFIED]`. The old
+  "grounded source" was ambiguous about attached documents; an attached
+  document is named explicitly now, since it is the source text itself.
+- **Guidance, not a gate.** Nothing checks a proposal's status against the
+  finding's grounding: the user reviews every status on the sheet before
+  anything is recorded, and a deterministic refusal would cost the user an
+  edit for a judgment call (a fact can rest on an unverified finding AND a
+  user statement). `assess_proposal`, `evidence_found`, the commit, the
+  record tool and `FactSources` are unchanged.
+- **Bytes.** The harvest is one uncached single-shot call, so the changed
+  prompt and schema move no cache. No chat, research or Final QC request
+  changed, and no retained Final QC report reads stale.
+
+Tests: `tests/test_harvest.py` —
+`test_each_research_source_says_whether_it_is_grounded` (a grounded and an
+unverified finding, each line exact; nothing escaped) and
+`test_the_status_rule_names_the_grounding_labels_the_sources_carry` (prompt
+and schema both name both labels; the old "grounded source" wording is
+gone). `tests/test_harvest.py` and `tests/test_prompt55_parsing_and_harvest.py`
+pass (94). Revert matrix, each reverted in place and restored from a saved
+copy: the source line without its grounding → 1 red; every finding labelled
+grounded → 1; the prompt's old status line → 1; the schema's old status
+description → 1. Restored and green afterwards. No paid API call was made;
+whether the live model now marks research-only facts assumed is unmeasured.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Projects", item "The fact harvest knows which research is
+verified": "When the fact harvest proposes a fact that rests on a research
+finding, it now sees whether that finding is backed by a retrieved source,
+and proposes a fact resting only on an unverified finding as assumed rather
+than confirmed. You still review every proposal's status before anything is
+recorded."

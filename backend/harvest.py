@@ -89,6 +89,13 @@ HARVEST_MAX_EVIDENCE_CHARS = 300
 # Pending previews held at once (the template cache's count); older ones are
 # discarded first. Expiry and the byte cap are the template cache's own.
 HARVEST_MAX_PREVIEWS = 16
+# How each research line in <available_sources> states its grounding, so the
+# status rule ("confirmed" needs a grounded finding) is one the model can
+# apply. Interpolated into the prompt and the schema, never retyped.
+# ``[UNVERIFIED]`` is the research report's own flag for a finding no
+# retrieved source backs.
+RESEARCH_GROUNDED_LABEL = "grounded"
+RESEARCH_UNVERIFIED_LABEL = "[UNVERIFIED]"
 
 # The fields a proposal carries, and the ones a user may edit before commit.
 PROPOSAL_FIELDS = (
@@ -192,9 +199,12 @@ HARVEST_SCHEMA: dict[str, Any] = {
                         "enum": list(FACT_TOOL_STATUSES),
                         "description": (
                             "confirmed = the user stated it, or a confirmed "
-                            "provision or grounded source establishes it; "
-                            "assumed = a default the user accepted or did not "
-                            "contest."
+                            "provision, an attached document or a research "
+                            f"finding marked {RESEARCH_GROUNDED_LABEL} "
+                            "establishes it; assumed = a default the user "
+                            "accepted or did not contest, or a fact whose only "
+                            "basis is a research finding marked "
+                            f"{RESEARCH_UNVERIFIED_LABEL}."
                         ),
                     },
                     "source_kind": {
@@ -417,8 +427,12 @@ def _source_lines(session: Any, sources: FactSources) -> tuple[str, ...]:
         summary = " ".join(str(item.requirement or "").split())
         if len(summary) > 120:
             summary = summary[:119].rstrip() + "…"
+        grounding = (
+            RESEARCH_GROUNDED_LABEL if item.grounded else RESEARCH_UNVERIFIED_LABEL
+        )
         lines.append(
-            f"{item.item_id} — research ({item.topic or item.category}): {summary}"
+            f"{item.item_id} — research ({item.topic or item.category}; "
+            f"{grounding}): {summary}"
         )
     for doc in session.references.docs:
         if doc.rid in sources.reference_ids:
@@ -572,7 +586,7 @@ Do NOT propose:
 
 For every proposal:
 - statement: one line a stranger could act on, at most {max_statement} characters.
-- status: confirmed when the user stated it or a confirmed provision or grounded source establishes it; assumed when it is a default the user accepted or did not contest.
+- status: confirmed when the user stated it, or a confirmed provision, an attached document or a research finding marked {grounded} in <available_sources> establishes it; assumed when it is a default the user accepted or did not contest, or when its only basis is a research finding marked {unverified} (a lead no retrieved source backs).
 - scope: project (every section), discipline (every section of this discipline), or section with the section number (a coordination fact about one section).
 - source_kind and source_ref: user with turn:N when the user said it in that turn; model with turn:N when it is the assistant's default the user accepted there; research, reference or qc with an id listed in <available_sources>. Leave source_ref empty only when no turn or listed record applies. Never invent an id — a source that is not listed is refused.
 - evidence: the line the fact rests on, quoted verbatim (at most {max_evidence} characters).
@@ -586,6 +600,8 @@ Think the problem through before you answer."""
 # The limits are interpolated, never retyped, so the prompt and the checks
 # that enforce them cannot drift apart.
 HARVEST_SYSTEM_PROMPT = _HARVEST_SYSTEM_PROMPT.format(
+    grounded=RESEARCH_GROUNDED_LABEL,
+    unverified=RESEARCH_UNVERIFIED_LABEL,
     max_statement=MAX_STATEMENT_CHARS,
     max_evidence=HARVEST_MAX_EVIDENCE_CHARS,
     max_proposals=HARVEST_MAX_PROPOSALS,

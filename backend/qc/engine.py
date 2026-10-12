@@ -3177,7 +3177,7 @@ def _render_section(section: SpecSection) -> str:
 # attached documents and the facts defuse theirs. Text without the tag
 # renders byte for byte as before.
 _STANDARDS_TAG_PATTERN = re.compile(
-    r"<\s*/?\s*standards_in_effect\s*>", re.IGNORECASE
+    r"<\s*/?\s*standards_in_effect\b[^>]*>", re.IGNORECASE
 )
 
 
@@ -3203,10 +3203,12 @@ def _standards_in_effect_block(standards: str) -> str:
 # A research finding summarizes a retrieved page, so a page can put the
 # profile's own tag into one; since 2026-10-12 every verifier seat reads the
 # frame as well as every lens. Defused visibly, as the standards, documents
-# and facts defuse theirs. Text without the tag renders byte for byte as
+# and facts defuse theirs — attributes included (``</…_profile x="y">`` reads
+# as an end tag too; Codex review on PR #306, which fixed the standards
+# pattern the same way). Text without the tag renders byte for byte as
 # before.
 _PROFILE_TAG_PATTERN = re.compile(
-    r"<\s*/?\s*project_requirements_profile\s*>", re.IGNORECASE
+    r"<\s*/?\s*project_requirements_profile\b[^>]*>", re.IGNORECASE
 )
 
 

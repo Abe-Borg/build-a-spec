@@ -22333,7 +22333,14 @@ What changed:
   so `_render_profile` defuses the block's own tag (`_PROFILE_TAG_PATTERN`,
   the standards/documents/facts posture: `[escaped tag: …]`, never
   deleted). A profile without the tag renders byte for byte as
-  `research_context_block` gives it, so lens bytes are unchanged.
+  `research_context_block` gives it, so lens bytes are unchanged. Codex
+  review on PR #306 (P2): the pattern allowed only whitespace before `>`,
+  so `</project_requirements_profile ignored="x">` — which still reads as an
+  end tag — passed through. Both this pattern and `_STANDARDS_TAG_PATTERN`
+  beside it now match `\b[^>]*>`, the harvest and compaction guards' shape;
+  two attribute spellings joined each tag test (old patterns → 4 red). The
+  facts and attached-documents guards elsewhere keep the narrow shape (left
+  for their own change).
 - **The prompt.** The data-classification sentence names
   `<project_requirements_profile>` ("the requirements research the lenses
   reviewed against"). The refute list keeps the submittal-per-product, the

@@ -1659,7 +1659,9 @@ or approval the project never supplied" — the gap the
   `_verify_one`). In the seat prefix it follows `<standards_in_effect>` and
   precedes the documents, facts and `<specification>`, inside cached block 0;
   empty renders nothing. `_render_profile` defuses the frame's own tag
-  (`_PROFILE_TAG_PATTERN`); a profile without it renders byte for byte.
+  (`_PROFILE_TAG_PATTERN`, attributes included — `\b[^>]*>`, as
+  `_STANDARDS_TAG_PATTERN` now is too; Codex review on PR #306); a profile
+  without it renders byte for byte.
 - **The prompt.** The data sentence names `<project_requirements_profile>`.
   The refute list drops "a value, criterion, or approval the project never
   supplied": a missing-input finding is upheld when the specification

@@ -304,6 +304,12 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **The reviewers read the research (next release).** On a section with a
+      completed research round, run Final QC and open a reviewer on any
+      panel: its claim view and reasoning can cite the research, and a
+      finding that a research requirement is missing is not refuted for want
+      of it. The QC cost shown is a little higher than the same section's
+      previous run.
 - [ ] **A blocking question holds back readiness (next release).** Ask the
       assistant to leave a clause out until you answer something: Waiting on
       you shows the item as blocking, and the checklist shows a required

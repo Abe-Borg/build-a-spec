@@ -1642,6 +1642,43 @@ which already gates), and never count a settled item. Tests:
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
 
+## Final QC's verifier seats read the requirements research — implemented notes (2026-10-12)
+
+Step 2 of the prompt-review follow-up. The lenses review against
+`<project_requirements_profile>`; the seats could not see it and default to
+refuted when uncertain, so completeness findings built on research were
+judged blind. And the seat prompt told seats to refute "a value, criterion,
+or approval the project never supplied" — the gap the
+`enforceability_language` brief and the writing policy keep open.
+
+- **The block.** `_requirements_profile_block` is the one frame for the lens
+  and seat prefixes (lens bytes unchanged). `_run_final_qc` renders
+  `profile_render = _render_profile(profile)` once — the render every lens
+  reads, "no profile was run" included — and passes `requirements_profile=`
+  to all three seat builders (batched specs, streamed lineage-key specs,
+  `_verify_one`). In the seat prefix it follows `<standards_in_effect>` and
+  precedes the documents, facts and `<specification>`, inside cached block 0;
+  empty renders nothing. `_render_profile` defuses the frame's own tag
+  (`_PROFILE_TAG_PATTERN`, attributes included — `\b[^>]*>`, as
+  `_STANDARDS_TAG_PATTERN` now is too; Codex review on PR #306); a profile
+  without it renders byte for byte.
+- **The prompt.** The data sentence names `<project_requirements_profile>`.
+  The refute list drops "a value, criterion, or approval the project never
+  supplied": a missing-input finding is upheld when the specification
+  cannot be correct without the input, refuted when the provision already
+  stands complete without it, and its ops are inadequate when they would
+  invent the input.
+- **No protocol bump, no manifest key.** The profile is already hashed
+  (`requirements_research`); the manifest does not hash seat prompts (the
+  2026-10-08 precedent). Cost: the profile in each lineage's cached prefix
+  (Sonnet 5.5: one 5-minute write per lineage, then reads at $0.10/M).
+
+Never give a seat a profile render other than the one the lenses read, and
+never add a seat path that skips it. Tests:
+`tests/test_qc_verifier_research.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

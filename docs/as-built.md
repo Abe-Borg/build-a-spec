@@ -22286,6 +22286,131 @@ now holds back the readiness checklist until it is settled. Answer it in
 chat or tick it off in Waiting on you. Other open items still show as a
 reminder line and never block."
 
+## Final QC's verifier seats read the requirements research — implemented notes (2026-10-12)
+
+Step 2 of the prompt-review follow-up (an outside review of the prompts,
+checked against the code; owner: take the lead, step by step). Two of the
+review's points about the verifier seats were confirmed in code:
+
+1. **The seats could not see the research.** Every lens reviews against
+   `<project_requirements_profile>`, and the `completeness` brief judges
+   "each controlling item either represented in the draft or consciously
+   absent". `_verifier_shared_prefix` carried the date, the standards in
+   effect (since 2026-10-08), the attached documents, the facts and the
+   specification — not the profile. A seat asked to refute "the controlling
+   requirement that the AHJ witnesses the hydrostatic test is never
+   represented" could not read the requirement, and its system prompt says
+   to default to refuted when uncertain. The panel rules soften this —
+   upheld needs a unanimous panel, a split panel is disputed, and a
+   critical or high refutation without a validated citation escalates to the
+   user (`panel_outcome`) — but a medium or low finding on which both seats
+   were merely unsure was refuted.
+2. **The seat prompt contradicted the lens and the policy.** It listed "a
+   value, criterion, or approval the project never supplied" among the
+   things to refute, while the `enforceability_language` brief keeps that
+   gap open ("replace vague language only with criteria the project
+   supplied — otherwise the finding stays advisory with proposed_ops null")
+   and the writing policy says to raise it.
+
+What changed:
+
+- **One frame.** `_requirements_profile_block(profile)` builds
+  `<project_requirements_profile>\n…\n</project_requirements_profile>\n\n`
+  for both prefixes; `_lens_shared_prefix` uses it (its bytes are what they
+  were).
+- **Every seat reads the lenses' render.** `_run_final_qc` renders
+  `profile_render = _render_profile(profile)` once, beside
+  `standards_render`, and passes `requirements_profile=` to all three seat
+  builders: the batched specs (the warm lead streams from them), the
+  streamed pool's lineage-key specs and `_verify_one` (and through it
+  `_verifier_call_spec`). With no research, the seats read the same "No
+  requirements-research profile was run…" line the lenses read. In the seat
+  prefix the block follows `<standards_in_effect>` and precedes the
+  documents, the facts and `<specification>` — the lens prefix's order —
+  inside cached block 0. `_verifier_shared_prefix(requirements_profile="")`
+  renders nothing, so a direct caller's bytes are unchanged.
+- **The frame is escaped.** A research finding summarizes a retrieved page,
+  so `_render_profile` defuses the block's own tag (`_PROFILE_TAG_PATTERN`,
+  the standards/documents/facts posture: `[escaped tag: …]`, never
+  deleted). A profile without the tag renders byte for byte as
+  `research_context_block` gives it, so lens bytes are unchanged. Codex
+  review on PR #306 (P2): the pattern allowed only whitespace before `>`,
+  so `</project_requirements_profile ignored="x">` — which still reads as an
+  end tag — passed through. Both this pattern and `_STANDARDS_TAG_PATTERN`
+  beside it now match `\b[^>]*>`, the harvest and compaction guards' shape;
+  two attribute spellings joined each tag test (old patterns → 4 red). The
+  facts and attached-documents guards elsewhere keep the narrow shape (left
+  for their own change).
+- **The prompt.** The data-classification sentence names
+  `<project_requirements_profile>` ("the requirements research the lenses
+  reviewed against"). The refute list keeps the submittal-per-product, the
+  template's article placement and keyword placement, and drops the missing
+  value: "A finding that a value, criterion, or approval is missing is not
+  refuted merely because the project never supplied it: uphold it when the
+  specification cannot be correct without that input, refute it when the
+  provision already stands complete without it, and set ops_adequate false
+  when the operations would invent the missing input instead of leaving it
+  for the user to supply." The first test mirrors the blocking definition
+  of Waiting on you (step 1); the second keeps the writing policy's
+  write-around legitimate.
+- **The trust explainer** (Final QC card) says the seats get the research
+  profile and how a missing value is judged.
+- **No protocol bump, no manifest key.** The profile is already a hashed
+  input (`requirements_research`), and the manifest records inputs and
+  review rules, not which prompt carries them (the 2026-10-08 standards
+  precedent; seat prompts are not hashed). A retained result stays current
+  by fingerprint (pinned); the release's `application_version` reads every
+  retained report stale once (pinned beside the standards change).
+- **Cost.** The profile joins each lineage's cached prefix (no-web and
+  web-tooled seats are separate lineages). On Sonnet 5.5 a 5-minute write is
+  $2.50/M and a read $0.10/M: for a 30k-token profile and about 70 streamed
+  seats in two lineages, two writes (~$0.15) plus the reads (~$0.20), about
+  $0.35 a run; the 100k-token render cap puts the ceiling near $1.2. The
+  batched transport (not the default) re-writes the prefix on every seat
+  that misses the cache, so it pays proportionally more there. Estimated
+  from the price table; not measured.
+- **Unchanged.** The lens requests, the grouping calls, panel sizes and
+  adjudication, the verdict schema, the protocol version, the transports'
+  byte identity (both still send the same seat request), the SSE protocol,
+  readiness. A seat citing a research item id as refutation evidence still
+  does not validate (`document_ref` resolves to elements and attached
+  documents only), so an uncited critical refutation still escalates.
+
+Tests: `tests/test_qc_verifier_research.py` (16): the seat prefix frames the
+profile as the lens does and in the lens's order; an empty render leaves a
+direct caller's bytes alone; four spellings of the tag cannot close the
+frame in either prefix; a profile without the tag renders byte for byte;
+every seat on the streamed and batched transports reads the lenses' frame
+inside the cached block; a run without research gives the seats the same "no
+profile" line; the batched phase's warm lead streams the prefix its batch
+reads; the streamed pool keys each lineage on the prefix it sends; the
+prompt names the block as data (both modules) and judges a missing input on
+whether the specification can be correct without it; a retained result
+stays current. Every other Final QC, writing-policy, P55 and agent-
+visibility test file passes unchanged (981 + 63), as do `npm test` (570) and
+the build. Revert matrix, each reverted in place and restored (the new file
+run each time): the seat prefix dropping the block → 10 red; the block after
+the owner's documents → 1; the batched specs without it → 2; the streamed
+lineage specs without it → 1; the `_verify_one` call without it → 3;
+`_verifier_call_spec` dropping it → 5; the escape removed → 4; the data
+sentence reverted → 2; the refute line reverted → 1.
+
+No paid API call was made; whether seats now uphold research-based
+completeness findings more often, and what that does to the number of
+findings a user must disposition, is unmeasured until the owner runs Final
+QC.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Final QC", item "The reviewers read the research too": "Final QC's
+verifier reviewers now read the same requirements research the five
+specialists reviewed against, so a finding that the section misses a
+requirement the research established is judged with the research in view.
+A finding that a value the project never supplied is missing is kept when
+the section cannot be right without it; only a fix that would invent the
+value is turned down. This adds a little to each Final QC run's cost
+(roughly $0.20–$0.40 on a typical run)."
+
 ## The fact harvest sees which research findings are grounded — implemented notes (2026-10-12)
 
 Owner question (Abraham): does the fact harvest check or evaluate research or

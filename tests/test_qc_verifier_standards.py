@@ -204,6 +204,8 @@ def test_the_seat_prefix_frames_the_block_as_the_lens_prefix_does():
         "<standards_in_effect>",
         "</ standards_in_effect >",
         "</STANDARDS_IN_EFFECT>",
+        '</standards_in_effect ignored="x">',
+        '<standards_in_effect role="system">',
     ],
 )
 def test_a_recorded_basis_or_reason_cannot_close_the_frame(tag):

@@ -216,6 +216,43 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — a blocking question holds back issue readiness
+
+(2026-10-12, from an outside review of the prompts. docs/as-built.md's "A
+blocking question holds back issue readiness" is the record; in the next
+release.)
+
+Since the specification stopped holding `[TBD]` placeholders, a value the
+draft is missing is tracked in **Waiting on you** instead. The readiness
+checklist used to block on a `[TBD]`, but its Waiting on you line was only a
+reminder, so a section could go green while the assistant was still waiting
+on an answer the draft could not be right without — most plainly a clause it
+had left out until you answered.
+
+- **A blocking item now blocks.** The checklist gains a required line,
+  "No blocking question or decision is waiting on you". While an item the
+  assistant marked *blocking* is open, it reads "1 blocking item waiting on
+  you — Commodity class. Answer it in chat or tick it off in Waiting on
+  you." and the section is not ready to issue. The Word and JSON Final QC
+  reports list it among the blockers like any other required check.
+- **Answer it, or tick it off.** Answering in chat lets the assistant settle
+  the item; ticking it off in Waiting on you clears the line yourself, the way
+  dismissing a Final QC finding with a reason does. Reopening the item brings
+  the line back.
+- **Everything else stays a reminder.** A question the assistant wrote around
+  (the provision stands without the answer and is marked *assumed*, which
+  already holds readiness until you confirm it) does not block, and the
+  existing advisory line still lists everything open.
+- **The assistant is told what the flag costs.** Its instructions now say a
+  clause left out until you answer is blocking, and that a blocking item
+  holds the readiness checklist, so it marks the ones that matter rather than
+  none.
+
+The chat's standing instructions and the follow-up tool's description
+changed, so every open session rewrites its cached prefix once after the
+update. Research and Final QC prompts did not change, and retained Final QC
+reports stay current. No paid API call was made.
+
 ## Current Status — a section's diagnostics follow it across launches
 
 (2026-10-09, owner request. docs/as-built.md's "A section's diagnostics
@@ -2776,7 +2813,9 @@ lives instead.
 - **The readiness checklist names anything still waiting**, as an *advisory*
   line: it does not block issue the way an unresolved `[TBD]` does, but the
   checklist is the last place anyone looks before a section goes out, which is
-  exactly when a forgotten decision costs the most.
+  exactly when a forgotten decision costs the most. (Since 2026-10-12 an item
+  marked *blocking* does block issue, through its own required line — see
+  "a blocking question holds back issue readiness" near the top.)
 - The list rides the saved project file, survives undo/redo and reload, and is
   discarded with the session on New session — like every other thing that
   belongs to the project rather than the app.
@@ -3410,9 +3449,10 @@ actions.
   never changes the selected module or specification automatically.
 - **Issue readiness — the "can it go out the door" screenshot moment.** A
   deterministic checklist (no model call) at the top of the QC drawer goes
-  green exactly when: no open items, no unreviewed imported/assumed blocks,
-  lint clean, research complete, QC current, and the audit contract complete
-  with no open criticals. "Research complete" means every research area the
+  green exactly when: no open items, no blocking question waiting on you, no
+  unreviewed imported/assumed blocks, lint clean, research complete, QC
+  current, and the audit contract complete with no open criticals.
+  "Research complete" means every research area the
   module declares has actually completed — a run that finished with some
   areas failed blocks readiness and names which ones, because absent findings
   are not the same as an area that was checked and found nothing. Pressing

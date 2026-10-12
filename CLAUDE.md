@@ -230,13 +230,15 @@ attempt state, full-input staleness, and readiness; a different retained last
 success is included separately). `GET /api/readiness` is a
 deterministic checklist (no model call):
 `{checks: [{id, ok, detail, advisory}], ready}` — `ready` = all non-advisory
-checks ok (no open items, no unreviewed imported/assumed, lint clean, research
+checks ok (no open items, no open blocking follow-up (`no_blocking_followups`,
+2026-10-12), no unreviewed imported/assumed, lint clean, research
 complete — which since Chunk 3.2 means every REQUIRED module dimension has
 cumulatively completed, not merely that the runner said `complete`; see
 "Required research coverage gates readiness" — `qc_current`
 exact-input/latest-attempt identity,
 `qc_audit_complete` current schema/protocol plus complete lens/verifier
-coverage and no open criticals; `profile_complete` is advisory). Any
+coverage and no open criticals; `profile_complete` and `followups_clear` are
+advisory). Any
 failed/missing lens or verifier seat makes the QC result partial and blocks
 readiness even when the available verifier votes reach a majority.
 
@@ -1611,6 +1613,32 @@ Never take a lock in `active_session_uid`, never call `note_session` under
 Tests: `tests/test_session_history.py`, `frontend/tests/sessionHistory.test.ts`.
 Full record and reversion evidence in `docs/as-built.md` under the same
 heading. No paid API call was made.
+
+## A blocking question holds back issue readiness — implemented notes (2026-10-12)
+
+Step 1 of the prompt-review follow-up (an outside review Abraham forwarded,
+checked against the code). Since 2026-10-06 an unknown lives in Waiting on
+you, not in the text as a `[TBD]` that `no_open_items` gated, and
+`followups_clear` (v1.16.0) is advisory, so a clause left out until the
+answer arrives — no assumed block for `no_assumed_left` to catch — let a
+section read ready.
+
+- **The gate.** `_readiness_payload` gains `no_blocking_followups`
+  (non-advisory, after `no_open_items`): ok when no OPEN follow-up is
+  `blocking`; the detail names the first ("+N more") and the way through
+  (answer in chat, or tick it off in the panel — the dismiss-with-reason
+  analogue; reopening restores it). `followups_clear` stays advisory and
+  still lists everything. Every readiness surface renders it generically.
+- **The flag.** `_FOLLOWUP_POLICY`, `track_followups`' description and its
+  `blocking` property say a left-out clause is blocking and that blocking
+  holds readiness. The writing policy is untouched (no version bump, no QC
+  staleness); the stable prompt and the tool bytes changed once.
+
+Never gate readiness on non-blocking items (their provisions are assumed,
+which already gates), and never count a settled item. Tests:
+`tests/test_followups.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
 
 ## As-built history
 

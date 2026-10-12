@@ -22183,3 +22183,89 @@ the values Excel last showed — a formula's result, a date, a percentage —
 and macros are never run. Older .xls, .xlsb and .ods files are refused with
 how to save them as .xlsx. A project with an Excel attachment opened in an
 older version shows its type as 'xlsx' and still reads it."
+
+## A blocking question holds back issue readiness — implemented notes (2026-10-12)
+
+Step 1 of the prompt-review follow-up. Abraham forwarded an outside review of
+the prompts on 2026-10-12; it was checked against the code in-session, and
+the owner said to take the lead and go step by step. The review's point 2
+and point 7 (unresolved dependencies must stay visible to the readiness
+check) were confirmed, and worse than the review could see from the prompts
+alone: since 2026-10-06 an unknown the draft depends on is tracked in
+Waiting on you instead of being written into the document as a `[TBD]`.
+`no_open_items` gated the `[TBD]`; `followups_clear`, designed in v1.16.0
+when unknowns still went into the text, is advisory. A clause left out
+until the answer arrives leaves no assumed block for `no_assumed_left` to
+catch, so a section could read ready while the model itself was waiting on
+an answer the draft could not be right without. No route, SSE event, env
+knob, dependency or project-format change.
+
+- **The gate.** `_readiness_payload` gains `no_blocking_followups`
+  (non-advisory), right after `no_open_items`: ok when no OPEN follow-up is
+  marked `blocking`. The detail names the first and the way through — "1
+  blocking item waiting on you — Commodity class. Answer it in chat or tick
+  it off in Waiting on you." — with "(+N more)" for the rest
+  (`_blocking_followups_readiness_detail`, pluralized). Clean, it reads "No
+  blocking question or decision is waiting on you." A tick in the panel
+  clears it, as dismissing a Final QC finding with a reason clears that
+  gate; reopening the item restores it. `followups_clear` stays advisory and
+  still names everything open, blocking first.
+- **Only blocking items gate.** A non-blocking question's provision was
+  written to stand without the answer and stamped assumed, which
+  `no_assumed_left` already gates until the user confirms it. Gating every
+  open item would hold readiness on to-dos and nice-to-knows the model
+  raises freely, and teach the model to avoid the list.
+- **The gate is only as good as the flag.** `track_followups` already
+  defined blocking as "the draft cannot be correct without the answer",
+  which covers a left-out clause in principle, but nothing said so, and
+  nothing said what the flag costs. Now all three places the model reads the
+  definition do: `_FOLLOWUP_POLICY`'s blocking bullet ("A clause you left
+  out until the answer arrives is blocking. A blocking item holds the
+  section's issue-readiness checklist until it is settled, and blocking
+  items are surfaced first…"), the tool description's blocking paragraph,
+  and the `blocking` property's description. The writing policy's
+  write-around rule is untouched, so `WRITING_POLICY_VERSION` stays and no
+  retained Final QC report reads stale.
+- **Where it shows.** Every readiness surface renders checks generically —
+  the QC drawer's checklist, the in-app report's readiness record, the Word
+  report's Issue readiness blockers (`docx_export`), the JSON export's
+  `current_state`, a project brief's `ready` — so the line appears with no
+  frontend logic change. The tour's Waiting on you step and Help's
+  provenance card gain one sentence each; no step order changed, so
+  `TOUR_VERSION` stays 9.
+- **Bytes that changed once.** The stable chat prompt and the
+  `track_followups` tool definition: every open chat session rewrites its
+  cached prefix once after the update. Research and Final QC requests are
+  byte-identical.
+- **Unchanged.** `followups_clear`, the follow-up store and its panel route,
+  the project file, the SSE protocol, research, Final QC.
+
+Tests: `tests/test_followups.py` —
+`test_a_blocking_item_holds_issue_readiness` (the exact clean check; the
+failing detail; the item moves exactly one required check),
+`test_a_non_blocking_item_never_gates`,
+`test_settling_the_blocking_item_clears_the_gate_and_reopening_restores_it`
+(two blocking items; the count and lead follow the panel ticks; reopening
+restores the gate), and `test_the_model_is_told_what_blocking_now_costs`
+(both modules' prompts, the tool description, the flag description). The
+existing advisory test's docstring now says a blocking item gates through
+its own line. The twelve other test files that read readiness pass
+unchanged (335 tests), as do `npm test` (570) and the build. Revert matrix,
+each mechanism reverted in place and restored from the exact text read
+(`tests/test_followups.py` run each time): the gate made advisory → 1 red;
+the gate counting every open item → 2; the gate counting settled items → 1;
+the gate never failing → 2; the prompt sentence removed → 1; the tool
+paragraph reverted → 1; the flag description reverted → 1. Files restored
+and the suite green afterwards.
+
+No paid API call was made; whether the live model now marks a left-out
+clause blocking is unmeasured until the owner runs a session.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Waiting on you", item "A blocking question holds back issue
+readiness": "A question or decision the assistant marks blocking — one the
+draft cannot be right without, such as a clause left out until you answer —
+now holds back the readiness checklist until it is settled. Answer it in
+chat or tick it off in Waiting on you. Other open items still show as a
+reminder line and never block."

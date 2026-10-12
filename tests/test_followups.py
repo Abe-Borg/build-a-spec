@@ -603,9 +603,10 @@ def test_an_empty_list_is_omitted_from_the_project_file():
 
 
 def test_readiness_names_what_is_waiting_but_does_not_gate(monkeypatch):
-    """Advisory: an unanswered question does not make the draft wrong the way
-    an unresolved [TBD] does — but the checklist is the last place anyone
-    looks before issuing, which is when a forgotten decision costs most."""
+    """Advisory: a non-blocking question does not make the draft wrong — but
+    the checklist is the last place anyone looks before issuing, which is
+    when a forgotten decision costs most. (A BLOCKING item gates through its
+    own line: see the tests below.)"""
     client = _client()
     check = next(
         c
@@ -640,6 +641,149 @@ def test_readiness_names_what_is_waiting_but_does_not_gate(monkeypatch):
     assert all(c["ok"] for c in payload["checks"] if not c["advisory"]) == payload[
         "ready"
     ]
+
+
+def _check(payload: dict, check_id: str) -> dict:
+    return next(c for c in payload["checks"] if c["id"] == check_id)
+
+
+def _failing_required(payload: dict) -> set[str]:
+    return {c["id"] for c in payload["checks"] if not c["advisory"] and not c["ok"]}
+
+
+def test_a_blocking_item_holds_issue_readiness(monkeypatch):
+    """Since 2026-10-06 an unknown is tracked here instead of being written
+    into the document as a [TBD], which `no_open_items` gated. One the model
+    marked blocking — the draft cannot be correct without it, a clause left
+    out until the answer arrives — must gate the same way, or the section
+    reads ready with the question still open."""
+    client = _client()
+    before = client.get("/api/readiness").json()
+    gate = _check(before, "no_blocking_followups")
+    assert gate == {
+        "id": "no_blocking_followups",
+        "ok": True,
+        "detail": "No blocking question or decision is waiting on you.",
+        "advisory": False,
+    }
+
+    _patch_client(
+        monkeypatch,
+        _track_turn(
+            {
+                "add": [
+                    {"kind": "question", "title": "Fire main?"},
+                    {
+                        "kind": "decision",
+                        "title": "Commodity class",
+                        "blocking": True,
+                    },
+                ]
+            }
+        ),
+    )
+    client.post("/api/chat", json={"message": "hi"})
+
+    after = client.get("/api/readiness").json()
+    gate = _check(after, "no_blocking_followups")
+    assert gate["ok"] is False and gate["advisory"] is False
+    assert gate["detail"] == (
+        "1 blocking item waiting on you — Commodity class. Answer it in chat "
+        "or tick it off in Waiting on you."
+    )
+    # The item moved exactly one required check, and required checks are
+    # what `ready` is made of.
+    assert _failing_required(after) - _failing_required(before) == {
+        "no_blocking_followups"
+    }
+    assert after["ready"] is False
+    assert all(c["ok"] for c in after["checks"] if not c["advisory"]) == after[
+        "ready"
+    ]
+
+
+def test_a_non_blocking_item_never_gates(monkeypatch):
+    """The model wrote the provision to stand without the answer and stamped
+    it assumed (which `no_assumed_left` gates): the question itself stays an
+    advisory line."""
+    client = _client()
+    before = client.get("/api/readiness").json()
+    _patch_client(
+        monkeypatch,
+        _track_turn({"add": [{"kind": "question", "title": "Fire main?"}]}),
+    )
+    client.post("/api/chat", json={"message": "hi"})
+
+    after = client.get("/api/readiness").json()
+    assert _check(after, "no_blocking_followups")["ok"] is True
+    assert _check(after, "followups_clear")["ok"] is False
+    assert _failing_required(after) == _failing_required(before)
+
+
+def test_settling_the_blocking_item_clears_the_gate_and_reopening_restores_it(
+    monkeypatch,
+):
+    """A tick in the panel is the user's way through, the way dismissing a
+    QC finding with a reason is; putting the item back puts the gate back."""
+    client = _client()
+    _patch_client(
+        monkeypatch,
+        _track_turn(
+            {
+                "add": [
+                    {"kind": "question", "title": "Is there a fire pump?", "blocking": True},
+                    {"kind": "todo", "title": "Send the flow test", "blocking": True},
+                ]
+            }
+        ),
+    )
+    client.post("/api/chat", json={"message": "hi"})
+
+    gate = _check(client.get("/api/readiness").json(), "no_blocking_followups")
+    assert gate["ok"] is False
+    assert gate["detail"].startswith(
+        "2 blocking items waiting on you — Is there a fire pump? (+1 more)."
+    )
+
+    client.post("/api/followup/fu-1", json={"status": "resolved", "note": "No pump."})
+    gate = _check(client.get("/api/readiness").json(), "no_blocking_followups")
+    assert gate["ok"] is False
+    assert gate["detail"].startswith(
+        "1 blocking item waiting on you — Send the flow test."
+    )
+
+    client.post("/api/followup/fu-2", json={"status": "resolved"})
+    assert _check(client.get("/api/readiness").json(), "no_blocking_followups")[
+        "ok"
+    ] is True
+
+    client.post("/api/followup/fu-2", json={"status": "open"})
+    assert _check(client.get("/api/readiness").json(), "no_blocking_followups")[
+        "ok"
+    ] is False
+
+
+def test_the_model_is_told_what_blocking_now_costs():
+    """The gate is only as good as the flag: the model has to know that a
+    clause it left out is blocking, and that blocking holds readiness, or it
+    keeps marking nothing blocking and the line never fires."""
+    from backend.followups import TRACK_FOLLOWUPS_TOOL
+    from backend.llm.prompts import render_system_prompt
+    from backend.spec_modules.generic import GENERIC
+    from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
+
+    for module in (GENERIC, HYPERSCALE_FIRE):
+        prompt = render_system_prompt(module)
+        assert "A clause you left out until the answer arrives is blocking." in prompt
+        assert "holds the section's issue-readiness checklist" in prompt
+    description = TRACK_FOLLOWUPS_TOOL["description"]
+    assert "A clause left out until the answer arrives is blocking" in description
+    assert "holds the section's issue readiness" in description
+    flag = TRACK_FOLLOWUPS_TOOL["input_schema"]["properties"]["add"]["items"][
+        "properties"
+    ]["blocking"]["description"]
+    assert "a clause left out until the answer arrives is" in flag
+    assert "Holds issue readiness until settled." in flag
 
 
 def test_the_stable_prompt_carries_the_policy():

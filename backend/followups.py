@@ -21,7 +21,10 @@ goes: the model writes the provision around the missing value, stamps it
 assumed, and tracks the question here with ``element_id`` pointing at it.
 It never writes a ``[TBD: ...]`` (``spec_doc.spec_voice`` refuses one), so
 the document's open items are only leftovers from legacy projects,
-starters, and hand edits.
+starters, and hand edits. Because the gate those placeholders used to trip
+went with them, an open ``blocking`` item now gates issue readiness itself
+(``app._readiness_payload``'s ``no_blocking_followups``); every other open
+item is an advisory line (``followups_clear``).
 
 A store, not a latest-only set
 ------------------------------
@@ -567,8 +570,11 @@ TRACK_FOLLOWUPS_TOOL: dict[str, Any] = {
         "'resolution' is one line saying what was settled; it is what the "
         "user sees on the checked-off row.\n\n"
         "Set 'blocking' only when the draft cannot be correct without the "
-        "answer — not merely when it is important. Set 'element_id' when the "
-        "item is about a specific provision, so the user can jump to it.\n\n"
+        "answer — not merely when it is important. A clause left out until "
+        "the answer arrives is blocking, and a blocking item holds the "
+        "section's issue readiness until it is settled. Set 'element_id' "
+        "when the item is about a specific provision, so the user can jump "
+        "to it.\n\n"
         "Call this at most once per turn, with both halves in the one call. "
         "Re-adding a title already open is a no-op, so restating is safe but "
         "pointless."
@@ -609,7 +615,9 @@ TRACK_FOLLOWUPS_TOOL: dict[str, Any] = {
                             "type": "boolean",
                             "description": (
                                 "True only when the draft cannot be correct "
-                                "until this is answered."
+                                "until this is answered (a clause left out "
+                                "until the answer arrives is). Holds issue "
+                                "readiness until settled."
                             ),
                         },
                         "element_id": {

@@ -298,7 +298,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Nothing the assistant needs from you gets lost",
         body:
-          "The specification never holds a place for something it does not know yet: no [TBD], no placeholder, no note to you. When a value is missing, the assistant writes the provision so it stands without it, marks it assumed, and asks here instead. This list keeps every open question, decision and to-do after the chat scrolls past, and each is ticked off once it is settled — by the assistant when it reads your answer, or by you. Placeholders left in an older document collect in Leftover placeholders beside it, to be rewritten; until then they hold back readiness. This practice copy has none.",
+          "The specification never holds a place for something it does not know yet: no [TBD], no placeholder, no note to you. When a value is missing, the assistant writes the provision so it stands without it, marks it assumed, and asks here instead. This list keeps every open question, decision and to-do after the chat scrolls past, and each is ticked off once it is settled — by the assistant when it reads your answer, or by you. An item marked blocking holds back readiness until it is settled. Placeholders left in an older document collect in Leftover placeholders beside it, to be rewritten; until then they hold back readiness. This practice copy has none.",
       },
       {
         id: "project-facts",

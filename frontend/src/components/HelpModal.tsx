@@ -662,7 +662,8 @@ function HowItWorks() {
                 <Tag>assumed</Tag>, or <Tag>imported</Tag> — plus a link to the
                 research item behind it. A value nobody has given yet is never
                 held in the text: the provision is written without it, marked
-                assumed, and the question waits in Waiting on you. A block from
+                assumed, and the question waits in Waiting on you; one marked
+                blocking holds back issue readiness until it is settled. A block from
                 an older document may still read <Tag>needs input</Tag>; that
                 is a leftover, one click from confirmed or assumed. The review
                 report (Export → Download review report) schedules every

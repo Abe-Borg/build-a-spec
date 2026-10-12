@@ -216,6 +216,41 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — Final QC's reviewers read the research too
+
+(2026-10-12, step 2 of the prompt-review follow-up. docs/as-built.md's
+"Final QC's verifier seats read the requirements research" is the record; in
+the next release.)
+
+Each Final QC finding is checked by a panel of reviewers who try to knock it
+down, and who are told to knock it down when unsure. They could read the
+specification, the standards editions in effect, your attached documents and
+the project facts, but not the requirements research the five specialists
+reviewed against. So a finding such as "the research says the fire marshal
+witnesses the hydrostatic test, and the section never says so" was judged by
+reviewers who could not see the research.
+
+- **The reviewers now read the same research profile the specialists did**,
+  word for word, including the line that says no research was run when none
+  was. It rides the copy every reviewer shares, so it is paid for once per
+  run and read cheaply after that: roughly $0.20–$0.40 more on a typical
+  run, about $1 with the largest research profiles (estimated from the
+  price table, not yet measured).
+- **A missing value is no longer thrown out for being missing.** The
+  reviewers were told to reject any finding about a value, criterion or
+  approval the project never supplied, while the language specialist is
+  told to keep exactly that gap open for you. Now a reviewer keeps such a
+  finding when the section cannot be right without the value, rejects it
+  when the provision already stands without it, and turns down only a fix
+  that would invent the value.
+- A research finding cannot close the block it sits in: its tag is defused
+  visibly, as the standards, documents and facts already were.
+
+Your section, your saved reports and the review's recorded inputs are
+unchanged: a retained Final QC result stays current, and the release that
+ships this reads it stale once, as every release does. No paid API call was
+made.
+
 ## Current Status — a blocking question holds back issue readiness
 
 (2026-10-12, from an outside review of the prompts. docs/as-built.md's "A

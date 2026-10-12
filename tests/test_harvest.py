@@ -35,8 +35,11 @@ import pytest
 
 from backend import sessions, settings
 from backend.harvest import (
+    HARVEST_SCHEMA,
     HARVEST_SYSTEM_PROMPT,
     HARVEST_TOOL_NAME,
+    RESEARCH_GROUNDED_LABEL,
+    RESEARCH_UNVERIFIED_LABEL,
     conversation_turns,
     neutralize_harvest_frames,
 )
@@ -1430,6 +1433,97 @@ def test_a_dismissal_reason_is_read_and_citable(monkeypatch):
     row = resp.json()["proposals"][0]
     assert row["problem"] == "" and row["evidence_found"] is True
     assert resp.json()["dismissals"] == 1
+
+
+def test_each_research_source_says_whether_it_is_grounded(monkeypatch):
+    """The status rule turns on grounding ("confirmed" needs a grounded
+    finding), so every research line the call reads states it — before
+    this, the rule named a property the model could not see."""
+    from backend.research.engine import (
+        DimensionStatus,
+        RequirementsProfile,
+        append_research_round,
+    )
+    from tests.test_project_brief import PROFILE, _item
+
+    client = _client()
+    session = _session(client)
+    session.research.restore(
+        append_research_round(
+            None,
+            RequirementsProfile(
+                items=[
+                    _item("r-1", "Loudoun County adopted the 2021 VCC."),
+                    _item(
+                        "r-2",
+                        "The water purveyor may require a 90-minute supply.",
+                        grounded=False,
+                        accepted_sources=[],
+                    ),
+                ],
+                dimension_statuses=[
+                    DimensionStatus(
+                        dimension_id="governing_codes",
+                        status="completed",
+                        title="Governing building and fire codes",
+                        item_count=2,
+                        grounded_count=1,
+                    )
+                ],
+                research_date="2026-08-02",
+                project=PROFILE.to_dict(),
+            ),
+        )
+    )
+    _conversation(session, 1)
+    resp, fake = _preview(client, monkeypatch)
+    assert resp.status_code == 200, resp.text
+    sources = _request_text(fake).split("<available_sources>")[1].split(
+        "</available_sources>"
+    )[0]
+    assert (
+        f"r-1 — research (topic; {RESEARCH_GROUNDED_LABEL}): "
+        "Loudoun County adopted the 2021 VCC."
+    ) in sources
+    assert (
+        f"r-2 — research (topic; {RESEARCH_UNVERIFIED_LABEL}): "
+        "The water purveyor may require a 90-minute supply."
+    ) in sources
+    # The label's brackets are not a frame tag, so nothing was escaped.
+    assert "escaped tag" not in sources
+
+
+def test_confirmed_needs_a_grounded_finding_and_an_unverified_one_is_never_a_basis():
+    """The rules use the labels the source lines carry. An [UNVERIFIED]
+    finding is a lead, never a fact: it is no basis for a proposal at any
+    status (Codex review on PR #307 — an earlier draft of this change filed
+    an unverified-only fact under "assumed", and the sheet preselects every
+    proposal without a problem)."""
+    fields = HARVEST_SCHEMA["properties"]["proposals"]["items"]["properties"]
+    status = fields["status"]["description"]
+    source_ref = fields["source_ref"]["description"]
+    prompt = HARVEST_SYSTEM_PROMPT
+    do_not = prompt.split("Do NOT propose:")[1].split("For every proposal:")[0]
+    rules = prompt.split("For every proposal:")[1]
+    assert (
+        f"anything whose only basis is a research finding marked "
+        f"{RESEARCH_UNVERIFIED_LABEL}" in do_not
+    )
+    status_line = next(
+        line for line in rules.splitlines() if line.startswith("- status:")
+    )
+    for text in (status_line, status):
+        assert f"research finding marked {RESEARCH_GROUNDED_LABEL}" in text
+        # Assumed is a default the user accepted, never an unverified lead.
+        assert RESEARCH_UNVERIFIED_LABEL not in text
+    assert f"(for research, only a finding marked {RESEARCH_GROUNDED_LABEL})" in rules
+    assert (
+        f"marked {RESEARCH_GROUNDED_LABEL}, never one marked "
+        f"{RESEARCH_UNVERIFIED_LABEL}" in source_ref
+    )
+    # The old wording named a property no source line stated.
+    for text in (prompt, status):
+        assert "grounded source" not in text
 
 
 # ---------------------------------------------------------------------------

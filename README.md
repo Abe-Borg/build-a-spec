@@ -1277,13 +1277,29 @@ for an owner's design standard, a basis-of-design narrative, a product data
 sheet, a previous project's section, or meeting notes.
 
 - **Whatever format you already have it in.** Word (`.docx`), PDF, plain text,
-  XML, CSV, and Markdown (`.md` or `.markdown`). A PDF is read page by page
+  XML, CSV, Markdown (`.md` or `.markdown`), and Excel workbooks (`.xlsx`, or
+  macro-enabled `.xlsm`). A PDF is read page by page
   and the assistant can tell you which page something came from; a CSV or
   XML keeps its rows and tags, because for a schedule or an export that
   structure *is* the content; a Markdown file is read as written, so its
   headings, lists and tables stay the outline the assistant finds its way
   around by. A scanned PDF with no text layer is refused with the reason
   rather than attached as something the assistant cannot actually read.
+- **Excel workbooks are read sheet by sheet.** Every sheet, in workbook
+  order, under a marker with its name (hidden sheets are read too, and marked
+  hidden), its rows as CSV. A cell reads the way Excel last showed it: a
+  formula's saved result, a date as `YYYY-MM-DD`, a percentage with its `%`,
+  `TRUE`/`FALSE`. Columns empty in every row (spacer columns) and runs of
+  blank rows are dropped, so a formatted schedule does not spend the token
+  budget on empty cells. Macros are never run. A workbook written by a script
+  that never calculated its formulas has no saved results; those cells are
+  read as their formulas and the attachment says how many — open and save it
+  in Excel first to attach the numbers. Legacy `.xls`, binary `.xlsb`,
+  OpenDocument `.ods` and Numbers files are refused with the way out (save as
+  `.xlsx`, or export the sheet as `.csv`), and so is a password-protected
+  workbook, which Excel encrypts whole. A workbook too large for the
+  100,000-token attachment budget is refused like any other attachment;
+  attach just the sheets you need.
 - **Background, never the spec.** A reference document is never added to the
   section, never edited, and never appears in lint, compare, Final QC,
   readiness, or any export. It is material for the assistant to read.
@@ -4535,7 +4551,7 @@ only after you accept them.
 This is a *source-available* license rather than an OSI-approved open-source one:
 the Open Source Definition forbids restricting a field of endeavour, and the
 noncompete term does exactly that. Every runtime dependency is permissively
-licensed (MIT, BSD, Apache-2.0, MPL-2.0), and PyInstaller's bootloader exception
+licensed (MIT, BSD, Apache-2.0, MPL-2.0, PSF-2.0), and PyInstaller's bootloader exception
 permits packaging under any license, so nothing here is imposed by a dependency.
 
 For a commercial or competing-use license, contact the copyright holder.

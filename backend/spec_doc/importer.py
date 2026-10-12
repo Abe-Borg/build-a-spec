@@ -876,9 +876,10 @@ class ReferenceExtraction:
     in Word.
 
     The type is shared with the non-Word extractors in
-    ``backend/reference_extract.py`` (PDF, text, XML, CSV, Markdown), which
-    set ``kind`` and may report ``warnings`` about what the read left out — a
-    truncated page range, undecodable pages, a non-UTF-8 encoding.
+    ``backend/reference_extract.py`` (PDF, text, XML, CSV, Markdown, Excel),
+    which set ``kind`` and may report ``warnings`` about what the read left
+    out — a truncated page range, undecodable pages, a non-UTF-8 encoding,
+    formulas with no saved result.
     ``tracked_changes`` is meaningful only for Word.
     """
 

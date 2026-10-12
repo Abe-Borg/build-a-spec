@@ -538,7 +538,8 @@ export default function ArtifactPanel({
   // Attaching reference material takes the same native-first path, but has no
   // blank-document precondition: it never touches the spec. Its own dialog
   // kind, because an attachment is not Word-only — the "docx" filter would
-  // hide every PDF/text/XML/CSV/Markdown file in the packaged app's picker.
+  // hide every PDF/text/XML/CSV/Markdown/Excel file in the packaged app's
+  // picker.
   const handleAttachClick = async () => {
     if (referenceBusy) return;
     const file = await nativeOpenFile("reference");
@@ -1510,7 +1511,7 @@ export default function ArtifactPanel({
               e.target.value = "";
             }}
           />
-          <Tip tip="Attach a .docx, .pdf, .txt, .xml, .csv, or Markdown (.md) file as background for the assistant to read — an owner's design standard, a basis-of-design narrative, a data sheet, an equipment schedule, meeting notes. It is never added to the spec and never edited.">
+          <Tip tip="Attach a .docx, .pdf, .txt, .xml, .csv, Markdown (.md) or Excel (.xlsx) file as background for the assistant to read — an owner's design standard, a basis-of-design narrative, a data sheet, an equipment schedule, meeting notes. It is never added to the spec and never edited.">
             <button
               className={actionButton}
               onClick={handleAttachClick}
@@ -1524,7 +1525,7 @@ export default function ArtifactPanel({
           <input
             ref={referenceRef}
             type="file"
-            accept=".docx,.pdf,.txt,.xml,.csv,.md,.markdown"
+            accept=".docx,.pdf,.txt,.xml,.csv,.md,.markdown,.xlsx,.xlsm"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];

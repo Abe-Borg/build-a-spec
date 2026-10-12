@@ -658,7 +658,7 @@ is `BUILD_A_SPEC_REDLINE_COMMENTS`, on by default.
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 
 - [ ] Attach one of each reference type — `.docx`, `.pdf`, `.txt`, `.xml`,
-      `.csv`, `.md` — and have the model read one. A PDF with no text layer
+      `.csv`, `.md`, `.xlsx` — and have the model read one. A PDF with no text layer
       must be refused with the reason, not attached empty.
 - [ ] In the **packaged** app, the Attach Document dialog's "Reference
       document" filter lists `.md` and `.markdown` files (not only under
@@ -666,6 +666,13 @@ is `BUILD_A_SPEC_REDLINE_COMMENTS`, on by default.
       row in the Documents panel says Markdown, a `.markdown` file keeps its
       own name, and asking the model about the table gets the table's
       values.
+- [ ] In the **packaged** app, the same filter lists `.xlsx` and `.xlsm`.
+      Attach a saved Excel equipment schedule with two sheets, a formula and
+      a date: its row says Excel, asking the model for a value on the second
+      sheet gets it by sheet name, the formula's cell reads as its result,
+      and the date reads `YYYY-MM-DD`. An `.xls` is refused with "save it as
+      an Excel Workbook (.xlsx)". (A refusal of every `.xlsx` saying the XML
+      guard is missing means the build lost `defusedxml`.)
 - [ ] A mermaid figure, a hand-authored SVG, and a table render in chat; the
       SVG/PNG/CSV downloads work from the **packaged** app. Rendering is
       sandboxed at three layers, so this is the one place a rendering

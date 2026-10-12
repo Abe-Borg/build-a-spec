@@ -68,6 +68,12 @@ try:
 except Exception:
     pass
 
+# The Excel reader for reference attachments imports openpyxl lazily, and
+# openpyxl picks up defusedxml only if it can import it — the reader refuses
+# workbooks without it. Static analysis finds both; naming them is cheap
+# insurance against shipping a build that refuses every .xlsx.
+hiddenimports += ["openpyxl", "defusedxml", "defusedxml.ElementTree"]
+
 # Distribution metadata read at runtime.
 for _dist in ("anthropic", "keyring", "fastapi", "pywebview", "pypdf"):
     try:

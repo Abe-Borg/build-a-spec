@@ -917,9 +917,9 @@ export interface ReferenceDocMeta {
   /** Word only: the file carried pending revisions and was read Accept-All. */
   tracked_changes: boolean;
   added_at: string;
-  /** Which extractor read it: docx | pdf | txt | xml | csv | md. */
+  /** Which extractor read it: docx | pdf | txt | xml | csv | md | xlsx. */
   kind: string;
-  /** That kind's display name — "Word", "PDF", "CSV". */
+  /** That kind's display name — "Word", "PDF", "CSV", "Excel". */
   kind_label: string;
   excerpt: string;
   /** Anthropic-counted tokens contributed to the 100,000-token attachment cap. */

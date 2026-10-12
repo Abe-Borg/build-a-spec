@@ -22001,3 +22001,166 @@ that opened or saved the open section, while retention keeps them for as
 long as you keep working on it (`BUILD_A_SPEC_SESSION_HISTORY_DAYS`, 90
 days by default). Earlier launches' prompt text is included only when you
 tick the box. History starts with this version."
+
+## Excel workbooks attach as reference documents — implemented notes (2026-10-12)
+
+Owner ask (Abraham, 2026-10-12): "the Documents upload needs to accept
+spreadsheet upload." It did not: *Attach Document* took `.docx`, `.pdf`,
+`.txt`, `.xml`, `.csv` and Markdown, and an `.xlsx` was refused with "That
+file type is not supported as a reference". A master import stays Word-only.
+No route, SSE event, env knob, project-format change or version bump; two
+new dependencies (`openpyxl`, `defusedxml`).
+
+- **One kind, two spellings.** `REFERENCE_KINDS` maps `.xlsx` and the
+  macro-enabled `.xlsm` to `xlsx`, labelled "Excel" (the Markdown pattern: a
+  file keeps the spelling it came with). The macros are never run; the
+  reader never loads the VBA part. `.xltx`/`.xltm` templates were left out.
+- **Read sheet by sheet as CSV.** `reference_extract._extract_workbook`
+  reads every worksheet in workbook order. A workbook with more than one
+  sheet opens with `[workbook sheets: 1. Pumps; 2. Valves; 3. Lookup
+  (hidden)]`, so a stored copy cut short still tells the model which sheets
+  the cut left out; each sheet opens with `[sheet N of M: Name]` or
+  `[hidden sheet N of M: Name]` (Excel forbids `]` in a sheet name, so the
+  marker cannot be forged by one). Rows follow as RFC 4180 CSV (`csv.writer`)
+  — the reading the `csv` kind already gets, because a schedule's rows and
+  columns are its content. Word tables flatten to `a | b` and drop empty
+  cells; a schedule cannot, its columns are positional. Hidden sheets are
+  read (the author's lookup tables can be what a value means) and marked;
+  chart sheets have no cells and are skipped with a warning.
+- **A cell reads the way Excel last showed it.** Saved values
+  (`data_only=True`): a date `YYYY-MM-DD`, a date-time `YYYY-MM-DD HH:MM`
+  (`:SS` when nonzero), a time `HH:MM`, a duration `H:MM:SS`, `TRUE`/`FALSE`,
+  numbers to Excel's 15 significant digits (`2500`, not `2500.0`; `0.3`, not
+  `0.30000000000000004`), and a percentage format's `%` applied (`0.65` →
+  `65%`; a `%` inside a quoted literal, an escape or a `[…]` section is
+  decoration, not a percent). No other number format is applied: `0.00`,
+  currency and thousands separators would only cost tokens. Text has its
+  whitespace runs (Alt+Enter line breaks included) folded to one space and
+  control characters dropped, as Word's reader does.
+- **A formula Excel never calculated is read as its formula and said.** A
+  workbook written by a script (openpyxl, many exporters) carries formulas
+  with no saved value, and the values pass alone reads those cells blank —
+  a schedule's totals would silently vanish. So two read-only workbooks are
+  walked in step, values and formulas (`zip_longest` over the same rows; the
+  same XML gives both the same shape), and a cell with no value whose
+  formula-pass type is `f` is read as its formula (`=B2*C2`, an array
+  formula's `.text`) and counted in a warning that says to open and save it
+  in Excel. A formula whose saved result is an empty string
+  (`=IF(A1="","",…)`, how schedules hide unused rows) is saved with `t="str"`
+  and reads blank too; only a numeric-typed empty one is unsaved, so that
+  common cell is not mistaken for one. The policy tells the model a cell
+  reading as `=…` had no saved result.
+- **What layout costs is dropped.** Columns empty in every row of a sheet
+  (the margin, spacer columns) are removed; runs of blank rows become one
+  separator, none at either end; trailing empty cells are trimmed. Reference
+  text is budgeted (100,000 tokens across attachments), and a formatted
+  schedule's empty cells would otherwise spend it — and long comma runs
+  could tokenize past `reference_docs.MAX_CHARS_PER_TOKEN`, which on reload
+  would re-reserve the attachment at one token per byte. Interior empty
+  cells stay, because they hold the columns in place.
+- **`reset_dimensions()` on every sheet.** Read-only mode trusts the
+  `<dimension>` the writing program recorded and stops there; some writers
+  record `A1` for a full sheet, which would have read one row silently.
+- **Refusals carry the way out.** `.xls`, `.xlsb`, `.ods` and `.numbers`
+  are not kinds, but `unsupported_reference_message` (now behind both the
+  endpoint and `extract_reference_document`) names the format and says to
+  save it as an Excel Workbook (`.xlsx`) or export the sheet as `.csv`;
+  every other unknown type gets the list of accepted extensions as before.
+  A file starting with the OLE2 signature is a password-protected workbook
+  (Excel encrypts the whole package) or a renamed `.xls`, and says so. Junk,
+  a non-workbook ZIP (a renamed `.docx`), or anything else openpyxl raises
+  on (it raises broadly — an `AttributeError` on an openpyxl-written chart
+  sheet without a drawing, found while building this) is "could not be read
+  as an Excel workbook" with the save-as advice. A workbook with no cell
+  values is refused rather than attached empty (the scanned-PDF posture).
+- **Untrusted XML.** `_inspect_workbook_package` enforces the master
+  import's ZIP limits (`MAX_ZIP_MEMBERS`, `MAX_ZIP_MEMBER_BYTES`,
+  `MAX_ZIP_UNCOMPRESSED_BYTES`) and refuses an encrypted member before
+  openpyxl opens the package; declared sizes suffice because `zipfile` never
+  inflates past them. openpyxl parses workbook parts with lxml and
+  `resolve_entities=False`, but sheets and shared strings through
+  `iterparse` — stdlib expat, which blocks the classic billion-laughs bomb
+  (measured: refused in 0.2 s) yet still expands a declared entity, up to a
+  hundredfold of the input. Word's reader never expands entities, so
+  `defusedxml` is now a dependency: with it installed openpyxl's `iterparse`
+  refuses any entity declaration (`openpyxl.DEFUSEDXML`). The reader fails
+  closed without it ("its XML guard is missing"), the PyInstaller spec names
+  `openpyxl` and `defusedxml.ElementTree` as hidden imports, and the release
+  checklist says what a build without it looks like. defusedxml is PSF-2.0,
+  so README's dependency-license sentence gains it; openpyxl and its
+  `et_xmlfile` are MIT.
+- **Runaway breaker.** `MAX_WORKBOOK_TEXT_CHARS` (1,000,000) stops reading
+  at the first row that would pass it, appends a note naming the sheet, the
+  row and how many later sheets went unread, and warns. It sits above
+  `reference_docs.MAX_TEXT_CHARS` (pinned), so the stored truncation — which
+  tells the model the tail was not read — is what normally cuts. A workbook
+  that large is refused by the 100,000-token attachment budget anyway; the
+  breaker only bounds the CPU spent finding that out. Cost: two loads (the
+  shared-strings table is parsed by each); a generated 6 MB, 150,000-row
+  workbook took about 2.4 s per load plus about 0.9 s per pass to the
+  breaker on the dev container. Real schedules are well under a second.
+- **`block_count`** is the number of rows with values read.
+- **Every list of types moved together**: the native dialog's filter
+  (`main._REFERENCE_OPEN_FILE_TYPES`), the browser picker's `accept`, the
+  Attach Document tooltip, Help (the step, the recipe — plus a workbook line
+  in the recipe), the trust dossier's card 7, the `reference-docs` tour step
+  (558 of 700 characters; no step order changed, so `TOUR_VERSION` stays),
+  the `ReferenceDoc.kind` comments in `types.ts`, README (a new "Excel
+  workbooks are read sheet by sheet" bullet), the app and importer
+  docstrings, and the release checklist (a packaged-picker row).
+- **The stable prompt changed.** `_REFERENCE_DOC_POLICY` names Excel among
+  the kinds and says how a workbook arrives: the two markers, rows as CSV
+  holding the values Excel last showed, cite the sheet by name, never treat a
+  marker as content, and a `=…` cell had no saved result. Every chat session
+  writes its cached prefix once more after the update. The policy is only in
+  the chat's stable prompt; Final QC's and research's prompts read attached
+  text with its kind label but not this policy, and nothing about it is in
+  the QC input manifest, so no retained Final QC result reads stale. The
+  per-turn stub adds "sheet markers [sheet N of M: Name] in the text" for a
+  workbook (per-turn context, no cached block).
+- **Older builds open a project that carries a workbook attachment**:
+  `ReferenceDoc.from_dict` accepts any kind and `kind_label` falls back to
+  the kind, so 1.26.0 shows its type as "xlsx" and reads it normally. The
+  same holds for a project brief.
+- **Tests**: `tests/test_reference_workbooks.py` (30): attach and read sheet
+  by sheet (kind, label, filename, rows parsed back with `csv.reader`, the
+  stub and tool header); a single sheet has no contents line; cells as Excel
+  shows them; a saved formula result; an empty-string result reads blank
+  (both `<v></v>` and `<v/>`); an unsaved formula read and reported; spacer
+  columns and blank-row runs; hidden sheets; a lying `<dimension>`; chart
+  sheets; `.xlsm`; the project round trip; the four formats with the way
+  out; the OLE signature; junk and a renamed `.docx`; a workbook with no
+  values; an entity declaration refused, not expanded; the bomb; failing
+  closed without the guard; the dependencies and the hidden import pinned;
+  member size, member count and an encrypted member; the breaker's note and
+  warning; the breaker above the stored cap; the policy's wording.
+  `tests/test_reference_docs.py`: `.xlsx`/`.xlsm` added to the
+  unsupported-type and every-type tests (the three-way picker/policy pin
+  covers the rest unchanged). Revert matrix, each mechanism reverted in place
+  and restored from the exact text read (both files run each time): the
+  `.xlsx` mapping → 24 red; `.xlsm` → 4; the Excel label → 2;
+  `reset_dimensions` → 1; the empty-string guard → 1; the formula fallback →
+  1; the percent → 1; the format-literal stripping → 1; spacer columns → 1;
+  the blank-run collapse → 1; the fail-closed guard → 1; the OLE check → 1;
+  the encrypted-member check → 1; the member-size bound → 1; the member count
+  → 1; the breaker → 1; the hidden marker → 1; the contents line → 2; the
+  ISO date → 1; the 15-digit number → 1; the spreadsheet refusal message →
+  4; the browser `accept` → 1; the native filter → 1; the stub mark → 1;
+  `defusedxml` out of `requirements.txt` → 1; the spec's hidden import → 1.
+  The policy's kinds list reverted stayed green at first ("Excel" still
+  appeared in the new sentence), so `test_the_model_is_told_how_a_workbook_reads`
+  was added before this was recorded: the kinds list → 1, the formula
+  sentence → 1.
+
+No paid API call was made; the token counter is the suite's fake, so how
+real workbooks tokenize is unmeasured.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Reference documents", item "Attach Excel workbooks": "Attach
+Document now takes Excel workbooks (.xlsx and macro-enabled .xlsm) beside
+Word, PDF, text, XML, CSV and Markdown. Every sheet is read, by name, as
+the values Excel last showed — a formula's result, a date, a percentage —
+and macros are never run. Older .xls, .xlsb and .ods files are refused with
+how to save them as .xlsx. A project with an Excel attachment opened in an
+older version shows its type as 'xlsx' and still reads it."

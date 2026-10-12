@@ -159,6 +159,19 @@ def _pdf_bytes(pages: list[list[str]]) -> bytes:
     return bytes(out)
 
 
+def _xlsx_bytes(rows: list[list[object]]) -> bytes:
+    """A one-sheet workbook; ``tests/test_reference_workbooks.py`` pins how
+    workbooks are read."""
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    for row in rows:
+        workbook.active.append(row)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def _upload(client: TestClient, name: str, payload: bytes):
     return client.post(
         "/api/reference/upload",
@@ -341,7 +354,10 @@ def test_an_unsupported_type_is_refused_and_names_what_is_accepted():
 
     assert refused.status_code == 400
     error = refused.json()["error"]
-    for extension in (".docx", ".pdf", ".txt", ".xml", ".csv", ".md", ".markdown"):
+    for extension in (
+        ".docx", ".pdf", ".txt", ".xml", ".csv", ".md", ".markdown", ".xlsx",
+        ".xlsm",
+    ):
         assert extension in error
 
 
@@ -505,6 +521,12 @@ def test_every_supported_type_attaches_and_keeps_its_text():
         ),
         ("acme.md", b"# ACME standard\n\n- CHW supply: 44 degrees F", "md"),
         ("acme.markdown", b"## Chilled water\n\n44 degrees F at design.", "md"),
+        (
+            "acme.xlsx",
+            _xlsx_bytes([["system", "supply temp"], ["CHW", "44 degrees F"]]),
+            "xlsx",
+        ),
+        ("acme.xlsm", _xlsx_bytes([["CHW supply", "44 degrees F"]]), "xlsx"),
     ]
 
     for index, (name, payload, kind) in enumerate(uploads, start=1):

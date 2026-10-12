@@ -1276,12 +1276,14 @@ function Dossier() {
         <Runtime
           n={7}
           title="Attaching a reference document"
-          trigger="Attach a Word file, PDF, text file, XML, CSV, or Markdown file as background."
+          trigger="Attach a Word file, PDF, text file, XML, CSV, Markdown file, or Excel workbook as background."
           runs={
             <>
               The text is extracted (a PDF page by page, with{" "}
               <Mono>[page N]</Mono> markers so the model can cite where something
-              came from) and nothing else is retained. It is{" "}
+              came from; an Excel workbook sheet by sheet, each sheet's rows as
+              CSV holding the values Excel last showed, its macros never run)
+              and nothing else is retained. It is{" "}
               <b className="text-ink">not</b> part of the specification: not in
               the document tree, not in lint, not in Compare, not in any export.
               It <b className="text-ink">is</b> read by the research agents and

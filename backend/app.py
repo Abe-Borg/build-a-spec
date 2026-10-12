@@ -34,7 +34,8 @@ Endpoints (all JSON unless noted):
   ``?redline=master`` or ``?redline=version&base=N`` remains a normalized
   semantic tracked-changes export.
 - ``POST /api/reference/upload`` → attach a reference document (Word, PDF,
-  text, XML, CSV or Markdown) as background context for the model to read.
+  text, XML, CSV, Markdown or an Excel workbook) as background context for
+  the model to read.
   Never touches the document tree, so unlike a master import it has no
   blank-document precondition; the bytes are inspected and discarded, only
   extracted text is kept.
@@ -221,7 +222,7 @@ from .reference_extract import (
     extract_reference_document,
     reference_kind_for_filename,
     sanitize_reference_filename,
-    supported_extensions_phrase,
+    unsupported_reference_message,
 )
 from .spec_doc.importer import (
     MasterImportError,
@@ -6222,9 +6223,9 @@ def create_app(
         """Attach a document as background context for the model.
 
         Accepts every type in ``reference_extract.REFERENCE_KINDS`` (Word,
-        PDF, text, XML, CSV, Markdown) — background material arrives in
-        whatever format the office already has it in, and none of it becomes
-        the spec.
+        PDF, text, XML, CSV, Markdown, Excel) — background material arrives
+        in whatever format the office already has it in, and none of it
+        becomes the spec.
 
         Deliberately unlike ``/api/import/master``: this never touches the
         document tree, so it has no blank-document precondition and stays
@@ -6248,10 +6249,7 @@ def create_app(
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": (
-                        f"That file type is not supported as a reference. "
-                        f"Attach a {supported_extensions_phrase()} file."
-                    ),
+                    "error": unsupported_reference_message(submitted_name),
                 },
                 status_code=400,
             )

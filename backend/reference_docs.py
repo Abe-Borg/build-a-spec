@@ -385,6 +385,10 @@ class ReferenceDocStore:
                 # Worth one clause: it is what lets the model answer "where
                 # does the standard say that?" with a page.
                 marks.append("page markers [page N] in the text")
+            elif doc.kind == "xlsx":
+                # Same reason: "the Pumps sheet" is where a schedule's value
+                # came from.
+                marks.append("sheet markers [sheet N of M: Name] in the text")
             suffix = f" [{'; '.join(marks)}]" if marks else ""
             # The real Anthropic-counted number (post-truncation — the same
             # one the 100k cap and the panel use), never the pre-truncation

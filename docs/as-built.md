@@ -22593,7 +22593,7 @@ chat-path files (166). Revert matrix, each reverted in place and restored
 the guard missing "training data" → 1; the guard refusing removals → 1; the
 generic conventions reverted → 2; the playbook default reverted → 1; the
 standards block reverted → 2; the QC brief reverted → 1; each research brief
-reverted → 1. For the review fixes (`tests/test_edition_basis.py`, now 23):
+reverted → 1. For the review fixes (`tests/test_edition_basis.py`, now 21):
 the chat path skipping the research-id check → 1; the check removed → 2;
 the widened phrases reverted → 5; each research brief's conditional-rule
 sentence removed → 1.

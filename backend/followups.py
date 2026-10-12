@@ -160,7 +160,10 @@ class FollowUp:
             kind=kind,
             title=str(data.get("title", "")),
             detail=str(data.get("detail", "")),
-            blocking=bool(data.get("blocking", False)),
+            # Only a JSON true blocks: the app always writes a boolean, and a
+            # hand-edited "false" must not become a readiness blocker
+            # (bool("false") is True). Anything else restores as not blocking.
+            blocking=data.get("blocking") is True,
             element_id=str(data.get("element_id", "")),
             status=status,
             resolution=str(data.get("resolution", "")),
@@ -234,6 +237,15 @@ class FollowUpStore:
                 "track_followups: 'title' is required — state the ask itself "
                 "in one line."
             )
+        # A real JSON boolean or nothing. The schema is lenient, and
+        # bool("false") is True: since the flag gates issue readiness, a
+        # string would turn an explicit "no" into a blocker.
+        blocking = payload.get("blocking")
+        if blocking is not None and not isinstance(blocking, bool):
+            raise FollowUpError(
+                "track_followups: 'blocking' must be true or false — a JSON "
+                "boolean, not a string or a number."
+            )
         key = _match_key(title)
         for item in self.items:
             if item.status == "open" and _match_key(item.title) == key:
@@ -249,7 +261,7 @@ class FollowUpStore:
             kind=str(kind),
             title=title,
             detail=_clean_str(payload.get("detail"), MAX_DETAIL_CHARS, "detail"),
-            blocking=bool(payload.get("blocking", False)),
+            blocking=blocking is True,
             element_id=_clean_str(payload.get("element_id"), 80, "element_id"),
             raised_turn=max(0, int(message_index)),
             created_at=_now(),

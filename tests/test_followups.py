@@ -22,6 +22,7 @@ from backend.followups import (
     MAX_RESOLVED_KEPT,
     MAX_TITLE_CHARS,
     PANEL_RESOLUTION,
+    FollowUp,
     FollowUpError,
     FollowUpStore,
     validate_track_payload,
@@ -761,6 +762,52 @@ def test_settling_the_blocking_item_clears_the_gate_and_reopening_restores_it(
     assert _check(client.get("/api/readiness").json(), "no_blocking_followups")[
         "ok"
     ] is False
+
+
+@pytest.mark.parametrize("value", ["false", "true", 1, 0, "yes"])
+def test_blocking_must_be_a_real_boolean(value):
+    """bool("false") is True, and the flag gates issue readiness: a string or
+    a number is refused for the model to correct (Codex review on PR #305),
+    and the batch leaves the store as it was."""
+    store = _store("Fire main?")
+    with pytest.raises(FollowUpError, match="'blocking' must be true or false"):
+        store.apply(
+            {
+                "add": [
+                    {"kind": "question", "title": "Commodity class", "blocking": value}
+                ],
+                "resolve": [],
+            },
+            message_index=2,
+        )
+    assert [item.title for item in store.items] == ["Fire main?"]
+
+
+def test_blocking_true_false_and_absent_are_accepted():
+    store = FollowUpStore()
+    store.apply(
+        {
+            "add": [
+                {"kind": "question", "title": "a", "blocking": True},
+                {"kind": "question", "title": "b", "blocking": False},
+                {"kind": "question", "title": "c"},
+                {"kind": "question", "title": "d", "blocking": None},
+            ],
+            "resolve": [],
+        },
+        message_index=1,
+    )
+    assert [item.blocking for item in store.items] == [True, False, False, False]
+
+
+def test_a_restored_item_blocks_only_on_a_json_true():
+    """Lenient restore: the app always writes a boolean, so anything else in a
+    file is a hand edit, and a hand-edited "false" must not gate readiness."""
+    base = {"fid": "fu-1", "kind": "question", "title": "x"}
+    assert FollowUp.from_dict({**base, "blocking": True}).blocking is True
+    for value in ("false", "true", 1, None):
+        assert FollowUp.from_dict({**base, "blocking": value}).blocking is False
+    assert FollowUp.from_dict(base).blocking is False
 
 
 def test_the_model_is_told_what_blocking_now_costs():

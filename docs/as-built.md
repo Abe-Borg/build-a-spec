@@ -22237,8 +22237,18 @@ knob, dependency or project-format change.
   `track_followups` tool definition: every open chat session rewrites its
   cached prefix once after the update. Research and Final QC requests are
   byte-identical.
+- **The flag must be a real boolean** (Codex review on PR #305, P2). The
+  tool schema is lenient and `FollowUpStore.add` / `FollowUp.from_dict`
+  read the flag with `bool(...)`, so `"blocking": "false"` was a blocking
+  item — harmless while the flag only ordered the [NEXT] pick, a spurious
+  readiness blocker now. `add` refuses anything but a JSON boolean or an
+  absent/null value with a `FollowUpError` the model corrects ("'blocking'
+  must be true or false — a JSON boolean, not a string or a number"; the
+  batch stays all or nothing), and a restore reads only a JSON `true` as
+  blocking: the app always writes a boolean, so anything else in a file is
+  a hand edit, and the lenient-restore posture defaults it to not blocking.
 - **Unchanged.** `followups_clear`, the follow-up store and its panel route,
-  the project file, the SSE protocol, research, Final QC.
+  the project file format, the SSE protocol, research, Final QC.
 
 Tests: `tests/test_followups.py` —
 `test_a_blocking_item_holds_issue_readiness` (the exact clean check; the
@@ -22256,7 +22266,13 @@ each mechanism reverted in place and restored from the exact text read
 the gate counting every open item → 2; the gate counting settled items → 1;
 the gate never failing → 2; the prompt sentence removed → 1; the tool
 paragraph reverted → 1; the flag description reverted → 1. Files restored
-and the suite green afterwards.
+and the suite green afterwards. For the boolean check
+(`test_blocking_must_be_a_real_boolean`, five values;
+`test_blocking_true_false_and_absent_are_accepted`;
+`test_a_restored_item_blocks_only_on_a_json_true`): the `add` guard removed
+→ 5 red; the restore back to `bool(...)` → 1; `add`'s `blocking is True`
+back to `bool(blocking)` stayed green, correctly — behind the guard only a
+boolean or `None` reaches it, where the two agree.
 
 No paid API call was made; whether the live model now marks a left-out
 clause blocking is unmeasured until the owner runs a session.

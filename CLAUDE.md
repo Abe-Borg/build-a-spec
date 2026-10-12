@@ -1632,7 +1632,9 @@ section read ready.
 - **The flag.** `_FOLLOWUP_POLICY`, `track_followups`' description and its
   `blocking` property say a left-out clause is blocking and that blocking
   holds readiness. The writing policy is untouched (no version bump, no QC
-  staleness); the stable prompt and the tool bytes changed once.
+  staleness); the stable prompt and the tool bytes changed once. The flag
+  must be a JSON boolean: `add` refuses a string or number (`bool("false")`
+  is True; Codex review on PR #305), and a restore blocks only on `true`.
 
 Never gate readiness on non-blocking items (their provisions are assumed,
 which already gates), and never count a settled item. Tests:

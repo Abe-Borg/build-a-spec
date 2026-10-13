@@ -975,8 +975,8 @@ def _edition_conflict_fact(
     would flip the brief's own edition on each section's save and word the
     conflict the other way round each time, recording one disagreement as
     two facts. Who records what, and on which basis, rides in ``detail`` (a
-    statement is bounded at 240 characters and a basis is free text). The
-    uid is derived from the statement for the same reason: one
+    statement is bounded at ``MAX_STATEMENT_CHARS`` and a basis is free
+    text). The uid is derived from the statement for the same reason: one
     disagreement, one fact.
     """
     editions = sorted(

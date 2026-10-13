@@ -47,6 +47,7 @@ from backend.llm.client import MissingApiKeyError
 from backend.llm.conversation import SessionState, fact_sources
 from backend.llm.prompts import render_system_prompt
 from backend.project_facts import (
+    MAX_STATEMENT_CHARS,
     RECORD_PROJECT_FACTS_TOOL,
     FactSources,
     ProjectFactError,
@@ -905,13 +906,13 @@ def test_a_problem_is_shown_on_the_sheet_not_a_failure(monkeypatch):
     resp, _fake = _preview(
         client,
         monkeypatch,
-        harvest_proposal("x" * 300),
+        harvest_proposal("x" * (MAX_STATEMENT_CHARS + 1)),
         harvest_proposal("Cites a finding that does not exist.", source_kind="research", source_ref="r-404"),
         harvest_proposal("Fine."),
     )
     assert resp.status_code == 200, resp.text
     problems = [row["problem"] for row in resp.json()["proposals"]]
-    assert "300 characters" in problems[0]
+    assert f"{MAX_STATEMENT_CHARS + 1} characters" in problems[0]
     assert "'r-404' names no finding" in problems[1]
     assert problems[2] == ""
     # The unresolved ref is shown as the model gave it, for the user to fix.

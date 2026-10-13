@@ -271,6 +271,33 @@ prompt-review steps). Open chat sessions rewrite their cached prompt once.
 No paid API call was made: how often real pages yield a found passage is
 unmeasured until research runs.
 
+## Current Status — a project fact can run to 500 characters
+
+(2026-10-13, owner decision. docs/as-built.md's "A project fact's statement
+runs to 500 characters" is the record; in the next release.)
+
+- **Room to say it whole.** A project fact's statement was capped at 240
+  characters, too short for a fact that needs its conditions or its
+  coordination partner named in the same line. The cap is now 500
+  characters everywhere a statement is written: the assistant's
+  `record_project_facts` tool, the Project facts panel (adding, editing,
+  and a retired fact's replacement), and the Harvest facts review sheet. A
+  fact's optional detail keeps its 600-character limit.
+- **What longer facts cost.** The facts the assistant reads with every
+  message keep their size limit (about 6,000 tokens in the chat, 8,000 for
+  research and Final QC). Longer statements take more of it, so a large
+  ledger reaches it sooner; when it does, the block says how many facts it
+  left out (coordination facts first, then assumed ones) and they stay in
+  the panel and the project file.
+- **Older builds cut long facts.** A build from before this change shortens
+  a statement past 240 characters to 240 when it opens the project file or
+  a project brief, so keep every section of a project on this release or
+  later once a long fact is recorded.
+
+Open chat sessions rewrite their cached prompt once (the tool's description
+states the new limit). Saved Final QC reports stay current. No paid API
+call was made.
+
 ## Current Status — Final QC accounts for the research, sees your open questions, and says when it cannot check
 
 (2026-10-13, the prompt-review follow-up. docs/as-built.md's "Final QC v5:

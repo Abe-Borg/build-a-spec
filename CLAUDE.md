@@ -2230,6 +2230,7 @@ Never let a summary turn the model's default into the user's word, and
 never write around a gap with a pointer the project has not confirmed.
 Tests: `tests/test_review_leftovers.py`, `tests/test_writing_policy.py`.
 Full record, reversion evidence and the release-note draft are in
+`docs/as-built.md` under the same heading. No paid API call was made.
 
 ## The chat's Final QC summary checks every review input — implemented notes (2026-10-13)
 

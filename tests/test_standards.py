@@ -172,10 +172,15 @@ def test_unpinned_context_block_states_the_mandatory_basis_posture():
     block = standards_context_block(_UNPINNED, None)
     assert "pins NO default editions" in block
     assert "- (none recorded yet)" in block
-    # The decision-1 policy, verbatim territory: stated basis, honest
-    # model proposals, year-free until recorded.
+    # The decision-1 policy: stated basis, year-free until recorded. Since
+    # 2026-10-12 (owner, option A) the basis is the user's statement or a
+    # grounded research item — never a model proposal — and a model-proposed
+    # entry from an earlier session is named unverified.
     assert "set_standard_edition" in block
-    assert "model-proposed, unverified" in block
+    assert "the user's statement or a grounded research item id" in block
+    assert "never an edition proposed from your own knowledge" in block
+    assert "model-proposed is unverified" in block
+    assert "honestly-labeled model proposal" not in block
     assert "without an edition year" in block
     # Nothing renders as a module default.
     assert "module default" not in block

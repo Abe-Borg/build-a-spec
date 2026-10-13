@@ -304,6 +304,12 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **Editions come from you or research (next release).** In a
+      general-module session with no edition recorded, say "use whatever
+      edition is current": the assistant cites the standard without a year,
+      says which edition it believes applies, and asks you to confirm it
+      rather than recording one itself. Confirm it: the edition is recorded
+      with your statement as its basis.
 - [ ] **The reviewers read the research (next release).** On a section with a
       completed research round, run Final QC and open a reviewer on any
       panel: its claim view and reasoning can cite the research, and a

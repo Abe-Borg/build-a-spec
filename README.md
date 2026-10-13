@@ -216,6 +216,50 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — editions come from you or the research, never a guess
+
+(2026-10-12, step 3 of the prompt-review follow-up; owner decision. docs/as-
+built.md's "An edition comes from the user or the research, never a guess"
+is the record; in the next release.)
+
+The general (any-discipline) module pins no standard editions, so every
+edition is recorded per project with a stated basis. Until now the
+assistant could record one from its own memory, labeled "model-proposed,
+unverified". Once recorded, the rest of the app treated it like a verified
+edition: the lint flagged other citations against it, and Final QC checked
+the specification against it.
+
+- **An edition now comes only from you or from the research.** Until one of
+  those supplies it, the standard is cited without a year. The assistant
+  still tells you which edition it believes applies and why, and offers to
+  look it up or run research; it records the edition once you confirm it.
+  The app refuses a recording whose basis is the assistant's own guess.
+- **An older project's guesses are flagged.** An edition recorded earlier
+  as "model-proposed" is shown to the assistant as unverified, so it asks
+  you to confirm it (or research to establish it) and re-records it, or
+  removes it and cites the standard without a year.
+- **Final QC checks the edition that applies to your project**, with any
+  amendments its adoption makes, not the newest edition. A newer published
+  edition is mentioned separately and is never a defect in a citation that
+  matches the edition in effect.
+- **Research reports which code cycle would govern**: whether the code in
+  force when the permit application is filed (or the project vests)
+  governs, any transition period in which the previous edition may still be
+  used — a multi-phase campus can straddle a code cycle — and whether
+  alterations of an existing building fall under an existing-building code.
+  It reports these as rules with their dates, and applies one to your
+  project only when your project facts give the permit date or say the work
+  is an alteration — never assuming today's code governs just because it is
+  current.
+- **Invented research citations are refused too.** An edition recorded on a
+  research item must name one the research actually found.
+
+The fire-protection module is unaffected apart from the last two points: it
+pins current editions with recorded sources. The Final QC brief changed, so a
+retained Final QC result reads stale once and needs a re-run, as does a
+general-module project's (its standards block changed); open chat sessions
+rewrite their cached prompt once. No paid API call was made.
+
 ## Current Status — Final QC's reviewers read the research too
 
 (2026-10-12, step 2 of the prompt-review follow-up. docs/as-built.md's
@@ -3121,8 +3165,9 @@ describe the project.
 - **No pinned editions in generic mode — deliberately.** The generic module
   ships zero standards pins. Every edition enters through the existing
   `set_standard_edition` override with a **stated basis**: a grounded
-  research item, your statement, or an honestly-labeled model proposal
-  ("model-proposed, unverified"). Until an edition is recorded, the draft
+  research item or your statement. (Until 2026-10-12 an honestly-labeled
+  model proposal also counted; see "editions come from you or the research"
+  near the top.) Until an edition is recorded, the draft
   cites designations year-free, and a new lint rule (`unrecorded_edition`,
   active only in generic mode) flags any year citation with no recorded
   basis — which flows into the readiness checklist, so an issue-ready draft
@@ -3322,8 +3367,10 @@ actions.
 - **Five lenses, in parallel, on a stronger reviewer than the drafter.**
   "Send to Final QC" fans out five independent Opus 5.5 reviews of the whole
   section: **code
-  compliance** (verifies every citation/edition against the standards'
-  *actual current content* via web search — the big search allowance),
+  compliance** (verifies every citation/edition against the *actual text of
+  the edition in effect for the project* via web search — the big search
+  allowance; a newer published edition is noted separately, never as a
+  defect),
   **coordination & consistency** (PART 1/2/3 alignment, dangling
   cross-references, terminology drift), **completeness** (versus the grounded
   research profile and conventional section scope), **enforceability &

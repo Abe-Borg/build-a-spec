@@ -2344,7 +2344,7 @@ function ConfirmQCModal({
               </li>
               <li>
                 The code-compliance reviewer searches the web to check standards
-                against their current published text.
+                against the text of the edition in effect for your project.
               </li>
               <li>
                 Every finding is then re-checked by an adversarial verification

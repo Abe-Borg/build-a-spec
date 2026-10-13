@@ -142,7 +142,7 @@ from ..spec_doc.source_patch import (
     validate_source_map_identity,
     validate_source_transition,
 )
-from ..spec_doc.spec_voice import check_drafted_edits
+from ..spec_doc.spec_voice import check_drafted_edits, check_edition_bases
 from ..compliance import AuditRunner
 from ..qc import QCRunner, qc_version_fingerprint
 from ..qc.apply import (
@@ -4463,6 +4463,9 @@ def _run_tool(
         # with one that does not is refused whole, like a placeholder.
         check_edit_reasons(edits)
         check_drafted_edits(edits)
+        check_edition_bases(
+            edits, research_ids=fact_sources(session).research_ids
+        )
         applied = session.apply_doc_edits(edits)
     except SpecEditError as exc:
         _trace.tool_dispatch(

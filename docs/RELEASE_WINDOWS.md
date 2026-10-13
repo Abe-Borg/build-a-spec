@@ -304,6 +304,12 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **Only you confirm a provision (next release).** On a section with a
+      completed research round, press Draft full section: provisions with a
+      ◆ research chip land stamped assumed (amber), not confirmed, and show
+      in the Review drawer; the readiness checklist reads "N assumed
+      block(s) awaiting review" until you confirm them. Confirm one article with
+      press-and-hold: those blocks turn confirmed and the count drops.
 - [ ] **Editions come from you or research (next release).** In a
       general-module session with no edition recorded, say "use whatever
       edition is current": the assistant cites the standard without a year,

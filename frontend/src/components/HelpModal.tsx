@@ -660,7 +660,10 @@ function HowItWorks() {
               <>
                 Each block carries a status — <Tag>confirmed</Tag>,{" "}
                 <Tag>assumed</Tag>, or <Tag>imported</Tag> — plus a link to the
-                research item behind it. A value nobody has given yet is never
+                research item behind it. Only you confirm: a provision drawn
+                from research, an attached document, Final QC or a project fact
+                you did not state yourself stays assumed until you approve it,
+                and its source chip shows where it came from. A value nobody has given yet is never
                 held in the text: the provision is written without it, marked
                 assumed, and the question waits in Waiting on you; one marked
                 blocking holds back issue readiness until it is settled. A block from

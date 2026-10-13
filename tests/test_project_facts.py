@@ -358,7 +358,7 @@ def test_the_context_block_groups_orders_and_labels():
         "(recorded in 21 13 13, 2026-09-04; source: reference ref-1)"
     ) in lines
     assert "- pf-5 [section 21 13 13, assumed] This section's own fact. (recorded in 21 13 13, 2026-09-04; source: model)" in lines
-    assert lines[-1].startswith("Do not re-ask or re-derive these.")
+    assert lines[-1].startswith("Do not re-ask or re-derive the confirmed ones.")
 
 
 def test_with_no_current_section_every_section_fact_is_a_coordination_fact():

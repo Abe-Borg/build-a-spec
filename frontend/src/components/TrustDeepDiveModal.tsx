@@ -565,7 +565,8 @@ function Dossier() {
               "You",
               "A fact you stated in chat, a form you filled in, or a proposal you explicitly approved.",
               <>
-                Stamped <Tag>confirmed</Tag>.
+                Stamped <Tag>confirmed</Tag>. Nothing else confirms a
+                provision.
               </>,
             ],
             [
@@ -593,8 +594,9 @@ function Dossier() {
               "Findings from the Research run: live web retrieval against your jurisdiction, authority, client, and site, returned as structured items with citations.",
               <>
                 A ◆ provenance chip on the provision linking to the research
-                item. Items that could not be matched to a retrieved page are
-                kept but marked <Mono>[UNVERIFIED]</Mono>.
+                item, stamped <Tag>assumed</Tag> until you approve it. Items
+                that could not be matched to a retrieved page are kept but
+                marked <Mono>[UNVERIFIED]</Mono>.
               </>,
             ],
             [
@@ -602,8 +604,9 @@ function Dossier() {
               "An imported office master, a reusable template, or an attached reference document (owner standard, basis of design, data sheet).",
               <>
                 Master and template content lands stamped <Tag>imported</Tag>{" "}
-                until reviewed. Reference documents never enter the
-                specification at all.
+                until reviewed. Reference documents themselves never enter
+                the specification; a provision drawn from one carries its ◆
+                chip and is stamped <Tag>assumed</Tag> until you approve it.
               </>,
             ],
           ]}

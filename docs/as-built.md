@@ -22613,3 +22613,131 @@ Final QC now checks citations against the edition in effect for your
 project rather than the newest one, and research asks which code cycle
 governs the project (permit date, transition period, existing buildings).
 Retained Final QC results read stale once after updating."
+
+## A provision is confirmed only when a person approved it — implemented notes (2026-10-13)
+
+Step 4 of the prompt-review follow-up (an outside review Abraham forwarded,
+checked against the code). Owner decision: option A — "confirmed" on the
+specification means a person approved it. Option B (two kinds of confirmed,
+"by research" and "by you", with readiness not waiting on the first) was
+declined: more code, a new state, and readiness that never asks.
+
+The review's point 4, confirmed in code. `_PROVENANCE` defined a provision's
+`confirmed` as "the user stated it, or explicitly approved your proposal".
+A project fact's `confirmed` (`record_project_facts`) is "the user stated it
+or a grounded source establishes it" — a research item, an attached
+document, a Final QC finding. And `_PROJECT_FACTS_POLICY` ended "A provision
+drafted from a confirmed fact may be stamped confirmed", with the per-turn
+facts block repeating the citation half. So research → confirmed fact →
+confirmed provision, with no person in the chain: the Review drawer lists
+only assumed and imported blocks, and readiness's `no_assumed_left` counts
+only assumed, so such a provision was never put in front of the user. The
+same review noted the facts block said "Do not re-ask or re-derive these"
+for every fact, assumed ones included, while research and Final QC treat
+assumed facts as leads.
+
+- **`_PROVENANCE`.** The confirmed line gains: "Nothing else confirms a
+  provision. A research item, an attached document, a Final QC finding, and
+  a project fact that one of them established (or that is itself assumed)
+  are sources to cite, not approvals: a provision drafted from one is
+  assumed, with that source as source_item_id, until the user approves it. A
+  project fact the user stated (source: user, confirmed) counts as their
+  statement."
+- **`_PROJECT_FACTS_POLICY`.** "A confirmed fact is settled input" (not the
+  whole block); "An assumed fact is a working default, not a decision: draft
+  to it, stamp what rests on it assumed, and raise it with the user once, in
+  one line, when a provision you draft depends on it — when they agree,
+  supersede it with the same statement recorded as confirmed." (Re-recording
+  an active statement is a no-op, and a supersede retires first, so a
+  replacement restating the old wording records a fresh fact — the existing
+  path to an upgrade.) The last bullet now says a fact's "confirmed" means
+  established and a provision's means approved, and stamps the provision
+  confirmed only when the user stated the fact or approved the provision.
+  "treat what it shows as settled" (the panel) became "a change made there
+  is the user's own word": the panel also shows assumed facts.
+- **`_REFERENCE_DOC_POLICY`.** "confirmed when the user directed it" became
+  "confirmed only when the user directed that requirement or approved the
+  provision … the document alone confirms nothing."
+- **`_RESEARCH_POLICY`.** The source_item_id line says "when a provision
+  follows a fact. A citation shows where a provision came from; it never
+  confirms it (see Provenance discipline)."
+- **Directives.** `FULL_DRAFT_DIRECTIVE` tags "an established project fact"
+  and stamps "assumed for whatever you drew from research, an attached
+  document or a project fact I did not state myself — its source chip says
+  where it came from, and I'll confirm it in review".
+  `ADAPT_IMPORTED_DIRECTIVE` confirms a kept block "where I've stated or
+  approved it" (was "where I've established it").
+- **The per-turn facts block** (`ProjectFactStore.context_block`) closes:
+  "Do not re-ask or re-derive the confirmed ones. An [assumed] fact is a
+  working default: raise it with the user once, in one line, when a
+  provision you draft rests on it. … A provision drafted from a fact cites
+  its id as source_item_id, and is stamped confirmed only when the user
+  stated that fact (source: user, confirmed) or approved the provision."
+  Each fact's line already renders its status and `source:`, so the model
+  can tell a user's statement from a research-established fact.
+- **The edit tool's `status` property** gains "confirmed only for what the
+  user stated or approved — a source you cite is not an approval." The
+  tool's top-level description, the op vocabulary Final QC echoes, did not
+  change.
+- **UI copy.** Help's "Honest provenance on every provision" says only you
+  confirm; the trust explainer's origins table says research- and
+  document-derived provisions are stamped assumed until you approve them.
+  No control changed, so no capability or tour step.
+
+**No guard, deliberately.** Refusing a model batch that stamps a provision
+confirmed while citing r-/ref-/qc-/a non-user pf- would refuse the user's
+own approvals: approval happens in chat ("yes, add that requirement"), which
+the batch cannot see — the same reasoning as step 3's edition guard. The
+prompt (three blocks, both directives, the tool property and the per-turn
+facts block) is the control; the Review drawer and `no_assumed_left` catch
+everything stamped assumed.
+
+**Bytes that changed once.** The stable prompt (every module) and the edit
+tool's input schema: every open session rewrites its cached prefix once. The
+per-turn facts block's last line (per-turn, not cached across turns). The two
+directives are per-turn user text. Not the QC manifest: lens briefs, the
+writing policy and the tool's top-level description are untouched, so
+retained Final QC results stay current. Not the harvest (its fact statuses
+already treat a confirmed provision as the user's word, which this makes
+true), not Final QC's facts scope (it already said a provision resting on an
+assumed fact should be assumed), not readiness, not saved documents (a
+provision already stamped confirmed stays confirmed).
+
+Tests: `tests/test_confirmed_meaning.py` (12): the provenance rule in both
+modules' stable prompts; the facts policy's two meanings and provision rule;
+the assumed-fact rule and the panel line; the reference-document line; the
+research citation line; both directives; the edit tool's status property
+(and its top-level description untouched); the per-turn facts block telling
+the kinds apart with each fact's status and source still rendered; and one
+`/api/chat` turn whose request carries the rule in the system prompt, the
+tool and the newest message's facts block. `tests/test_project_facts.py`
+pinned the old closing line and now pins the new. Every test file that reads
+the changed prompts passes (804 of 805; the other, `test_reference_docs`'
+xlsx case, needs `openpyxl`, absent from the local environment and red on
+master too), and
+`npm test` (570) and `npm run build` pass.
+
+Revert matrix, each reverted in place and restored (the two test files run
+each time): the provenance rule removed → 3 red; the facts policy's
+provision rule reverted → 4; its assumed-fact rule reverted → 2; the
+reference-document line reverted → 2; the research citation line reverted →
+2; the full-draft stamping line reverted → 1; its tag line reverted → 1; the
+adapt directive reverted → 1; the per-turn facts block reverted → 3; the
+tool's status description reverted → 2. 10 of 10 caught.
+
+No paid API call was made; how many more assumed blocks a researched full
+draft now produces, and whether the model raises assumed facts at the right
+moment and not more often, is unmeasured until the owner runs one.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Drafting", item "Only you confirm a provision": "A provision the
+assistant draws from research, an attached document, Final QC, or a project
+fact you did not state yourself is now stamped assumed, with its source chip
+showing where it came from, and waits in the Review drawer until you confirm
+it — a whole article or PART at a time if you like. Before, a provision
+drafted from a research-established fact could be stamped confirmed without
+anyone looking at it. A project fact marked assumed is no longer treated as
+settled: the assistant raises it with you once when a provision depends on
+it. Expect more assumed blocks to review after a full draft on a researched
+project."

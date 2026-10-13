@@ -762,10 +762,14 @@ class ProjectFactStore:
             "record_project_facts; they carry between sections of this project "
             "and apply unless the user says otherwise):",
             *lines,
-            "Do not re-ask or re-derive these. When the user contradicts one, "
-            "supersede it with record_project_facts in the same turn — never "
-            "draft silently against it. A provision drafted from a confirmed "
-            "fact may cite its id as source_item_id.",
+            "Do not re-ask or re-derive the confirmed ones. An [assumed] fact "
+            "is a working default: raise it with the user once, in one line, "
+            "when a provision you draft rests on it. When the user contradicts "
+            "a fact, supersede it with record_project_facts in the same turn — "
+            "never draft silently against it. A provision drafted from a fact "
+            "cites its id as source_item_id, and is stamped confirmed only when "
+            "the user stated that fact (source: user, confirmed) or approved "
+            "the provision.",
         ]
         if omitted:
             out.append(

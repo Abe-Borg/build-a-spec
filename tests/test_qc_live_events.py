@@ -8,7 +8,7 @@ import anthropic
 import httpx
 
 from backend import settings
-from backend.qc.engine import VERIFICATION_RULE_V4, run_final_qc
+from backend.qc.engine import VERIFICATION_RULE_V5, run_final_qc
 from backend.qc.schema import QC_LENSES
 from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
@@ -299,7 +299,7 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
             "element_id": "pt1.a1.p1",
             "panel_size": 2,
             "uphold_requires": 2,
-            "rule": VERIFICATION_RULE_V4,
+            "rule": VERIFICATION_RULE_V5,
             "evidence_gated": False,
             "outcomes": ["upheld", "disputed", "refuted", "inconclusive"],
         }
@@ -319,6 +319,8 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
     completed = seat_one[-1]
     assert completed["status"] == "completed"
     assert completed["upholds"] is True
+    # final-qc/5: a completed seat says whether it could check the finding.
+    assert completed["cannot_verify"] is False
     assert completed["revised_severity"] == "low"
     assert completed["ops_adequate"] is True
     # The seat's submitted one-line reasons ride its vote (the Review Room's
@@ -338,6 +340,7 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
         "uphold_requires": 2,
         "completed_seats": 2,
         "upholds": 2,
+        "unverifiable": 0,
     }
     validation = _events_for(events, type="validation_progress")
     assert len(validation) == 1
@@ -802,6 +805,7 @@ def test_failed_verifier_makes_panel_inconclusive_without_fix_validation() -> No
     ]
     assert len(failed) == 1
     assert "upholds" not in failed[0]
+    assert "cannot_verify" not in failed[0]
     assert "revised_severity" not in failed[0]
     assert "ops_adequate" not in failed[0]
     assert _events_for(events, type="candidate_complete") == [
@@ -814,6 +818,7 @@ def test_failed_verifier_makes_panel_inconclusive_without_fix_validation() -> No
             "uphold_requires": 2,
             "completed_seats": 1,
             "upholds": 1,
+            "unverifiable": 0,
         }
     ]
     assert _events_for(events, type="verification_complete")[0][

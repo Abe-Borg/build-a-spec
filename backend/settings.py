@@ -589,9 +589,10 @@ QC_MAX_WORKERS = _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8, minimum=1)
 
 # Adversarial verification panel sizes. Medium/low findings face
 # QC_VERIFIERS_STANDARD refuters; critical/high face QC_VERIFIERS_CRITICAL.
-# Adjudication is final-qc/4 (see backend/qc/engine.VERIFICATION_RULE_V4):
+# Adjudication is final-qc/5 (see backend/qc/engine.VERIFICATION_RULE_V5):
 # a UNANIMOUS panel upholds, a majority refutation refutes, and any other
-# split is `disputed` and escalates to a human. Raising a panel size
+# split is `disputed` and escalates to a human; a seat that could not verify
+# the finding counts as neither side. Raising a panel size
 # therefore increases scrutiny — under the old strict-majority rule the
 # extra critical seat bought leniency instead (2-of-3 passed where a
 # 2-seat panel needed 2-of-2).

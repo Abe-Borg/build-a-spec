@@ -61,6 +61,7 @@ const PILL_CLASS: Record<string, string> = {
   interrupted: "bg-warn/15 text-warn",
   upheld: "bg-accent/15 text-accent",
   refuted: "bg-ink-faint/15 text-ink-dim",
+  unverifiable: "bg-warn/15 text-warn",
   disputed: "bg-warn/15 text-warn",
   inconclusive: "bg-warn/15 text-warn",
 };
@@ -75,6 +76,8 @@ const DISPUTE_REASONS: Record<string, string> = {
   split_panel: "the reviewers split, so it comes to you",
   insufficient_refutation_evidence:
     "the refutation cited no validated evidence, so it comes to you",
+  unverifiable:
+    "the reviewers could not check it, so it comes to you — their notes say what they would need",
 };
 
 function plural(count: number, one: string, many = `${one}s`): string {
@@ -215,6 +218,9 @@ function entryContent(
           </span>
         );
       }
+      if (entry.cannotVerify) {
+        return <span className="text-warn">? Could not verify the finding</span>;
+      }
       return (
         <span className={entry.upholds ? "text-accent" : "text-ink-dim"}>
           {entry.upholds ? "● Voted to uphold the finding" : "— Voted to refute the finding"}
@@ -265,6 +271,7 @@ function seatPill(seat: QcVerifierSeatLiveState | undefined, runLive: boolean): 
   }
   if (status === "upheld") return { key: "upheld", label: "upheld" };
   if (status === "not_upheld") return { key: "refuted", label: "refuted" };
+  if (status === "unverifiable") return { key: "unverifiable", label: "could not verify" };
   if (status === "failed") return { key: "failed", label: "failed" };
   if (status === "cancelled") return { key: "interrupted", label: "cancelled" };
   if (status === "active") return { key: "running", label: "reviewing" };
@@ -272,6 +279,22 @@ function seatPill(seat: QcVerifierSeatLiveState | undefined, runLive: boolean): 
 }
 
 function SeatVerdict({ seat }: { seat: QcVerifierSeatLiveState }) {
+  if (seat.status === "unverifiable") {
+    // Neither side (final-qc/5): its note says what it would need to see.
+    return (
+      <div className="rounded-lg border border-warn/35 bg-warn/5 px-3 py-2 text-[11px] leading-relaxed">
+        <p className="font-semibold text-warn">
+          Could not verify the finding — the text that decides it was out of
+          this reviewer's reach
+        </p>
+        {seat.note && <p className="mt-1 text-ink-dim">{seat.note}</p>}
+        <p className="mt-1.5 text-ink-faint">
+          It counts neither for nor against the finding. Proposed fix: not
+          judged.
+        </p>
+      </div>
+    );
+  }
   if (seat.status !== "upheld" && seat.status !== "not_upheld") return null;
   const upheld = seat.status === "upheld";
   return (
@@ -590,9 +613,11 @@ export default function QcAgentActivityModal({
                   {plural(candidate.panelSize, "reviewer")} each try, independently,
                   to refute the claim — wrong on the facts, already handled
                   elsewhere in the document, out of this section's scope, or
-                  trivial — and refute when unsure. It is upheld only if every
-                  reviewer upholds it; a majority refutation refutes it; any other
-                  split is disputed and comes to you.
+                  trivial — and refute when unsure. A reviewer that cannot reach
+                  the text that decides the claim says so instead of refuting
+                  it. It is upheld only if every reviewer upholds it; a majority
+                  of the panel refuting refutes it; anything else is disputed
+                  and comes to you, including a claim no reviewer could check.
                   {candidate.evidenceGated
                     ? " Because it was raised as critical or high, a refutation must also cite validated evidence, or the finding is disputed instead of dropped."
                     : ""}{" "}

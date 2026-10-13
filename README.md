@@ -217,6 +217,52 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — Final QC accounts for the research, sees your open questions, and says when it cannot check
+
+(2026-10-13, the prompt-review follow-up. docs/as-built.md's "Final QC v5:
+research coverage, open questions, and cannot verify" is the record; in the
+next release.)
+
+Three changes to Final QC (protocol `final-qc/5`, report schema `5`):
+
+- **A reviewer can say it cannot check a finding.** Each reviewer used to
+  have two answers and was told to refute when unsure, so a reviewer that
+  could not read the text deciding a finding — a paywalled NFPA section, a
+  document nobody attached — refuted it, and two such reviewers on a medium
+  finding deleted it as "refuted" with nobody having checked it. Now a
+  reviewer answers "could not verify" and names what it would need to see.
+  That counts neither way: a finding is refuted only when a majority of the
+  whole panel refutes it, and one the reviewers could not settle comes to
+  you as **disputed — the reviewers could not check it**. Like every
+  dispute it holds issue readiness until you address it or dismiss it with
+  a reason. A critical or high refutation still needs validated evidence.
+- **Final QC reads your open Waiting-on-you items.** Every lens and reviewer
+  sees the questions the assistant is still waiting on you for, so a clause
+  written around a value you have not given yet, or left out until a
+  blocking answer arrives, is no longer reported as an oversight. A
+  provision marked confirmed that states an answer you have not given is
+  still a finding. Settling or raising a question after a review makes the
+  review stale, as recording a project fact does, so settle open questions
+  before running Final QC.
+- **Every research requirement gets a disposition.** The completeness lens
+  accounts for each controlling requirement in the requirements research
+  (grounded specification requirements): **covered** (with the paragraphs
+  that state it), **missing** (with the finding it raised, whose panel
+  outcome you can see), or **not applicable** (with why: jurisdiction,
+  occupancy or system, edition in effect, or another section's scope). A
+  requirement the lens skipped reads **not assessed**, and one the research
+  length limit kept from the reviewers reads **not shown**, so nothing reads
+  as accounted for that was not. The table is in the Final QC report, a
+  short version (what needs attention) is in the review report, the report
+  view shows it, and the assistant can list the missing ones. It is the
+  completeness lens's accounting, not the panel's: only findings are
+  verified.
+
+Saved Final QC reports from before this change still open and export as the
+final-qc/4 record they are, but read out of date: re-run Final QC once (the
+same release as the earlier prompt-review steps). Open chat sessions rewrite
+their cached prompt once. No paid API call was made.
+
 ## Current Status — the prompt review's small leftovers
 
 (2026-10-13, the prompt-review follow-up. docs/as-built.md's "The prompt
@@ -982,9 +1028,14 @@ thinking with empty text unless a request asks for a summary of it.
   medium or low finding, three for a critical or high one). Each reviewer
   reads the same specification and, independently, tries to refute the claim:
   is it wrong on the facts, already handled elsewhere in the document, out of
-  this section's scope, or trivial? A reviewer refutes when unsure. The
-  finding is **upheld** only if every reviewer upholds it; a majority
-  refutation **refutes** it; any other split is **disputed** and comes to you.
+  this section's scope, or trivial? A reviewer refutes when unsure on the
+  merits. A reviewer that cannot reach the text that decides the finding (a
+  paywalled standard, a document nobody supplied) says so instead of refuting
+  it, and names what it would need to see. The finding is **upheld** only if
+  every reviewer upholds it; a refutation by a majority of the whole panel
+  **refutes** it, and a reviewer that could not verify it never counts as
+  refuting; any other split is **disputed** and comes to you (as
+  "unverifiable" when the reviewers that checked it did not disagree).
   A critical or high finding can be refuted only with validated evidence (a
   source the reviewer actually read, or a cited place in the specification
   or an attached document); otherwise it is disputed instead of dropped. Each reviewer also judges
@@ -3870,12 +3921,12 @@ actions.
   content/input fingerprints, input manifest, model, effective QC
   configuration, start/finish timestamps and duration, research-profile
   availability, and current/stale status. A later document edit cannot be
-  mistaken for the version that was reviewed. New reports use schema `4` and
-  protocol `final-qc/4`; earlier reports remain readable and exportable as
+  mistaken for the version that was reviewed. New reports use schema `5` and
+  protocol `final-qc/5`; earlier reports remain readable and exportable as
   historical evidence, but cannot provide an actionable fix queue — a
-  schema-3 report was adjudicated under the superseded panel rule, so it is
-  kept as the record of what was decided and never re-scored under the
-  current one.
+  schema-3 or schema-4 report was adjudicated under a superseded panel rule,
+  so it is kept as the record of what was decided and never re-scored under
+  the current one.
 - **Each lens leaves an observable work record, including failures.** The
   report keeps the lens title, completion status or error, summary, explicit
   coverage checks and outcomes, search queries, retrieved sources, finding and

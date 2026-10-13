@@ -418,6 +418,9 @@ def test_reviewed_checks_schema_normalization_grounding_and_round_trip() -> None
             }
         ],
         "findings": [],
+        # final-qc/5: only the completeness lens is asked for the research
+        # accounting; a payload without one normalizes to None.
+        "requirement_coverage": None,
     }
 
     store = _section()
@@ -625,8 +628,8 @@ def test_json_export_contains_complete_report_and_authoritative_current_state() 
     assert set(payload) == {"report", "current_state"}
 
     report = payload["report"]
-    assert report["schema_version"] == 4
-    assert report["protocol_version"] == "final-qc/4"
+    assert report["schema_version"] == 5
+    assert report["protocol_version"] == "final-qc/5"
     assert report["run_id"].startswith("qc-run-")
     assert report["execution_status"] == "complete"
     assert report["version_fingerprint"] == qc_version_fingerprint(store.doc)
@@ -2565,8 +2568,8 @@ def test_a_v3_report_is_readable_but_no_longer_current_audit_grade() -> None:
         qc_verdict_response(True),
     ]
     result = _run(SequencedFakeClient(scripts), store)
-    assert result.schema_version == QC_REPORT_SCHEMA_VERSION == 4
-    assert result.protocol_version == QC_PROTOCOL_VERSION == "final-qc/4"
+    assert result.schema_version == QC_REPORT_SCHEMA_VERSION == 5
+    assert result.protocol_version == QC_PROTOCOL_VERSION == "final-qc/5"
 
     # The same record labelled v3 still loads (history is never dropped)…
     payload = copy.deepcopy(result.to_dict())
@@ -3916,24 +3919,28 @@ def test_the_word_executive_layer_lists_one_blocker_per_defect():
 # frontend suite (frontend/tests/verificationCopy.test.ts) carries the same
 # literal; the Chunk 5.3 contract is that the Word memo and the report modal
 # never teach different meanings, and the v3 "panel's majority" wording had
-# outlived the final-qc/4 rule in both.
-V4_RULE_SENTENCE = (
+# outlived the final-qc/4 rule in both. final-qc/5 changed it once more: a
+# seat that could not verify the finding is not a refuting seat, so "the
+# refuting seats outnumber the upholding ones" stopped being the rule.
+RULE_SENTENCE = (
     "A finding survives only when every seat upholds it, is refuted when the "
-    "refuting seats outnumber the upholding ones, and is disputed otherwise; "
+    "refuting seats outnumber all the others, and is disputed otherwise; a "
+    "seat that could not verify the finding never counts as refuting it, and "
     "a critical or high refutation additionally needs at least one validated "
     "citation."
 )
 
 
-def test_the_memo_methodology_states_the_v4_rule_the_report_modal_states() -> None:
+def test_the_memo_methodology_states_the_rule_the_report_modal_states() -> None:
     """The Word memo's methodology must describe the adjudication rule the
-    engine actually runs (final-qc/4), name every outcome bucket including
+    engine actually runs (final-qc/5), name every outcome bucket including
     disputed, and say it in the same words as the on-screen report."""
     store, result = _rich_audit_result()
     payload = build_qc_memo(result.to_dict(), store.doc, stale=False)
     text = _document_text(Document(io.BytesIO(payload)))
 
-    assert V4_RULE_SENTENCE in text
+    assert RULE_SENTENCE in text
+    assert "refuting seats outnumber the upholding ones" not in text
     assert "panel's majority" not in text
     assert "three for critical and high findings, two for medium and low" in text
     assert (
@@ -3948,7 +3955,7 @@ def test_the_memo_methodology_states_the_v4_rule_the_report_modal_states() -> No
         / "components"
         / "QCReportModal.tsx"
     ).read_text(encoding="utf-8")
-    assert V4_RULE_SENTENCE in modal, (
+    assert RULE_SENTENCE in modal, (
         "the report modal's methodology drifted from the Word memo's rule sentence"
     )
     assert "panel's majority" not in modal

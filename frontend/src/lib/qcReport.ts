@@ -4,6 +4,9 @@ import type {
   QcFinding,
   QcLensStatus,
   QcOpsSemanticStatus,
+  QcRequirementCoverage,
+  QcRequirementDisposition,
+  QcRequirementDispositionKind,
   QcResultView,
   QcSnapshot,
   QcVerdict,
@@ -76,6 +79,9 @@ export interface QcDispositionEventRecord {
 }
 
 export type QcReportVerdict = Omit<QcVerdict, "ops_adequate" | "ops_note"> & {
+  /** final-qc/5: the seat could not check the finding either way. Absent
+   *  when false and on every older record; never an uphold or a refutation. */
+  cannot_verify?: boolean;
   /** Absent on historical schema-v2 verifier records. */
   ops_adequate?: boolean;
   /** Absent on historical schema-v2 verifier records. */
@@ -218,7 +224,11 @@ export interface QcReportMetrics {
   unclassifiedSourceChecks: number;
   verdicts: number;
   upholdingVerdicts: number;
+  /** Completed seats that answered on the merits and did not uphold. */
   refutingVerdicts: number;
+  /** Completed seats that could not verify the finding (final-qc/5):
+   *  neither upholding nor refuting. 0 for every older record. */
+  unverifiableVerdicts: number;
   verdictErrors: number;
   expectedVerifierSeats: number;
   recordedVerifierSeats: number;
@@ -396,6 +406,13 @@ export function isCompletedVerifierSeat(verdict: QcReportVerdict): boolean {
 /** A preserved seat can exist without a usable verdict (failure/cancellation). */
 export function isFailedVerifierSeat(verdict: QcReportVerdict): boolean {
   return !isCompletedVerifierSeat(verdict);
+}
+
+/** A seat that could not check the finding either way (final-qc/5). Only
+ *  an explicit `true` counts, as in the Word memo's `_qc_cannot_verify`:
+ *  an older record has no field and answered on the merits. */
+export function qcVerdictCannotVerify(verdict: QcReportVerdict): boolean {
+  return verdict.cannot_verify === true;
 }
 
 /** Reproduce the persisted panel-completeness rules without mutating data. */
@@ -1276,11 +1293,23 @@ export function buildQcReportMetrics(
     rejectedSourceChecks: sourceChecks.filter((check) => check.accepted === false).length,
     unclassifiedSourceChecks: sourceChecks.filter((check) => check.accepted == null).length,
     verdicts: verdicts.length,
+    // A seat that could not verify is neither side (final-qc/5), whatever
+    // its `upholds` says — the memo's vote count reads it the same way.
     upholdingVerdicts: verdicts.filter(
-      (verdict) => isCompletedVerifierSeat(verdict) && verdict.upholds,
+      (verdict) =>
+        isCompletedVerifierSeat(verdict) &&
+        !qcVerdictCannotVerify(verdict) &&
+        verdict.upholds,
     ).length,
     refutingVerdicts: verdicts.filter(
-      (verdict) => isCompletedVerifierSeat(verdict) && !verdict.upholds,
+      (verdict) =>
+        isCompletedVerifierSeat(verdict) &&
+        !qcVerdictCannotVerify(verdict) &&
+        !verdict.upholds,
+    ).length,
+    unverifiableVerdicts: verdicts.filter(
+      (verdict) =>
+        isCompletedVerifierSeat(verdict) && qcVerdictCannotVerify(verdict),
     ).length,
     verdictErrors: verdicts.filter(isFailedVerifierSeat).length,
     expectedVerifierSeats,
@@ -1997,6 +2026,209 @@ export const QC_OPS_SOURCE_LABELS: Record<string, string> = {
   none: "No contributing lens proposed a mechanical fix.",
 };
 
+/* --- Research requirement coverage (final-qc/5) ---------------------------
+ *
+ * Every controlling research requirement and what the completeness lens
+ * found of it. Mirrors `docx_export`'s `qc_requirement_*` helpers so the
+ * Word memo and the modal read one record the same way. */
+
+/** How each disposition reads, as the Word report labels it. */
+export const QC_REQUIREMENT_DISPOSITION_LABELS: Record<
+  QcRequirementDispositionKind,
+  string
+> = {
+  covered: "Covered",
+  missing: "Missing",
+  not_applicable: "Not applicable",
+  not_assessed: "Not assessed",
+  not_shown: "Not shown to the reviewers",
+};
+
+/** Reading order: what needs attention first, then the rest. */
+const QC_REQUIREMENT_DISPOSITION_ORDER: readonly QcRequirementDispositionKind[] = [
+  "missing",
+  "not_assessed",
+  "not_shown",
+  "not_applicable",
+  "covered",
+];
+
+/** The order the counts line names them in (the memo's). */
+const QC_REQUIREMENT_COUNT_ORDER: readonly QcRequirementDispositionKind[] = [
+  "covered",
+  "missing",
+  "not_applicable",
+  "not_assessed",
+  "not_shown",
+];
+
+/** Dispositions the review did not settle: read them as open. */
+const QC_REQUIREMENT_ATTENTION = new Set<string>([
+  "missing",
+  "not_assessed",
+  "not_shown",
+]);
+
+/** The modal's framing for the coverage table, the memo's own words. */
+export const QC_REQUIREMENT_COVERAGE_FRAMING =
+  "The completeness lens accounted for each controlling requirement in the " +
+  "requirements research (grounded specification requirements). These " +
+  "dispositions are the lens's own, not the verifier panel's: only findings " +
+  "face the panel, so a missing requirement's finding carries the panel's " +
+  "outcome. Not assessed and not shown mean the review did not account for " +
+  "the requirement; read them as open.";
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** The persisted accounting, or null: a report before final-qc/5, or a run
+ *  with no requirements profile. A malformed value reads as absent. */
+export function qcRequirementCoverage(
+  rawResult: QcResultView | QcReportResult | null | undefined,
+): QcRequirementCoverage | null {
+  const coverage = (rawResult as { requirement_coverage?: unknown } | null | undefined)
+    ?.requirement_coverage;
+  return isPlainRecord(coverage) ? (coverage as unknown as QcRequirementCoverage) : null;
+}
+
+function coverageEntries(coverage: QcRequirementCoverage): QcRequirementDisposition[] {
+  return arrayOrEmpty(coverage.entries).filter(isPlainRecord);
+}
+
+/** A disposition's label; an unknown value reads as itself. */
+export function qcRequirementDispositionLabel(disposition: unknown): string {
+  const key = String(disposition ?? "");
+  return (
+    QC_REQUIREMENT_DISPOSITION_LABELS[key as QcRequirementDispositionKind] ??
+    (key || "Not recorded")
+  );
+}
+
+/** Entries in reading order, each group in profile order. */
+export function qcRequirementEntries(
+  coverage: QcRequirementCoverage,
+): QcRequirementDisposition[] {
+  const rank = (entry: QcRequirementDisposition) => {
+    const index = QC_REQUIREMENT_DISPOSITION_ORDER.indexOf(
+      entry.disposition as QcRequirementDispositionKind,
+    );
+    return index < 0 ? 99 : index;
+  };
+  // Array.prototype.sort is stable, so profile order holds within a group.
+  return [...coverageEntries(coverage)].sort((a, b) => rank(a) - rank(b));
+}
+
+/** "12 covered · 2 missing · …" — every disposition that occurs. */
+export function qcRequirementCountsLine(coverage: QcRequirementCoverage): string {
+  const counts = new Map<string, number>();
+  for (const entry of coverageEntries(coverage)) {
+    const key = String(entry.disposition ?? "");
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const parts = QC_REQUIREMENT_COUNT_ORDER.filter((name) => counts.get(name)).map(
+    (name) =>
+      `${counts.get(name)} ${QC_REQUIREMENT_DISPOSITION_LABELS[name].toLowerCase()}`,
+  );
+  return parts.join(" · ") || "no controlling requirements";
+}
+
+/** Whether the review left this requirement open. */
+export function qcRequirementNeedsAttention(entry: QcRequirementDisposition): boolean {
+  return QC_REQUIREMENT_ATTENTION.has(String(entry.disposition ?? ""));
+}
+
+/** The entries the review left open, in reading order. */
+export function qcRequirementAttentionEntries(
+  coverage: QcRequirementCoverage,
+): QcRequirementDisposition[] {
+  return qcRequirementEntries(coverage).filter(qcRequirementNeedsAttention);
+}
+
+/** The research items the table does not hold against the draft. */
+export function qcRequirementNotHeldLine(coverage: QcRequirementCoverage): string {
+  return (
+    `${counterValue(coverage.unverified_count)} unverified research lead(s), ` +
+    `${counterValue(coverage.process_count)} process advisory item(s)`
+  );
+}
+
+export type QcFindingCollection = "findings" | "disputed" | "refuted" | "inconclusive";
+
+const QC_COLLECTION_OUTCOMES: Record<QcFindingCollection, string> = {
+  findings: "upheld",
+  disputed: "disputed",
+  refuted: "refuted",
+  inconclusive: "inconclusive",
+};
+
+export interface QcRequirementFindingLink {
+  collection: QcFindingCollection;
+  /** "upheld", "disputed", "refuted" or "inconclusive". */
+  outcome: string;
+  finding: QcReportFinding;
+}
+
+/**
+ * The candidate a missing requirement's finding became: by the original
+ * claim's content address first (a consolidated candidate lists every claim
+ * it covers), then by the completeness lens and the exact title it gave.
+ * Searches the persisted collections, as the memo's `qc_requirement_finding`
+ * and `QCResult.finding_for_origin` do. null when neither matches.
+ */
+export function qcRequirementFinding(
+  rawResult: QcResultView | QcReportResult,
+  entry: QcRequirementDisposition,
+): QcRequirementFindingLink | null {
+  const result = resultFields(rawResult);
+  const originId = String(entry.origin_id ?? "");
+  const title = String(entry.finding_title ?? "").trim();
+  const collections: [QcFindingCollection, unknown][] = [
+    ["findings", result.findings],
+    ["disputed", result.disputed],
+    ["refuted", result.refuted],
+    ["inconclusive", result.inconclusive],
+  ];
+  const link = (collection: QcFindingCollection, finding: QcReportFinding) => ({
+    collection,
+    outcome: QC_COLLECTION_OUTCOMES[collection],
+    finding,
+  });
+  if (originId) {
+    for (const [collection, items] of collections) {
+      for (const item of Array.isArray(items) ? (items as unknown[]) : []) {
+        if (!isPlainRecord(item)) continue;
+        const origins = (item as { candidate_origins?: unknown }).candidate_origins;
+        if (Array.isArray(origins) && origins.includes(originId)) {
+          return link(collection, item as unknown as QcReportFinding);
+        }
+      }
+    }
+  }
+  if (title) {
+    for (const [collection, items] of collections) {
+      for (const item of Array.isArray(items) ? (items as unknown[]) : []) {
+        if (!isPlainRecord(item)) continue;
+        if (
+          item.lens_id === "completeness" &&
+          String(item.title ?? "").trim() === title
+        ) {
+          return link(collection, item as unknown as QcReportFinding);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** What a missing requirement's row says when it links to no finding. */
+export function qcRequirementUnlinkedNote(entry: QcRequirementDisposition): string {
+  const title = String(entry.finding_title ?? "").trim();
+  return title
+    ? `Finding "${title}" not found in this report`
+    : "No finding raised (tracked as an open question, or none)";
+}
+
 export interface QcRequestPopulation {
   lensRecords: number;
   consolidationRecords: number;
@@ -2208,7 +2440,7 @@ export function qcReportLimitations(
   ];
   if (stale) {
     limitations.push(
-      "The active review input differs from the captured snapshot. The change may be in the document, research, standards, module, model settings, or source policy; re-run Final QC before relying on findings or applying proposed operations.",
+      "The active review input differs from the captured snapshot. The change may be in the document, research, standards, attached documents, project facts, open Waiting on you items, module, model settings, or source policy; re-run Final QC before relying on findings or applying proposed operations.",
     );
   }
   // Replaces a present/absent-only line: a PARTIAL profile used to read as

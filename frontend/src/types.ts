@@ -1496,6 +1496,12 @@ export interface QcDispositionEvent {
 
 export interface QcVerdict {
   upholds: boolean;
+  /** final-qc/5: the seat could not check the finding either way (the text
+   *  that decides it was out of its reach). Neither an uphold nor a
+   *  refutation; `upholds` and `ops_adequate` are then false and
+   *  `refutation_evidence` empty. Absent when false, and on every older
+   *  record. */
+  cannot_verify?: boolean;
   revised_severity: string | null;
   note: string;
   ops_adequate: boolean;
@@ -1554,10 +1560,13 @@ export interface QcFinding {
   /** v4 rule identity. Empty on v3 and older records, which recorded only
    *  the integer threshold their own strict-majority rule used. */
   verification_rule?: string;
-  /** Why a candidate is disputed: "split_panel", or
-   *  "insufficient_refutation_evidence" when a critical/high refutation
-   *  cited nothing that validated. Empty for every other outcome. */
-  dispute_reason?: string;
+  /** Why a candidate is disputed: "split_panel" when seats that checked it
+   *  disagreed, "insufficient_refutation_evidence" when a critical/high
+   *  refutation cited nothing that validated, or (final-qc/5)
+   *  "unverifiable" when a seat could not check it and the seats that could
+   *  did not refute it by a majority of the panel. Empty for every other
+   *  outcome. */
+  dispute_reason?: QcDisputeReason;
   /** Chunk 5.2: content-addressed ids of the ORIGINAL lens claims this
    *  candidate covers. Stable references — the immutable records live once,
    *  in `consolidation.origins`; resolve with `qcCandidateOrigins`. Length
@@ -1570,6 +1579,59 @@ export interface QcFinding {
   status: QcFindingStatus;
   dismiss_reason: string;
   disposition_events: QcDispositionEvent[];
+}
+
+/** Why a complete panel escalated a candidate to a person. Open to unknown
+ *  values so a newer backend's reason still renders (as its raw code). */
+export type QcDisputeReason =
+  | "split_panel"
+  | "insufficient_refutation_evidence"
+  /** final-qc/5: a seat could not check the finding, and the seats that
+   *  could did not refute it by a majority of the panel. */
+  | "unverifiable"
+  | ""
+  | string;
+
+/** What the completeness lens found of one controlling research
+ *  requirement (final-qc/5). `not_assessed` and `not_shown` are the
+ *  engine's own: the review did not account for the requirement. */
+export type QcRequirementDispositionKind =
+  | "covered"
+  | "missing"
+  | "not_applicable"
+  | "not_assessed"
+  | "not_shown";
+
+export interface QcRequirementDisposition {
+  requirement_id: string;
+  disposition: QcRequirementDispositionKind | string;
+  /** The requirement as the reviewers read it, so the record stands alone. */
+  requirement: string;
+  authority: string;
+  code_reference: string;
+  /** Covered only: the provisions that state it. */
+  element_ids: string[];
+  /** One per `element_ids` entry: its number in the reviewed snapshot. */
+  element_refs: string[];
+  note: string;
+  /** Missing only: the title of the finding the lens raised, "" for none. */
+  finding_title: string;
+  /** Missing only: content address of that original lens claim, "" when
+   *  unlinked. Survives consolidation renaming the candidate. */
+  origin_id: string;
+}
+
+/** The run's research requirement accounting (final-qc/5). Absent on older
+ *  reports and on a run with no requirements profile. */
+export interface QcRequirementCoverage {
+  lens_id: string;
+  entries: QcRequirementDisposition[];
+  /** Ungrounded research leads, not held against the draft. */
+  unverified_count: number;
+  /** Process advisories, not held against the draft. */
+  process_count: number;
+  /** Lens entries naming ids outside the controlling set (ignored). */
+  unlisted_count: number;
 }
 
 /** Provenance of a consolidated candidate's proposed operations. */
@@ -1717,6 +1779,10 @@ export interface QcResultView {
    *  which cannot say, and must never be read as "complete". */
   batch_usage_capture?: "complete" | "incomplete" | "";
   dismissed_ids: string[];
+  /** final-qc/5: every controlling research requirement and what the
+   *  completeness lens found of it. Absent on older reports and on a run
+   *  with no requirements profile. */
+  requirement_coverage?: QcRequirementCoverage;
 }
 
 /** One candidate as introduced at the start of adversarial verification.
@@ -1935,6 +2001,9 @@ export type QcEvent =
       error?: string;
       /** Present only for a completed seat. */
       upholds?: boolean;
+      /** final-qc/5, completed seats only: the seat could not check the
+       *  finding either way. Absent on a replayed older log (= false). */
+      cannot_verify?: boolean;
       revised_severity?: string | null;
       ops_adequate?: boolean;
       /** The seat's one-line reasons for its vote and for its fix decision.
@@ -1947,13 +2016,16 @@ export type QcEvent =
       candidate_id: string;
       outcome: "upheld" | "refuted" | "disputed" | "inconclusive";
       /** Set only when `outcome` is "disputed". */
-      dispute_reason?: string;
+      dispute_reason?: QcDisputeReason;
       panel_size?: number;
       /** v4 replaces the integer `threshold`: an uphold needs every seat. */
       uphold_requires?: number;
       threshold?: number;
       completed_seats?: number;
       upholds?: number;
+      /** final-qc/5: completed seats that could not verify the finding.
+       *  Absent on a replayed older log. */
+      unverifiable?: number;
     })
   | (QcEventBase & {
       type: "verification_complete";

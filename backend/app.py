@@ -91,7 +91,7 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Callable, Iterator, Literal, Mapping, Sequence
@@ -158,6 +158,7 @@ from .research.grounding import refusal_category
 from .research.schema import extract_tool_use_block, single_output_tool_kwargs
 from .qc.engine import (
     DISPUTE_REASON_INSUFFICIENT_EVIDENCE,
+    DISPUTE_REASON_UNVERIFIABLE,
     QC_PROTOCOL_VERSION,
     QC_REPORT_SCHEMA_VERSION,
     build_qc_input_manifest,
@@ -1466,6 +1467,7 @@ def _qc_export_current_state(
         batch_verification=settings.QC_BATCH_VERIFICATION,
         reference_docs=list(session.references.docs),
         project_facts=list(session.facts.active()),
+        followups=session.followups.open_items(),
     )
     matches = _qc_matches_current_inputs(
         session, result, source_guard=source_guard
@@ -2370,7 +2372,8 @@ def _readiness_payload(
     elif not qc_matches_inputs:
         qc_current_detail = (
             "Final QC is stale — the document, another review input "
-            "(research, standards, module, or source policy), or the review "
+            "(research, standards, module, source policy, attached documents, "
+            "project facts, or the open Waiting-on-you items), or the review "
             "configuration itself (model, effort, panel sizes, app version) "
             "has changed since the report was produced."
         )
@@ -2471,6 +2474,14 @@ def _readiness_payload(
                 if finding.dispute_reason
                 == DISPUTE_REASON_INSUFFICIENT_EVIDENCE
             )
+            # final-qc/5: reviewers that could not reach the text deciding a
+            # finding say so instead of refuting it; the finding names what
+            # they needed, which is what the person deciding it has to find.
+            unverifiable = sum(
+                1
+                for finding in open_disputes
+                if finding.dispute_reason == DISPUTE_REASON_UNVERIFIABLE
+            )
             also_open = (
                 f" {len(open_findings)} other finding(s) are also open."
                 if open_findings
@@ -2480,6 +2491,12 @@ def _readiness_payload(
                 f"Final QC has {len(open_disputes)} disputed finding(s) "
                 "awaiting human review: the verifier panel completed but did "
                 "not agree"
+                + (
+                    f", and {unverifiable} of them the reviewers could not "
+                    "check (each says what they would need to see)"
+                    if unverifiable
+                    else ""
+                )
                 + (
                     f", and {unevidenced} of them refuted a critical/high "
                     "finding without citing evidence"
@@ -7170,6 +7187,12 @@ def create_app(
                 # run against what was attached when it started.
                 reference_docs=list(session.references.docs),
                 project_facts=list(session.facts.active()),
+                # Copies: an item is resolved in place, and the review reads
+                # the open items as they stood when it started (final-qc/5).
+                followups=[
+                    dataclass_replace(item)
+                    for item in session.followups.open_items()
+                ],
                 remembered_dismissed=remembered,
                 usage_sink=lambda cat, u, g=run_generation: (
                     session.add_usage_if_current(g, cat, u)

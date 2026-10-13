@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from backend import sessions, settings
 from backend.app import create_app
 from backend.qc.engine import (
-    VERIFICATION_RULE_V4,
+    VERIFICATION_RULE_V5,
     QCFanoutError,
     QCResult,
     qc_version_fingerprint,
@@ -771,7 +771,7 @@ def test_every_dismissed_id_carries_its_record_forward():
     assert len(result.dismissed_ids) == 2
 
 
-def test_every_v4_finding_persists_the_rule_that_adjudicated_it():
+def test_every_finding_persists_the_rule_that_adjudicated_it():
     result = _run(
         SequencedFakeClient(
             _medium_scripts([qc_verdict_response(True), qc_verdict_response(True)])
@@ -779,11 +779,12 @@ def test_every_v4_finding_persists_the_rule_that_adjudicated_it():
         _section(),
     )
     finding = result.findings[0]
-    assert finding.verification_rule == VERIFICATION_RULE_V4
-    # v4 upholds only unanimously, so the integer bar equals the panel size.
+    assert finding.verification_rule == VERIFICATION_RULE_V5
+    # v5, like v4, upholds only unanimously, so the integer bar equals the
+    # panel size.
     assert finding.verification_threshold == finding.verification_panel_size == 2
-    assert result.schema_version == 4
-    assert result.protocol_version == "final-qc/4"
+    assert result.schema_version == 5
+    assert result.protocol_version == "final-qc/5"
 
 
 def test_a_reloaded_v4_report_re_adjudicates_to_the_same_outcome():

@@ -186,6 +186,9 @@ def matches_current_inputs(
             # So are the established facts: every lens and seat read them,
             # and a supersede after the run changes what was reviewed.
             project_facts=list(session.facts.active()),
+            # And the open "Waiting on you" items (final-qc/5): settling or
+            # raising one changes what the reviewers were told is still open.
+            followups=session.followups.open_items(),
         )
     )
 

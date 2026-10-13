@@ -304,6 +304,18 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **Final QC v5 (next release).** Run Final QC on a section with
+      research and one open Waiting-on-you question whose clause is left
+      out: the report says `final-qc/5`, the left-out clause is not raised
+      as missing, and the Final QC report's Research Requirement Coverage
+      table lists every grounded requirement as covered (with paragraph
+      numbers), missing (with its finding) or not applicable (with why).
+      The review report shows the ones that need attention. Tick the
+      question off afterwards: the review reads stale. A reviewer that
+      could not reach a cited standard shows "could not verify" with what
+      it needed, and its finding is disputed ("the reviewers could not
+      check it") rather than refuted. A saved final-qc/4 report opens and
+      exports but asks for a re-run.
 - [ ] **The prompt review's small leftovers (next release).** In a long
       chat, open View summary after it condenses: each decision says who
       settled it (you, your approval, or a default you let stand) and
@@ -1118,9 +1130,10 @@ shifting under a pinned tool version.
       the committed-history boundary and only incremental creation; check
       the one-hour subtotal and list-price estimate against provider
       records.
-- [ ] **QC v4.** Current reports say `final-qc/4`; outcomes follow the v4
-      table, a disputed candidate blocking readiness until dispositioned;
-      the masthead and sign-off agree; a saved v3 report is readable as
+- [ ] **QC v5.** Current reports say `final-qc/5`; outcomes follow the v5
+      table (v4's, with a cannot-verify seat counting neither way), a
+      disputed candidate blocking readiness until dispositioned; the
+      masthead and sign-off agree; a saved v3 or v4 report is readable as
       history but asks for a rerun for current readiness.
 - [ ] **Responsiveness.** While chat streams, import a large template, export
       a large source DOCX, and request a stop, in separate trials. SSE and

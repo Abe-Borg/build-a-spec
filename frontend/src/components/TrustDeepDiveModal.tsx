@@ -726,7 +726,12 @@ function Dossier() {
               or pulls from it; no request is made either way. The Project
               panel also reads the project folder locally — the brief beside a
               section's saved file and the names of the section files next to
-              it — and never writes a path into any file. A brief carries the
+              it — and never writes a path into any file. When the assistant
+              reads another section of the project (by number, on request or
+              to check for duplication), the app reads that section's saved
+              file from the same folder, renders its document, and sends that
+              text in the request; the text is removed from stored history
+              after the turn. A brief carries the
               full text of your attached reference documents and every recorded
               project fact, so treat it as sensitive project data.
             </>,
@@ -1575,7 +1580,11 @@ function Dossier() {
               session lasts: the Project panel lists the brief’s registry and
               the section files present, and its Open reads a sibling by number
               through the same project-load path as Open — a name that resolves
-              outside the folder is refused. The folder is never recorded in
+              outside the folder is refused. The assistant can read a sibling
+              the same way, by number, when you ask about another section or it
+              checks that a provision is not already specified there: the file
+              as last saved, its document only, for that turn only. The folder
+              is never recorded in
               any file, so a project folder can be moved or shared whole. The
               brief there is a living file: each save of a section beside it —
               or Update project brief — merges that section into it
@@ -1742,6 +1751,11 @@ function Dossier() {
               "Read-only; the text is removed from stored history afterwards.",
             ],
             [
+              "Read another section of the project",
+              "Open the current text of a sibling section, by its number, to avoid duplicating or contradicting it and to cross-reference it exactly.",
+              "Read-only, desktop only: the app resolves the number through the project’s registry to that section’s saved file beside the project brief — the same lookup the Project panel’s Open uses, and a name that resolves outside the folder is refused. Only the document is rendered (never that section’s conversation, research or facts), and the text is removed from stored history afterwards.",
+            ],
+            [
               "Record project facts",
               "Record a fact the project has settled, or retire one it has contradicted.",
               "Every fact names its source, and the source must exist in this section — a research finding, an attached document, a Final QC finding, or one of the conversation’s replies. One that names nothing is refused as an error the model must correct; a retired fact stays in the record with its reason.",
@@ -1763,7 +1777,7 @@ function Dossier() {
           ]}
           rightTitle="Outside its reach, structurally"
           right={[
-            "Reading or writing any file on your computer.",
+            "Reading or writing any file on your computer — with one bounded exception: it can ask for another section of the same project by number, and the app reads that section’s saved file from the project folder for it (read-only, the file as last saved, never a path of the model’s choosing).",
             "Running any program, script, or shell command.",
             "Reaching any network address of its own choosing.",
             "Touching the retained bytes of your imported DOCX.",

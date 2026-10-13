@@ -1763,6 +1763,11 @@ function Dossier() {
               "Read-only, desktop only: the app resolves the number through the project’s registry to that section’s saved file beside the project brief — the same lookup the Project panel’s Open uses, and a name that resolves outside the folder is refused. Only the document is rendered (never that section’s conversation, research or facts), and the text is removed from stored history afterwards. You choose which sections it may read: each row in the Project panel has an “assistant may read” box, ticked by default; an unticked section is refused before anything is read, and the model is told not to try.",
             ],
             [
+              "Apply verified Final QC fixes",
+              "Apply the fixes Final QC verified as safe, by finding, after you approve them in the conversation.",
+              "The model is instructed to use it only after your explicit approval in the conversation. The application then applies only findings whose fix the review’s panel verified as safe, only while the review still matches the document and its inputs, and exactly the panel-approved operations, as one undoable step that records each finding as applied. Advisory, disputed, refuted and inconclusive findings are never applied.",
+            ],
+            [
               "Read a Final QC finding",
               "Open the full record of one finding from the retained Final QC review — its rationale, the provision text it reviewed, its sources and whether each checked out, its proposed operations and each reviewer’s vote — or the list of every finding on the report.",
               "Read-only: it never applies or dismisses anything, and the record is removed from stored history afterwards.",
@@ -1785,6 +1790,7 @@ function Dossier() {
             "Proposing, drafting, and revising specification text.",
             "Recording an edition — but only with a stated basis it must supply.",
             "Asking you questions and defaulting visibly when you defer.",
+            "Applying Final QC’s verified safe fixes when you approve them in the conversation — only the operations the review’s panel approved.",
             "Looking something up on the public web through the two server-side tools.",
           ]}
           rightTitle="Outside its reach, structurally"
@@ -1793,7 +1799,7 @@ function Dossier() {
             "Running any program, script, or shell command.",
             "Reaching any network address of its own choosing.",
             "Touching the retained bytes of your imported DOCX.",
-            "Starting research, starting QC, applying a QC fix, dismissing a finding, exporting, saving, or deleting anything.",
+            "Starting research, starting QC, dismissing a finding, exporting, saving, or deleting anything.",
             <>
               Creating an <Tag>imported</Tag> status — only the app seeds those,
               so “reviewed” can never be faked by the thing being reviewed.

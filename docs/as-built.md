@@ -24205,3 +24205,82 @@ requirement or left out and asked about, never pointed at the Drawings
 unless you said they show it, and never handed to the Contractor as a
 submittal when it is the engineer of record's to set. Retained Final QC
 results read stale once after updating."
+
+## The chat's Final QC summary checks every review input — implemented notes (2026-10-13)
+
+Owner decision (Abraham): do the two follow-ups left from PR #319 as one PR.
+
+### What changed
+
+- **The FINAL QC REVIEW block's freshness.** It said CURRENT whenever the
+  document matched the reviewed version (`matches_version`), so after a
+  research re-run, an attachment swap, a project fact recorded or
+  superseded (the chat records facts itself), or a Final QC setting change,
+  it kept listing "verified safe fix … apply via apply_qc_fixes" while
+  `apply_qc_fixes` (and the readiness `qc_current` gate) refused the
+  review as stale — one wasted round and a confusing refusal.
+  `qc_review_context_block` gains `inputs_current` (default True for direct
+  callers) and renders a third state, "STALE — the document is unchanged,
+  but another review input changed … or the imported-source permission
+  check has not settled. Fixes CANNOT be applied until Final QC is
+  re-run". The state logic is one helper, `qc/context._freshness_state`,
+  which `read_qc_finding` now shares; the document reason is said first
+  when both moved. `conversation._qc_inputs_current` asks
+  `matches_current_inputs(session, result)` (non-blocking, the apply path's
+  `block=False`) at turn start, lock-free like the readiness poll that asks
+  it on every refresh; an exception is logged (`buildaspec.chat`, WARNING)
+  and reads as not current, so the context render can never fail a turn.
+  The `read_qc_finding` runner uses the same helper. Erratum to "The chat
+  reads a Final QC finding in full": its review-fix note said the per-turn
+  block still judged by document version; it no longer does.
+- **Trust explainer.** Its "Outside its reach" list named "applying a QC
+  fix", though the chat applies verified fixes through `apply_qc_fixes` on
+  the user's approval (since v1.11.0). The item is gone; "Within its reach"
+  says "Applying Final QC's verified safe fixes when you approve them in the
+  conversation — only the operations the review's panel approved"; and the
+  tool table gains "Apply verified Final QC fixes", whose constraint says
+  the approval is the model's instruction and what the application itself
+  enforces (panel-verified fixes only, a review that still matches the
+  document and its inputs, the exact operations, one undoable step, each
+  finding recorded as applied; advisory, disputed, refuted and inconclusive
+  findings never).
+- **Unchanged.** The stable prompt (the "# Final QC findings" policy
+  already covers STALE), the tool list, every cached byte, the QC manifest,
+  readiness, the SSE protocol, the project file.
+
+### Tests
+
+- `tests/test_qc_context.py`: a research re-run after the review turns the
+  block from CURRENT to the inputs STALE end to end, and the readiness gate
+  agrees; a freshness check that raises never fails the turn and reads as
+  not current; when the document also moved, the document reason is the one
+  said, whatever the inputs. The existing CURRENT pin still holds for an
+  untouched review.
+
+**Revert matrix** (each reverted in place, the named files run, restored):
+the block call without `inputs_current` → 2 red; the turn-start check
+without its guard → 1; the inputs state never chosen → 3 (across
+`test_qc_context` and `test_qc_finding_read`). 3 of 3 caught. Ruff, 675
+tests across the QC, chat, app and context files, `npm test` (573) and
+`npm run build` pass; the full suite runs in CI. No paid API call was made.
+
+### Review fix (Codex, PR #321)
+
+The finding rows contradicted the freshness line: `_finding_line` still said
+"verified safe fix, N op(s) — apply via apply_qc_fixes on the user's
+explicit approval" under a STALE header (true for a document edit before
+this PR too). `_finding_line(finding, section, state)` now says "not
+applyable until Final QC is re-run" in either STALE state, the OPEN
+FINDINGS header names the ids as `read_qc_finding` inputs rather than
+apply inputs, and CURRENT reads "describes the document and its review
+inputs as they stand". Tests: a stale review (inputs, end to end; the
+document, unit) offers no row or header as applyable, and the current one
+still does. Reverting the row's state check turns 2 red.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Final QC", item "The chat knows when a review went stale": "The
+chat no longer calls a Final QC review current after research is re-run, an
+attachment or project fact changes, or a Final QC setting changes — it says
+the review needs re-running before offering its fixes, the same answer
+applying them would give."

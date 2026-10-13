@@ -2230,6 +2230,33 @@ Never let a summary turn the model's default into the user's word, and
 never write around a gap with a pointer the project has not confirmed.
 Tests: `tests/test_review_leftovers.py`, `tests/test_writing_policy.py`.
 Full record, reversion evidence and the release-note draft are in
+
+## The chat's Final QC summary checks every review input — implemented notes (2026-10-13)
+
+Owner decision (Abraham), the follow-up the PR #319 review left open.
+
+- **The per-turn block's freshness.** `qc_review_context_block(...,
+  inputs_current=)` and `read_qc_finding` share `qc/context._freshness_state`:
+  CURRENT, STALE because the document changed (said first when both
+  moved), or STALE because another review input moved or the
+  imported-source check has not settled. `_turn_context_text` passes
+  `_qc_inputs_current(session, result)` — `matches_current_inputs`, the
+  apply path's and the readiness `qc_current` gate's question,
+  non-blocking, lock-free at turn start like the readiness poll. It never
+  fails a turn: an exception logs a warning on `buildaspec.chat` and reads
+  as not current. The `read_qc_finding` runner uses the same helper. In
+  either STALE state no finding row or header offers a fix as applyable
+  (`_finding_line(..., state)`; Codex review on PR #321). The
+  "# Final QC findings" policy already says what to do with STALE, so the
+  stable prompt is unchanged; the block is per-turn, so no cache moves.
+- **Trust explainer.** "Applying a QC fix" left the "outside its reach"
+  list; "Within its reach" names it with its gate, and the tool table gains
+  "Apply verified Final QC fixes" (the model is instructed to use it only on
+  approval; the app applies only panel-verified fixes on a review that still
+  matches, as one undoable step).
+
+Never describe a retained review as current on the document version alone.
+Tests: `tests/test_qc_context.py`. Full record and reversion evidence in
 `docs/as-built.md` under the same heading. No paid API call was made.
 
 ## As-built history

@@ -1847,7 +1847,9 @@ document), so the model could only ask the user to paste a section.
   from this session and why. `readable` is `bool(project_home)`, which only
   a save or an open sets, never a chat turn's tools, so it may render into
   the cached block (C1's rule); a home change rewrites it once.
-- **The prompt.** `_PROJECT_SECTIONS_POLICY` (after `_REFERENCE_DOC_POLICY`)
+- **The prompt.** `_PROJECT_SECTIONS_POLICY` (after `_PROJECT_FACTS_POLICY`,
+  before `_REFERENCE_DOC_POLICY`, which the pasted-text note must follow
+  directly — `tests/test_prompt55_pasted_content.py` pins that)
   — read before drafting near a sibling's scope, read for an exact
   cross-reference, report duplication as a project defect and let the user
   decide which section keeps it, never copy a sibling's provision, record a

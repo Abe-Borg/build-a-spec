@@ -22951,7 +22951,13 @@ already does, and the read is modelled on it exactly.
   rule, `test_the_project_block_footer_follows_the_home_not_the_turn`);
   binding or losing a home rewrites the committed history once, the
   accepted trade for any project-block change.
-- **The prompt.** `_PROJECT_SECTIONS_POLICY`, after `_REFERENCE_DOC_POLICY`:
+- **The prompt.** `_PROJECT_SECTIONS_POLICY`, after `_PROJECT_FACTS_POLICY` and
+  before `_REFERENCE_DOC_POLICY` (the first cut put it between the
+  reference-document policy and the pasted-text note; the full suite's
+  `test_the_stable_prompt_carries_the_guides_note` pins those two adjacent —
+  Design 3 of the 5.5 upgrade, both being material the user brings from
+  elsewhere — and went red, so the block moved up one, where facts → other
+  sections → attached documents reads in order anyway):
   read before drafting near a sibling's scope, and rather than guessing or
   asking the user to paste; read for an exact cross-reference; two sections
   specifying the same thing is a project defect — say which section and

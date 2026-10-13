@@ -263,6 +263,26 @@ final-qc/4 record they are, but read out of date: re-run Final QC once (the
 same release as the earlier prompt-review steps). Open chat sessions rewrite
 their cached prompt once. No paid API call was made.
 
+## Current Status — the chat's Final QC summary knows when the review went stale
+
+(2026-10-13, owner decision. docs/as-built.md's "The chat's Final QC
+summary checks every review input" is the record; in the next release.)
+
+- **Stale means stale.** The Final QC summary the chat reads with every
+  message said a review was current as long as the document hadn't changed.
+  If research was re-run, an attachment swapped, a project fact recorded or
+  superseded, or a Final QC setting changed after the review, it still said
+  current and offered the safe fixes — and applying them was then refused.
+  It now runs the same check as applying a fix and the readiness checklist,
+  so it says the review is stale, and why, before anyone asks to apply.
+- **The trust explainer says the chat can apply Final QC fixes.** It listed
+  "applying a QC fix" among the things the chat cannot do. It can, through
+  its apply tool, when you approve in the conversation; the explainer now
+  says so and gives the tool its own row with its limits.
+
+No request byte, cache or saved file changed beyond the per-message context.
+No paid API call was made.
+
 ## Current Status — the prompt review's small leftovers
 
 (2026-10-13, the prompt-review follow-up. docs/as-built.md's "The prompt

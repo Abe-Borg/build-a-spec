@@ -271,8 +271,13 @@ _FRAME_TAGS = (
     "specification",
     "transcript",
 )
+# The name must end at whitespace, "/" or ">" (``(?=[\s/>])``), not at a
+# word boundary: "-", ":" or "." would end it there, and a longer tag
+# such as "<transcript-note>" is another tag that passes through byte for
+# byte (Codex review on PR #314, applied here in the prompt-review
+# follow-up).
 _FRAME_TAG_PATTERN = re.compile(
-    r"<\s*/?\s*(" + "|".join(_FRAME_TAGS) + r")\b[^>]*>", re.IGNORECASE
+    r"<\s*/?\s*(" + "|".join(_FRAME_TAGS) + r")(?=[\s/>])[^>]*>", re.IGNORECASE
 )
 
 

@@ -474,8 +474,9 @@ def view_spec_for(record: CompactionRecord | None) -> ViewSpec | None:
         "recall_conversation to read it word for word. A decision the "
         "summary records is a record, not the user's confirmation: stamp a "
         "provision confirmed on its strength only when the summary says the "
-        "user stated or approved it, quoting their words; otherwise read the "
-        "turn with recall_conversation, or ask."
+        "user stated or approved it, quoting their words; otherwise — a "
+        "default, or a settler not recorded — read the turn with "
+        "recall_conversation, or ask."
     )
     return ViewSpec(
         keep_from=record.keep_from,
@@ -671,8 +672,11 @@ def summary_instruction(
         "Say who settled every decision, preference and established fact "
         "you record: the user stated it, the user approved something you "
         "proposed, or it is your default the user let stand without saying "
-        "yes. Quote the user's own words, a short exact phrase, when they "
-        "gave any. Never write a default the user let stand as agreed, "
+        "yes. When you cannot tell — an earlier summary you are carrying "
+        "records it without saying, and the turn itself is not in front of "
+        "you — write \"settler not recorded\" and keep its turn number; "
+        "never guess. Quote the user's own words, a short exact phrase, when "
+        "they gave any. Never write a default the user let stand as agreed, "
         "approved, confirmed or decided: a later turn reads this summary "
         "instead of the conversation, and must not take your default for "
         "the user's word.\n\n"

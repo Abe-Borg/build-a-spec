@@ -3322,15 +3322,25 @@ def _template_structure_contract(section: SpecSection) -> dict[str, Any]:
     }
 
 
+# Every spelling a reader would take for a closing tag: "<", then any run of
+# whitespace — literal, or JSON's own \n \r \t escapes — then "/". The
+# other frame neutralizers accept "< /tag>" for the same reason (Codex review
+# on PR #320).
+_JSON_CLOSING_TAG_RE = re.compile(r"<((?:\s|\\[nrt])*)/")
+
+
 def _frame_safe_json(encoded: str) -> str:
     """JSON text that cannot close the ``<specification_document>`` frame.
 
-    ``</`` only ever occurs inside a JSON string (no JSON syntax uses
-    ``<``), and ``\\/`` is JSON's own escape for ``/``, so ``<\\/`` decodes to
-    exactly the same document while no closing tag survives in the text the
-    model reads. Document text cannot end the frame and speak as the prompt.
+    ``<`` only ever occurs inside a JSON string (no JSON syntax uses it), and
+    ``\\/`` is JSON's own escape for ``/``, so rewriting the slash of every
+    closing-tag spelling (``</``, ``< /``, ``<\\n/``) decodes to exactly the
+    same document while no closing tag survives in the text the model reads.
+    Document text cannot end the frame and speak as the prompt.
     """
-    return encoded.replace("</", "<\\/")
+    return _JSON_CLOSING_TAG_RE.sub(
+        lambda match: "<" + match.group(1) + "\\/", encoded
+    )
 
 
 def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:

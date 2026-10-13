@@ -24174,6 +24174,23 @@ profile pattern → 1; the harvest pattern → 3; the compaction pattern → 3;
 the research wording → 2; the policy rule → 3; the generic default → 1; the
 template data sentence → 1; the frame escape → 2. 12 of 12 caught.
 
+**Review fixes (Codex, PR #320).** P1: re-condensing a session whose
+earlier summary predates attribution puts a recorded decision in front of
+the summarizer without its turn, and tools are off for the summary, so
+demanding one of the three settlers forced a guess — and a guessed "the user
+approved" could later be stamped confirmed. The instruction now says to
+write "settler not recorded" and keep the turn number when it cannot tell,
+never to guess, and the preface sends "a default, or a settler not
+recorded" to `recall_conversation` or a question. P2: `_frame_safe_json`
+escaped only `</`, but a reader takes `< /specification_document>` (or a
+tab or newline before the slash) for a closing tag too, as the other frame
+neutralizers assume. `_JSON_CLOSING_TAG_RE` (`<((?:\s|\\[nrt])*)/`) now
+gives the slash of every such spelling JSON's own `\/` escape; the
+document still decodes identically. Tests: a "settler not recorded" pin,
+the preface pin, four planted spellings in the round trip, and a spaced tag
+planted in the template request. Probes: the settler sentence → 1 red; the
+preface → 1; the escape back to `</` only → 4.
+
 No paid API call was made.
 
 ### Release-note draft (for the release after 1.26.0)

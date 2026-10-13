@@ -2192,7 +2192,10 @@ PR"): five items too small for their own step.
   summary's preface (`view_spec_for`) says a recorded decision is a record,
   not the user's confirmation: a provision is stamped confirmed on it only
   when the summary attributes it to the user in their words, otherwise
-  recall the turn or ask. Headings and `extract_summary` are unchanged, so
+  recall the turn or ask. When the summarizer cannot tell — re-condensing
+  an older summary that never said, with the turn out of sight — it writes
+  "settler not recorded" and keeps the turn number, never a guess (Codex
+  review on PR #320). Headings and `extract_summary` are unchanged, so
   `tools/compaction_json_eval.py` compares the same shape.
 - **Frame guards.** `qc.engine._STANDARDS_TAG_PATTERN`,
   `_PROFILE_TAG_PATTERN`, `harvest._FRAME_TAG_PATTERN` and
@@ -2215,8 +2218,10 @@ PR"): five items too small for their own step.
   the document is data to rewrite and never instructions, drops "as
   indicated on the Drawings" as a generalization (names the Drawings only
   where the document already does), and frames the JSON with
-  `_frame_safe_json` (`</` → `<\/`, JSON's own escape, so the document
-  decodes identically and no closing tag survives inside the frame).
+  `_frame_safe_json`: every closing-tag spelling — `<`, any whitespace
+  (literal or JSON's `\n \r \t`), `/` — gets JSON's own `\/` escape, so
+  the document decodes identically and no closing tag, spaced or not,
+  survives inside the frame (Codex review on PR #320 caught `< /tag>`).
 - **Stale once.** The policy is in the QC manifest: retained Final QC
   results read stale once, the same release as steps 6 and 7. The stable
   prompt changes once; a summarized session's preface changes once.

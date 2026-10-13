@@ -81,9 +81,9 @@ def test_set_status_confirms_only_what_the_user_approved():
     assert "use it to confirm an assumed block" not in text
     assert (
         "Changes only the provision's status, without retyping its text — "
-        "confirmed once the user has approved the provision, or assumed for "
-        "an imported block you keep as fitting this project (gap-and-adapt)."
-        in text
+        "confirmed once the user has stated or approved the provision, or "
+        "assumed for an imported block you keep as fitting this project "
+        "(gap-and-adapt)." in text
     )
 
 
@@ -218,6 +218,10 @@ def test_the_harvest_names_the_edition_sources():
     assert (
         "adopted codes, editions and amendments the user stated (including "
         "what they report the authority having jurisdiction confirmed), or "
-        "that an attached document or a research finding marked grounded "
-        "establishes;" in text
+        "that a research finding marked grounded establishes — never an "
+        "attached document alone;" in text
     )
+    # An attachment is never authority for an adopted edition (Codex review
+    # on PR #316): the line names only the user and grounded research.
+    line = next(l for l in text.split("- ") if l.startswith("adopted codes"))
+    assert "an attached document or" not in line

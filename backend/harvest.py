@@ -572,7 +572,7 @@ _HARVEST_SYSTEM_PROMPT = """\
 You extract ESTABLISHED PROJECT FACTS from one section's specification-drafting session, so that the NEXT section of the same project starts knowing them. Each section of a project is its own session; the next one never sees this conversation or this document. A recorded project fact is how something settled here reaches it.
 
 Propose only what the material shows was SETTLED — stated or confirmed by the user, written into a confirmed provision, or decided in a Final QC dismissal reason — and only what the next section would need:
-- adopted codes, editions and amendments the user stated (including what they report the authority having jurisdiction confirmed), or that an attached document or a research finding marked {grounded} establishes;
+- adopted codes, editions and amendments the user stated (including what they report the authority having jurisdiction confirmed), or that a research finding marked {grounded} establishes — never an attached document alone;
 - owner and client standards, and preferences the user stated;
 - insurer requirements;
 - site facts (water supply basis, hazard or commodity classifications, seismic category, environmental conditions);

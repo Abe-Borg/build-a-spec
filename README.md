@@ -231,8 +231,8 @@ harvest fill in. Steps 1–6 had left a few of them stating the old rule:
   reparented", next to the relocate operation step 5 added. It now says
   move never changes a parent; relocate, described beside it, does.
 - **Only you confirm.** The edit tool said to use set_status "to confirm an
-  assumed block". It now says confirmed once you have approved the
-  provision. The imported-starter note now says your approval is the last
+  assumed block". It now says confirmed once you have stated or approved
+  the provision. The imported-starter note now says your approval is the last
   step, because an adapted block stays assumed until you approve it.
 - **Lint holds readiness.** The assistant was told lint is "advisory", and
   the readiness checklist said "N advisory lint issue(s)", but every lint

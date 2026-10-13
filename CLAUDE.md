@@ -2000,8 +2000,9 @@ and the code. Fifteen places stated an old rule; all are wording.
 - **Edit tool.** `move`'s line says "move never changes an element's
   parent" (was "content cannot be reparented", false since `relocate`);
   true for Final QC too, which echoes this description and has no relocate.
-  `set_status`: "confirmed once the user has approved the provision" (was
-  "use it to confirm an assumed block"). The `reason` property and the
+  `set_status`: "confirmed once the user has stated or approved the
+  provision" (was "use it to confirm an assumed block"; Codex review on PR
+  #316 kept "stated", the provenance rule's other half). The `reason` property and the
   prompt's reason line note that a set_standard_edition basis cites a
   research item by its id and never reaches Word (section metadata stores
   no reason trail; no export reads `edition_overrides`).
@@ -2014,7 +2015,9 @@ and the code. Fifteen places stated an old rule; all are wording.
 - **Editions.** The pinned `standards_context_block` names a grounded
   research item beside the user's statement; `RECORD_PROJECT_FACTS_TOOL`
   and the harvest prompt drop "confirmed by the user or the AHJ" (the
-  harvest keeps its own `{grounded}` label, which its tests require).
+  harvest keeps its own `{grounded}` label, which its tests require). An
+  attached document alone never establishes an edition (Codex review on PR
+  #316).
 - **Requirements, not directives** (step 6's rule): the explanatory-prose
   lint message ("Explains instead of stating the requirement … Rewrite it
   as the requirement alone"), `_LINT_POLICY`, and `_RESEARCH_POLICY`, which

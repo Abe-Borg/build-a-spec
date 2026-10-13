@@ -23593,9 +23593,11 @@ step read all of it against those steps and against what the code does.
   relocate (the lens prompt's own relocation line is unchanged). No
   relocate line was added to the shared description, for the same reason.
 - Same description, `set_status`: "use it to confirm an assumed block" —
-  step 4 made the user's approval the only thing that confirms. Now
-  "confirmed once the user has approved the provision, or assumed for an
-  imported block you keep as fitting this project (gap-and-adapt)".
+  step 4 made the user's statement or approval the only thing that
+  confirms. Now "confirmed once the user has stated or approved the
+  provision, or assumed for an imported block you keep as fitting this
+  project (gap-and-adapt)" (the first push said "approved" only; see the
+  review fixes below).
 - The `reason` property and `_TOOL_GUIDE`'s reason line say "never by an
   id" and "on set_standard_edition the basis is the reason", while that
   operation asks for a research item's id in the basis (step 3's guard
@@ -23621,8 +23623,9 @@ step read all of it against those steps and against what the code does.
   hears from the AHJ only through the user or a source. The tool now says
   "the user states or a grounded research item establishes (never from
   your own knowledge)"; the harvest says the user stated it (including what
-  they report the AHJ confirmed) or an attached document or a research
-  finding marked `{grounded}` establishes it — the harvest's own label,
+  they report the AHJ confirmed) or a research finding marked `{grounded}`
+  establishes it, never an attached document alone (the first push listed
+  attachments; see the review fixes below) — the harvest's own label,
   which `test_confirmed_needs_a_grounded_finding_…` requires (it refuses
   "grounded source" in that prompt).
 - Step 6 replaced "Directives only" with "Requirements, never commentary",
@@ -23691,6 +23694,20 @@ checklist detail → 2; the imported-review line → 1; the standards block →
 1; the lint policy's "directive" → 2; "Lint is advisory" → 2; the export
 schedules line → 2; the research policy's "where it applies" → 2; the facts
 tool → 1; the harvest line → 1; the lint message → 1. 15 of 15 caught.
+
+**Review fixes (Codex, PR #316).** P1: the first push listed "an attached
+document" among the sources that establish an adopted edition in the
+harvest prompt. `_REFERENCE_DOC_POLICY` and `read_reference_doc` say an
+attachment is never authority for a code requirement, step 3 allows only the
+user's statement or grounded research, and the harvest accepts a confirmed
+`source_kind="reference"` fact, so an unverified adoption could have reached
+later sections as settled input. The line now names the user and a
+`{grounded}` research finding only, "never an attached document alone".
+P2: `set_status` said "confirmed once the user has approved the provision",
+narrower than the provenance rule ("stated or approved"), so a requirement
+the user stated outright could have stayed assumed and held
+`no_assumed_left`. It now says "stated or approved". Probes: each fix
+reverted → 1 red in `tests/test_tool_text_review.py`.
 
 No paid API call was made.
 

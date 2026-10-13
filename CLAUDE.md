@@ -112,7 +112,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting) and, since 2026-10-07, each op's `reason` (the panel prints the newest under a changed block); `doc` is the authoritative full snapshot (rendering), whose `edit_reasons` carries every element's trail |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks — leftovers only since 2026-10-06: the model can write neither, and since PR 4 the user's edit API refuses a needs_input stamp too; the panel titles them Leftover placeholders); emitted when a turn changed the doc |
-| `lint` | `items`, `standards` | lint issues (they never block an edit; every one holds issue readiness) + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
+| `lint` | `items`, `standards` | lint issues (they never block an edit; every one holds issue readiness except a `look_only` "pending" look) + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
 | `turn_complete` | `stop_reason`, `usage` | turn ended; history + doc version committed server-side. `usage` aggregates the turn's billed tokens across every round (input/output/cache/thinking + web-tool request counts) — raw material for the future cost meter. A turn stopped mid-stream adds `estimated_output_tokens` + `usage_estimated: true` (see "Disclosed stopped-turn output estimate"); `output_tokens` stays exactly what the provider reported |
 | `error` | `message` | turn failed; history untouched and doc rolled back (retry is safe) |
 
@@ -2036,11 +2036,45 @@ and the code. Fifteen places stated an old rule; all are wording.
   blocks, the editing boundary, and the research, QC, consolidation,
   compliance and template output tools.
 
-Not changed, raised with the owner: a legitimate "pending" hold point
-("pending acceptance of shop drawings") is an `explanatory_prose` lint
-issue the prompt says to leave, lint cannot be dismissed, and `lint_clean`
-gates readiness, so such a section never reads ready. Tests:
+Raised with the owner and settled the same day (option A, next
+section): a legitimate "pending" hold point no longer holds readiness. Tests:
 `tests/test_tool_text_review.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
+
+## A "pending" hold point is a look, not a defect — implemented notes (2026-10-13)
+
+Owner decision (Abraham, option A), raised by step 7: the lint flags
+"pending" for a look and the prompt says to leave a real hold point, but
+every lint issue held `lint_clean` and none can be dismissed, so a section
+with "pending acceptance of shop drawings" never read ready.
+
+- **The rule.** `spec_voice.PENDING_LOOK_LABEL` (the "pending" pattern's
+  label) is the one member of `LOOK_ONLY_PROSE_LABELS`;
+  `look_only_prose(hits)` is true when every explanatory-prose hit carries
+  such a label. `lint_document` then reports that provision as a look:
+  severity `info`, `look_only: True` (present only on a look, so every
+  other issue's shape is unchanged), and its own message ("Check
+  'pending' … A look only: it does not hold issue readiness."). A
+  provision with "pending" plus any other hit is an ordinary `warn` issue.
+- **Readiness.** `linting.holds_readiness(issue)` is the one test.
+  `lint_clean` counts only the issues that hold readiness;
+  `_lint_readiness_detail` names the looks left ("Lint clean apart from N
+  'pending' look(s) left, which do not hold readiness", or after "N lint
+  issue(s) to fix."). Unchanged when there is no look.
+- **What the model reads.** The LINT REPORT header says each issue holds
+  readiness "except one marked 'look only'", and a look's line reads
+  `[explanatory_prose, look only]`. `_LINT_POLICY` says "pending" alone is
+  a look, a real hold point stays, and it does not hold readiness. The
+  stable prompt changes once (cache rewrite); the QC manifest does not
+  carry lint, so retained Final QC results are unaffected.
+- **UI.** No new control: the Issues drawer already shows `info` with the
+  grey dot, and the message says what it is. `LintIssue.look_only?` in
+  `types.ts`; the tour's lint sentence says a look stays.
+
+Never let a look hold readiness, and never mark a provision a look when
+anything other than "pending" is flagged in it. Tests:
+`tests/test_pending_look_only.py`. Full record, reversion evidence and the
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
 

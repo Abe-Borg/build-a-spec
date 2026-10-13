@@ -229,6 +229,7 @@ from .spec_doc.importer import (
     ReferenceExtraction,
     parse_master_docx,
 )
+from .spec_doc.linting import holds_readiness as lint_holds_readiness
 from .spec_doc.model import SpecSection, iter_paragraphs
 from .spec_doc.project import (
     chat_transcript,
@@ -2155,6 +2156,26 @@ def _blocking_followups_readiness_detail(blocking) -> str:
     )
 
 
+def _lint_readiness_detail(blocking: int, looks: int) -> str:
+    """The ``lint_clean`` line: issues to fix, and any looks left beside them.
+
+    A look (``look_only``, a "pending" left for a check) is named so the user
+    knows it is there, and said not to hold readiness.
+    """
+    look_note = (
+        f"{looks} 'pending' look(s) left, which do not hold readiness"
+        if looks
+        else ""
+    )
+    if blocking:
+        return f"{blocking} lint issue(s) to fix." + (
+            f" {look_note[0].upper()}{look_note[1:]}." if looks else ""
+        )
+    if looks:
+        return f"Lint clean apart from {look_note}."
+    return "Lint clean."
+
+
 def _readiness_payload(
     session,
     *,
@@ -2191,6 +2212,11 @@ def _readiness_payload(
         unstructured_import=session.import_is_unstructured(),
         preserved_chrome=session.preserved_chrome(),
     )
+    # A look (a "pending" left for a check) stays in the report but does not
+    # hold readiness: it is often a real hold point (owner decision,
+    # 2026-10-13). Every other issue does.
+    lint_blocking = [issue for issue in lint_items if lint_holds_readiness(issue)]
+    lint_looks = len(lint_items) - len(lint_blocking)
     profile = ProjectProfile.from_dict(doc.project_profile)
     profile_ok = bool(profile and profile.is_complete())
     research_ok, research_detail = _research_readiness(session)
@@ -2551,10 +2577,8 @@ def _readiness_payload(
         },
         {
             "id": "lint_clean",
-            "ok": len(lint_items) == 0,
-            "detail": "Lint clean."
-            if not lint_items
-            else f"{len(lint_items)} lint issue(s) to fix.",
+            "ok": len(lint_blocking) == 0,
+            "detail": _lint_readiness_detail(len(lint_blocking), lint_looks),
             "advisory": False,
         },
         {

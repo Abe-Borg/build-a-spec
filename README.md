@@ -216,6 +216,32 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — a "pending" hold point no longer blocks issue
+
+(2026-10-13, owner decision after step 7 of the prompt-review follow-up.
+docs/as-built.md's "A pending hold point is a look, not a defect" is the
+record; in the next release.)
+
+The lint flags "pending" so someone checks it, and the assistant is told to
+leave it where it is a real condition of the work — a hold point such as
+"Do not fabricate piping pending acceptance of shop drawings". But every
+lint issue held "ready to issue" and none can be dismissed, so a section
+with a real hold point could never read ready unless it was reworded.
+
+- A provision whose only flagged word is "pending" is now a **look**: it
+  still shows in the Issues list (with the quieter grey dot), and its
+  message says to check it and that it does not hold issue readiness.
+- The readiness checklist counts only the issues that must be fixed, and
+  names any looks left: "Lint clean apart from 1 'pending' look(s) left,
+  which do not hold readiness."
+- A provision with "pending" plus anything else the lint flags — a reason
+  ("because …"), "should" — is an ordinary issue and still blocks.
+- The assistant's lint report marks a look "look only", and its lint
+  guidance says a real hold point stays.
+
+Open chat sessions rewrite their cached prompt once. No paid API call was
+made.
+
 ## Current Status — the tool instructions match the new rules
 
 (2026-10-13, step 7 of the prompt-review follow-up. docs/as-built.md's "The

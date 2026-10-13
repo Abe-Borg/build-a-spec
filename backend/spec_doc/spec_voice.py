@@ -419,6 +419,13 @@ _TALKS = "talks about the document instead of directing"
 _APP_TERMS = "uses the app's own bookkeeping terms"
 _DESIGN_TEAM = "addresses the design team"
 _HEDGES = "hedges — state the requirement"
+#: "pending" is the one phrase that is often right: a hold point ("Do not
+#: fabricate piping pending acceptance of shop drawings") is a real
+#: condition of the work. A provision whose only hits carry this label is a
+#: look, not a defect: it stays in the lint report and does not hold issue
+#: readiness (owner decision, 2026-10-13, option A).
+PENDING_LOOK_LABEL = "'pending' — leave it only if it is a real condition of the work"
+LOOK_ONLY_PROSE_LABELS: frozenset[str] = frozenset({PENDING_LOOK_LABEL})
 
 #: Phrases that mark a provision explaining instead of directing. Matching
 #: ignores case; earlier patterns claim their span first (``scan_markers``).
@@ -477,10 +484,7 @@ EXPLANATORY_PROSE_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"(?i)\blikely\b", _HEDGES),
     (r"(?i)\bprobably\b", _HEDGES),
     (r"(?i)\bmay\s+need\s+to\b", _HEDGES),
-    (
-        r"(?i)\bpending\b",
-        "'pending' — leave it only if it is a real condition of the work",
-    ),
+    (r"(?i)\bpending\b", PENDING_LOOK_LABEL),
 )
 
 #: Words that put prose into a REFERENCES entry. Case-sensitive on purpose
@@ -560,6 +564,15 @@ def explanatory_prose_hits(text: str) -> list[dict[str, str]]:
             key=lambda hit: hit[0],
         )
     ]
+
+
+def look_only_prose(hits: list[dict[str, str]]) -> bool:
+    """True when every hit is a look (``LOOK_ONLY_PROSE_LABELS``), not a breach.
+
+    A provision with "pending" and nothing else is left for a look; one that
+    also gives a reason or hedges is a breach like any other.
+    """
+    return bool(hits) and all(hit.get("label") in LOOK_ONLY_PROSE_LABELS for hit in hits)
 
 
 def _sentence_count(text: str) -> int:

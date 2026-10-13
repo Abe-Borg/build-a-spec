@@ -739,7 +739,7 @@ export interface SeedReport {
   name: string;
 }
 
-/** One deterministic lint finding (advisory, never blocking). */
+/** One deterministic lint finding: never blocks an edit, holds issue readiness unless look_only. */
 export interface LintIssue {
   id: string;
   rule: string;
@@ -748,6 +748,8 @@ export interface LintIssue {
   ref: string;
   message: string;
   match: string;
+  /** A look ("pending" alone), shown but never holding issue readiness. */
+  look_only?: boolean;
 }
 
 /** One standard's edition in effect: module pin, jurisdiction override, a

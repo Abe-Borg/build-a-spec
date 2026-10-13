@@ -664,6 +664,29 @@ export async function projectSections(): Promise<ProjectSectionsPayload> {
 }
 
 /**
+ * Open or close a sibling section to the assistant's reads — the Project
+ * panel's "assistant may read" box (2026-10-13). By NUMBER; the server records
+ * the choice on this section (it rides its saved file, never a brief): off adds
+ * the number to the closed list, on removes it. Refused in a tour and for the
+ * open section's own number; the server's message is thrown as is.
+ */
+export async function setSectionAccess(
+  number: string,
+  readable: boolean,
+): Promise<{ readable: boolean; exclusions: string[] }> {
+  const resp = await fetch("/api/project/section-access", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ number, readable }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `changing what the assistant may read failed (${resp.status})`);
+  }
+  return { readable: !!data.readable, exclusions: data.section_read_exclusions ?? [] };
+}
+
+/**
  * Open a sibling section of this project by NUMBER — never a path. The
  * server resolves the number through the registry to a file beside the
  * brief and runs the exact load-file path, so the answer is a

@@ -231,9 +231,10 @@ from .spec_doc.importer import (
 )
 from .spec_doc.model import SpecSection, iter_paragraphs
 from .spec_doc.project import (
-    PROJECT_KIND,
     chat_transcript,
     load_project,
+    MAX_SECTION_READ_EXCLUSIONS,
+    PROJECT_KIND,
     sanitize_project_link,
 )
 from .spec_doc.project_package import (
@@ -751,6 +752,16 @@ class NextSectionRequest(BaseModel):
     discipline: str = ""
     module_id: str = ""
     template_id: str = ""
+
+
+class SectionAccessRequest(BaseModel):
+    """Body of ``POST /api/project/section-access`` (2026-10-13): the Project
+    panel's per-row "assistant may read" box. A section NUMBER, and whether
+    the assistant may read that section's saved file with
+    ``read_project_section``."""
+
+    number: str = ""
+    readable: bool = True
 
 
 class OpenSectionRequest(BaseModel):
@@ -8546,6 +8557,90 @@ def create_app(
             }
         )
 
+    @app.post("/api/project/section-access")
+    def project_section_access(body: SectionAccessRequest) -> JSONResponse:
+        """Open or close a sibling section to the assistant's reads — the
+        Project panel's "assistant may read" box (2026-10-13).
+
+        Records the choice on THIS section (``SessionState.section_read_exclusions``,
+        saved in its ``.baspec``, never in a brief): ``readable: false`` adds
+        the number to the list, ``true`` removes it. Default is readable, so
+        the list holds only what the user closed. The PROJECT SECTIONS footer
+        reads it at the next turn's start (a change rewrites the cached
+        project block once, as binding a home does) and
+        ``read_project_section`` reads it at dispatch, so a section closed
+        mid-turn is refused from that moment. Refused inside a tour (409
+        ``tutorial_active``) and for this section's own number (400
+        ``own_section``: its text is the turn's context, never a read); a
+        blank number is 400. Writes nothing to disk; the next Save carries it.
+        """
+        if sessions.get_workspace().scope != "original":
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": (
+                        "A tutorial workspace is active. End the tour to return "
+                        "to your project before changing what the assistant may read."
+                    ),
+                },
+                status_code=409,
+            )
+        number = " ".join((body.number or "").split())
+        if not number:
+            return JSONResponse(
+                {"ok": False, "error": "Name the section to open or close."},
+                status_code=400,
+            )
+        session = sessions.get_session()
+        with session.session_state_guard():
+            own = " ".join((session.doc.doc.number or "").split())
+            if own and number == own:
+                return _coded_error_response(
+                    {
+                        "ok": False,
+                        "code": "own_section",
+                        "error": (
+                            f"Section {number} is the section open here; the "
+                            "assistant always has its text."
+                        ),
+                    },
+                    status_code=400,
+                )
+            current = [
+                n for n in session.section_read_exclusions if n != number
+            ]
+            if not body.readable:
+                if len(current) >= MAX_SECTION_READ_EXCLUSIONS:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": (
+                                "Too many sections are closed to the assistant "
+                                f"(the limit is {MAX_SECTION_READ_EXCLUSIONS})."
+                            ),
+                        },
+                        status_code=400,
+                    )
+                current.append(number)
+            changed = current != session.section_read_exclusions
+            session.section_read_exclusions = current
+            exclusions = list(current)
+        if changed:
+            _trace_capture.app_event(
+                "project_section_access",
+                number=number,
+                readable=bool(body.readable),
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "number": number,
+                "readable": bool(body.readable),
+                "section_read_exclusions": exclusions,
+            }
+        )
+
     @app.post("/api/project/next-section")
     async def project_next_section_start(
         body: NextSectionRequest | None = None,
@@ -9028,12 +9123,14 @@ def create_app(
             current_number = session.doc.doc.number or ""
             current_title = session.doc.doc.title or ""
             save_target = str(session.save_target or "")
+            exclusions = list(session.section_read_exclusions)
         listing = sessions.project_sections_listing(
             link=link,
             home=home,
             current_number=current_number,
             current_title=current_title,
             save_target=save_target,
+            exclusions=exclusions,
         )
         pull = _pull_availability(
             session,

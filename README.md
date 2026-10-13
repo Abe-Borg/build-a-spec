@@ -216,6 +216,31 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — you choose which sections the assistant may read
+
+(2026-10-13, owner request. docs/as-built.md's "The user chooses which
+sections the assistant may read" is the record; in the next release.)
+
+The assistant reads the project's other sections on demand (the entry
+below). Which ones is now your call, per section.
+
+- **An "assistant may read" box on every other section's row** in the
+  Project panel, ticked by default. Untick one and the assistant is told, in
+  the project list it reads every turn, that the section is closed to it and
+  not to try; a read it attempts anyway is refused before anything is read,
+  naming the box. Tick it again and the read is back.
+- **The choice is this section's own.** It is saved in the section's `.baspec`
+  with the section you are in, and never in the project brief, so each
+  section of a project decides for itself what its assistant may read. A
+  fresh session starts with every section readable.
+- **No effect on the section you are in**, whose text the assistant always
+  has, and none on the panel's Open, which is yours.
+
+Changing a box rewrites the assistant's cached project list once, the way
+saving beside the brief does. No model request byte changed otherwise, no
+saved-file format changed (the key is written only when a section is
+closed), and no paid API call was made.
+
 ## Current Status — six small wording fixes
 
 (2026-10-13, step 6 of the prompt-review follow-up. docs/as-built.md's "Six
@@ -1691,8 +1716,11 @@ with Open — and shows it in a **Project** panel directly above Project facts:
 - **The assistant reads the other sections the same way** (2026-10-13): ask
   what a listed section says, or whether something is already covered there,
   and it reads that section's saved file by number — only its document, as
-  last saved, for that turn — through the same registry lookup. See "Current
-  Status — the assistant reads the project's other sections".
+  last saved, for that turn — through the same registry lookup. Each other
+  row's **assistant may read** box, ticked by default, decides whether it may;
+  the choice is saved with the section you are in. See "Current Status — the
+  assistant reads the project's other sections" and "Current Status — you
+  choose which sections the assistant may read".
 - **Next section →** at the bottom is the v1.20.0 dialog. The new section
   carries the folder with it, and its first Save opens in that folder, so it
   lands beside the brief by default. Since 2026-10-08 it also starts with
@@ -1733,7 +1761,11 @@ per section, plus which files are present and which are unregistered) and
 `POST /api/project/open-section {number}` (409 in a tour, while anything
 runs, or with no project folder; 404 for an unknown number or a missing file;
 400 for a file name outside the folder). The document payload gains
-`project_home`.
+`project_home`. `POST /api/project/section-access {number, readable}`
+(2026-10-13) opens or closes a sibling section to the assistant's reads; the
+listing's rows carry `assistant_readable` and the payload
+`section_read_exclusions` (409 in a tour; 400 for the open section's own
+number or a blank one).
 
 ### The brief is a living file (Phase 3)
 

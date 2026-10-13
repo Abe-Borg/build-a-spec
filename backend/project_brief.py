@@ -1546,12 +1546,46 @@ def _section_line(record: dict[str, Any], *, with_articles: bool) -> str:
     return f"{head} ({tail})"
 
 
+def _readable_footer(closed: list[str], *, all_closed: bool) -> str:
+    """The footer's reading half when the files are reachable: which listed
+    sections the user has closed to the assistant, if any, and what to do."""
+    if closed and all_closed:
+        return (
+            "The user has closed every listed section to you in the Project "
+            "panel, so their text cannot be read from this session: coordinate "
+            "from the titles and article lists above, ask the user when a "
+            "provision's placement is in doubt, and say once that opening a "
+            "section to you there (its \"assistant may read\" box) would let "
+            "you read it."
+        )
+    reading = (
+        "Each listed section's current text can be read in full with "
+        "read_project_section (by its number)"
+    )
+    if closed:
+        reading += (
+            f" except {', '.join(closed)}, which the user has closed to you in "
+            "the Project panel: do not try to read "
+            + ("it" if len(closed) == 1 else "them")
+            + "; if its text would help, say so once and let the user open it "
+            "there"
+        )
+    return (
+        reading
+        + ": read one before drafting anything that borders on its scope, "
+        "when the user asks what it says or whether something is already "
+        "covered, and to cross-reference a provision by its article and "
+        "paragraph."
+    )
+
+
 def project_sections_block(
     link: dict[str, Any] | None,
     current_section_number: str,
     *,
     max_tokens: int = SECTIONS_CONTEXT_MAX_TOKENS,
     readable: bool = False,
+    excluded: Iterable[str] = (),
 ) -> str:
     """The other sections of this project, for the cached project block.
 
@@ -1568,6 +1602,12 @@ def project_sections_block(
     can and never asks the user to paste a section it could have read — or
     tries a read that cannot work. A home is bound by a save or an open,
     never by a chat turn, so the footer is as cacheable as the list.
+
+    ``excluded`` names the listed sections the user has CLOSED to the
+    assistant in the Project panel (``SessionState.section_read_exclusions``):
+    the list still names them (scope is still coordinated against them),
+    the footer says they are closed and not to try. Set by the panel's
+    route, never by a turn's tools, so it is as cacheable as the home.
     """
     if not isinstance(link, dict):
         return ""
@@ -1593,15 +1633,12 @@ def project_sections_block(
         f'project brief "{name}"; coordinate scope with them and do not '
         f"duplicate their provisions — {where}):"
     )
+    closed = [n for n in (r["number"] for r in others) if n in {_fold(e) for e in excluded}]
     footer = (
         "A provision that belongs to a listed section is cross-referenced "
         '("as specified in Section 21 13 13"), never restated here. '
         + (
-            "Each listed section's current text can be read in full with "
-            "read_project_section (by its number): read one before drafting "
-            "anything that borders on its scope, when the user asks what it "
-            "says or whether something is already covered, and to "
-            "cross-reference a provision by its article and paragraph."
+            _readable_footer(closed, all_closed=len(closed) == len(others))
             if readable
             else "Their text cannot be read from this session (the section "
             "open here is not saved in its project folder, or this is a "

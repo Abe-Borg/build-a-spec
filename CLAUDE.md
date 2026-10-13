@@ -1827,8 +1827,14 @@ document), so the model could only ask the user to paste a section.
   link was synced is readable though PROJECT SECTIONS does not list it, and
   the refusal for an unknown number names what the joined registry holds.
   It needs a bound `project_home`; without one (a browser session, a section
-  saved elsewhere) the tool says how to make the files reachable. Nothing
-  new travels in a brief, and the read never writes.
+  saved elsewhere) the tool says how to make the files reachable. The file
+  must also BE the section asked for, of this project (Codex review on PR
+  #312): its embedded number must equal the one requested (a renumbered
+  section saved to its old file name leaves the old number's record on the
+  same file; the refusal names the section the file holds), and a file
+  naming another project's id is refused unread; a file with no link (saved
+  before its first brief export) reads. Nothing new travels in a brief, and
+  the read never writes.
 - **One version, the reader's text.** `project_package.read_project_json`
   reads the `project.json` member alone (bounded as the package parser
   bounds it; legacy JSON too) and `load_section_document` parses
@@ -1866,7 +1872,8 @@ document), so the model could only ask the user to paste a section.
 
 Never let a sibling's text into committed history, the project file or a
 cached block; never resolve a section by anything but the registry join and
-`section_file_path`; never render a sibling with element ids. Tests:
+`section_file_path`; never return a file whose own number or project id is
+not the one asked for; never render a sibling with element ids. Tests:
 `tests/test_project_sections.py`. Full record, reversion evidence and the
 release-note draft are in `docs/as-built.md` under the same heading. No
 paid API call was made.

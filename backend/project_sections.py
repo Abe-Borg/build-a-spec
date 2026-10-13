@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .spec_doc.model import SpecSection, reader_text
-from .spec_doc.project import PROJECT_FORMAT, PROJECT_KIND
+from .spec_doc.project import PROJECT_FORMAT, PROJECT_KIND, sanitize_project_link
 from .spec_doc.project_package import (
     MAX_PACKAGE_BYTES,
     ProjectPackageError,
@@ -181,15 +181,18 @@ def _read_file_bounded(path: str) -> bytes:
     return data
 
 
-def read_section_file(path: str) -> SpecSection:
-    """The current document saved in the ``.baspec`` (or legacy JSON) at ``path``.
+def read_section_file(path: str) -> tuple[SpecSection, str]:
+    """The current document saved in the ``.baspec`` (or legacy JSON) at
+    ``path``, and the project id its own link names (``""`` when the file
+    never joined a project).
 
     ``ValueError`` (``ProjectPackageError`` included) when the file is not
     a readable section; ``OSError`` when it cannot be read at all. The
     caller turns both into a refusal the model can act on.
     """
-    data = _read_file_bounded(path)
-    return load_section_document(read_project_json(data))
+    project = read_project_json(_read_file_bounded(path))
+    link = sanitize_project_link(project.get("project_link"))
+    return load_section_document(project), str((link or {}).get("project_id") or "")
 
 
 def read_project_section(
@@ -261,7 +264,7 @@ def read_project_section(
             "record of that section names a file outside the project folder."
         ) from exc
     try:
-        section = read_section_file(path)
+        section, file_project = read_section_file(path)
     except OSError as exc:
         raise SectionReadRefusal(
             f"section {wanted}'s file could not be read "
@@ -273,8 +276,40 @@ def read_project_section(
             f"section {wanted}'s file is not a readable Build-a-Spec section "
             f"({exc}). Nothing was read; tell the user."
         ) from exc
+    # The registry is data from a file people share and hand-edit, and it
+    # goes stale on its own: a section renumbered and saved to its old file
+    # name leaves the old number's record pointing at the same file. The
+    # resolver proves only that the named file sits in the folder; the file
+    # must also BE the section asked for, of this project (Codex review on
+    # PR #312). A file that never joined a project (saved before its first
+    # brief export) carries no id and is not refused for that — the
+    # registry named it and its number agrees; a file naming another
+    # project's id is another project's.
+    home_project = str(home.get("project_id") or "")
+    if file_project and home_project and file_project != home_project:
+        raise SectionReadRefusal(
+            f"the file the project's registry names for section {wanted} "
+            "belongs to a different project, so it was not read. Tell the "
+            "user: the project brief's record of that section names a file "
+            "from another project (the registry is stale or was edited)."
+        )
+    found = " ".join(section.number.split())
+    if found != wanted:
+        raise SectionReadRefusal(
+            f"the file the project's registry names for section {wanted} "
+            f"holds section {found or '(unnumbered)'} — the registry is "
+            "stale (that section was renumbered, or its file renamed). "
+            "Nothing was read. "
+            + (
+                f"Read {found} instead if that is the section you want, or "
+                if found
+                else ""
+            )
+            + "tell the user to save that section again so the project brief "
+            "lists it correctly."
+        )
     return SectionRead(
-        number=" ".join(section.number.split()) or wanted,
+        number=found,
         title=" ".join(section.title.split()),
         file_name=os.path.basename(path),
         text=reader_text(section),

@@ -22905,6 +22905,23 @@ already does, and the read is modelled on it exactly.
   number is in the refusal's listing. A record naming no file, a file not
   beside the brief, or a name that resolves outside the folder is refused in
   the resolver's own words plus what to tell the user, and nothing is read.
+- **The file must be the section asked for** (Codex review on PR #312, P1:
+  a stale or hand-edited registry can map a number to another section's or
+  another project's file, and the resolver proves only that the named file
+  sits in the folder). `read_section_file` now also returns the project id
+  the file's own link names; `read_project_section` refuses, unread, a file
+  naming a DIFFERENT project's id ("belongs to a different project … the
+  registry is stale or was edited"), and a file whose embedded number is not
+  the one requested ("holds section 21 13 13 — the registry is stale (that
+  section was renumbered, or its file renamed) … Read 21 13 13 instead"). The
+  renumber case is real on its own: `build_project_brief` upserts the
+  registry by number, so a section renumbered and saved to its old file name
+  leaves the old number's record pointing at the same file. A file with no
+  link at all — saved before its first brief export, which joins the folder
+  at its next Save — reads: the registry named it and its number agrees.
+  `open-section` keeps its own posture (it opens such a file and drops the
+  home); the chat read is stricter because the model, not a person, is what
+  acts on the text.
 - **`spec_doc.project_package.read_project_json`** reads the `project.json`
   member alone — bounded as `parse_project_package` bounds it (`getinfo`,
   `MAX_PROJECT_JSON_BYTES`, `_read_member`), legacy JSON projects too — and
@@ -22999,7 +23016,7 @@ registry" line): the registry is the documented contract, as for Open. No
 new SSE event or status strip wording for the read (the status strip shows
 "working" as for any tool). Not the brief: nothing new travels in it.
 
-**Tests** (`tests/test_project_sections.py`, 20): the read returns the
+**Tests** (`tests/test_project_sections.py`, 22): the read returns the
 sibling's text as a reader sees it (labels, statuses, header, file name, no
 ids, no chips); nothing of the sibling but its document reaches the result;
 the read follows the file as saved (a re-save by a throwaway session
@@ -23010,8 +23027,11 @@ a blank number are refused; without a home the tool and the project block
 both say how to make the files reachable; an unlinked session has no other
 sections; the footer follows the home, not the turn, and flips when the
 home is lost; an escape, a missing file and a nameless record are refused
-without reading anything or naming a path; a corrupt or wrong-kind file is a
-correctable error that leaks none of its content; the read is charged to the
+without reading anything or naming a path; a file holding another section
+(the stale record a renumber leaves) is refused naming the section it holds,
+a file of another project is refused unread, and a never-joined file reads;
+a corrupt or wrong-kind file is a correctable error that leaks none of its
+content; the read is charged to the
 budget attachments share, and a refused read charges nothing; the body is
 elided from committed history and an error kept; a sibling cannot close the
 frame or stage reply chips, and the header is neutralized with the body; one

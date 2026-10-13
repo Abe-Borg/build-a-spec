@@ -26,6 +26,7 @@ answer "what does 21 30 00 say". What the tests pin:
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 from dataclasses import replace
@@ -340,6 +341,83 @@ def test_a_missing_file_and_an_escape_are_refused_without_reading_anything(tmp_p
     nameless = _read(live, "21 07 00")
     assert nameless["is_error"] is True
     assert "does not record a file" in nameless["content"]
+
+
+def test_a_file_that_is_not_the_section_asked_for_is_refused_unread(tmp_path):
+    """The registry proves only that a named file sits in the folder. A
+    renumbered section saved to its old file name leaves the old number's
+    record pointing at the same file; a hand-edited brief can name any
+    sibling. The file must BE the section asked for (Codex review on
+    PR #312): refused, naming the section the file holds, and nothing of
+    it is read."""
+    client = _client()
+    live, first_file, _second, home = _two_section_folder(client, tmp_path)
+    link_records = [dict(r) for r in live.project_link["sections"]]
+    _write_brief(
+        tmp_path,
+        BRIEF_NAME,
+        home["project_id"],
+        *link_records,
+        # The stale record a renumber leaves: 21 31 00's old number, same file.
+        _record("21 31 00", "Renumbered", exported_at="2030-01-01T00:00:00+00:00", file_name=first_file.name),
+    )
+
+    stale = _read(live, "21 31 00")
+
+    assert stale["is_error"] is True
+    assert "holds section 21 13 13" in stale["content"]
+    assert "Read 21 13 13 instead" in stale["content"]
+    assert "Nothing was read" in stale["content"]
+    assert BODY_MARKER not in stale["content"]
+    # The section it does hold still reads.
+    assert not _read(live, "21 13 13").get("is_error")
+
+
+def test_a_file_of_another_project_is_refused_and_a_never_joined_one_is_read(tmp_path):
+    """A file naming another project's id is another project's, whatever
+    the registry says — refused unread. A file with no link at all is a
+    section saved before its first brief export (it joins the folder at its
+    next Save); the registry named it and its number agrees, so it reads."""
+    client = _client()
+    live, first_file, _second, home = _two_section_folder(client, tmp_path)
+
+    def _sibling_file(name: str, number: str, link, marker: str):
+        state = SessionState()
+        load_project(parse_project_file(first_file.read_bytes()).project, state)
+        state.doc.begin_turn()
+        state.apply_doc_edits(
+            [
+                {"action": "replace", "target_id": "sec", "text": "Standpipes", "numbering": number},
+                {"action": "add_paragraph", "target_id": "pt2.a1", "text": marker, "status": "assumed"},
+            ]
+        )
+        state.doc.commit_turn()
+        state.project_link = link
+        path = tmp_path / name
+        path.write_bytes(sessions.project_package(state)[0])
+        return path
+
+    foreign_link = {**copy.deepcopy(live.project_link), "project_id": "f" * 32}
+    foreign = _sibling_file("21 12 00.baspec", "21 12 00", foreign_link, "Foreign project hose valves.")
+    unjoined = _sibling_file("21 14 00.baspec", "21 14 00", None, "Never-joined hose valves.")
+    link_records = [dict(r) for r in live.project_link["sections"]]
+    _write_brief(
+        tmp_path,
+        BRIEF_NAME,
+        home["project_id"],
+        *link_records,
+        _record("21 12 00", "Standpipes", exported_at="2030-01-01T00:00:00+00:00", file_name=foreign.name),
+        _record("21 14 00", "Standpipes", exported_at="2030-01-01T00:00:00+00:00", file_name=unjoined.name),
+    )
+
+    refused = _read(live, "21 12 00")
+    assert refused["is_error"] is True
+    assert "belongs to a different project" in refused["content"]
+    assert "Foreign project hose valves." not in refused["content"]
+
+    read = _read(live, "21 14 00")
+    assert not read.get("is_error"), read["content"]
+    assert "Never-joined hose valves." in read["content"]
 
 
 def test_a_corrupt_sibling_file_is_a_correctable_error_not_a_turn_failure(tmp_path):

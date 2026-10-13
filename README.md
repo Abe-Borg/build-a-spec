@@ -216,6 +216,35 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — a moved provision keeps its subparagraphs
+
+(2026-10-13, step 5 of the prompt-review follow-up. docs/as-built.md's "A
+relocation lands whole or not at all" is the record; in the next release.)
+
+When the assistant moved a provision to a different PART, article or parent
+paragraph, it had to delete the original — taking its subparagraphs with it
+— and add them back under the new copy in a later step. A Stop, a reply cut
+off for length, or a forgotten second step in between kept the first half
+and lost the subparagraphs under the provision.
+
+- **One step now.** The assistant has a `relocate` operation that moves an
+  article or paragraph and everything under it to its new place in a single
+  edit, with every provision's words, status and source chip unchanged. It
+  lands whole or not at all; there is no in-between to lose.
+- **New numbers, same history.** The moved provisions get new ids (an id
+  names its parent), and each keeps its "why" trail, plus the reason for
+  the move. A Waiting on you question linked to a moved provision follows
+  it.
+- **The redline shows the original deleted and the copy inserted**, each with
+  its comment, as before.
+- **Final QC is unchanged in what it can do.** A Final QC fix that would
+  move a provision with subparagraphs still stays advisory: it is listed for
+  you to act on, never applied by itself.
+
+The writing policy that drafting and Final QC share changed (version 2), so a
+retained Final QC result reads stale once and needs a re-run, and open chat
+sessions rewrite their cached prompt once. No paid API call was made.
+
 ## Current Status — only you confirm a provision
 
 (2026-10-13, step 4 of the prompt-review follow-up; owner decision. docs/as-

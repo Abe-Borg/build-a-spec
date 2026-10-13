@@ -377,6 +377,20 @@ class FollowUpStore:
         item.resolved_at = ""
         return True
 
+    def remap_elements(self, id_map: dict[str, str]) -> int:
+        """Point items at a relocated provision's new id; return how many moved.
+
+        A ``relocate`` edit gives the provision and everything under it new
+        ids. Turn-atomic like every other write here: a rolled-back turn puts
+        the old links back with the document."""
+        moved = 0
+        for item in self.items:
+            new = id_map.get(item.element_id) if item.element_id else None
+            if new:
+                item.element_id = new
+                moved += 1
+        return moved
+
     def _trim_resolved(self) -> None:
         resolved = [item for item in self.items if item.status == "resolved"]
         excess = len(resolved) - MAX_RESOLVED_KEPT

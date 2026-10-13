@@ -217,6 +217,7 @@ export interface DocOp {
     | "add_article"
     | "add_paragraph"
     | "move"
+    | "relocate"
     | "replace"
     | "delete"
     | "set_status"
@@ -234,6 +235,11 @@ export interface DocOp {
   restored?: boolean;
   position?: number;
   previous_position?: number;
+  /** relocate: the element's id before the move, its new parent, and every
+   *  old id under it mapped to its new one (``id`` is the new id). */
+  previous_id?: string;
+  parent_id?: string;
+  id_map?: Record<string, string>;
   /** The assistant's brief reason for this op (every model edit carries
    *  one; a manual panel edit none). */
   reason?: string;

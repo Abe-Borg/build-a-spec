@@ -22850,3 +22850,136 @@ anyone looking at it. A project fact marked assumed is no longer treated as
 settled: the assistant raises it with you once when a provision depends on
 it. Expect more assumed blocks to review after a full draft on a researched
 project."
+
+## A relocation lands whole or not at all — implemented notes (2026-10-13)
+
+Step 5 of the prompt-review follow-up (an outside review Abraham forwarded,
+checked against the code). The review's point 10: "Part 0 instructs the
+model to add a replacement parent and delete the original in one batch, then
+recreate its children afterward. If the later call fails, nested obligations
+could be lost. Prefer an atomic subtree relocation … This requires checking
+the backend behavior, not just adjusting prose."
+
+Checked against the code. Writing policy v1's relocation rule: "add it at its
+new location and delete the original in one batch, carrying its text,
+status, and source_item_id unchanged; re-add its subparagraphs under the
+returned id in the same turn." `move` cannot reparent (an id names its
+parent: `pt1.a2.p3`), and new ids are server-assigned, so the subparagraphs
+could only come back in a second batch. A failed batch loses nothing (it is
+refused whole), and a failed turn rolls back. What did lose them: a user
+Stop or a `max_tokens` cut landing between the two batches — both commit
+what already landed, by design — or a model that forgot the second step.
+
+- **`relocate`** (`backend/spec_doc/model.py`, `_relocate`; registered in
+  `_ACTIONS` after `move`). `target_id` an article with `parent_id` a part,
+  or a paragraph with `parent_id` an article (top level) or a paragraph (to
+  nest); optional `position`, a 0-based index among the new siblings; no
+  other field (`text`, `status` … are refused: everything travels
+  unchanged). The copy is built (`_copy_paragraphs`) and inserted before the
+  original is removed, inside one op inside the batch's one transaction
+  (`apply_edits` works on a deep copy and swaps on success), so there is no
+  state, committed or not, with the obligations missing. New ids: the root
+  takes the destination's `next_seq`, its children are numbered from 1 under
+  it with `next_seq` set past them, so the tree passes `from_dict`'s id and
+  counter checks (pinned by a save/load round trip). The record: `id` (the
+  new root), `previous_id`, `parent_id`, `id_map` (every old id → its new
+  one, root first).
+- **Refusals**, each saying the way out: a part or `sec` (nothing to
+  relocate), the current parent ("use move to reorder it there"), a
+  destination inside the moved subtree, an article to a non-part or a
+  paragraph to a part, nesting past `MAX_PARAGRAPH_DEPTH` counting the
+  subtree's own height (`_subtree_height`), preserved Word content anywhere
+  in the subtree or as the destination (`locked`: its identity is its id).
+- **Reasons.** Each old uid's `edit_reasons` and `workflow_reasons` trail is
+  copied to its new uid, then the relocation's reason is recorded on every
+  new AND old uid (`done(…, *new, *old, resets=True)` — the delete path's
+  shape, so the redline's deletion comment says why too). A reason-less
+  relocation (a hand edit through `/api/doc/edit`) drops both trails, as a
+  hand move or delete does.
+- **References.** `SessionState.apply_doc_edits` — the one entry point for
+  model and manual batches — re-points follow-ups after a relocation
+  (`FollowUpStore.remap_elements(id_map)`); the store is turn-atomic, so a
+  rolled-back turn puts the old links back with the document (pinned). A
+  document undo does not touch follow-ups (as for every other follow-up
+  change). Text references to the old number ("Paragraph 1.1.A") are still
+  the `unresolved_reference` lint's to report. The redline shows the original
+  deleted and the copy inserted, each with its comment (`diff_sections`
+  reports `deleted`/`inserted`; `build_docx` renders it — pinned). The
+  panel's `doc_patch` handler lights every id in `id_map`
+  (`frontend/src/App.tsx`; `DocOp` gains `relocate`, `previous_id`,
+  `parent_id`, `id_map`).
+- **The imported-source gate needed nothing.** `validate_source_transition`
+  judges the proposed final document, never an op name ("callers must not
+  authorize structural operations from their action names alone"), so a
+  relocation in source-preserving mode is refused or allowed exactly as the
+  add-plus-delete it replaces would be.
+- **What the model is told.** `parent_id`'s schema description (relocate
+  only; one step; `id_map`; use it for every relocation) and `_TOOL_GUIDE`
+  ("To put a provision under a different PART, article or parent paragraph,
+  use relocate … see the writing policy's relocation rule"). The tool's
+  top-level description is deliberately unchanged: Final QC's lenses read it
+  as their op vocabulary, and `QC_OP_ACTIONS` has no relocate (the
+  every-edit-carries-a-reason precedent). Writing policy v2
+  (`WRITING_POLICY_VERSION = 2`, hash re-pinned): "To relocate a provision
+  to a different PART, article, or parent paragraph, use one relocate
+  operation: it carries the provision and everything under it — text,
+  status, and source_item_id unchanged — and assigns new ids. Where relocate
+  is not available, add the provision at its new location and delete the
+  original in one batch, carrying the same; never delete a provision with
+  subparagraphs before its replacement and every subparagraph exist." The
+  second sentence is Final QC's: a leaf relocation as add plus delete stays
+  a valid QC fix (`obligations.relocation_problems` checks its anchors), and
+  a nested one stays advisory, as it was. Adding relocate to Final QC's
+  vocabulary (strict schema, `op_conflicts` write keys, the apply planner)
+  is a separate change, not made here.
+- **Bytes that changed once.** The stable prompt (`_TOOL_GUIDE` and the
+  policy rendering) and the edit tool's input schema (`action` enum, the
+  `parent_id` property): every open session rewrites its cached prefix once.
+  The writing policy is in the QC input manifest, so every retained Final QC
+  result reads stale once (`docs/writing-policy.md` updated: header, rule 7,
+  the reconciliation row, the capability gaps).
+- **Unchanged.** `move`, every other op, the QC schema, apply path and
+  planner, readiness, the SSE protocol (no new event), saved projects (no
+  new field: a relocated tree is an ordinary tree).
+
+Tests: `tests/test_relocate.py` (26): a paragraph to another PART with its
+three levels (words, statuses, source links, order, `id_map`, save/load,
+input untouched); an article to another PART; nesting at a position; ids
+never reused on a round trip; eleven refusals with their messages; depth
+counted over the subtree (refused one level too deep, accepted at the
+limit); preserved content as subtree and destination; a batch with a
+relocation and a bad op leaves the provision where it was; reason trails
+copied plus the relocation's on both sides; a hand relocation drops them;
+the redline's deletion and insertion; a chat turn re-pointing a follow-up and
+returning `id_map`; a rolled-back turn restoring the link and the tree; the
+policy, the tool guide and the schema wording; Final QC's vocabulary and the
+top-level description without relocate. `tests/test_writing_policy.py`
+pins the v2 hash and the new brief-rule words; `tests/test_writing_policy_eval.py`
+the v2 label. Every test file that reads the edit tool, the op vocabulary,
+the policy or the follow-ups passes (1,783, 1 skipped); `npm test` (570) and
+`npm run build` pass.
+
+Revert matrix (`tests/test_relocate.py` and `tests/test_writing_policy.py`
+each time; each reverted in place and restored): relocate not registered →
+22 red; the original not removed → 2; children not copied → 4; status not
+carried → 2; source link not carried → 1; the depth check off by one → 1;
+the cycle check removed → 2; the preserved-content check removed → 1; the
+same-parent check removed → 1; extra fields accepted → 2; reason trails not
+copied → 1; follow-ups not re-pointed → 1; the policy rule reverted → 2; the
+tool guide reverted → 1; the `parent_id` description reverted → 1. 15 of 15
+caught. The panel's subtree highlight has no test (it is in `App.tsx`'s
+event switch).
+
+No paid API call was made; how reliably the live model reaches for relocate
+instead of add plus delete is unmeasured until the owner runs one.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Drafting", item "A moved provision keeps its subparagraphs":
+"When the assistant moves a provision to a different PART, article or
+parent paragraph, it now does it in one step that carries every subparagraph
+under it, with the same words, status and source chips. Before, it deleted
+the original and added the subparagraphs back afterward, and stopping the
+reply in between could lose them. A Waiting on you question about a moved
+provision follows it. Retained Final QC results read stale once after
+updating."

@@ -304,6 +304,13 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **A moved provision keeps its subparagraphs (next release).** Ask the
+      assistant to move a provision that has subparagraphs to another PART
+      (e.g. a test requirement from PART 1 to PART 3). It lands in one edit
+      with every subparagraph under it, the same words and status chips, and
+      the original is gone. If a Waiting on you item pointed at a
+      subparagraph, clicking it still finds the provision. Undo: the
+      provision and its subparagraphs return to where they were.
 - [ ] **Only you confirm a provision (next release).** On a section with a
       completed research round, press Draft full section: provisions with a
       ◆ research chip land stamped assumed (amber), not confirmed, and show

@@ -1276,7 +1276,13 @@ class SessionState:
             # preservation gate have accepted the whole transaction.
             candidate, _candidate_ops = apply_edits(self.doc.doc, edits)
             self.validate_source_backed_candidate(candidate)
-        return self.doc.apply_edits(edits)
+        applied = self.doc.apply_edits(edits)
+        for record in applied:
+            if record.get("action") == "relocate":
+                # A relocated provision has new ids; its waiting question
+                # follows it (prompt-review follow-up, step 5).
+                self.followups.remap_elements(record.get("id_map") or {})
+        return applied
 
     def _active_source_scope(self) -> bool:
         """Whether current body mutations require source preservation.

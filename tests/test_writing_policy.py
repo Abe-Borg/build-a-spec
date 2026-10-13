@@ -54,6 +54,9 @@ _PINNED_CORE_SHA256 = {
     2: "3333716642e49570dfc30b720098779c27d2f242adefdc8e1c6ed84ab97276cc",
     # Statements are specification text; scope qualifiers stay (step 6).
     3: "f12ff5ace80eaccdeb62679601084797781141adbcb2c501f6376af906467882",
+    # Writing around a gap names the Drawings only for what they show, and
+    # never hands the engineer of record's criteria to a submittal.
+    4: "32bb8324f3a9d784289f3823719ffb3346389252bf5446461674740c7a6c82ec",
 }
 
 _HEADER = "# Specification writing policy"

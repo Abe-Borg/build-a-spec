@@ -394,10 +394,15 @@ CONTEXT_BOUNDARY_PATTERN = re.compile(
     r"(?<!=)={2,}\s*(?:END\s+)?PROJECT\s+(?:CONTEXT|BACKGROUND)\b[^\n=]*={2,}",
     re.IGNORECASE,
 )
+# The name must end at whitespace, "/" or ">" (``(?=[\s/>])``), not at a
+# word boundary: "-", ":" or "." would end it there, and a longer tag
+# such as "<ledgers-note>" is another tag that passes through byte for
+# byte (Codex review on PR #314, applied here in the prompt-review
+# follow-up).
 _FRAME_TAG_PATTERN = re.compile(
     r"<\s*(/?)\s*("
     + "|".join((SUMMARY_FRAME_TAG, RECALL_FRAME_TAG, LEDGERS_FRAME_TAG))
-    + r")\b[^>]*>",
+    + r")(?=[\s/>])[^>]*>",
     re.IGNORECASE,
 )
 
@@ -466,7 +471,12 @@ def view_spec_for(record: CompactionRecord | None) -> ViewSpec | None:
         "message, those are current. The full text of those turns is kept — "
         "before relying on an exact detail from them "
         "(a number, a wording, the reason for a decision), call "
-        "recall_conversation to read it word for word."
+        "recall_conversation to read it word for word. A decision the "
+        "summary records is a record, not the user's confirmation: stamp a "
+        "provision confirmed on its strength only when the summary says the "
+        "user stated or approved it, quoting their words; otherwise — a "
+        "default, or a settler not recorded — read the turn with "
+        "recall_conversation, or ask."
     )
     return ViewSpec(
         keep_from=record.keep_from,
@@ -659,6 +669,17 @@ def summary_instruction(
         "explanations and reasoning can be condensed much further, to what "
         "they concluded or produced — as long as nothing in the six items "
         "above is dropped.\n\n"
+        "Say who settled every decision, preference and established fact "
+        "you record: the user stated it, the user approved something you "
+        "proposed, or it is your default the user let stand without saying "
+        "yes. When you cannot tell — an earlier summary you are carrying "
+        "records it without saying, and the turn itself is not in front of "
+        "you — write \"settler not recorded\" and keep its turn number; "
+        "never guess. Quote the user's own words, a short exact phrase, when "
+        "they gave any. Never write a default the user let stand as agreed, "
+        "approved, confirmed or decided: a later turn reads this summary "
+        "instead of the conversation, and must not take your default for "
+        "the user's word.\n\n"
         "Do not restate the specification document, the project facts, the "
         "items waiting on the user, the research findings or the Final QC "
         "review: each arrives fresh with every message, and a copy here "
@@ -667,9 +688,11 @@ def summary_instruction(
         "are missing\", list each decision or established fact from the part "
         "you are summarizing that the project facts below do not already "
         "record, one per line, each starting with the turn it was settled in "
-        "(for example \"- turn 12: the AHJ adopted NFPA 13-2022\"; turns are "
-        "numbered from 1, one per message the user sent); write \"None.\" if "
-        "there are none.\n\n"
+        "and who settled it (for example \"- turn 12, the user stated: 'the "
+        "city adopted NFPA 13-2022'\" or \"- turn 15, your default, let "
+        "stand: quick-response sprinklers throughout\"; turns are numbered "
+        "from 1, one per message the user sent); write \"None.\" if there "
+        "are none.\n\n"
         f"<{LEDGERS_FRAME_TAG}>\n{neutralize_compaction_frames(ledgers)}\n"
         f"</{LEDGERS_FRAME_TAG}>\n\n"
         "Do not call any tools while writing this summary, and do not end it "

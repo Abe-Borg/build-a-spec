@@ -57,6 +57,12 @@ nobody re-opens them by accident:
   commentary, not statements. And a qualifier that defines where a
   requirement applies is scope to keep, which the "never explain where a
   requirement comes from or why it applies" rule could be read to strike.
+- Version 4 (2026-10-13, prompt-review follow-up, the small leftovers):
+  "write around it: … a reference to the Drawings or to a submittal" let a
+  missing value become a pointer to drawings that might not carry it, or
+  push the engineer of record's own design criteria onto the Contractor as
+  a submittal. The Drawings are named only for what the user has said they
+  show; delegated design the section assigns on purpose is unchanged.
 """
 from __future__ import annotations
 
@@ -65,7 +71,7 @@ from dataclasses import dataclass
 from typing import Any
 
 WRITING_POLICY_ID = "spec-writing"
-WRITING_POLICY_VERSION = 3
+WRITING_POLICY_VERSION = 4
 WRITING_POLICY_LABEL = f"{WRITING_POLICY_ID}/{WRITING_POLICY_VERSION}"
 
 
@@ -213,9 +219,15 @@ SECTIONS: tuple[PolicySection, ...] = (
             "with the Owner\", no reminders. Those belong in chat or on the "
             "Waiting on you list.",
             "When a value is missing, write around it: a performance "
-            "requirement, a reference to the Drawings or to a submittal, or "
-            "the clause left out until the answer arrives. Then ask for the "
-            "value with track_followups.",
+            "requirement, or the clause left out until the answer arrives. "
+            "Then ask for the value with track_followups. Refer to the "
+            "Drawings or a schedule only for information the user has said "
+            "they show. Never hand the design criteria the engineer of "
+            "record owns (for a sprinkler system: hazard classification, "
+            "design density and area, water supply basis) to the Contractor "
+            "as a submittal; delegated design the section assigns on purpose "
+            "(working plans, hydraulic calculations, seismic bracing) is not "
+            "that.",
             "A qualifier that defines where a requirement applies (\"in data "
             "halls\", \"where piping passes through rated assemblies\") is "
             "scope, not explanation: keep it.",

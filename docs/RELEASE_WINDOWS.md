@@ -304,6 +304,14 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **The prompt review's small leftovers (next release).** In a long
+      chat, open View summary after it condenses: each decision says who
+      settled it (you, your approval, or a default you let stand) and
+      quotes you. Leave a value unknown: the assistant writes a performance
+      requirement or leaves the clause out and asks, and does not write
+      "as indicated on the Drawings" or "submit the hazard classification".
+      Generalize a section with AI: no "as indicated on the Drawings"
+      appears that the section did not already have.
 - [ ] **A "pending" hold point no longer blocks issue (next release).**
       Add "Do not fabricate piping pending acceptance of shop drawings." to
       a section with nothing else flagged: the Issues list shows it with a

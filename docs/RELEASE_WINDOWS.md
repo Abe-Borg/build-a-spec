@@ -304,6 +304,13 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **Six small wording fixes (next release).** Ask the assistant "explain
+      why the hydrostatic test is two hours": it answers in chat and the
+      document does not change. On a normal drafting turn the reply asks at
+      most three questions, and a chip that accepts a recommendation names
+      it ("Use your recommended …"). Run Final QC on a section with a
+      DEFINITIONS article or a "This Section includes…" paragraph: the
+      language reviewer does not flag them for lacking "Provide…".
 - [ ] **A moved provision keeps its subparagraphs (next release).** Ask the
       assistant to move a provision that has subparagraphs to another PART
       (e.g. a test requirement from PART 1 to PART 3). It lands in one edit

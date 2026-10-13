@@ -122,4 +122,4 @@ def test_the_offline_report_sends_nothing_and_compares_with_the_baseline(monkeyp
 def test_the_cli_prints_the_offline_report(capsys):
     assert evaluator.main([]) == 0
     printed = json.loads(capsys.readouterr().out)
-    assert printed["current"]["policy"]["label"] == "spec-writing/2"
+    assert printed["current"]["policy"]["label"] == "spec-writing/3"

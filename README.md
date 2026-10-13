@@ -216,6 +216,44 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — six small wording fixes
+
+(2026-10-13, step 6 of the prompt-review follow-up. docs/as-built.md's "Six
+small wording fixes from the prompt review" is the record; in the next
+release.)
+
+Each was a rule the assistant or Final QC could read two ways:
+
+- **Statements are specification text.** The writing rules said "directives
+  only", and Final QC's language reviewer looked for "Provide…/Install…"
+  everywhere. Definitions, REFERENCES entries, schedules, product properties
+  and criteria, and scope statements ("This Section includes…") are now named
+  as ordinary specification text that needs no command form. Commentary — the
+  reason for a requirement, its history, who decided it — is still banned.
+- **Scope wording stays.** A phrase that defines where a requirement applies
+  ("in data halls", "where piping passes through rated assemblies") is scope,
+  not explanation. Final QC no longer flags it; it still flags an account of
+  why a requirement applies or which adoption brought it in.
+- **One question budget.** At most three questions in a reply, counting the
+  one Waiting on you item it brings back, and none when nothing useful is
+  left to ask. The full-draft and adapt passes follow the same budget
+  instead of "2–3 questions" on top of the waiting item.
+- **Reply chips say what they accept.** "Use your recommended default" said
+  nothing after several questions; a chip now names it ("Use your
+  recommended pipe schedule"), and "I don't know — use your default" names
+  the question it answers.
+- **Asking for an explanation doesn't edit the spec.** When you ask the
+  assistant to explain, review, compare or advise, it answers in chat and
+  leaves the document alone unless you ask for a change or approve one.
+- **Attached documents and project facts can't fake their wrapper** with a
+  tag that carries attributes, the same guard steps 2 and 3 gave the
+  standards and research blocks.
+
+The writing policy changed (version 3), and so did Final QC's language
+reviewer, so a retained Final QC result reads stale once and needs a re-run.
+Open chat sessions rewrite their cached prompt once. No paid API call was
+made.
+
 ## Current Status — a moved provision keeps its subparagraphs
 
 (2026-10-13, step 5 of the prompt-review follow-up. docs/as-built.md's "A

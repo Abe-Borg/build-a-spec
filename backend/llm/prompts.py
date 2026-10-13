@@ -27,11 +27,13 @@ from ..spec_modules import SpecModule
 _HOW_YOU_WORK = """\
 # How you work
 
-A live specification document sits beside this chat. You never write spec language in chat — every provision goes into the document through the apply_spec_edits tool. Each turn:
+A live specification document sits beside this chat. You never write spec language in chat — every provision goes into the document through the apply_spec_edits tool. Each turn that moves the draft:
 
 1. Absorb what the user told you and fold it into the draft.
 2. Make every tool call the turn needs first: any lookups or reads, then apply_spec_edits (one batched call where possible) to add or revise the affected articles and paragraphs, then whatever else the turn calls for (create_figure, track_followups, record_project_facts).
-3. After your final tool call, write your reply: briefly say what changed in the document, then ask the next most important follow-up questions — at most 3 per turn, each with your recommended answer — and end it with your suggested replies (see "Suggested replies" below). Never restate drafted spec text in chat; the panel shows it.
+3. After your final tool call, write your reply: briefly say what changed in the document, then ask the next most important follow-up questions — at most three per turn, counting the waiting item you surface (see "Waiting on you"), each with your recommended answer, and none when no useful question remains — and end it with your suggested replies (see "Suggested replies" below). Never restate drafted spec text in chat; the panel shows it.
+
+When the user asks you to explain, review, compare or advise rather than change the draft, answer that in your reply and leave the document alone: edit it only when they ask for a change or approve one you proposed. Such a turn needs no edit and no new question, though it may still surface the waiting item and stage suggested replies.
 
 Write the reply last, after the final tool call, because anything longer than a sentence or two that you write between tool calls reaches the user only as a brief, collapsed progress line and is not kept in the conversation. What changed, your questions, your recommended answers and the suggested replies belong in that closing message. A short progress note between tool calls is still welcome.
 
@@ -70,18 +72,19 @@ _SUGGESTED_PROMPTS_POLICY = """\
 
 You can offer up to five one-tap reply chips — short messages, shown just above the composer, that the user sends by clicking instead of typing. Stage them at the very end of your closing message, after everything else in it, as one block on a line of its own, in plain text rather than a code block: the tag <suggested_replies>, a JSON array of strings, then </suggested_replies>. For example:
 
-<suggested_replies>["Use your recommended default", "Yes, ESFR at the ceiling only", "I don't know — use your default"]</suggested_replies>
+<suggested_replies>["Use your recommended pipe schedule", "Yes, ESFR at the ceiling only", "I don't know the ceiling height — use your default"]</suggested_replies>
 
 The app takes the block out of what the user sees and shows its entries as chips. So write nothing after it, never mention or describe it, and never write that tag for anything else. At most one block per turn. The chips are the clickable answers to the questions your closing message asks, so ask the questions first and stage their answers last. Each turn's block replaces last turn's chips entirely, and a reply without one clears the bar — silence is a valid, meaningful signal, and an empty array says the same thing explicitly. Do not call the suggest_prompts tool: it is retired, and a call stages nothing.
 
-- Write every chip in the USER'S voice as a complete, sendable reply: "Use your recommended default", "Draft PART 2 now", "Yes, ESFR at the ceiling only". Never a fill-in-the-blank template, never a question, never spec text.
-- Answers first: when your closing message asks questions, lead with direct answers to them — your recommended answer, a plausible alternative or two, and an "I don't know — use your default" option. Add momentum moves (continue drafting, move to the next topic) only in the remaining slots.
+- Write every chip in the USER'S voice as a complete, sendable reply: "Use your recommended pipe schedule", "Draft PART 2 now", "Yes, ESFR at the ceiling only". Never a fill-in-the-blank template, never a question, never spec text.
+- A chip that accepts a recommendation or a default names what it accepts. "Use your recommended default" says nothing once the reply asks more than one question: write "Use your recommended pipe schedule" instead.
+- Answers first: when your closing message asks questions, lead with direct answers to them — your recommended answer, a plausible alternative or two, and an "I don't know — use your default" option that names the question it answers when you ask more than one. Add momentum moves (continue drafting, move to the next topic) only in the remaining slots.
 - Offer a concrete value ("The ceiling height is 32 ft") only when that value is already established by the user, the profile, or grounded research — never invent a number for the user to rubber-stamp.
 - Suggest only things sayable in chat that you can act on next turn. STARTING research runs or Final QC, exporting, undo, and saving are panel buttons — never chips. Approving or declining proposed changes after a research or Final QC debrief IS chat-actionable ("Yes — apply the proposed changes"), and those approval chips are exactly right. So is answering the tracked item you are surfacing this turn — a chip that settles something on the "Waiting on you" list is the best use of a slot there is. Don't re-suggest anything already done or answered.
 - Keep chips glanceable: aim under ~60 characters (120 is the hard cap), no numbering or "Option A:" prefixes.
 - Keep the block valid JSON — every chip in straight double quotes, any double quote inside a chip escaped — with at most five chips. A block that breaks these rules is dropped whole, and the user gets no chips that turn.
 - Wind down honestly. As the section nears issue-ready — open items resolved, statuses reviewed, lint clean — drop to one or two genuinely useful chips, or none. A full bar on a finished section is noise, not help.
-- After a full-section draft pass, the chips ARE the clickable answers to the 2-3 follow-up questions you close with."""
+- After a full-section draft pass, the chips ARE the clickable answers to the follow-up questions you close with."""
 
 _FOLLOWUP_POLICY = """\
 # Waiting on you — tracking what you need from the user
@@ -91,7 +94,7 @@ The track_followups tool keeps a running list of what you are waiting on the use
 - Track three things and only these: a QUESTION you asked that the user has not answered, a DECISION that is genuinely theirs to make, and a TODO that one of you owes the other. Everything else stays out.
 - Every unknown the draft depends on is tracked HERE, never in the document. Write the provision so it stands complete without the answer, stamp it assumed, and add the question here with element_id set to that provision. When the answer arrives, revise the provision and resolve the item in the same turn.
 - Resolve in the same turn a thing is settled — the user answers, a decision is made, the to-do is done, or the item became moot because the scope changed. Write the resolution as one line the user will recognize ("Class IV, cartoned unexpanded plastics"), not "resolved". An item that no longer applies is resolved saying why, never left to rot.
-- Every turn, surface exactly ONE waiting item — the one marked [NEXT] in the context block — in your reply or as a suggested-reply chip. Work it into what you are already saying; never dump the list, never raise a second, and never open with an apology for asking again. If your reply already raises or settles one of these, that counts: do not add another on top.
+- Surface one waiting item per turn — the one marked [NEXT] in the context block — in your reply or as a suggested-reply chip; it counts as one of the turn's at most three questions. Work it into what you are already saying; never dump the list, never raise a second, and never open with an apology for asking again. If your reply already raises or settles one of these, that counts: do not add another on top.
 - Mark blocking only when the draft cannot be correct until you have the answer — not merely when it matters. A clause you left out until the answer arrives is blocking. A blocking item holds the section's issue-readiness checklist until it is settled, and blocking items are surfaced first, so over-using the flag makes it meaningless.
 - When an item was ticked off in the panel with no note, the user settled it without telling you what they decided. Do not invent the decision. Carry on if it no longer affects the draft; ask once, plainly, if it does."""
 
@@ -271,10 +274,10 @@ Draft the COMPLETE section now — the full first pass, top to bottom.
 - Lay down every PART and every article this section conventionally carries (per the section catalog where this module carries one — otherwise per the discipline's conventional section structure — and the interview playbook), plus anything the project's known facts call for. Structure first, then flesh each article out.
 - Use everything already established: my interview answers, the project profile, the standards editions in effect, the grounded research items, the established project facts, and any reference documents I have attached (read them first — do not draft around them). Draft to them — and when a provision derives from a research item, an attached document, or an established project fact, tag it with that item's, document's, or fact's source_item_id.
 - Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed), and assumed for whatever you drew from research, an attached document or a project fact I did not state myself — its source chip says where it came from, and I'll confirm it in review. Where a provision depends on a value you do not have, write it so it stands complete without that value, stamp it assumed, and ask me for the value with track_followups — never a [TBD], a placeholder, or a note in the document. Over-flag with the assumed stamp rather than silently guess — I'll walk the assumptions afterward.
-- Write every provision in specification voice and place each requirement by function, as the writing policy says: directives to the Contractor, no explanation of where a requirement comes from or why it applies, and REFERENCES entries carrying only designation, title, and edition.
+- Write every provision in specification voice and place each requirement by function, as the writing policy says: requirements stated plainly — directives to the Contractor, and definitions, schedules, product criteria and scope statements where the section needs them — no explanation of where a requirement comes from or why it applies, and REFERENCES entries carrying only designation, title, and edition.
 - Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
 - {_CARRY_THE_PASS_THROUGH}
-- When the last edit is in, close with a short summary in chat plus your 2–3 highest-value follow-up questions, with suggested replies that answer them. {_REPLY_AFTER_TOOL_CALLS}"""
+- When the last edit is in, close with a short summary in chat plus your highest-value follow-up questions — at most three, counting the waiting item you surface — with suggested replies that answer them. {_REPLY_AFTER_TOOL_CALLS}"""
 
 
 # --- Full-draft prerequisites ---------------------------------------------
@@ -549,7 +552,7 @@ Walk the ENTIRE imported starter against THIS project now — the full gap-and-a
 - If PROJECT CONTEXT carries an IMPORTED DOCX EDITING BOUNDARY block, obey it: batch only IDs it lists as editable (one operation per call when unsure), never attempt its categorical no-gos, and where it blocks an adaptation this project needs, tell me what the panel's "Edit freely" action would unlock rather than silently skipping it.
 - Keep each apply_spec_edits call to a sensible size (roughly an article at a time) so I can watch the pass move through the document.
 - {_CARRY_THE_PASS_THROUGH}
-- When the last edit is in, close with a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus your 2-3 highest-value follow-up questions, with suggested replies that answer them. {_REPLY_AFTER_TOOL_CALLS}"""
+- When the last edit is in, close with a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus your highest-value follow-up questions — at most three, counting the waiting item you surface — with suggested replies that answer them. {_REPLY_AFTER_TOOL_CALLS}"""
 
 
 def adapt_imported_directive(prereqs: DraftPrerequisites) -> str:

@@ -254,6 +254,51 @@ reviewer, so a retained Final QC result reads stale once and needs a re-run.
 Open chat sessions rewrite their cached prompt once. No paid API call was
 made.
 
+## Current Status — the assistant reads the project's other sections
+
+(2026-10-13, owner request. docs/as-built.md's "The assistant reads the
+project's other sections on demand" is the record; in the next release.)
+
+When a project is drafted section by section, the assistant used to see only
+the other sections' titles and article names — enough to know fire pumps are
+21 30 00's, not enough to avoid duplicating a provision, cross-reference one
+exactly, or answer "what does 21 30 00 say about the jockey pump?" without
+asking you to paste it. Now it reads them.
+
+- **Ask about another section, or let it check.** "Does 21 13 13 already
+  cover the pipe material?", "make sure we don't duplicate 21 30 00", "cross-
+  reference the fire pump controller paragraph" — the assistant reads that
+  section's saved file by number and answers from its text. Before drafting
+  near another section's scope it reads the section rather than guessing, and
+  when two sections specify the same thing it says which section and which
+  paragraph and lets you decide which keeps it. It never copies a sibling's
+  provision into the open section, and it cannot edit the other section —
+  what that one needs changed, it tells you.
+- **The same file the Project panel opens.** The read goes to the section's
+  saved `.baspec` beside the project brief, found by number through the same
+  registry lookup the panel's **Open** uses (a file name that resolves outside
+  the folder is refused). So it is the section **as last saved** — save a
+  section before asking about it from another — and only its document: never
+  that section's conversation, research, facts or figures. Nothing new travels
+  in a brief.
+- **Read on request, so it stays cheap.** Like an attached reference document,
+  a section's text reaches the assistant only in the turn that asked for it,
+  shares that turn's reading budget with attachments, and is removed from the
+  stored conversation afterwards — so the project file never carries a copy of
+  another section, and a section is paid for when it is read, not on every
+  later message.
+- **Desktop only, in the project folder.** A section whose own file is saved
+  beside its project brief can read the others; a browser session, or a
+  section saved elsewhere, cannot, and the assistant is told so up front
+  (it says once that saving the section beside its brief would let it read
+  them). The Project panel's "file not found beside the brief" row is a
+  section the assistant cannot read either.
+
+The stable prompt gained a short block on the other sections, and the tool
+list one entry, so every open chat session rewrites its cached prompt once.
+Saved files, the brief format, Final QC, readiness and every export are
+unchanged. No paid API call was made.
+
 ## Current Status — a moved provision keeps its subparagraphs
 
 (2026-10-13, step 5 of the prompt-review follow-up. docs/as-built.md's "A
@@ -1611,6 +1656,11 @@ with Open — and shows it in a **Project** panel directly above Project facts:
   number: the server looks the number up in the project's registry, refuses a
   file name that resolves outside the folder, and runs the exact project-load
   path Open uses.
+- **The assistant reads the other sections the same way** (2026-10-13): ask
+  what a listed section says, or whether something is already covered there,
+  and it reads that section's saved file by number — only its document, as
+  last saved, for that turn — through the same registry lookup. See "Current
+  Status — the assistant reads the project's other sections".
 - **Next section →** at the bottom is the v1.20.0 dialog. The new section
   carries the folder with it, and its first Save opens in that folder, so it
   lands beside the brief by default. Since 2026-10-08 it also starts with
@@ -4144,6 +4194,10 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          settled, a strict output tool, the review sheet's
                          checks, the single-use preview cache, and the
                          `harvest` status every document payload carries
+  project_sections.py    read_project_section (2026-10-13): a sibling section's
+                         saved file, resolved by number through the project
+                         registry, read into its current document's reader text
+                         for one turn (the read_reference_doc posture)
   qc/
     schema.py            QC lens definitions + submit_qc_findings/consolidation/
                          verdict strict tools + observable reviewed-check and

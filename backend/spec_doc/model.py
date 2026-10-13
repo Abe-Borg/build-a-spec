@@ -862,6 +862,51 @@ def outline(section: SpecSection, *, max_text: int | None = 160) -> str:
     return "\n".join(lines)
 
 
+def reader_text(section: SpecSection) -> str:
+    """The reader's rendering — display numbering and statuses, no ids, no
+    provenance chips. What ``read_project_section`` hands the model for
+    ANOTHER section of the project (``backend/project_sections.py``).
+
+    Deliberately not :func:`outline`, which is the model's map of the
+    document it EDITS: ids to target and ◆ chips to carry. A sibling cannot
+    be edited from here, and its ids would collide with this section's in
+    the model's eye (every section has a ``pt1.a1``). The labels are the
+    ones the panel shows and the export writes (:func:`labelled_paragraphs`
+    / :func:`_paragraph_label`), so a cross-reference the model writes from
+    this text ("Paragraph 2.3.A") names what the other section's reader
+    sees. A locked block keeps its ``[preserved …]`` marker in the label's
+    place, as the outline does.
+    """
+    if section.is_empty():
+        return "(the section's document is empty — no header or articles yet)"
+    lines = [
+        f"SECTION {section.number or '(number not set)'} — "
+        f"{section.title or '(title not set)'}"
+    ]
+    for part in section.parts:
+        lines.append(part.title)
+        if not part.articles:
+            lines.append("  (no articles)")
+            continue
+        for a_idx, article in enumerate(part.articles):
+            lines.append(f"  {part.number}.{a_idx + 1} {article.title}")
+
+            def walk(paragraphs: list[Paragraph], depth: int) -> None:
+                for p, i in labelled_paragraphs(paragraphs):
+                    text = " ".join(p.text.split())
+                    indent = "    " + "  " * depth
+                    label = (
+                        f"[preserved {p.locked}]"
+                        if p.locked
+                        else _paragraph_label(depth, i)
+                    )
+                    lines.append(f"{indent}{label} ({p.status}) {text}")
+                    walk(p.children, depth + 1)
+
+            walk(article.paragraphs, 0)
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Edit ops
 # ---------------------------------------------------------------------------

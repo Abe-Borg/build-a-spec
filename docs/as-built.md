@@ -23014,6 +23014,227 @@ reply in between could lose them. A Waiting on you question about a moved
 provision follows it. Retained Final QC results read stale once after
 updating."
 
+## The assistant reads the project's other sections on demand — implemented notes (2026-10-13)
+
+**Owner request (Abraham).** Chaining several specs of one project through
+the app "works great", but the chat has lately said it would help if it
+could see one of the project's other specs — its body content — for many
+things, and above all to avoid duplication between sections. Asked whether
+to implement it; the answer here is the implementation.
+
+**What was there.** A project is a folder (Project workspace Phase 2): its
+`.basproject` beside one `.baspec` per section, found by discovery and never
+recorded in any file. Every chat turn's cached project block carries the
+PROJECT SECTIONS list (`project_brief.project_sections_block`): the other
+sections' numbers, titles and article names, from the brief's registry,
+"titles only — never provision text, so the model coordinates scope instead
+of copying". The brief carries neither the conversation nor the document of
+any section (owner constraint, `project_brief`'s docstring: bloat, and
+stale). So the model knew fire pumps were 21 30 00's and could not know what
+21 30 00 said about the jockey pump, whether a provision it was about to
+write already stood there, or what paragraph to cross-reference — and said
+so, or asked the user to paste it. The one on-demand read the chat had was
+`read_reference_doc`, for attached documents: body for the turn that asked,
+elided at commit, per-turn budget, framed as data.
+
+**Design.** The sibling's text comes from the SAME place the Project panel's
+Open gets the sibling: its saved file beside the brief, resolved by number
+through the project registry. Not from the brief (the owner constraint
+stands; a brief carrying every section's document would also be stale the
+moment a sibling saved), not from a model-written summary (unverifiable),
+and not from a new per-turn block (a project's sections would be re-billed
+on every turn). On demand, for one turn, is what the reference-document read
+already does, and the read is modelled on it exactly.
+
+- **`backend/project_sections.py`** (new leaf; imports `spec_doc`,
+  `suggestions`, and `sessions` lazily inside the two functions that need
+  its folder helpers, since `sessions` imports the engine, which imports
+  this). `READ_PROJECT_SECTION_TOOL` (`{number}`, required);
+  `read_project_section(number, current_number, link, home, resolve)` — the
+  refusals that need no disk first (blank number; this section's own number,
+  whose full text is in the PROJECT CONTEXT; no project link; no home), then
+  the resolver, then the read; every failure a `SectionReadRefusal` naming
+  the way through and never a path; `_available` lists what the JOINED
+  registry can resolve, for an unknown number; `wrap_project_section_body`
+  frames the result `<project_section>` and defuses the tag (attributes
+  included, the `_PROFILE_TAG_PATTERN` shape) and the reply-chip tag.
+- **`sessions.resolve_section_file`** is the resolver, passed in by the
+  engine: the registry join (link ∪ the brief on disk, newest export per
+  number) and `section_file_path`'s directly-in-the-folder rule — the
+  derivation `open-section` uses, so the section the model reads is the
+  file the panel would open. A section only the folder's brief lists (a
+  sibling exported after this one's link was synced) is readable though
+  PROJECT SECTIONS, rendered from the link alone, does not name it; its
+  number is in the refusal's listing. A record naming no file, a file not
+  beside the brief, or a name that resolves outside the folder is refused in
+  the resolver's own words plus what to tell the user, and nothing is read.
+- **The file must be the section asked for** (Codex review on PR #312, P1:
+  a stale or hand-edited registry can map a number to another section's or
+  another project's file, and the resolver proves only that the named file
+  sits in the folder). `read_section_file` now also returns the project id
+  the file's own link names; `read_project_section` refuses, unread, a file
+  naming a DIFFERENT project's id ("belongs to a different project … the
+  registry is stale or was edited"), and a file whose embedded number is not
+  the one requested ("holds section 21 13 13 — the registry is stale (that
+  section was renumbered, or its file renamed) … Read 21 13 13 instead"). The
+  renumber case is real on its own: `build_project_brief` upserts the
+  registry by number, so a section renumbered and saved to its old file name
+  leaves the old number's record pointing at the same file. A file with no
+  link at all — saved before its first brief export, which joins the folder
+  at its next Save — reads: the registry named it and its number agrees.
+  `open-section` keeps its own posture (it opens such a file and drops the
+  home); the chat read is stricter because the model, not a person, is what
+  acts on the text.
+- **`spec_doc.project_package.read_project_json`** reads the `project.json`
+  member alone — bounded as `parse_project_package` bounds it (`getinfo`,
+  `MAX_PROJECT_JSON_BYTES`, `_read_member`), legacy JSON projects too — and
+  **`project_sections.load_section_document`** parses `doc.versions[index]`
+  only, with the `SpecSection.from_dict` a load runs on every version.
+  `parse_project_file` validates a package whole: every retained version,
+  the manifest's digests, the Word master's digest and its source binding —
+  right for a load that becomes the session, seconds of work (under the turn
+  guard) for a read that renders one version's text and becomes nothing of
+  the session. The file bytes are judged twice against `MAX_PACKAGE_BYTES`
+  (`_read_file_bounded`, the open-section route's shape).
+- **`spec_doc.model.reader_text`** renders the sibling as a reader sees it:
+  the header, each PART, `1.1 TITLE`, then `A. (status) text` with the
+  panel's and the export's labels (`labelled_paragraphs` /
+  `_paragraph_label`; a locked block keeps `[preserved …]`), no element ids,
+  no ◆ chips. Not `outline`: that is the model's map of the document it
+  EDITS, and a sibling's ids (`pt2.a1`) would collide with this section's in
+  the model's eye. The result's header names the section, its title, the
+  file, and that its provisions are the other section's: cross-reference,
+  never restate, not editable from here. Nothing of the sibling's
+  conversation, research, reference texts, facts or figures reaches the
+  result (pinned by phrase).
+- **The engine.** `_run_read_project_section` (beside
+  `_run_read_reference_doc`): the home and link are the session's own
+  attributes, read under the turn guard the tool loop holds for every tool;
+  the disk read runs under it too — `apply_doc_edits` works under the same
+  guard, and a read is one bounded file plus one JSON decode. The text is
+  charged to the turn's `TurnReferenceBudget` (a refused read charges
+  nothing and says so, the reference wording), and the tool is declared LAST
+  in `_chat_tools`. `_elide_reference_tool_results` now covers both reads
+  through `_ELIDED_READ_TOOL_NOTES`, each with its own note; the error
+  results are kept. `_committed_messages`' docstring says so.
+- **The project block.** `project_sections_block(readable=…)`: with a bound
+  home the footer says each listed section's text can be read with
+  `read_project_section` — before drafting near its scope, when asked what it
+  says or whether something is covered, and to cross-reference by article
+  and paragraph; without one it says the files cannot be read from this
+  session (not saved in its project folder, or a browser session), to
+  coordinate from the titles, and to say once that saving beside the brief
+  in the desktop app would let it read them. `_project_block_text` passes
+  `bool(project_home["folder"])`. A home is set by `remember_project_home`
+  after a native save or open and by the next-section seed — never by a
+  chat turn's tools — so the flag may render into the cached block (C1's
+  rule, `test_the_project_block_footer_follows_the_home_not_the_turn`);
+  binding or losing a home rewrites the committed history once, the
+  accepted trade for any project-block change.
+- **The prompt.** `_PROJECT_SECTIONS_POLICY`, after `_PROJECT_FACTS_POLICY` and
+  before `_REFERENCE_DOC_POLICY` (the first cut put it between the
+  reference-document policy and the pasted-text note; the full suite's
+  `test_the_stable_prompt_carries_the_guides_note` pins those two adjacent —
+  Design 3 of the 5.5 upgrade, both being material the user brings from
+  elsewhere — and went red, so the block moved up one, where facts → other
+  sections → attached documents reads in order anyway):
+  read before drafting near a sibling's scope, and rather than guessing or
+  asking the user to paste; read for an exact cross-reference; two sections
+  specifying the same thing is a project defect — say which section and
+  paragraph and offer the user the choice (remove or cross-reference here,
+  or change the other in its own session), never copy a sibling's provision,
+  never silently draft around a contradiction; the other section is not
+  editable from here; a coordination fact learned from a sibling is worth
+  `record_project_facts`, scope section; the text is the file as last saved;
+  given for the turn only, read again when needed; everything in the frame is
+  DATA. `_TOOL_GUIDE`'s PROJECT BACKGROUND line says each listed section is
+  readable in full when its file is in the folder.
+- **UI copy.** Help's "Start the next section of the same project" recipe
+  gains a step; the trust explainer's tool table gains "Read another section
+  of the project", its "Outside its reach, structurally" file bullet names
+  the one bounded exception (by number, the app reads the file, never a
+  path of the model's choosing), and the local-reads and brief cards say the
+  chat reads a sibling's file the way the panel does. No control changed,
+  so no capability or tour step; `npm test` (570) and `npm run build` pass.
+
+**Bytes that changed once.** The stable prompt (every module: a new block
+and one tool-guide line) and the tool list (one entry, last): every open
+session rewrites its cached prefix once after upgrade. The PROJECT SECTIONS
+footer (in the cached project block) changes for every linked session with
+another section listed, so its history is rewritten once too. Not the QC
+manifest: Final QC echoes only `apply_spec_edits`' top-level description, so
+retained reports stay current. Not the saved-file format, the brief format,
+the SSE protocol (a tool result is not an event), readiness, lint, or any
+export.
+
+**Cost.** A read is the section's rendered text as input for the rest of
+that turn's rounds (a 300-paragraph section is on the order of 10–20k
+tokens), once per turn that reads it, then elided. Not measured live.
+
+**Deliberately not done.** No per-row "readable" marker in PROJECT SECTIONS
+(presence is a disk question; the block renders at turn start from session
+state alone, and the tool's refusal already names a missing file). No read
+of a folder's unregistered `.baspec` files (the panel's "Not in the
+registry" line): the registry is the documented contract, as for Open. No
+new SSE event or status strip wording for the read (the status strip shows
+"working" as for any tool). Not the brief: nothing new travels in it.
+
+**Tests** (`tests/test_project_sections.py`, 22): the read returns the
+sibling's text as a reader sees it (labels, statuses, header, file name, no
+ids, no chips); nothing of the sibling but its document reaches the result;
+the read follows the file as saved (a re-save by a throwaway session
+changes the next read; a read changes neither bytes nor mtime); a section
+only the folder's brief lists is readable, and an unknown number's refusal
+names the joined registry without the open section; the current section and
+a blank number are refused; without a home the tool and the project block
+both say how to make the files reachable; an unlinked session has no other
+sections; the footer follows the home, not the turn, and flips when the
+home is lost; an escape, a missing file and a nameless record are refused
+without reading anything or naming a path; a file holding another section
+(the stale record a renumber leaves) is refused naming the section it holds,
+a file of another project is refused unread, and a never-joined file reads;
+a corrupt or wrong-kind file is a correctable error that leaks none of its
+content; the read is charged to the
+budget attachments share, and a refused read charges nothing; the body is
+elided from committed history and an error kept; a sibling cannot close the
+frame or stage reply chips, and the header is neutralized with the body; one
+`/api/chat` turn through the fake client carries the text in the
+continuation round and commits without it (history and the saved package);
+`reader_text`'s exact rendering; `read_project_json` on a package, a legacy
+JSON project, junk and a package without its member;
+`load_section_document`'s shape checks; the pure refusals never call the
+resolver; the tool is declared last and both modules' prompts teach it.
+`tests/test_app.py`'s roster pin gains the entry.
+
+**Revert matrix** (each reverted in place, `tests/test_project_sections.py`
+run, restored): the elision entry for the new tool removed → 2 red; the
+footer's `readable` ignored → 2; the tool not declared → 2; the frame not
+neutralized → 1; the refusal listing the link alone instead of the joined
+registry → 1; the policy block dropped from the prompt → 1; `outline` (ids
+and chips) rendered instead of `reader_text` → 1; the budget not charged →
+1. 8 of 8 caught. Ruff and the touched files (`test_project_sections`,
+`test_project_brief`, `test_project_home`, `test_reference_docs`,
+`test_context_sizes`, `test_next_section`, `test_app`,
+`test_history_hygiene`, `test_prompt55_parsing_and_harvest`,
+`test_confirmed_meaning`, `test_writing_policy`, `test_fetch_elision_canary`,
+`test_chat_compaction`: 397) pass; the full suite runs in CI. No paid API
+call was made; whether the model reads a sibling at the right moments, and
+how often, is unmeasured until the owner runs a project through it.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Projects", item "The assistant can read the project's other
+sections": "Ask what another section of the project says, or whether
+something is already covered there, and the assistant reads that section's
+saved file from the project folder by its number — the same lookup the
+Project panel's Open uses — and answers from its text. Before drafting near
+another section's scope it reads the section instead of guessing, and when
+two sections specify the same thing it tells you which paragraph and lets
+you decide which keeps it. It reads the file as last saved, only its
+document, for that turn only, and never edits it; a section not saved beside
+its project brief, or a browser session, cannot read the others, and the
+assistant says so."
+
 ## Six small wording fixes from the prompt review — implemented notes (2026-10-13)
 
 Step 6 of the prompt-review follow-up (an outside review Abraham forwarded,

@@ -82,6 +82,15 @@ SIBLING_RESEARCH = "Loudoun County adopted the 2021 VCC."
 SIBLING_REFERENCE = "The owner requires 30 minutes of water supply."
 
 
+def _footer_line(block: str) -> str:
+    """The PROJECT SECTIONS footer inside a rendered project block (the
+    block's own closing frame marker follows it)."""
+    return next(
+        line for line in block.splitlines()
+        if line.startswith("A provision that belongs to a listed section is cross-referenced")
+    )
+
+
 def _read(session: SessionState, number: str, budget: TurnReferenceBudget | None = None):
     return _run_tool(
         session,
@@ -731,3 +740,170 @@ def test_the_tool_is_declared_last_and_every_module_s_prompt_teaches_it():
         assert "each readable in full with read_project_section" in prompt
         # Duplication is a project defect to report, never silently fixed.
         assert "Never copy a sibling's provision into this section" in prompt
+
+
+# ---------------------------------------------------------------------------
+# The user chooses which sections the assistant may read (2026-10-13)
+# ---------------------------------------------------------------------------
+
+
+def test_a_section_the_user_closed_is_refused_unread_and_the_footer_says_so(tmp_path):
+    """The Project panel's "assistant may read" box, off: the tool refuses
+    before anything is resolved or read, naming the box, and the cached
+    project block's footer names the closed section so the model does not
+    try. Opening it again restores the read and the footer."""
+    client = _client()
+    live, _first, _second, _home_ = _two_section_folder(client, tmp_path)
+    live.section_read_exclusions = ["21 13 13"]
+    # With one other section listed, closing it closes every listed section
+    # (the whole-footer wording, pinned below); a second sibling in the
+    # registry makes this the "except …" case.
+    live.project_link["sections"].append(_record("21 12 00", "Standpipes"))
+
+    refused = _read(live, "21 13 13")
+    assert refused["is_error"] is True
+    assert "has not opened section 21 13 13 to you" in refused["content"]
+    assert '"assistant may read" box' in refused["content"]
+    assert "Nothing was read" in refused["content"]
+    assert BODY_MARKER not in refused["content"]
+
+    footer = _footer_line(_turn_context(live).project_block)
+    assert "except 21 13 13, which the user has closed to you in the Project panel" in footer
+    assert "do not try to read it" in footer
+    # The list itself still names the section: scope is still coordinated.
+    assert "- 21 13 13 Wet-Pipe Sprinkler Systems" in _turn_context(live).project_block
+
+    live.section_read_exclusions = []
+    assert not _read(live, "21 13 13").get("is_error")
+    reopened = _footer_line(_turn_context(live).project_block)
+    assert "closed" not in reopened
+    assert "can be read in full with read_project_section (by its number): read one" in reopened
+
+
+def test_closing_every_section_changes_the_footer_whole():
+    link = {
+        "project_id": "d" * 32,
+        "name": "Campus X",
+        "brief_updated_at": "",
+        "seeded_from": [],
+        "research_rounds_at_seed": 0,
+        "sections": [
+            _record("21 13 13", "Wet-Pipe Sprinkler Systems"),
+            _record("21 30 00", "Fire Pumps"),
+        ],
+    }
+    every = project_sections_block(
+        link, "21 12 00", readable=True, excluded=["21 13 13", " 21  30 00 "]
+    )
+    assert "The user has closed every listed section to you in the Project panel" in every
+    assert "read_project_section" not in every
+    assert "- 21 13 13 Wet-Pipe Sprinkler Systems" in every and "- 21 30 00 Fire Pumps" in every
+    some = project_sections_block(link, "21 12 00", readable=True, excluded=["21 30 00"])
+    assert "except 21 30 00, which the user has closed" in some
+    assert "can be read in full with read_project_section" in some
+    # An exclusion the list does not name changes nothing; without a home the
+    # closed list is moot and the footer is the no-home one.
+    assert project_sections_block(link, "21 12 00", readable=True, excluded=["21 99 00"]) == (
+        project_sections_block(link, "21 12 00", readable=True)
+    )
+    assert project_sections_block(link, "21 12 00", excluded=["21 13 13"]) == (
+        project_sections_block(link, "21 12 00")
+    )
+
+
+def test_the_section_access_route_toggles_the_listing_and_the_choice_is_saved_with_the_section(tmp_path):
+    client = _client()
+    live, first_file, _second, home = _two_section_folder(client, tmp_path)
+
+    closed = client.post("/api/project/section-access", json={"number": " 21 13 13 ", "readable": False})
+    assert closed.status_code == 200, closed.text
+    assert closed.json() == {
+        "ok": True,
+        "number": "21 13 13",
+        "readable": False,
+        "section_read_exclusions": ["21 13 13"],
+    }
+    listing = client.get("/api/project/sections").json()
+    rows = {row["number"]: row for row in listing["sections"]}
+    assert rows["21 13 13"]["assistant_readable"] is False
+    assert rows["21 30 00"]["assistant_readable"] is True, "the open section is always readable"
+    assert listing["section_read_exclusions"] == ["21 13 13"]
+    # Closing twice is one entry; reopening removes it.
+    assert client.post("/api/project/section-access", json={"number": "21 13 13", "readable": False}).json()["section_read_exclusions"] == ["21 13 13"]
+    reopened = client.post("/api/project/section-access", json={"number": "21 13 13", "readable": True})
+    assert reopened.json()["section_read_exclusions"] == []
+    assert client.get("/api/project/sections").json()["sections"][0]["assistant_readable"] is True
+
+    # The choice rides this section's file and comes back with it — and never
+    # a brief, which is the project's, not this section's.
+    client.post("/api/project/section-access", json={"number": "21 13 13", "readable": False})
+    package = sessions.project_package(live)[0]
+    project = parse_project_file(package).project
+    assert project["section_read_exclusions"] == ["21 13 13"]
+    reloaded = SessionState()
+    load_project(project, reloaded)
+    assert reloaded.section_read_exclusions == ["21 13 13"]
+    assert _read(reloaded, "21 13 13")["is_error"] is True or reloaded.project_home is None
+    brief = client.get("/api/project/brief")
+    assert brief.status_code == 200
+    assert b"section_read_exclusions" not in brief.content
+    # An empty list writes no key (legacy bytes untouched), and a load over a
+    # live session replaces the list rather than inheriting it.
+    live.section_read_exclusions = []
+    assert "section_read_exclusions" not in parse_project_file(sessions.project_package(live)[0]).project
+    live.section_read_exclusions = ["21 30 00"]
+    load_project(project, live)
+    assert live.section_read_exclusions == ["21 13 13"]
+    assert "21 30 00" not in live.section_read_exclusions
+
+
+def test_the_section_access_route_refuses_the_open_section_a_blank_number_and_a_tour(tmp_path):
+    client = _client()
+    live, _first, _second, _home_ = _two_section_folder(client, tmp_path)
+
+    own = client.post("/api/project/section-access", json={"number": "21 30 00", "readable": False})
+    assert own.status_code == 400 and own.json()["code"] == "own_section"
+    blank = client.post("/api/project/section-access", json={"number": "  ", "readable": False})
+    assert blank.status_code == 400
+    assert live.section_read_exclusions == []
+
+    original = sessions.get_workspace()
+    started = client.post(
+        "/api/tutorial/start",
+        json={
+            "request_id": "section-access-refuses-in-a-tour",
+            "source": "showcase",
+            "workspace_id": original.workspace_id,
+            "generation": original.generation,
+        },
+    )
+    assert started.status_code == 200, started.text
+    try:
+        resp = client.post("/api/project/section-access", json={"number": "21 13 13", "readable": False})
+        assert resp.status_code == 409 and resp.json()["code"] == "tutorial_active"
+    finally:
+        sessions.reset_session()
+
+
+def test_exclusions_are_sanitized_on_load_and_bounded():
+    from backend.spec_doc.project import (
+        MAX_SECTION_READ_EXCLUSIONS,
+        sanitize_section_read_exclusions,
+    )
+
+    assert sanitize_section_read_exclusions(None) == []
+    assert sanitize_section_read_exclusions("21 13 13") == []
+    assert sanitize_section_read_exclusions({"21 13 13": True}) == []
+    assert sanitize_section_read_exclusions([" 21  13 13 ", 7, None, "", "21 13 13", "21 30 00"]) == [
+        "21 13 13",
+        "21 30 00",
+    ]
+    assert sanitize_section_read_exclusions(["x" * 100])[0] == "x" * 40
+    too_many = [f"21 {i:02d} 00" for i in range(MAX_SECTION_READ_EXCLUSIONS + 5)]
+    assert len(sanitize_section_read_exclusions(too_many)) == MAX_SECTION_READ_EXCLUSIONS
+    # A file whose key is garbage still loads, with every section readable.
+    state = SessionState()
+    project = sessions.project_payload(state)
+    project["section_read_exclusions"] = {"not": "a list"}
+    load_project(project, state)
+    assert state.section_read_exclusions == []

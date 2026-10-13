@@ -52,7 +52,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from .spec_doc.model import SpecSection, reader_text
 from .spec_doc.project import PROJECT_FORMAT, PROJECT_KIND, sanitize_project_link
@@ -202,6 +202,7 @@ def read_project_section(
     link: dict[str, Any] | None,
     home: dict[str, str] | None,
     resolve: Any,
+    excluded: Iterable[str] = (),
 ) -> SectionRead:
     """Resolve ``number`` to a sibling's file, read it, and render its text.
 
@@ -211,7 +212,10 @@ def read_project_section(
     section the model reads is the file the panel would open). Every way
     the read can fail is a :class:`SectionReadRefusal` naming the way
     through — the model corrects itself or tells the user; the turn never
-    fails and no path is said.
+    fails and no path is said. ``excluded`` is the user's own list of
+    sections closed to the assistant (the Project panel's "assistant may
+    read" box, off): refused before anything is resolved or read, naming
+    the box, so the model tells the user rather than trying again.
     """
     wanted = " ".join((number or "").split())
     if not wanted:
@@ -224,6 +228,14 @@ def read_project_section(
         raise SectionReadRefusal(
             f"section {wanted} is this session's own section. Its full "
             "current text is in the PROJECT CONTEXT; nothing was read."
+        )
+    if wanted in {" ".join(str(e or "").split()) for e in excluded}:
+        raise SectionReadRefusal(
+            f"the user has not opened section {wanted} to you: its "
+            '"assistant may read" box in the Project panel is off. Nothing '
+            "was read. Work from the titles and article lists in PROJECT "
+            "SECTIONS, and if that section's text would help, say so once and "
+            "let the user open it there."
         )
     if not isinstance(link, dict) or not link.get("project_id"):
         raise SectionReadRefusal(

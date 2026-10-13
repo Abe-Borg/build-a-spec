@@ -1753,7 +1753,7 @@ function Dossier() {
             [
               "Read another section of the project",
               "Open the current text of a sibling section, by its number, to avoid duplicating or contradicting it and to cross-reference it exactly.",
-              "Read-only, desktop only: the app resolves the number through the project’s registry to that section’s saved file beside the project brief — the same lookup the Project panel’s Open uses, and a name that resolves outside the folder is refused. Only the document is rendered (never that section’s conversation, research or facts), and the text is removed from stored history afterwards.",
+              "Read-only, desktop only: the app resolves the number through the project’s registry to that section’s saved file beside the project brief — the same lookup the Project panel’s Open uses, and a name that resolves outside the folder is refused. Only the document is rendered (never that section’s conversation, research or facts), and the text is removed from stored history afterwards. You choose which sections it may read: each row in the Project panel has an “assistant may read” box, ticked by default; an unticked section is refused before anything is read, and the model is told not to try.",
             ],
             [
               "Record project facts",

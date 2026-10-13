@@ -23464,6 +23464,115 @@ as ordinary specification text, and wording that defines where a
 requirement applies is kept. Retained Final QC results read stale once after
 updating."
 
+## The user chooses which sections the assistant may read — implemented notes (2026-10-13)
+
+**Owner questions, then a decision (Abraham), after PR #312 merged.** Is the
+read read-only on the inactive section (yes: the saved file, never written,
+never the live session). Does the assistant read every available section or
+only the ones named (neither was enforced: it read any registered sibling
+whenever its policy said to — before drafting near a section's scope, when
+asked, for a cross-reference — one per call, bounded by the per-turn budget).
+How is the active context protected (the tool result is framed as data for
+one turn, carries no element ids, is elided at commit, and the cached blocks
+are untouched). The owner wanted the option to specify the sections, and
+chose the recommended shape: a per-row "assistant may read" box in the
+Project panel, default on, saved with the section.
+
+- **The list.** `SessionState.section_read_exclusions: list[str]` — the
+  sibling numbers the user closed; empty (the default) means every section
+  the registry lists may be read. A deny-list rather than an allow-list so a
+  section added to the project later is readable without a visit to the
+  panel. `spec_doc.project.sanitize_section_read_exclusions` bounds it like
+  a registry number (folded, 40 chars, deduplicated in order, at most
+  `MAX_SECTION_READ_EXCLUSIONS` = 200); malformed input degrades to `[]`,
+  the `project_link` posture. `save_project` writes the key only when the
+  list is non-empty (legacy bytes untouched); `load_project` assigns it
+  unconditionally, like the link, so a load over a live session never
+  inherits the previous section's choice; `_reset_while_locked` clears it;
+  `tests/test_session_wipe.py`'s sweep declares it. Never in a brief: the
+  choice is this section's, not the project's (`build_project_brief` does
+  not read it, pinned by the brief's bytes).
+- **The route.** `POST /api/project/section-access {number, readable}`
+  (`SectionAccessRequest`): `readable: false` appends the folded number,
+  `true` removes it; idempotent; 409 `tutorial_active` in a tour, 400
+  `own_section` for the open section's number (its text is the turn's
+  context, never a read), 400 for a blank number or past the bound. Allowed
+  while a turn streams: the PROJECT SECTIONS footer is frozen at turn start,
+  and the tool reads the live list at dispatch, so a section closed mid-turn
+  is refused from that moment. A change records a `project_section_access`
+  trace event (outside the guard). Writes nothing to disk; the next Save
+  carries it. `GET /api/project/sections` snapshots the list under the guard
+  and `project_sections_listing(exclusions=…)` marks each row
+  `assistant_readable` (the open section's row always true) and returns
+  `section_read_exclusions`.
+- **The engine.** `read_project_section(excluded=…)` refuses a closed number
+  right after the own-section check — before the link, the home, the
+  resolver or any disk — "the user has not opened section N to you: its
+  \"assistant may read\" box in the Project panel is off … say so once and
+  let the user open it there". `project_sections_block(excluded=…)`: the
+  list still names every section (scope is still coordinated against a
+  closed one), and the readable footer (`_readable_footer`) says "except
+  N, which the user has closed to you in the Project panel: do not try to
+  read it" or, when every listed section is closed, that their text cannot
+  be read and to say once that opening one there would let it. Without a
+  home the footer is the no-home one regardless; an exclusion the list does
+  not name changes nothing. The footer stays one line (the block's tests
+  index the last line). `_project_block_text` and
+  `_run_read_project_section` pass the session's list. The list is written
+  only by the route, never by a turn's tools, so it may render into the
+  cached project block (C1's rule); a change rewrites the committed history
+  once, as binding a home does.
+- **The panel.** `ProjectPanel` renders, on every registry row that is not
+  the current section and outside a tour, a checkbox "assistant may read"
+  (`row.assistant_readable !== false`, so an older server reads as all
+  readable) with capability `project.section-access`, disabled while that
+  row's change is in flight and — like Open — while anything runs (`busy ||
+  acting`): during a section swap the rows still shown are the outgoing
+  section's, and the route writes to whichever session is live when the
+  request lands, so a toggle sent mid-swap would have recorded the choice on
+  the section that replaced it (Codex review on PR #315, P2; the pin covers
+  the gate); `onChange` → `api.setSectionAccess(number,
+  readable)` → a listing re-read (`accessNonce`), a failure shown in the
+  panel's outcome line. `capabilities.ts` and the `project-panel` tour step
+  gain the capability; the step's body gains one sentence; `TOUR_VERSION`
+  stays (no step order change, the `qc.agent-detail` precedent). Help's
+  recipe step and the trust explainer's tool row say the choice exists.
+- **Unchanged.** Every other request byte, the tool's schema and description,
+  the SSE protocol (the listing is REST), the QC manifest, readiness, the
+  brief format, the read's identity checks and budget.
+
+Never read a section the user closed, never carry the list in a brief, and
+never let a turn's tools write it. Tests: `tests/test_project_sections.py`
+(a closed section is refused unread and the footer names it, reopening
+restores both; every section closed changes the footer whole, an unlisted
+exclusion and a home-less session change nothing; the route toggles the
+listing, the choice rides the section's file and not the brief, an empty
+list writes no key, a load replaces the list; the route refuses the open
+section, a blank number and a tour; sanitization and the bound), the wipe
+sweep, `frontend/tests/projectPanel.test.ts` (the box, its gate, the client,
+the tour step).
+
+**Revert matrix** (each reverted in place, `tests/test_project_sections.py`
+run, restored): the tool ignoring the closed list → 1 red; the footer
+ignoring it → 2; the choice not written to the file → 1; a load keeping the
+previous list → 1; listing rows always readable → 1. 5 of 5 caught. Two
+pins corrected on the way: the project block's last line is its closing
+frame marker, so the footer is found by its opening words; and with one
+other section listed, closing it closes every listed section (the
+whole-footer wording), so the "except …" case needs a second sibling in
+the registry. Ruff, the touched backend files (258), `npm test` (573) and
+`npm run build` pass; the full suite runs in CI. No paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Projects", item "You choose which sections the assistant may read":
+"Every other section's row in the Project panel has an 'assistant may read'
+box, ticked by default. Untick one and the assistant is told that section is
+closed to it: it works from the title and article list alone, and a read it
+attempts anyway is refused before anything is read. The choice is saved with
+the section you are in, never in the project brief, so each section decides
+for itself."
+
 ## The tool instructions and per-turn notes match the new rules — implemented notes (2026-10-13)
 
 Step 7 of the prompt-review follow-up (the outside review Abraham forwarded).

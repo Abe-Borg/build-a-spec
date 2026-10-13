@@ -508,6 +508,11 @@ export interface ProjectSectionRow extends SectionRecord {
   /** False for the open section when the registry does not list it yet —
    *  it joins when the section exports a brief. */
   in_registry: boolean;
+  /** Whether the assistant may read this section's saved text with its
+   *  read_project_section tool — the panel's "assistant may read" box
+   *  (2026-10-13). Always true for the open section. Older servers omit it
+   *  (then every section is readable). */
+  assistant_readable?: boolean;
 }
 
 /** `GET /api/project/sections` — what the Project panel lists. */
@@ -527,6 +532,9 @@ export interface ProjectSectionsPayload {
   pull_available?: boolean;
   /** What that pull would bring, or null without a home or a readable brief. */
   pull_summary?: PullSummary | null;
+  /** The sibling sections closed to the assistant's reads, by number —
+   *  this section's own choice, saved in its file (2026-10-13). */
+  section_read_exclusions?: string[];
 }
 
 /** What a pull from the project brief would bring (counts). */

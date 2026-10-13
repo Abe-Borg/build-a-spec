@@ -325,3 +325,33 @@ def test_the_chat_and_its_condensing_run_on_opus_55(monkeypatch):
         "content": [],
         "output_config": {"effort": "high"},
     }
+
+
+def test_the_chat_fetches_up_to_eight_pages_a_request():
+    """Owner decision, 2026-10-13 (4 before): a turn checking several
+    sources met 4 within one request, and a refused fetch reads to the model
+    as a spent budget. Read from the source so a developer's environment
+    cannot move it; the chat's fetch tool declares the loaded value."""
+    from backend.llm.conversation import _chat_tools
+
+    source = Path(settings.__file__).read_text(encoding="utf-8")
+    defaults = {}
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in ("CHAT_MAX_SEARCHES", "CHAT_MAX_FETCHES")
+        ):
+            call = node.value
+            assert isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_int_env"
+            name, default = (arg.value for arg in call.args)
+            defaults[node.targets[0].id] = (name, default)
+    assert defaults == {
+        "CHAT_MAX_SEARCHES": ("BUILD_A_SPEC_CHAT_MAX_SEARCHES", 8),
+        "CHAT_MAX_FETCHES": ("BUILD_A_SPEC_CHAT_MAX_FETCHES", 8),
+    }
+    (fetch,) = [tool for tool in _chat_tools() if tool["name"] == "web_fetch"]
+    assert fetch["max_uses"] == settings.CHAT_MAX_FETCHES
+    # The page ceiling is unchanged: the allowance doubled, not the page.
+    assert fetch["max_content_tokens"] == 50_000

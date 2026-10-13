@@ -9,6 +9,7 @@ Critic's suite.
 """
 from __future__ import annotations
 
+import base64
 import copy
 import functools
 import itertools
@@ -1203,9 +1204,39 @@ def search_result_block(
     return block
 
 
-def fetch_blocks(url: str, *, tool_use_id: str = "") -> list[SimpleNamespace]:
-    """A ``server_tool_use``(web_fetch) + result pair for ``url``."""
+def fetch_blocks(
+    url: str,
+    *,
+    tool_use_id: str = "",
+    text: str | None = None,
+    pdf: bytes | None = None,
+    echo_url: bool = True,
+) -> list[SimpleNamespace]:
+    """A ``server_tool_use``(web_fetch) + result pair for ``url``.
+
+    ``text`` / ``pdf`` give the result the ``document`` block the API
+    returns (a plain-text or base64 PDF source) — what research checks an
+    item's quote against (item 7). ``echo_url=False`` drops the result's own
+    URL, so only its pairing with the call says what was fetched.
+    """
     use_id = tool_use_id or _srvtoolu_id("fetch")
+    result: dict[str, Any] = {"type": "web_fetch_result"}
+    if echo_url:
+        result["url"] = url
+    if text is not None:
+        result["content"] = {
+            "type": "document",
+            "source": {"type": "text", "media_type": "text/plain", "data": text},
+        }
+    elif pdf is not None:
+        result["content"] = {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": base64.b64encode(pdf).decode("ascii"),
+            },
+        }
     return [
         SimpleNamespace(
             type="server_tool_use",
@@ -1216,7 +1247,7 @@ def fetch_blocks(url: str, *, tool_use_id: str = "") -> list[SimpleNamespace]:
         SimpleNamespace(
             type="web_fetch_tool_result",
             tool_use_id=use_id,
-            content={"type": "web_fetch_result", "url": url},
+            content=result,
         ),
     ]
 

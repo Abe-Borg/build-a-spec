@@ -754,6 +754,9 @@ def _profile_view(profile: RequirementsProfile) -> dict[str, Any]:
                 "notes": i.notes,
                 "research_date": i.research_date,
                 "round_index": i.round_index,
+                "applies_when": i.applies_when,
+                "quote": i.quote,
+                "quote_source": i.quote_source,
             }
             for i in profile.items
         ],

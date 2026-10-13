@@ -3,13 +3,15 @@
  * requirements-research fan-out found, grouped by dimension (one per research
  * "agent"). Each dimension shows its completion status + telemetry (findings,
  * grounded count, searches/fetches) and its items in full — requirement,
- * authority, code reference, category, confidence, notes, and grounded
- * sources. The Research drawer shows a terse inline list; this is the full
+ * authority, code reference, category, confidence, the condition it applies
+ * under, the passage it quotes (and whether that was found on a fetched
+ * page), notes, and grounded sources. The Research drawer shows a terse inline list; this is the full
  * read-through view. Read-only — the same profile is already in the chat
  * model's per-turn context, so nothing here mutates the spec.
  */
 import { useRef } from "react";
 import { useDialogFocus } from "../lib/dialogFocus";
+import { appliesWhen, researchQuote } from "../lib/researchQuote";
 import type {
   ResearchDimensionView,
   ResearchItemView,
@@ -53,6 +55,8 @@ function sourceHost(url: string): string {
 }
 
 function ItemRow({ item, dated }: { item: ResearchItemView; dated?: boolean }) {
+  const quote = researchQuote(item);
+  const condition = appliesWhen(item);
   const details: string[] = [];
   if (item.authority) details.push(item.authority);
   if (item.code_reference) details.push(item.code_reference);
@@ -92,6 +96,30 @@ function ItemRow({ item, dated }: { item: ResearchItemView; dated?: boolean }) {
           <p className="mt-0.5 text-[11px] text-ink-faint">
             {details.join(" · ")}
           </p>
+          {condition && (
+            <p className="mt-0.5 text-[11px] text-ink-dim">
+              <span className="font-semibold">Applies when:</span> {condition}
+            </p>
+          )}
+          {quote && (
+            <blockquote
+              className={`mt-1 border-l-2 pl-2 text-[11px] ${
+                quote.found ? "border-ok/60 text-ink-dim" : "border-warn/60 text-ink-faint"
+              }`}
+            >
+              <span>&ldquo;{quote.text}&rdquo;</span>{" "}
+              <span
+                className={`not-italic ${quote.found ? "text-ok" : "text-warn"}`}
+                title={
+                  quote.found
+                    ? `The research found this passage on ${quote.source}`
+                    : "The research quoted this, but the passage was not found on any page it fetched for this finding"
+                }
+              >
+                ({quote.label})
+              </span>
+            </blockquote>
+          )}
           {item.notes && (
             <p className="mt-0.5 text-[11px] text-ink-faint italic">
               {item.notes}

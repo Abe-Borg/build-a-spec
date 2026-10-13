@@ -91,6 +91,7 @@ from .grounding import (
     web_fetch_count,
     web_search_count,
 )
+from .quotes import verify_item_quotes
 from .resend_sanitizer import sanitize_messages_for_resend
 from .retry_policy import (
     DEFAULT_REALTIME_RETRY_POLICY,
@@ -495,10 +496,44 @@ class ResearchItem:
     notes: str = ""
     research_date: str = ""
     round_index: int = 0
+    # The prompt-review follow-up, item 7 (2026-10-13): what the source
+    # actually says, and when the requirement governs. ``quote`` is the
+    # passage the worker copied, word for word, from a page it fetched;
+    # ``quote_source`` is the accepted source whose fetched text was found
+    # to contain it (``verify_item_quotes``), "" when it was not found or
+    # could not be checked (a search result's text is encrypted). It is set
+    # only inside the round that fetched the page: the text is gone after.
+    # ``applies_when`` is the condition under which the requirement governs
+    # a project ("only where the AHJ has adopted the 2024 IFC"); "" means
+    # unconditional, or an item from before the field existed. None of the
+    # three enters the item id, and each is serialized only when set, so a
+    # profile saved before them keeps its bytes (and the QC fingerprint
+    # over it does not move).
+    quote: str = ""
+    quote_source: str = ""
+    applies_when: str = ""
 
     @property
     def is_process_advisory(self) -> bool:
         return self.actionability == "process_advisory"
+
+    @property
+    def quote_found(self) -> bool:
+        """Whether the quote was found on a page the research fetched."""
+        return bool(self.quote and self.quote_source)
+
+
+# Serialized only when set (``RequirementsProfile.to_dict``): an item saved
+# before the fields existed must round-trip byte for byte.
+_OPTIONAL_ITEM_FIELDS = ("quote", "quote_source", "applies_when")
+
+
+def _item_payload(item: ResearchItem) -> dict[str, Any]:
+    payload = dataclasses.asdict(item)
+    for name in _OPTIONAL_ITEM_FIELDS:
+        if not payload.get(name):
+            payload.pop(name, None)
+    return payload
 
 
 # Closed vocabulary for the failure KIND recorded beside a dimension's
@@ -1112,7 +1147,7 @@ class RequirementsProfile:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "items": [dataclasses.asdict(i) for i in self.items],
+            "items": [_item_payload(i) for i in self.items],
             "dimension_statuses": [
                 _dimension_status_payload(s) for s in self.dimension_statuses
             ],
@@ -1165,6 +1200,7 @@ class RequirementsProfile:
                     notes=str(raw.get("notes", "") or ""),
                     research_date=str(raw.get("research_date", "") or ""),
                     round_index=int(raw.get("round_index", 0) or 0),
+                    **_quote_fields_from_raw(raw),
                 )
             )
         statuses = _statuses_from_raw(data.get("dimension_statuses"))
@@ -1308,6 +1344,10 @@ def _render_item_line(item: ResearchItem, *, dated: bool = False) -> str:
 
     Only a multi-round profile dates its items — with one round the
     header's date covers every item, and the line stays as it was.
+
+    Item 7 (2026-10-13): ``Applies when`` joins the details and the quote
+    gets a line of its own, each only when set, so an item from before the
+    fields renders byte for byte as it did.
     """
     marker = "[PROCESS] " if item.is_process_advisory else ""
     details = []
@@ -1315,6 +1355,8 @@ def _render_item_line(item: ResearchItem, *, dated: bool = False) -> str:
         details.append(f"Authority: {item.authority}")
     if item.code_reference:
         details.append(f"Ref: {item.code_reference}")
+    if item.applies_when:
+        details.append(f"Applies when: {item.applies_when}")
     sources = (
         ", ".join(item.accepted_sources) if item.accepted_sources else "[UNVERIFIED]"
     )
@@ -1322,7 +1364,26 @@ def _render_item_line(item: ResearchItem, *, dated: bool = False) -> str:
     details.append(f"confidence {round(item.confidence * 100)}%")
     if dated and item.research_date:
         details.append(f"as of {item.research_date}")
-    return f"- [{item.item_id}] {marker}{item.requirement} ({'; '.join(details)})"
+    line = f"- [{item.item_id}] {marker}{item.requirement} ({'; '.join(details)})"
+    if item.quote:
+        line += "\n" + _quote_line(item)
+    return line
+
+
+def _quote_line(item: ResearchItem) -> str:
+    """The rendered quote: where it was found, or that it was not."""
+    where = (
+        f"found on {item.quote_source}"
+        if item.quote_found
+        else QUOTE_NOT_FOUND_LABEL
+    )
+    return f'    Quote ({where}): "{item.quote}"'
+
+
+# What a quote the check did not find on any accepted source's fetched text
+# says in every render. Public: the readers (chat, Final QC, the redline)
+# name the same words.
+QUOTE_NOT_FOUND_LABEL = "not found on a fetched page"
 
 
 def _clamp_confidence(value: object) -> float:
@@ -1330,6 +1391,44 @@ def _clamp_confidence(value: object) -> float:
         return max(0.0, min(1.0, float(value)))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return 0.0
+
+
+# Bounds on the two worker-written fields of item 7 (2026-10-13). The schema
+# convention forbids length constraints, so they clamp at parse time. A
+# quote is a sentence or two; a long one would crowd the 100k research
+# render (``research_context_block`` trims whole items) and the worker's
+# 32k submission ceiling for no gain.
+QUOTE_MAX_CHARS = 400
+APPLIES_WHEN_MAX_CHARS = 300
+
+
+def _clean_item_text(value: object, limit: int) -> str:
+    """One line, whitespace collapsed, cut at ``limit`` with a mark."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _quote_fields_from_raw(raw: dict) -> dict[str, str]:
+    """``quote`` / ``quote_source`` / ``applies_when`` from a persisted item.
+
+    Lenient like the rest of :meth:`RequirementsProfile.from_dict`, with one
+    consistency rule: a quote counts as found only on one of the item's own
+    accepted sources — a record claiming otherwise did not come from
+    :func:`verify_item_quotes`, so the claim is dropped and the quote kept as
+    not found.
+    """
+    quote = _clean_item_text(raw.get("quote"), QUOTE_MAX_CHARS)
+    source = str(raw.get("quote_source", "") or "").strip()
+    accepted = {str(u) for u in (raw.get("accepted_sources") or [])}
+    return {
+        "quote": quote,
+        "quote_source": source if quote and source in accepted else "",
+        "applies_when": _clean_item_text(
+            raw.get("applies_when"), APPLIES_WHEN_MAX_CHARS
+        ),
+    }
 
 
 def _mint_item_id(dimension_id: str, category: str, requirement: str) -> str:
@@ -1392,7 +1491,27 @@ def _confirm_item(prior: ResearchItem, fresh: ResearchItem) -> ResearchItem:
             else (prior.research_date or fresh.research_date)
         ),
         round_index=prior.round_index or fresh.round_index,
+        applies_when=prior.applies_when or fresh.applies_when,
+        **_merged_quote(prior, fresh),
     )
+
+
+def _merged_quote(prior: ResearchItem, fresh: ResearchItem) -> dict[str, str]:
+    """The quote a re-found item keeps (item 7, 2026-10-13).
+
+    A quote and the source it was found on move together — never one
+    occurrence's passage beside the other's URL. Like the rest of the merge
+    it only strengthens: a fresh quote found on a fetched page replaces a
+    prior one that was not; otherwise the prior quote stays, and a blank
+    one fills in.
+    """
+    if fresh.quote_found and not prior.quote_found:
+        chosen = fresh
+    elif prior.quote:
+        chosen = prior
+    else:
+        chosen = fresh
+    return {"quote": chosen.quote, "quote_source": chosen.quote_source}
 
 
 def _accumulate_statuses(
@@ -1865,6 +1984,17 @@ Call the submit_requirements_research tool exactly once with your findings.
   team must act on but which are not spec text.
 - authority names who imposes it; code_reference cites the section when one
   exists.
+- applies_when states the condition under which the requirement governs a
+  project when it does not govern every project like this one: an adoption
+  or permit date, a building height, occupancy or hazard, new work versus an
+  alteration. Null when it governs the project described without condition.
+  Never leave a condition only in notes.
+- quote copies, word for word, the sentence or two that state the
+  requirement from a page you fetched with web_fetch and cite in
+  source_urls; mark a gap with "...". The quote is checked against the
+  fetched text, and the reader is told whether it was found. Null when no
+  fetched page states it (a search result alone cannot be quoted). Never
+  paraphrase in quote, and never write one from memory.
 - confidence in [0,1]. If you cannot ground a requirement in retrieved
   sources, either omit it or report it with confidence 0 and explain in
   notes — never guess.
@@ -1933,6 +2063,8 @@ def _established_fact_line(item: ResearchItem) -> str:
         details.append(f"Authority: {item.authority}")
     if item.code_reference:
         details.append(f"Ref: {item.code_reference}")
+    if item.applies_when:
+        details.append(f"Applies when: {item.applies_when}")
     if not item.grounded:
         details.append("[UNVERIFIED]")
     if item.research_date:
@@ -2383,7 +2515,10 @@ def _items_from_payload(payload: dict, dimension_id: str) -> list[ResearchItem]:
 
     Unknown actionability coerces to ``spec_requirement`` (the safe
     default); confidence clamps to [0, 1]; items without a requirement
-    drop.
+    drop. ``quote`` and ``applies_when`` fold to one line and clamp
+    (:data:`QUOTE_MAX_CHARS`, :data:`APPLIES_WHEN_MAX_CHARS`); whether the
+    quote is on a fetched page is decided later, against what the
+    conversation retrieved (:func:`verify_item_quotes`).
     """
     items: list[ResearchItem] = []
     for raw in payload.get("items") or []:
@@ -2414,6 +2549,10 @@ def _items_from_payload(payload: dict, dimension_id: str) -> list[ResearchItem]:
                 confidence=_clamp_confidence(raw.get("confidence")),
                 actionability=actionability,
                 notes=str(raw.get("notes") or "").strip(),
+                quote=_clean_item_text(raw.get("quote"), QUOTE_MAX_CHARS),
+                applies_when=_clean_item_text(
+                    raw.get("applies_when"), APPLIES_WHEN_MAX_CHARS
+                ),
             )
         )
     return items
@@ -3399,6 +3538,9 @@ def _run_dimension(
                 )
                 item.accepted_sources = list(grounding.accepted)
                 item.grounded = grounding.has_any_grounded_citation()
+            # Item 7: a quote counts as found only on the text of one of the
+            # item's own accepted sources, fetched in this same conversation.
+            verify_item_quotes(items, all_responses)
 
             # Meter the full billed set: a restart abandons a conversation
             # but not its billed usage, so a retry-then-succeed must still

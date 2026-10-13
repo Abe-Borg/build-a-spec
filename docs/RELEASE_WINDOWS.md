@@ -304,6 +304,20 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **Research quotes and conditions (next release).** Run Research on
+      a new project, then View report: findings carry a quoted passage
+      marked **Found on <host>** (green) or **Not found on a fetched page**
+      (amber), and at least one governing-code finding shows **Applies
+      when:** with its adoption or permit-date condition. Open a cited page
+      and confirm a found passage is really on it. Open a project researched
+      before this release: its findings show neither field and the chat's
+      research context reads as before. Ask the chat to draft from a
+      conditional finding whose condition the project facts do not settle:
+      it asks (or tracks the question) instead of drafting it, and no
+      condition or quote appears in the specification text. Export the
+      redline on the original after a research-sourced edit: the comment
+      shows **Applies when:** and, only for a found passage, **Source
+      text:**.
 - [ ] **Final QC v5 (next release).** Run Final QC on a section with
       research and one open Waiting-on-you question whose clause is left
       out: the report says `final-qc/5`, the left-out clause is not raised

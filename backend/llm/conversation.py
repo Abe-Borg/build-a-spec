@@ -2653,6 +2653,28 @@ class _TurnContext:
     sizes: dict[str, int]
 
 
+def _qc_inputs_current(session: SessionState, result: Any) -> bool:
+    """Whether every Final QC review input still matches ``result``.
+
+    The question ``apply_qc_fixes`` and the readiness ``qc_current`` gate
+    ask (``matches_current_inputs``, non-blocking), so the per-turn block
+    never calls CURRENT a review whose fixes the apply path would refuse
+    (2026-10-13). It runs at turn start, lock-free like the readiness poll
+    that asks it on every refresh; a pending imported-source check reads as
+    not current, the apply path's own answer. It can never fail the turn: an
+    error reads as not current and is logged.
+    """
+    try:
+        return bool(matches_current_inputs(session, result))
+    except Exception:  # noqa: BLE001 - a context render must not fail a turn
+        _log.warning(
+            "Final QC freshness could not be checked at turn start; the "
+            "review is described as not current.",
+            exc_info=True,
+        )
+        return False
+
+
 def _turn_context(session: SessionState) -> _TurnContext:
     """Render this turn's project block and PROJECT CONTEXT, and measure both."""
     project_block, project_sizes = _project_block_text(session)
@@ -2874,6 +2896,7 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
             current_version_index=session.doc.index,
             current_section=doc,
             latest_attempt_note=attempt_note,
+            inputs_current=_qc_inputs_current(session, qc_result),
         )
         parts.append(qc_block)
         measured["qc_review"] = len(parts) - 1
@@ -4381,7 +4404,7 @@ def _run_read_qc_finding(
             current_version_index=session.doc.index,
             current_section=session.doc.doc,
             inputs_current=(
-                result is not None and matches_current_inputs(session, result)
+                result is not None and _qc_inputs_current(session, result)
             ),
         )
     except QCFindingReadRefusal as exc:

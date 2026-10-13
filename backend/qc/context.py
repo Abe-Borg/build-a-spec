@@ -36,6 +36,31 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+# How the retained review relates to the session now — shared by the
+# per-turn block and ``read_qc_finding``. ``inputs`` is the answer
+# ``apply_qc_fixes`` would give (``apply.matches_current_inputs``) when the
+# document itself is unchanged: research, an attached document, an
+# established fact or a QC setting moved, or the imported-source check has
+# not settled (Codex review on PR #319; the per-turn block since 2026-10-13).
+_FRESH_CURRENT = "current"
+_STALE_DOCUMENT = "document"
+_STALE_INPUTS = "inputs"
+
+
+def _freshness_state(
+    result: Any,
+    *,
+    current_version_index: int,
+    current_section: Any,
+    inputs_current: bool,
+) -> str:
+    if not result.matches_version(current_version_index, current_section):
+        return _STALE_DOCUMENT
+    if not inputs_current:
+        return _STALE_INPUTS
+    return _FRESH_CURRENT
+
+
 def _one_line(text: str, limit: int = 240) -> str:
     """Fold whitespace to one line; cut long prose with a visible mark."""
     folded = " ".join(str(text or "").split())
@@ -85,7 +110,7 @@ def _render(
     open_disputed: list[Any],
     *,
     section: Any,
-    stale: bool,
+    state: str,
     trimmed: int,
     latest_attempt_note: str,
 ) -> str:
@@ -103,12 +128,22 @@ def _render(
             + (f" · finished {result.finished_at}" if result.finished_at else "")
         ),
     ]
-    if stale:
+    if state == _STALE_DOCUMENT:
         lines.append(
             "Freshness: STALE — the document changed after this review. "
             "Findings may no longer anchor where they say, and fixes CANNOT "
             "be applied until Final QC is re-run; describe them as the last "
             "review's findings, never as verified against the current text."
+        )
+    elif state == _STALE_INPUTS:
+        lines.append(
+            "Freshness: STALE — the document is unchanged, but another review "
+            "input changed after this review (requirements research, an "
+            "attached document, an established project fact, or a Final QC "
+            "setting), or the imported-source permission check has not "
+            "settled. Fixes CANNOT be applied until Final QC is re-run; "
+            "describe the findings as the last review's, made on inputs that "
+            "have since moved."
         )
     else:
         lines.append(
@@ -166,6 +201,7 @@ def qc_review_context_block(
     current_section: Any,
     latest_attempt_note: str = "",
     max_tokens: int = QC_CONTEXT_MAX_TOKENS,
+    inputs_current: bool = True,
 ) -> tuple[str, int]:
     """Render the retained QC result for chat context, capped.
 
@@ -176,8 +212,20 @@ def qc_review_context_block(
     LAST: they block issue readiness and need the user's decision, so they
     are the lines that must survive. The structured result keeps every
     finding either way (the panel and both report downloads are unabridged).
+
+    ``inputs_current`` is the caller's full-input answer
+    (``apply.matches_current_inputs``, the check ``apply_qc_fixes`` and the
+    readiness ``qc_current`` gate run): with the document unchanged, a moved
+    research profile, attachment, fact or QC setting reads STALE here too
+    (2026-10-13; the block judged by document version alone before, so it
+    said CURRENT about fixes the apply path then refused).
     """
-    stale = not result.matches_version(current_version_index, current_section)
+    state = _freshness_state(
+        result,
+        current_version_index=current_version_index,
+        current_section=current_section,
+        inputs_current=inputs_current,
+    )
     open_findings = [f for f in result.findings if f.status == "open"]
     open_disputed = [f for f in result.disputed if f.status == "open"]
     trimmed = 0
@@ -186,7 +234,7 @@ def qc_review_context_block(
         open_findings,
         open_disputed,
         section=current_section,
-        stale=stale,
+        state=state,
         trimmed=trimmed,
         latest_attempt_note=latest_attempt_note,
     )
@@ -206,7 +254,7 @@ def qc_review_context_block(
             open_findings,
             open_disputed,
             section=current_section,
-            stale=stale,
+            state=state,
             trimmed=trimmed,
             latest_attempt_note=latest_attempt_note,
         )
@@ -324,17 +372,6 @@ def _anchor(finding: Any) -> str:
 
 def _version_display(result: Any) -> str:
     return f"v{result.version_index + 1} (stored index {result.version_index})"
-
-
-# How the retained review relates to the session now. ``inputs`` is the
-# answer ``apply_qc_fixes`` would give (``apply.matches_current_inputs``)
-# when the document itself is unchanged: research, an attached document, an
-# established fact or a QC setting moved, or the imported-source check has
-# not settled (Codex review on PR #319 — the document version alone said
-# CURRENT and called fixes applyable that the apply path then refused).
-_FRESH_CURRENT = "current"
-_STALE_DOCUMENT = "document"
-_STALE_INPUTS = "inputs"
 
 
 def _freshness(state: str) -> str:
@@ -587,12 +624,12 @@ def read_qc_finding(
     finding_id = ""
     if isinstance(raw_input, dict):
         finding_id = " ".join(str(raw_input.get("finding_id") or "").split())
-    if not result.matches_version(current_version_index, current_section):
-        state = _STALE_DOCUMENT
-    elif not inputs_current:
-        state = _STALE_INPUTS
-    else:
-        state = _FRESH_CURRENT
+    state = _freshness_state(
+        result,
+        current_version_index=current_version_index,
+        current_section=current_section,
+        inputs_current=inputs_current,
+    )
     if not finding_id:
         body = _index(result, state)
     else:

@@ -258,3 +258,69 @@ def test_a_fully_dispositioned_report_still_renders_the_rollup() -> None:
     assert "OPEN FINDINGS: none" in block
     assert "1 applied" in block
     assert "1 dismissed" in block
+
+
+# ---------------------------------------------------------------------------
+# Freshness covers every review input, not just the document (2026-10-13)
+# ---------------------------------------------------------------------------
+
+
+def test_a_review_input_moved_after_the_review_reads_stale(monkeypatch) -> None:
+    """Research re-run after Final QC, document untouched: ``apply_qc_fixes``
+    and the readiness gate would call the review stale, so the block must
+    too — it said CURRENT on the document version alone before."""
+    from tests.test_context_sizes import _profile
+
+    client = _client()
+    _seed_and_install(client)
+    fake = FakeClient([text_turn(["ok"]), text_turn(["ok"])])
+    _patch_client(monkeypatch, fake)
+
+    client.post("/api/chat", json={"message": "what did the review find?"})
+    fresh = request_context_text(fake.messages.last_request)
+    assert "Freshness: CURRENT" in fresh
+
+    sessions.get_session().research.profile_result = _profile(3)
+    client.post("/api/chat", json={"message": "and now?"})
+    moved = request_context_text(fake.messages.last_request)
+    assert "Freshness: STALE — the document is unchanged, but another review input" in moved
+    assert "Fixes CANNOT be applied until Final QC is re-run" in moved
+    assert "Freshness: CURRENT" not in moved
+    # The readiness gate agrees.
+    checks = {c["id"]: c for c in client.get("/api/readiness").json()["checks"]}
+    assert checks["qc_current"]["ok"] is False
+
+
+def test_a_freshness_check_that_fails_never_fails_the_turn(monkeypatch) -> None:
+    client = _client()
+    _seed_and_install(client)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("manifest unavailable")
+
+    monkeypatch.setattr("backend.llm.conversation.matches_current_inputs", boom)
+    fake = FakeClient([text_turn(["ok"])])
+    _patch_client(monkeypatch, fake)
+    resp = client.post("/api/chat", json={"message": "status?"})
+    assert '"type": "error"' not in resp.text
+    context = request_context_text(fake.messages.last_request)
+    # Read as not current — the conservative answer, never CURRENT.
+    assert "another review input changed" in context
+
+
+def test_the_document_reason_wins_when_both_moved() -> None:
+    from backend.spec_doc.model import SpecSection
+
+    result = _unit_result([_finding("qc-a00000000001")])
+    section = SpecSection.empty()
+    # A unit result carries no version fingerprint, so it never matches the
+    # document: the document reason is the one said, inputs or not.
+    for inputs_current in (True, False):
+        block, _ = qc_review_context_block(
+            result,
+            current_version_index=0,
+            current_section=section,
+            inputs_current=inputs_current,
+        )
+        assert "Freshness: STALE — the document changed after this review." in block
+        assert "another review input" not in block

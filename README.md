@@ -217,6 +217,26 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — the chat's Final QC summary knows when the review went stale
+
+(2026-10-13, owner decision. docs/as-built.md's "The chat's Final QC
+summary checks every review input" is the record; in the next release.)
+
+- **Stale means stale.** The Final QC summary the chat reads with every
+  message said a review was current as long as the document hadn't changed.
+  If research was re-run, an attachment swapped, a project fact recorded or
+  superseded, or a Final QC setting changed after the review, it still said
+  current and offered the safe fixes — and applying them was then refused.
+  It now runs the same check as applying a fix and the readiness checklist,
+  so it says the review is stale, and why, before anyone asks to apply.
+- **The trust explainer says the chat can apply Final QC fixes.** It listed
+  "applying a QC fix" among the things the chat cannot do. It can, through
+  its apply tool, when you approve in the conversation; the explainer now
+  says so and gives the tool its own row with its limits.
+
+No request byte, cache or saved file changed beyond the per-message context.
+No paid API call was made.
+
 ## Current Status — the chat reads Final QC findings in full, fetches more, and knows when research was trimmed
 
 (2026-10-13, owner decisions. docs/as-built.md's "The chat reads a Final QC

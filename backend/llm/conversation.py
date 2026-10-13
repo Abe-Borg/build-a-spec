@@ -229,6 +229,12 @@ from ..project_brief import (
     project_sections_block,
     within_reference_cap,
 )
+from ..project_sections import (
+    READ_PROJECT_SECTION_TOOL,
+    SectionReadRefusal,
+    read_project_section,
+    wrap_project_section_body,
+)
 from ..research.engine import RequirementsProfile
 from ..research.retry_policy import classify_exception, is_retryable_failure_class
 from ..spec_doc.project import sanitize_project_link
@@ -278,10 +284,10 @@ def _chat_tools() -> list[dict[str, Any]]:
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
     ``suggest_prompts``, ``read_reference_doc``, ``apply_qc_fixes``,
-    ``track_followups``, ``record_project_facts`` and then
-    ``recall_conversation`` are appended LAST, in that order, so each
-    addition leaves the existing tool bytes intact as a stable cached
-    prefix. ``suggest_prompts`` is RETIRED — suggested replies ride the
+    ``track_followups``, ``record_project_facts``, ``recall_conversation``
+    and then ``read_project_section`` (2026-10-13) are appended LAST, in
+    that order, so each addition leaves the existing tool bytes intact as
+    a stable cached prefix. ``suggest_prompts`` is RETIRED — suggested replies ride the
     reply's ``<suggested_replies>`` block (``backend/suggestions.py``) — but
     stays declared, at its old position, so saved histories that called it
     remain valid requests; removal is scheduled for a later release.
@@ -306,6 +312,7 @@ def _chat_tools() -> list[dict[str, Any]]:
         TRACK_FOLLOWUPS_TOOL,
         RECORD_PROJECT_FACTS_TOOL,
         RECALL_CONVERSATION_TOOL,
+        READ_PROJECT_SECTION_TOOL,
     ]
 
 
@@ -2587,8 +2594,16 @@ def _project_block_text(session: SessionState) -> tuple[str, dict[str, int]]:
     # The other sections of this project, when the session was seeded from
     # (or exported) a project brief — titles and article names only, never
     # their provisions, so the model coordinates scope instead of copying.
+    # Whether their saved files can be READ on demand (read_project_section)
+    # is a fact of the bound project home, which only a save or an open
+    # sets, never a chat turn's tools — so it may render here (C1's rule).
     try:
-        sections_block = project_sections_block(session.project_link, doc.number)
+        sections_block = project_sections_block(
+            session.project_link,
+            doc.number,
+            readable=isinstance(session.project_home, dict)
+            and bool(session.project_home.get("folder")),
+        )
     except Exception:  # noqa: BLE001 - context assembly must never fail a turn
         sections_block = ""
     if sections_block:
@@ -2939,31 +2954,50 @@ def _elide_figure_tool_inputs(
     return result
 
 
+# The on-demand reads whose bodies never enter committed history, each with
+# the note that takes the body's place (``_elide_reference_tool_results``).
+_ELIDED_READ_TOOL_NOTES: dict[str, str] = {
+    "read_reference_doc": (
+        "[Reference document text omitted from history to keep it out of "
+        "every later request. It is unchanged in the session — call "
+        "read_reference_doc again to re-read it.]"
+    ),
+    READ_PROJECT_SECTION_TOOL["name"]: (
+        "[Project section text omitted from history to keep it out of "
+        "every later request. The section's saved file is where it was — "
+        "call read_project_section again to re-read it.]"
+    ),
+}
+
+
 def _elide_reference_tool_results(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Drop ``read_reference_doc`` bodies from committed history (COW).
+    """Drop ``read_reference_doc`` and ``read_project_section`` bodies from
+    committed history (COW).
 
     A reference document is large and the store already holds it verbatim, so
     leaving the text in history would re-bill it on every later turn and bloat
     the project file — the same reasoning as fetched-PDF elision, and the
     reason the tool description tells the model to simply read it again when
-    it needs it. The tool_use block is left alone: it is just an id, and
-    keeping it makes the transcript readable.
+    it needs it. A sibling section's text (2026-10-13) is the same case with
+    the saved file in the store's place: it would also put a copy of another
+    section into this section's project file. The tool_use block is left
+    alone: it is just an id, and keeping it makes the transcript readable.
 
     Unlike the figure elision this has to match a ``tool_result`` back to the
     call that produced it, so the assistant's ``tool_use`` ids are collected
     first and the user-role results filtered against them.
     """
-    read_ids = {
-        block.get("id")
+    read_ids: dict[Any, str] = {
+        block.get("id"): _ELIDED_READ_TOOL_NOTES[block.get("name")]
         for message in messages
         if message.get("role") == "assistant"
         for block in (message.get("content") or [])
         if block.get("type") == "tool_use"
-        and block.get("name") == "read_reference_doc"
+        and block.get("name") in _ELIDED_READ_TOOL_NOTES
     }
-    read_ids.discard(None)
+    read_ids.pop(None, None)
     if not read_ids:
         return messages
 
@@ -2982,15 +3016,7 @@ def _elide_reference_tool_results(
                 and not block.get("is_error")
             ):
                 new_content.append(
-                    {
-                        **block,
-                        "content": (
-                            "[Reference document text omitted from history "
-                            "to keep it out of every later request. It is "
-                            "unchanged in the session — call "
-                            "read_reference_doc again to re-read it.]"
-                        ),
-                    }
+                    {**block, "content": read_ids[block.get("tool_use_id")]}
                 )
                 changed = True
             else:
@@ -3063,7 +3089,9 @@ def _committed_messages(
     - ``create_figure`` tool inputs shed their heavy source (see
       :func:`_elide_figure_tool_inputs`) — the figure store holds it.
     - ``read_reference_doc`` tool results shed the document body (see
-      :func:`_elide_reference_tool_results`) — the reference store holds it.
+      :func:`_elide_reference_tool_results`) — the reference store holds it;
+      ``read_project_section`` results shed the sibling section's text the
+      same way — its saved file holds it.
     - Edit results shed the document outline they returned (see
       :func:`history_hygiene.elide_stale_outlines`) — it was the model's id
       map WITHIN this turn; every later turn's PROJECT CONTEXT carries the
@@ -4193,6 +4221,103 @@ def _run_read_reference_doc(
     )
 
 
+def _run_read_project_section(
+    session: SessionState,
+    block: dict[str, Any],
+    trace_handle: Any = None,
+    *,
+    budget: TurnReferenceBudget | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``read_project_section`` tool_use block.
+
+    The ``read_reference_doc`` shape exactly: the sibling's text is returned
+    in full for this turn and elided from committed history afterwards
+    (:func:`_elide_reference_tool_results`), it is charged to the SAME
+    per-turn ``budget`` as an attached document (a turn comparing three
+    large sections is bounded like one reading three large attachments),
+    and every way the read can fail is an ``is_error`` result the model
+    acts on, never a turn failure.
+
+    The file is the section's saved ``.baspec`` beside the project brief,
+    resolved by number through the one derivation the Project panel's Open
+    uses (``sessions.resolve_section_file``) — so what the model reads is
+    what the panel would open. The home and link are the session's own
+    attributes, read under the turn guard the caller holds; the disk read
+    runs under it too, which is the tool loop's posture for every tool
+    (``apply_doc_edits`` works under the same guard), and the read parses
+    one document version, not the package (``project_sections``).
+    """
+    # ``sessions`` imports this module; resolved here, once the engine is
+    # fully initialized (the ``project_registry`` precedent).
+    from .. import sessions
+
+    number = str((block.get("input") or {}).get("number") or "")
+    link = session.project_link if isinstance(session.project_link, dict) else None
+    home = session.project_home if isinstance(session.project_home, dict) else None
+    try:
+        read = read_project_section(
+            number=number,
+            current_number=session.doc.doc.number,
+            link=link,
+            home=home,
+            resolve=sessions.resolve_section_file,
+        )
+    except SectionReadRefusal as exc:
+        _trace.note(trace_handle, f"read_project_section refused: {exc}")
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": f"read_project_section: {exc}",
+                "is_error": True,
+            },
+            [],
+        )
+    if budget is not None and not budget.take(read.char_count):
+        _trace.note(
+            trace_handle,
+            f"project section {read.number} refused: turn budget spent "
+            f"({budget.spent}/{budget.limit} chars)",
+        )
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": (
+                    f"read_project_section: this turn has already read "
+                    f"{budget.spent:,} characters of reference material and "
+                    f"section {read.number} ({read.char_count:,} characters) "
+                    f"does not fit in the {budget.limit:,}-character per-turn "
+                    "budget. Nothing was read. Work with what you have "
+                    "already read this turn, or reply and read this section "
+                    "next turn."
+                ),
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(
+        trace_handle,
+        f"read project section {read.number} ({read.char_count} chars)",
+    )
+    title = f' — "{read.title}"' if read.title else ""
+    header = (
+        f"Section {read.number}{title} of this project, as last saved "
+        f"({read.file_name}). Another section's own text: cross-reference "
+        "its provisions, never restate them here, and never treat its "
+        "wording as this section's — you cannot edit it from here. Statuses "
+        "in parentheses are that section's review states.\n\n"
+    )
+    return (
+        {
+            "type": "tool_result",
+            "tool_use_id": block.get("id"),
+            "content": wrap_project_section_body(header, read.text),
+        },
+        [],
+    )
+
+
 @dataclass
 class _QcApplyStaging:
     """Turn-local record of what apply_qc_fixes staged this turn.
@@ -4442,6 +4567,10 @@ def _run_tool(
         return _run_record_project_facts(session, block, trace_handle=trace_handle)
     if name == "read_reference_doc":
         return _run_read_reference_doc(
+            session, block, trace_handle, budget=reference_budget
+        )
+    if name == READ_PROJECT_SECTION_TOOL["name"]:
+        return _run_read_project_section(
             session, block, trace_handle, budget=reference_budget
         )
     if name == "apply_qc_fixes":

@@ -628,3 +628,71 @@ def parse_project_file(
         source_map=staged_project.source_map,
         legacy_json=True,
     )
+
+
+def read_project_json(data: bytes) -> dict[str, Any]:
+    """The project dict of a ``.baspec`` (or legacy JSON project) — read, not
+    validated.
+
+    For read-only consumers that render ONE document of another section
+    (``backend/project_sections.py``): the project member is read on its
+    own, bounded as :func:`parse_project_package` bounds it, and decoded.
+    Nothing else is done — no manifest digest, no source member, no parse
+    of every retained version — because a read that becomes nothing of the
+    session has no use for the seconds those checks cost on a large
+    package, and ``read_project_section`` parses the one version it renders
+    with the same ``SpecSection.from_dict`` a load runs on all of them. A
+    load of the file still goes through :func:`parse_project_file`.
+
+    ``ProjectPackageError`` (a ``ValueError``) for anything that is not a
+    readable package or JSON project; the message names the shape, never
+    the content.
+    """
+    if not isinstance(data, bytes):
+        raise TypeError("data must be bytes")
+    if len(data) > MAX_PACKAGE_BYTES:
+        raise ProjectPackageTooLargeError(
+            "The project file is too large "
+            f"(maximum {MAX_PACKAGE_BYTES // (1024 * 1024)} MiB)."
+        )
+    if not data.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        if len(data) > MAX_PROJECT_JSON_BYTES:
+            raise ProjectPackageTooLargeError(
+                "The legacy JSON project exceeds its size limit."
+            )
+        project = _decode_json(data, label="project data")
+        if not isinstance(project, dict):
+            raise ProjectPackageError("The project data is not a JSON object.")
+        return project
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data), "r")
+    except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+        raise ProjectPackageError(
+            "That file is not a readable project package."
+        ) from exc
+    try:
+        try:
+            info = archive.getinfo(PROJECT_PATH)
+        except KeyError as exc:
+            raise ProjectPackageError(
+                "The project package is missing its project data."
+            ) from exc
+        if info.is_dir() or info.file_size < 0 or info.file_size > MAX_PROJECT_JSON_BYTES:
+            raise ProjectPackageTooLargeError(
+                f"The {PROJECT_PATH} member exceeds its size limit."
+            )
+        project = _decode_json(
+            _read_member(archive, info, maximum=MAX_PROJECT_JSON_BYTES),
+            label="project data",
+        )
+    except ProjectPackageError:
+        raise
+    except (zipfile.BadZipFile, RuntimeError, NotImplementedError, struct.error) as exc:
+        raise ProjectPackageError(
+            "The project package failed ZIP integrity validation."
+        ) from exc
+    finally:
+        archive.close()
+    if not isinstance(project, dict):
+        raise ProjectPackageError("The project data is not a JSON object.")
+    return project

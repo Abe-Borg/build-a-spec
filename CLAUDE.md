@@ -2063,7 +2063,7 @@ with "pending acceptance of shop drawings" never read ready.
   'pending' look(s) left, which do not hold readiness", or after "N lint
   issue(s) to fix."). Unchanged when there is no look.
 - **What the model reads.** The LINT REPORT header says each issue holds
-  readiness "except one marked 'look only'", and a look's line reads
+  readiness "except any marked 'look only'" (every look; Codex review on PR #318), and a look's line reads
   `[explanatory_prose, look only]`. `_LINT_POLICY` says "pending" alone is
   a look, a real hold point stays, and it does not hold readiness. The
   stable prompt changes once (cache rewrite); the QC manifest does not

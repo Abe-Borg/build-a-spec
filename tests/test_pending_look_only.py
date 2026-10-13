@@ -164,7 +164,7 @@ def test_the_model_reads_which_finding_is_a_look(monkeypatch):
     assert client.post("/api/chat", json={"message": "hi"}).status_code == 200
     context = _flat(request_context_text(fake.messages.requests[0]))
     assert (
-        "each issue holds issue readiness until fixed, except one marked "
+        "each issue holds issue readiness until fixed, except any marked "
         "'look only'" in context
     )
     assert "[explanatory_prose, look only]" in context
@@ -181,3 +181,25 @@ def test_the_lint_policy_says_a_hold_point_stays_and_does_not_hold_readiness():
             'such as a hold point ("pending acceptance of shop drawings"), and '
             "it does not hold issue readiness." in prompt
         )
+
+
+def test_every_hold_point_is_a_look_and_none_holds_readiness(monkeypatch):
+    """Two hold points: both are looks, and the header covers every one
+    (Codex review on PR #318: "except one marked" read as a single
+    exemption)."""
+    second = "Do not conceal piping pending acceptance of the hydrostatic test."
+    client, lint = _client_with(HOLD_POINT, second)
+    assert [issue.get("look_only") for issue in lint] == [True, True]
+    check = _lint_check(client)
+    assert check["ok"] is True
+    assert check["detail"] == (
+        "Lint clean apart from 2 'pending' look(s) left, which do not hold "
+        "readiness."
+    )
+    fake = FakeClient([text_turn(["Noted."])])
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    assert client.post("/api/chat", json={"message": "hi"}).status_code == 200
+    context = _flat(request_context_text(fake.messages.requests[0]))
+    assert "except any marked 'look only'" in context
+    assert "except one marked" not in context
+    assert context.count("[explanatory_prose, look only]") == 2

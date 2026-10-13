@@ -23753,7 +23753,7 @@ neither; "N lint issue(s) to fix." with no look (the existing wording, so
 sentences with both.
 
 **What the model reads.** The LINT REPORT header: "each issue holds issue
-readiness until fixed, except one marked 'look only'"; a look's line:
+readiness until fixed, except any marked 'look only'" ("one" in the first push read as a single exemption; Codex review on PR #318); a look's line:
 `[explanatory_prose, look only]`. `_LINT_POLICY`: "pending" alone is a look
 (marked in the report), a real hold point such as "pending acceptance of
 shop drawings" stays, and it does not hold issue readiness; "every issue it

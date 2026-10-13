@@ -2769,7 +2769,7 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
     if lint_items:
         lines = [
             "LINT REPORT (deterministic; it never blocks an edit, but each "
-            "issue holds issue readiness until fixed, except one marked "
+            "issue holds issue readiness until fixed, except any marked "
             "'look only' — stale-edition findings are drafting errors to "
             "fix):"
         ]

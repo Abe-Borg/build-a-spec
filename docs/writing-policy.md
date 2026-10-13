@@ -7,7 +7,7 @@ Final QC reviews against it. The rules themselves live in
 how they were reconciled with the code that existed before them, where they
 are wired in, what they cannot do, and what has and has not been measured.
 
-Policy `spec-writing/3`. Version 1 was written 2026-10-06 from the owner's
+Policy `spec-writing/4`. Version 1 was written 2026-10-06 from the owner's
 coding-agent brief ("Integrate a shared, versioned writing policy into
 drafting and Final QC"); version 2 (2026-10-13, step 5 of the prompt-review
 follow-up) made a relocation one `relocate` operation, so a provision's
@@ -15,7 +15,10 @@ subparagraphs can no longer be lost between two batches; version 3
 (the same day, step 6) made the voice rule ban commentary rather than
 statements — definitions, REFERENCES entries, schedules, product criteria and
 scope statements are specification text — and kept a qualifier that defines
-where a requirement applies as scope.
+where a requirement applies as scope; version 4 (the same day, the review's
+small leftovers) stopped "write around it" from pointing a missing value at
+the Drawings unless the user has said they show it, or handing the engineer
+of record's design criteria to the Contractor as a submittal.
 
 ## What the policy says
 

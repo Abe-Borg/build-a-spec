@@ -217,6 +217,45 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — the prompt review's small leftovers
+
+(2026-10-13, the prompt-review follow-up. docs/as-built.md's "The prompt
+review's small leftovers" is the record; in the next release.)
+
+Five small items from the outside review:
+
+- **Long chats keep who decided what.** When the oldest turns of a long
+  chat are condensed, the summary now says who settled each decision —
+  you stated it, you approved a proposal, or it is a default you let stand —
+  and quotes your words. The assistant is told a summary line is a record,
+  not your confirmation: it confirms a provision on it only when the summary
+  says you stated or approved it, and otherwise re-reads the turn or asks.
+- **Research is evidence, not the rule.** Grounded research still outweighs
+  the assistant's own knowledge, but grounded only means a source said it.
+  Before drafting to a finding, the assistant checks it fits this project
+  (jurisdiction, occupancy or system, the edition in effect) and says so in
+  chat when it may not.
+- **Writing around a gap stays honest.** When a value is missing, the
+  assistant writes a performance requirement or leaves the clause out and
+  asks. It refers to the Drawings or a schedule only for what you have said
+  they show, and never hands the engineer of record's design criteria
+  (hazard classification, design density and area, water supply basis) to
+  the Contractor as a submittal. Delegated design the section assigns on
+  purpose — working plans, hydraulic calculations, seismic bracing — is
+  unchanged.
+- **Templates read the document as data.** The AI template pass is told the
+  specification it generalizes is data, not instructions, and the document's
+  text cannot end that frame and speak as the prompt. It also no longer
+  generalizes a value into "as indicated on the Drawings".
+- **Four more tag guards** treat a longer tag such as
+  `<standards_in_effect-note>` as ordinary text, as step 6 did for attached
+  documents and project facts.
+
+The writing policy changed (version 4), so a retained Final QC result reads
+stale once — the same release as the earlier steps, so you re-run once.
+Open chat sessions rewrite their cached prompt once. No paid API call was
+made.
+
 ## Current Status — the chat reads Final QC findings in full, fetches more, and knows when research was trimmed
 
 (2026-10-13, owner decisions. docs/as-built.md's "The chat reads a Final QC

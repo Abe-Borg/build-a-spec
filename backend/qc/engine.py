@@ -3176,8 +3176,13 @@ def _render_section(section: SpecSection) -> str:
 # every lens and verifier seat prompt, so the tag is defused visibly, as the
 # attached documents and the facts defuse theirs. Text without the tag
 # renders byte for byte as before.
+# The name must end at whitespace, "/" or ">" (``(?=[\s/>])``), not at a
+# word boundary: "-", ":" or "." would end it there, and a longer tag
+# such as "<standards_in_effect-note>" is another tag that passes through byte for
+# byte (Codex review on PR #314, applied here in the prompt-review
+# follow-up).
 _STANDARDS_TAG_PATTERN = re.compile(
-    r"<\s*/?\s*standards_in_effect\b[^>]*>", re.IGNORECASE
+    r"<\s*/?\s*standards_in_effect(?=[\s/>])[^>]*>", re.IGNORECASE
 )
 
 
@@ -3207,8 +3212,13 @@ def _standards_in_effect_block(standards: str) -> str:
 # as an end tag too; Codex review on PR #306, which fixed the standards
 # pattern the same way). Text without the tag renders byte for byte as
 # before.
+# The name must end at whitespace, "/" or ">" (``(?=[\s/>])``), not at a
+# word boundary: "-", ":" or "." would end it there, and a longer tag
+# such as "<project_requirements_profile-note>" is another tag that passes through byte for
+# byte (Codex review on PR #314, applied here in the prompt-review
+# follow-up).
 _PROFILE_TAG_PATTERN = re.compile(
-    r"<\s*/?\s*project_requirements_profile\b[^>]*>", re.IGNORECASE
+    r"<\s*/?\s*project_requirements_profile(?=[\s/>])[^>]*>", re.IGNORECASE
 )
 
 

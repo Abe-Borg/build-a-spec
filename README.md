@@ -217,6 +217,52 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — Final QC accounts for the research, sees your open questions, and says when it cannot check
+
+(2026-10-13, the prompt-review follow-up. docs/as-built.md's "Final QC v5:
+research coverage, open questions, and cannot verify" is the record; in the
+next release.)
+
+Three changes to Final QC (protocol `final-qc/5`, report schema `5`):
+
+- **A reviewer can say it cannot check a finding.** Each reviewer used to
+  have two answers and was told to refute when unsure, so a reviewer that
+  could not read the text deciding a finding — a paywalled NFPA section, a
+  document nobody attached — refuted it, and two such reviewers on a medium
+  finding deleted it as "refuted" with nobody having checked it. Now a
+  reviewer answers "could not verify" and names what it would need to see.
+  That counts neither way: a finding is refuted only when a majority of the
+  whole panel refutes it, and one the reviewers could not settle comes to
+  you as **disputed — the reviewers could not check it**. Like every
+  dispute it holds issue readiness until you address it or dismiss it with
+  a reason. A critical or high refutation still needs validated evidence.
+- **Final QC reads your open Waiting-on-you items.** Every lens and reviewer
+  sees the questions the assistant is still waiting on you for, so a clause
+  written around a value you have not given yet, or left out until a
+  blocking answer arrives, is no longer reported as an oversight. A
+  provision marked confirmed that states an answer you have not given is
+  still a finding. Settling or raising a question after a review makes the
+  review stale, as recording a project fact does, so settle open questions
+  before running Final QC.
+- **Every research requirement gets a disposition.** The completeness lens
+  accounts for each controlling requirement in the requirements research
+  (grounded specification requirements): **covered** (with the paragraphs
+  that state it), **missing** (with the finding it raised, whose panel
+  outcome you can see), or **not applicable** (with why: jurisdiction,
+  occupancy or system, edition in effect, or another section's scope). A
+  requirement the lens skipped reads **not assessed**, and one the research
+  length limit kept from the reviewers reads **not shown**, so nothing reads
+  as accounted for that was not. The table is in the Final QC report, a
+  short version (what needs attention) is in the review report, the report
+  view shows it, and the assistant can list the missing ones. It is the
+  completeness lens's accounting, not the panel's: only findings are
+  verified.
+
+Saved Final QC reports from before this change still open and export as the
+final-qc/4 record they are, but read out of date: re-run Final QC once (the
+same release as the earlier prompt-review steps). Open chat sessions rewrite
+their cached prompt once. No paid API call was made.
+
 ## Current Status — the chat's Final QC summary knows when the review went stale
 
 (2026-10-13, owner decision. docs/as-built.md's "The chat's Final QC
@@ -1002,9 +1048,14 @@ thinking with empty text unless a request asks for a summary of it.
   medium or low finding, three for a critical or high one). Each reviewer
   reads the same specification and, independently, tries to refute the claim:
   is it wrong on the facts, already handled elsewhere in the document, out of
-  this section's scope, or trivial? A reviewer refutes when unsure. The
-  finding is **upheld** only if every reviewer upholds it; a majority
-  refutation **refutes** it; any other split is **disputed** and comes to you.
+  this section's scope, or trivial? A reviewer refutes when unsure on the
+  merits. A reviewer that cannot reach the text that decides the finding (a
+  paywalled standard, a document nobody supplied) says so instead of refuting
+  it, and names what it would need to see. The finding is **upheld** only if
+  every reviewer upholds it; a refutation by a majority of the whole panel
+  **refutes** it, and a reviewer that could not verify it never counts as
+  refuting; any other split is **disputed** and comes to you (as
+  "unverifiable" when the reviewers that checked it did not disagree).
   A critical or high finding can be refuted only with validated evidence (a
   source the reviewer actually read, or a cited place in the specification
   or an attached document); otherwise it is disputed instead of dropped. Each reviewer also judges
@@ -3890,12 +3941,12 @@ actions.
   content/input fingerprints, input manifest, model, effective QC
   configuration, start/finish timestamps and duration, research-profile
   availability, and current/stale status. A later document edit cannot be
-  mistaken for the version that was reviewed. New reports use schema `4` and
-  protocol `final-qc/4`; earlier reports remain readable and exportable as
+  mistaken for the version that was reviewed. New reports use schema `5` and
+  protocol `final-qc/5`; earlier reports remain readable and exportable as
   historical evidence, but cannot provide an actionable fix queue — a
-  schema-3 report was adjudicated under the superseded panel rule, so it is
-  kept as the record of what was decided and never re-scored under the
-  current one.
+  schema-3 or schema-4 report was adjudicated under a superseded panel rule,
+  so it is kept as the record of what was decided and never re-scored under
+  the current one.
 - **Each lens leaves an observable work record, including failures.** The
   report keeps the lens title, completion status or error, summary, explicit
   coverage checks and outcomes, search queries, retrieved sources, finding and
@@ -4844,7 +4895,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_LENS_EFFORT` | = `QC_EFFORT` (`medium`) | Effort for phase 1 (the five lenses and the consolidation call). `BUILD_A_SPEC_QC_LENS_EFFORT=high` puts the lenses back at the pre-P55-3 depth while the verifier seats keep their own effort. |
 | `BUILD_A_SPEC_QC_VERIFIER_EFFORT` | `medium` (follows `BUILD_A_SPEC_QC_EFFORT`) | Effort for phase 2 (the verifier seats — ~90% of a run's calls, answering a bounded question each). `medium` on every seat model since 2026-10-12 (owner decision, for cost); from 2026-10-08, when the seats moved to Sonnet 5.5, they defaulted to `high`, Sonnet 5.5's own default. Unset, it follows `BUILD_A_SPEC_QC_EFFORT`. Effort is part of a review's recorded inputs, so a Final QC result made while the seats ran at `high` reads stale once — re-run Final QC before applying its fixes. `high` restores the previous depth: in PowerShell `$env:BUILD_A_SPEC_QC_VERIFIER_EFFORT = "high"`; in Command Prompt `set BUILD_A_SPEC_QC_VERIFIER_EFFORT=high`. |
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
-| `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding can never be `disputed` and a single reviewer's refusal deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
+| `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding is `disputed` only when its single reviewer cannot verify it, and that reviewer's refutation deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |
 | `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | unset (GUI defaults to Stream) | When unset, Final QC phase 2 uses the Stream / Batch choice in its start confirmation or Settings, remembered on this computer in `qc_preferences.json` beside `onboarding_state.json`; with nothing saved it streams (the default moved from Batch on 2026-10-07; a saved choice is kept). Stream sends one seat per cache group first and the rest once it is answering, with live seat activity and a 5-minute cache entry; Batch prices tokens at half, shows a count of seats returned, stores a 5-minute entry too (1-hour before 2026-10-08), and may re-store the document for many seats (39% of batched seats read the shared copy on the measured run). Setting this variable locks both controls: `0`, `false`, `no`, `off` select Stream; other values select Batch. The choice is snapshotted for each run, never stored in a `.baspec` or the panel layout; switching it makes retained results stale through the existing input manifest. |
 | `BUILD_A_SPEC_QC_REFUSAL_FALLBACK` | `1` | Final QC's refusal fallback (the 5.5 prompting upgrade, P55-7): every streamed Final QC request — the lenses, the grouping calls, streamed verifier seats and warm leads — carries `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a request the QC model's safety classifiers decline is retried by the API on the fallback model it chooses, and that model's answer is used. The record that call produced names the answering model, and the report states it on that record and under Limitations, with the cost of those calls estimated at the rates of the model configured for that call (the lenses' model, or the seats'). Batched verifier seats never carry it (the Batches API rejects the parameter), nor do seats run on Claude Haiku 5.5, which has no server-side fallback. A request the provider refuses because of the parameter is sent once more without it, and the fallback then switches off until the app restarts. Not a review input: a retained Final QC result stays current either way. `0` switches it off: a declined call fails as it did before. In PowerShell: `$env:BUILD_A_SPEC_QC_REFUSAL_FALLBACK = "0"`; in Command Prompt: `set BUILD_A_SPEC_QC_REFUSAL_FALLBACK=0`. |

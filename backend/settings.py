@@ -589,9 +589,10 @@ QC_MAX_WORKERS = _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8, minimum=1)
 
 # Adversarial verification panel sizes. Medium/low findings face
 # QC_VERIFIERS_STANDARD refuters; critical/high face QC_VERIFIERS_CRITICAL.
-# Adjudication is final-qc/4 (see backend/qc/engine.VERIFICATION_RULE_V4):
+# Adjudication is final-qc/5 (see backend/qc/engine.VERIFICATION_RULE_V5):
 # a UNANIMOUS panel upholds, a majority refutation refutes, and any other
-# split is `disputed` and escalates to a human. Raising a panel size
+# split is `disputed` and escalates to a human; a seat that could not verify
+# the finding counts as neither side. Raising a panel size
 # therefore increases scrutiny — under the old strict-majority rule the
 # extra critical seat bought leniency instead (2-of-3 passed where a
 # 2-seat panel needed 2-of-2).
@@ -600,17 +601,19 @@ QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3, minimu
 
 # One seat is in range and legal, and it changes what the review MEANS
 # rather than merely how much of it there is: a panel of one cannot split,
-# so `disputed` is unreachable for medium/low and a lone reviewer's
-# refusal deletes the finding with no escalation to anyone. That is a
+# so a medium/low finding is disputed only when its lone reviewer cannot
+# verify it (final-qc/5), and that reviewer's refutation deletes the finding
+# with no escalation to anyone. That is a
 # defensible choice and it stays available (docs/as-built.md records 2 -> 1 as a
 # deferred cost lever), but it must never be a silent one. Warned on the
 # RESOLVED value, so a clamp up from 0 says this too.
 if QC_VERIFIERS_STANDARD < 2:
     logging.getLogger(_LOGGER_NAME).warning(
         "BUILD_A_SPEC_QC_VERIFIERS_STANDARD=%d: a one-seat medium/low panel "
-        "cannot split, so no medium/low finding can be disputed and a single "
-        "reviewer's refusal is final, with no escalation. The audit manifest "
-        "records the rule this configuration actually follows.",
+        "cannot split, so a medium/low finding is disputed only when its "
+        "single reviewer cannot verify it, and that reviewer's refutation is "
+        "final, with no escalation. The audit manifest records the rule this "
+        "configuration actually follows.",
         QC_VERIFIERS_STANDARD,
     )
 

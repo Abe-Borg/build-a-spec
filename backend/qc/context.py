@@ -40,8 +40,8 @@ def _estimate_tokens(text: str) -> int:
 # per-turn block and ``read_qc_finding``. ``inputs`` is the answer
 # ``apply_qc_fixes`` would give (``apply.matches_current_inputs``) when the
 # document itself is unchanged: research, an attached document, an
-# established fact or a QC setting moved, or the imported-source check has
-# not settled (Codex review on PR #319; the per-turn block since 2026-10-13).
+# established fact, an open Waiting-on-you item (final-qc/5) or a QC setting
+# moved, or the imported-source check has not settled (Codex review on PR #319; the per-turn block since 2026-10-13).
 _FRESH_CURRENT = "current"
 _STALE_DOCUMENT = "document"
 _STALE_INPUTS = "inputs"
@@ -99,16 +99,90 @@ def _finding_line(finding: Any, section: Any, state: str) -> str:
     )
 
 
+# Why a candidate is disputed, in words (``QCFinding.dispute_reason``).
+_DISPUTE_REASON_WORDS = {
+    "split_panel": "the reviewers who checked it split",
+    "insufficient_refutation_evidence": (
+        "a critical/high refutation cited no validated evidence"
+    ),
+    "unverifiable": (
+        "the reviewers could not check it; their notes say what they needed"
+    ),
+}
+
+
 def _disputed_line(finding: Any) -> str:
     ref = str(
         getattr(finding, "reviewed_ref", "")
         or getattr(finding, "element_id", "")
         or "section-level"
     )
+    # Only the reason a person acts on differently: an unverifiable dispute
+    # waits on text nobody reached, not on a judgement between reviewers.
+    unverifiable = (
+        " (the reviewers could not check it)"
+        if getattr(finding, "dispute_reason", "") == "unverifiable"
+        else ""
+    )
     return (
         f"- [{finding.severity}] {finding.finding_id} {ref}: "
-        f"{_one_line(finding.title)} — {_one_line(finding.issue)}"
+        f"{_one_line(finding.title)} — {_one_line(finding.issue)}{unverifiable}"
     )
+
+
+# What a research requirement disposition says, in words (final-qc/5).
+_COVERAGE_WORDS = (
+    ("covered", "covered"),
+    ("missing", "missing"),
+    ("not_applicable", "not applicable"),
+    ("not_assessed", "not assessed"),
+    ("not_shown", "not shown to the reviewers"),
+)
+_COVERAGE_ATTENTION = ("missing", "not_assessed", "not_shown")
+
+
+def _coverage_counts_line(result: Any) -> str:
+    """"12 covered · 2 missing" for a v5 result; ``""`` without the record."""
+    coverage = getattr(result, "requirement_coverage", None)
+    if coverage is None:
+        return ""
+    counts = coverage.counts()
+    parts = [f"{counts[key]} {words}" for key, words in _COVERAGE_WORDS if counts.get(key)]
+    return " · ".join(parts) or "no controlling requirements"
+
+
+def _coverage_index(result: Any) -> list[str]:
+    """The index's research coverage section: the counts, then each
+    requirement that needs attention with the finding raised for it."""
+    coverage = getattr(result, "requirement_coverage", None)
+    if coverage is None:
+        return []
+    lines = [
+        "",
+        "RESEARCH REQUIREMENT COVERAGE (the completeness lens's accounting, "
+        f"not panel-verified): {_coverage_counts_line(result)}.",
+    ]
+    words = dict(_COVERAGE_WORDS)
+    for entry in coverage.entries:
+        if entry.disposition not in _COVERAGE_ATTENTION:
+            continue
+        line = (
+            f"- {entry.requirement_id} [{words[entry.disposition]}] "
+            f"{_one_line(entry.requirement, 200)}"
+        )
+        if entry.disposition == "missing":
+            linked = result.finding_for_origin(
+                entry.origin_id, lens_id="completeness", title=entry.finding_title
+            )
+            if linked is not None:
+                key, finding = linked
+                line += f" — finding {finding.finding_id} ({key})"
+            elif not entry.finding_title:
+                line += " — no finding raised"
+        if entry.note:
+            line += f". Note: {_one_line(entry.note, 200)}"
+        lines.append(line)
+    return lines
 
 
 def _render(
@@ -146,8 +220,9 @@ def _render(
         lines.append(
             "Freshness: STALE — the document is unchanged, but another review "
             "input changed after this review (requirements research, an "
-            "attached document, an established project fact, or a Final QC "
-            "setting), or the imported-source permission check has not "
+            "attached document, an established project fact, an open "
+            "Waiting-on-you item, or a Final QC setting), or the "
+            "imported-source permission check has not "
             "settled. Fixes CANNOT be applied until Final QC is re-run; "
             "describe the findings as the last review's, made on inputs that "
             "have since moved."
@@ -183,9 +258,9 @@ def _render(
         lines.append("")
         lines.append(
             f"OPEN DISPUTED CANDIDATES ({len(open_disputed)} — the complete "
-            "verifier panel disagreed; NEVER applyable; the user adjudicates "
-            "each in the Final QC panel, by dismissing with a reason or "
-            "re-running):"
+            "verifier panel disagreed or could not check it; NEVER "
+            "applyable; the user adjudicates each in the Final QC panel, by "
+            "dismissing with a reason or re-running):"
         )
         lines.extend(_disputed_line(f) for f in open_disputed)
     applied = sum(1 for f in result.findings if f.status == "applied")
@@ -198,6 +273,12 @@ def _render(
         "inconclusive (audit records — read_qc_finding with no id lists "
         "every record with its id)."
     )
+    coverage_line = _coverage_counts_line(result)
+    if coverage_line:
+        lines.append(
+            f"Research requirements accounted for: {coverage_line} "
+            "(read_qc_finding with no id lists the ones that need attention)."
+        )
     if trimmed:
         lines.append(
             f"NOTE: {trimmed} finding(s) were trimmed from this rendering "
@@ -313,7 +394,8 @@ READ_QC_FINDING_TOOL: dict[str, Any] = {
         "verifier's vote and note, the original lens claims it combines, "
         "and its disposition. Omit finding_id to list every record on the "
         "report — open, applied, dismissed, disputed, refuted and "
-        "inconclusive — with their ids.\n"
+        "inconclusive — with their ids, and the research requirements the "
+        "review found missing or did not account for.\n"
         "\n"
         "Read a finding before explaining it past the one line your FINAL "
         "QC REVIEW block gives it, before drafting a remedy for an advisory "
@@ -351,8 +433,9 @@ _CATEGORIES: tuple[tuple[str, str, str], ...] = (
     (
         "disputed",
         "DISPUTED CANDIDATES",
-        "disputed candidate (the verifier panel split; never applyable — "
-        "the user adjudicates it in the Final QC panel)",
+        "disputed candidate (the verifier panel split, or could not check "
+        "it; never applyable — the user adjudicates it in the Final QC "
+        "panel)",
     ),
     (
         "refuted",
@@ -400,8 +483,9 @@ def _freshness(state: str) -> str:
         return (
             "Freshness: STALE — the document is unchanged, but another review "
             "input changed after this review (requirements research, an "
-            "attached document, an established project fact, or a Final QC "
-            "setting), or the imported-source permission check has not "
+            "attached document, an established project fact, an open "
+            "Waiting-on-you item, or a Final QC setting), or the "
+            "imported-source permission check has not "
             "settled. Its fixes cannot be applied through apply_qc_fixes "
             "until Final QC is re-run."
         )
@@ -432,6 +516,7 @@ def _index(result: Any, state: str) -> str:
             f"{_anchor(f)}: {_one_line(f.title)}"
             for f in group
         )
+    lines.extend(_coverage_index(result))
     lines.append("")
     lines.append("Call read_qc_finding with one of these ids for its full record.")
     return "\n".join(lines)
@@ -462,7 +547,13 @@ def _verdict_line(index: int, verdict: Any) -> str:
     if verdict.status != "completed":
         error = f": {_one_line(verdict.error, 200)}" if verdict.error else ""
         return f"- {seat}: did not complete ({verdict.status}{error})"
-    vote = "upholds" if verdict.upholds else "refutes"
+    vote = (
+        "could not verify"
+        if getattr(verdict, "cannot_verify", False)
+        else "upholds"
+        if verdict.upholds
+        else "refutes"
+    )
     parts = [f"- {seat}: {vote}"]
     if verdict.revised_severity:
         parts.append(f"severity → {verdict.revised_severity}")
@@ -570,7 +661,16 @@ def _detail(
         if finding.verification_panel_size
         else ""
     )
-    dispute = f"; dispute: {finding.dispute_reason}" if finding.dispute_reason else ""
+    dispute = (
+        f"; dispute: {finding.dispute_reason}"
+        + (
+            f" ({_DISPUTE_REASON_WORDS[finding.dispute_reason]})"
+            if finding.dispute_reason in _DISPUTE_REASON_WORDS
+            else ""
+        )
+        if finding.dispute_reason
+        else ""
+    )
     lines.append(f"Verification: {outcome}{panel}{dispute}")
     if finding.verification_rule:
         lines.append(f"Rule: {finding.verification_rule.strip()}")

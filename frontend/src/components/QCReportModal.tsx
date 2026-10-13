@@ -2,20 +2,26 @@
  * Audit-grade, read-only Final QC report.
  *
  * QCDrawer remains the compact action queue. This modal exposes the durable
- * record behind it: run identity, methodology, lens work papers, every source
- * check and verifier record, unabridged proposed operations, disposition
- * history, usage, substantively refuted candidates, infrastructure-
- * inconclusive candidates, and limitations.
+ * record behind it: run identity, methodology, lens work papers, research
+ * requirement coverage, every source check and verifier record, unabridged
+ * proposed operations, disposition history, usage, substantively refuted
+ * candidates, infrastructure-inconclusive candidates, and limitations.
  */
 import { useRef } from "react";
 import type { ReactNode } from "react";
-import type { QcCandidateOrigin, QcSnapshot, ReadinessPayload } from "../types";
+import type {
+  QcCandidateOrigin,
+  QcRequirementCoverage,
+  QcSnapshot,
+  ReadinessPayload,
+} from "../types";
 import { useDialogFocus } from "../lib/dialogFocus";
 import { useQcReportDownloads } from "../lib/useQcReportDownloads";
 import {
   QC_GROUNDING_METHODOLOGY_NOTE,
   QC_OPS_SOURCE_LABELS,
   QC_REQUEST_METHODOLOGY_NOTE,
+  QC_REQUIREMENT_COVERAGE_FRAMING,
   QC_WARM_LEAD_METHODOLOGY_NOTE,
   buildQcReportMetrics,
   collectQcOperationRecords,
@@ -45,6 +51,14 @@ import {
   qcPrimaryReport,
   qcPreRemediationState,
   qcReportLimitations,
+  qcRequirementCountsLine,
+  qcRequirementCoverage,
+  qcRequirementDispositionLabel,
+  qcRequirementEntries,
+  qcRequirementFinding,
+  qcRequirementNeedsAttention,
+  qcRequirementNotHeldLine,
+  qcRequirementUnlinkedNote,
   qcRequestPopulation,
   qcRequestPopulationNote,
   qcBatchCapture,
@@ -53,6 +67,7 @@ import {
   qcStreamedLeadSeats,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
+  qcVerdictCannotVerify,
   safeHttpUrl,
   verifierSeatCoverage,
   type QcReportFinding,
@@ -409,12 +424,14 @@ function VerdictRecord({ verdict, index }: { verdict: QcReportVerdict; index: nu
       ? `Reviewer seat ${storedReviewerIndex}`
       : `Reviewer record ${index + 1} (legacy/unindexed)`;
   const failedSeat = isFailedVerifierSeat(verdict);
+  // final-qc/5: neither an uphold nor a refutation, so it reads as neither.
+  const cannotVerify = !failedSeat && qcVerdictCannotVerify(verdict);
   return (
     <div className="rounded-lg border border-edge/70 bg-bg/40 px-3 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-[11px] font-semibold text-ink">{reviewerLabel}</p>
-        <Pill className={failedSeat ? "border-err/40 bg-err/10 text-err" : verdict.upholds ? "border-err/40 bg-err/10 text-err" : "border-ok/40 bg-ok/10 text-ok"}>
-          {failedSeat ? "non-completed verifier seat" : verdict.upholds ? "upholds candidate" : "does not uphold"}
+        <Pill className={failedSeat ? "border-err/40 bg-err/10 text-err" : cannotVerify ? "border-warn/40 bg-warn/10 text-warn" : verdict.upholds ? "border-err/40 bg-err/10 text-err" : "border-ok/40 bg-ok/10 text-ok"}>
+          {failedSeat ? "non-completed verifier seat" : cannotVerify ? "could not verify" : verdict.upholds ? "upholds candidate" : "does not uphold"}
         </Pill>
         {verdict.status && <Pill className={statusTone(verdict.status)}>{verdict.status}</Pill>}
       </div>
@@ -436,7 +453,9 @@ function VerdictRecord({ verdict, index }: { verdict: QcReportVerdict; index: nu
         )}
       </dl>
       <div className="mt-2">
-        <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">Reviewer note</p>
+        <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">
+          {cannotVerify ? "Reviewer note — what it would need to see" : "Reviewer note"}
+        </p>
         <p className="mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-ink-dim">
           {verdict.note || NOT_RECORDED}
         </p>
@@ -866,6 +885,112 @@ function LensRecord({ lens, index }: { lens: QcReportLens; index: number }) {
   );
 }
 
+const dispositionTone: Record<string, string> = {
+  missing: "border-err/40 bg-err/10 text-err",
+  not_assessed: "border-warn/40 bg-warn/10 text-warn",
+  not_shown: "border-warn/40 bg-warn/10 text-warn",
+  not_applicable: "border-edge bg-raised text-ink-dim",
+  covered: "border-ok/40 bg-ok/10 text-ok",
+};
+
+/** Every controlling research requirement and what the completeness lens
+ *  found of it (final-qc/5) — the Word memo's coverage table. */
+function RequirementCoverageRecord({
+  report,
+  coverage,
+}: {
+  report: QcReportResult;
+  coverage: QcRequirementCoverage;
+}) {
+  const entries = qcRequirementEntries(coverage);
+  const unlisted = Number(coverage.unlisted_count) || 0;
+  return (
+    <>
+      <dl className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+        <DataField label="Dispositions">{qcRequirementCountsLine(coverage)}</DataField>
+        <DataField label="Not held against the draft">{qcRequirementNotHeldLine(coverage)}</DataField>
+        {unlisted > 0 && (
+          <DataField label="Entries ignored">
+            {unlisted} entry(ies) named an id outside the controlling requirements
+          </DataField>
+        )}
+      </dl>
+      {entries.length === 0 ? (
+        <div className="mt-3">
+          <EmptyRecord>The requirements research held no controlling requirement.</EmptyRecord>
+        </div>
+      ) : (
+        <div className="mt-3 overflow-x-auto rounded-lg border border-edge/60">
+          <table className="w-full min-w-[48rem] border-collapse text-left text-[11px]">
+            <thead className="bg-raised text-[9px] tracking-wide text-ink-faint uppercase">
+              <tr>
+                <th className="border-b border-edge px-3 py-2 font-semibold">Requirement</th>
+                <th className="border-b border-edge px-3 py-2 font-semibold">Disposition</th>
+                <th className="border-b border-edge px-3 py-2 font-semibold">Where / finding</th>
+                <th className="border-b border-edge px-3 py-2 font-semibold">Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((entry, index) => {
+                const disposition = String(entry.disposition ?? "");
+                const details = [entry.authority, entry.code_reference]
+                  .map((value) => String(value ?? "").trim())
+                  .filter(Boolean);
+                const linked =
+                  disposition === "missing" ? qcRequirementFinding(report, entry) : null;
+                const refs = (entry.element_refs ?? []).filter(Boolean);
+                return (
+                  <tr
+                    key={`${entry.requirement_id}-${index}`}
+                    className={`border-b border-edge/40 align-top last:border-0 ${qcRequirementNeedsAttention(entry) ? "bg-warn/5" : ""}`}
+                  >
+                    <td className="px-3 py-2">
+                      <p className="whitespace-pre-wrap break-words leading-relaxed text-ink-dim">
+                        {String(entry.requirement ?? "").trim() || NOT_RECORDED}
+                      </p>
+                      {details.length > 0 && (
+                        <p className="mt-0.5 text-[10px] text-ink-faint">{details.join("; ")}</p>
+                      )}
+                      <p className="mt-0.5 break-all font-mono text-[9px] text-ink-faint">{entry.requirement_id}</p>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Pill className={dispositionTone[disposition] ?? "border-edge bg-raised text-ink-dim"}>
+                        {qcRequirementDispositionLabel(disposition)}
+                      </Pill>
+                    </td>
+                    <td className="px-3 py-2 text-ink-dim">
+                      {disposition === "covered" ? (
+                        refs.length ? refs.join(", ") : NOT_RECORDED
+                      ) : disposition !== "missing" ? (
+                        "—"
+                      ) : linked ? (
+                        <>
+                          <p className="whitespace-pre-wrap break-words leading-relaxed">
+                            {linked.finding.title || "Untitled finding"}{" "}
+                            <span className="text-ink-faint">({linked.outcome})</span>
+                          </p>
+                          <p className="mt-0.5 break-all font-mono text-[9px] text-ink-faint">
+                            {linked.finding.finding_id || NOT_RECORDED}
+                          </p>
+                        </>
+                      ) : (
+                        <span className="text-warn">{qcRequirementUnlinkedNote(entry)}</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 whitespace-pre-wrap break-words leading-relaxed text-ink-dim">
+                      {String(entry.note ?? "").trim() || "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
 function ReadinessRecord({ readiness }: { readiness: ReadinessPayload | null | undefined }) {
   if (!readiness) {
     return <EmptyRecord>No issue-readiness snapshot was supplied with this report view.</EmptyRecord>;
@@ -971,6 +1096,7 @@ export default function QCReportModal({
   const disputed = qcDisputedCandidates(report);
   const inconclusive = qcInconclusiveCandidates(report);
   const lensCoverage = qcLensCoverage(report);
+  const requirementCoverage = qcRequirementCoverage(report);
   const consolidation = qcConsolidationSummary(report);
   const preRemediation = qcPreRemediationState(report);
   const requestPopulation = qcRequestPopulation(report);
@@ -1083,7 +1209,7 @@ export default function QCReportModal({
           )}
           {reportIsStale && (
             <div className="rounded-xl border border-warn/50 bg-warn/10 px-4 py-3 text-[11px] leading-relaxed text-warn">
-              <strong>Stale review input:</strong> the active review input no longer matches the snapshot captured for this run. That can reflect a document-version change ({versionLabel(report.version_index)} reviewed; {versionLabel(currentVersion)} current) or a change to research, standards, module, or source-policy inputs. Preserve this record for traceability, but re-run Final QC before relying on it or applying its proposed operations.
+              <strong>Stale review input:</strong> the active review input no longer matches the snapshot captured for this run. That can reflect a document-version change ({versionLabel(report.version_index)} reviewed; {versionLabel(currentVersion)} current) or a change to research, standards, attached documents, project facts, open Waiting on you items, module, or source-policy inputs. Preserve this record for traceability, but re-run Final QC before relying on it or applying its proposed operations.
             </div>
           )}
           {auditCoverageIncomplete && (
@@ -1184,14 +1310,14 @@ export default function QCReportModal({
                 ["Parallel specialist lenses", "Each recorded lens received a defined brief and reviewed the whole input from its specialty. Lens check ledgers, searches, retrievals, summaries, errors, and usage appear in Section 05."],
                 ["Evidence qualification", `Candidate citations were retrieved and checked. Accepted and rejected source checks are both retained; rejected records provide traceability but do not count as grounding. ${QC_GROUNDING_METHODOLOGY_NOTE}`],
                 ["Cross-lens consolidation", "Lens candidates describing the same actionable defect at the same element were consolidated into one candidate reviewed by one verifier panel, so a defect two lenses both noticed was not challenged twice. Grouping was confined to candidates sharing a write scope, every original claim is retained verbatim in Section 05b, and any failure of the step fell back to one panel per original candidate."],
-                ["Adversarial verification", `Candidate findings were sent to recorded reviewer seats — ${qcPanelSizePhrase(report)}. A finding survives only when every seat upholds it, is refuted when the refuting seats outnumber the upholding ones, and is disputed otherwise; a critical or high refutation additionally needs at least one validated citation. Fix eligibility separately requires every seat to complete, uphold, and approve the full operation set. Each available verdict, fix-adequacy decision, note, revised severity, search, retrieval, error, and usage counter appears with the finding.`],
+                ["Adversarial verification", `Candidate findings were sent to recorded reviewer seats — ${qcPanelSizePhrase(report)}. A finding survives only when every seat upholds it, is refuted when the refuting seats outnumber all the others, and is disputed otherwise; a seat that could not verify the finding never counts as refuting it, and a critical or high refutation additionally needs at least one validated citation. Fix eligibility separately requires every seat to complete, uphold, and approve the full operation set. Each available verdict, fix-adequacy decision, note, revised severity, search, retrieval, error, and usage counter appears with the finding.`],
                 // Only for a run that streamed a lead seat ahead of its batch:
                 // the methodology describes the run, never the defaults (the
                 // memo's `qc_streamed_lead_seats` gate, mirrored).
                 ...(qcStreamedLeadSeats(report) > 0
                   ? [["Streamed lead seat", QC_WARM_LEAD_METHODOLOGY_NOTE]]
                   : []),
-                ["Outcome separation and operation validation", "Candidates are separated into surviving findings, disputed candidates (a complete panel that disagreed — never auto-applied, and blocking issue readiness until a human dispositions them), substantively refuted candidates, and infrastructure-inconclusive candidates. Only a surviving finding with unanimous semantic fix approval can enter deterministic and source-preservation validation; unabridged JSON remains visible for every bucket."],
+                ["Outcome separation and operation validation", "Candidates are separated into surviving findings, disputed candidates (a complete panel that disagreed, or that could not check the finding — never auto-applied, and blocking issue readiness until a human dispositions them), substantively refuted candidates, and infrastructure-inconclusive candidates. Only a surviving finding with unanimous semantic fix approval can enter deterministic and source-preservation validation; unabridged JSON remains visible for every bucket."],
                 ["Human disposition", "Open, applied, and dismissed states are kept separate from verification. Where supported by the record schema, later disposition events include time, reason, and document identity."],
               ].map(([title, body], index) => (
                 <li key={title} className="rounded-lg border border-edge/60 bg-surface/45 px-3 py-2.5">
@@ -1219,7 +1345,7 @@ export default function QCReportModal({
               <Stat label="Retrieved source records" value={metrics.retrievedSourceRecords.toLocaleString("en-US")} />
               <Stat label="Unique source values" value={metrics.uniqueSourceUrls.toLocaleString("en-US")} detail={`${metrics.evidenceTraceRecords} total query/source trace entries`} />
               <Stat label="Source checks" value={metrics.sourceChecks.toLocaleString("en-US")} detail={`${metrics.acceptedSourceChecks} accepted · ${metrics.rejectedSourceChecks} rejected · ${metrics.unclassifiedSourceChecks} unclassified`} />
-              <Stat label="Verifier records" value={metrics.verdicts.toLocaleString("en-US")} detail={`Completed-seat votes: ${metrics.upholdingVerdicts} uphold · ${metrics.refutingVerdicts} do not uphold`} />
+              <Stat label="Verifier records" value={metrics.verdicts.toLocaleString("en-US")} detail={`Completed-seat votes: ${metrics.upholdingVerdicts} uphold · ${metrics.refutingVerdicts} refute${metrics.unverifiableVerdicts ? ` · ${metrics.unverifiableVerdicts} could not verify` : ""}`} />
               <Stat label="Proposed operations" value={metrics.proposedOperations.toLocaleString("en-US")} detail={`${metrics.findingsWithValidOperations} semantically approved + mechanically valid · ${metrics.findingsWithInvalidOperations} mechanically invalid · ${metrics.findingsWithRejectedOperations} semantically rejected · ${metrics.findingsWithUnevaluatedOperations} survivor(s) not semantically evaluated`} />
               <Stat label="API requests" value={metrics.apiRequests.toLocaleString("en-US")} />
               <Stat label="Model responses" value={metrics.modelResponses.toLocaleString("en-US")} />
@@ -1272,6 +1398,16 @@ export default function QCReportModal({
                 : <EmptyRecord>No lens execution records were preserved.</EmptyRecord>}
             </div>
           </Section>
+
+          {requirementCoverage && (
+            <Section
+              number="05a"
+              title={`Research requirement coverage (${qcRequirementEntries(requirementCoverage).length})`}
+              description={QC_REQUIREMENT_COVERAGE_FRAMING}
+            >
+              <RequirementCoverageRecord report={report} coverage={requirementCoverage} />
+            </Section>
+          )}
 
           {consolidation.state !== "off" && (
             <Section
@@ -1389,7 +1525,7 @@ export default function QCReportModal({
           <Section
             number="07b"
             title={`Disputed candidate appendix (${disputed.length})`}
-            description="Every required verifier seat completed for these candidates and the reviewers did not agree. Disagreement on a reviewed finding is itself decision-relevant, so the candidate is escalated rather than recorded as upheld or refuted. Each needs a human disposition before issue; none is auto-applicable."
+            description="Every required verifier seat completed for these candidates and the reviewers did not agree, or a reviewer could not check the finding and the others did not refute it by a majority. Either is decision-relevant, so the candidate is escalated rather than recorded as upheld or refuted. Each needs a human disposition before issue; none is auto-applicable."
           >
             {disputed.length > 0 ? (
               <div className="space-y-3">
@@ -1398,7 +1534,9 @@ export default function QCReportModal({
                     <p className="mb-1 text-[11px] text-warn">
                       {finding.dispute_reason === "insufficient_refutation_evidence"
                         ? "Disputed: the panel majority refuted a critical/high finding, but no refuting reviewer cited evidence that validated against what it retrieved or against the reviewed document."
-                        : "Disputed: the panel completed but split — no unanimous uphold and no majority refutation."}
+                        : finding.dispute_reason === "unverifiable"
+                          ? "Disputed: at least one reviewer could not check the finding — the text that decides it was out of its reach — and the reviewers that could check it did not refute it by a majority of the panel. Their notes say what they would need to see; a person decides it."
+                          : "Disputed: the panel completed but split — no unanimous uphold and no majority refutation."}
                     </p>
                     <FindingRecord finding={finding} index={index} kind="disputed" schemaVersion={report.schema_version} origins={qcCandidateOrigins(report, finding)} />
                   </div>

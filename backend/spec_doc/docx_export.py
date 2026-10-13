@@ -2155,6 +2155,40 @@ def _render_qc_closing(document, qc_result: dict, *, compact: bool) -> None:
     else:
         document.add_paragraph("No surviving finding remains open.")
 
+    # final-qc/5: the research requirement accounting — the retired
+    # compliance audit's Status/Requirement table, here only for what still
+    # needs attention; the full Final QC report lists every requirement.
+    coverage = qc_requirement_coverage(qc_result)
+    if coverage is not None:
+        document.add_paragraph(
+            "Research requirement coverage: "
+            f"{qc_requirement_counts_line(coverage)}."
+        )
+        attention = [
+            entry
+            for entry in qc_requirement_entries(coverage)
+            if entry.get("disposition") in {"missing", "not_assessed", "not_shown"}
+        ]
+        if attention:
+            _schedule_table(
+                document,
+                [
+                    (
+                        QC_REQUIREMENT_DISPOSITION_LABELS.get(
+                            str(entry.get("disposition") or ""), ""
+                        ).upper(),
+                        str(entry.get("requirement") or "").strip()
+                        + (
+                            f" — {str(entry.get('note') or '').strip()}"
+                            if str(entry.get("note") or "").strip()
+                            else ""
+                        ),
+                    )
+                    for entry in attention
+                ],
+                ("Status", "Research requirement"),
+            )
+
     if not compact:
         return
     applied = sum(1 for f in findings if f.get("status") == "applied")
@@ -3483,9 +3517,11 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
                 "Candidate findings are challenged by a severity-based panel of "
                 "independent refuters — " + qc_panel_size_phrase(qc_result) + ". "
                 "A finding survives only when every seat "
-                "upholds it, is refuted when the refuting seats outnumber the "
-                "upholding ones, and is disputed otherwise; a critical or high "
-                "refutation additionally needs at least one validated citation. "
+                "upholds it, is refuted when the refuting seats outnumber all "
+                "the others, and is disputed otherwise; a seat that could not "
+                "verify the finding never counts as refuting it, and a "
+                "critical or high refutation additionally needs at least one "
+                "validated citation. "
                 "A proposed fix is separately approved only when every expected "
                 "seat completes, upholds the finding, and approves the complete "
                 "operation payload. The report preserves completed, failed, and "
@@ -3819,12 +3855,24 @@ def _qc_render_lenses(document, qc_result: dict) -> None:
         _qc_render_lens(document, lens, index, all_findings)
 
 
+def _qc_cannot_verify(verdict: dict) -> bool:
+    """A completed seat that could not check the finding (final-qc/5)."""
+    return verdict.get("cannot_verify") is True
+
+
 def _qc_vote_counts(verdicts: list[dict]) -> tuple[int, int, int, int]:
+    """Upholding, refuting, failed and total seats.
+
+    A seat that could not verify the finding is neither upholding nor
+    refuting (final-qc/5); :func:`_qc_seat_tally` counts it separately.
+    """
     uphold = refute = failed = 0
     for verdict in verdicts:
         status = str(verdict.get("status") or "completed").lower()
         if status != "completed":
             failed += 1
+        elif _qc_cannot_verify(verdict):
+            continue
         elif verdict.get("upholds") is True:
             uphold += 1
         else:
@@ -3851,10 +3899,12 @@ def _qc_seat_tally(verdicts: list[dict]) -> dict[str, object]:
     revised = sum(
         1 for item in verdicts if str(item.get("revised_severity") or "").strip()
     )
+    unverifiable = sum(1 for item in completed if _qc_cannot_verify(item))
     return {
         "revised": revised,
         "uphold": uphold,
         "refute": refute,
+        "unverifiable": unverifiable,
         "failed": failed,
         "total": total,
         "completed": len(completed),
@@ -3929,14 +3979,18 @@ def _qc_adjudication_line(
         return line, True
 
     if candidate_kind == "disputed":
-        if int(tally["uphold"]) + int(tally["refute"]) != total:
+        unverifiable = int(tally.get("unverifiable", 0))
+        if int(tally["uphold"]) + int(tally["refute"]) + unverifiable != total:
             return "", False
         if semantic == "approved":
             return "", False
+        could_not = (
+            f" / {unverifiable} could not verify" if unverifiable else ""
+        )
         line = (
-            f"split {tally['uphold']} uphold / {tally['refute']} refute of "
-            f"{total} seats · fix not evaluated, must not be applied from "
-            "this record"
+            f"split {tally['uphold']} uphold / {tally['refute']} refute"
+            f"{could_not} of {total} seats · fix not evaluated, must not be "
+            "applied from this record"
         )
         return line, True
 
@@ -3971,7 +4025,9 @@ def _qc_render_panel(
         rows: list[list[object]] = []
         for index, verdict in enumerate(verdicts, start=1):
             status = xml_safe_upper(str(verdict.get("status") or "completed"))
-            if "upholds" in verdict:
+            if _qc_cannot_verify(verdict):
+                vote = "COULD NOT VERIFY"
+            elif "upholds" in verdict:
                 vote = "UPHOLD" if verdict.get("upholds") is True else "REFUTE"
             else:
                 vote = "—"
@@ -4005,8 +4061,19 @@ def _qc_render_panel(
         for index, verdict in enumerate(verdicts, start=1)
         if str(verdict.get("status") or "completed").lower() == "completed"
     ]
-    upholding = [item for item in completed if item[1].get("upholds") is True]
-    refuting = [item for item in completed if item[1].get("upholds") is False]
+    upholding = [
+        item
+        for item in completed
+        if item[1].get("upholds") is True and not _qc_cannot_verify(item[1])
+    ]
+    refuting = [
+        item
+        for item in completed
+        if item[1].get("upholds") is False and not _qc_cannot_verify(item[1])
+    ]
+    # final-qc/5: seats that could not check the finding. Their note says
+    # what they would have needed, which is the lead a person acts on.
+    unverifying = [item for item in completed if _qc_cannot_verify(item[1])]
 
     def note_line(label: str, index: int, verdict: dict, key: str) -> None:
         text = str(verdict.get(key) or "").strip()
@@ -4019,10 +4086,20 @@ def _qc_render_panel(
 
     if candidate_kind == "disputed":
         for index, verdict in completed:
-            side = "upholding" if verdict.get("upholds") is True else "refuting"
+            side = (
+                "could not verify"
+                if _qc_cannot_verify(verdict)
+                else "upholding"
+                if verdict.get("upholds") is True
+                else "refuting"
+            )
             note_line(f"Verdict note, {side}", index, verdict, "note")
     else:
-        for side_label, side in (("upholding", upholding), ("refuting", refuting)):
+        for side_label, side in (
+            ("upholding", upholding),
+            ("refuting", refuting),
+            ("could-not-verify", unverifying),
+        ):
             if not side:
                 continue
             index, verdict = side[0]
@@ -4520,6 +4597,16 @@ def _render_memo_finding(
                 "reviewed document. Under-evidenced refutations of severe "
                 "findings are escalated, not accepted.",
             )
+        elif reason == "unverifiable":
+            _qc_add_label(
+                document,
+                "Why disputed",
+                "At least one reviewer could not check the finding — the text "
+                "that decides it was out of its reach — and the reviewers "
+                "that could check it did not refute it by a majority of the "
+                "panel. Their notes say what they would need to see; a "
+                "person decides it.",
+            )
         elif reason:
             _qc_add_label(
                 document,
@@ -4620,7 +4707,12 @@ def _render_memo_finding(
             document,
             "Persisted panel record",
             f"{tally['uphold']} uphold; {tally['refute']} refute; "
-            f"{tally['failed']} failed or cancelled; "
+            + (
+                f"{tally['unverifiable']} could not verify; "
+                if tally.get("unverifiable")
+                else ""
+            )
+            + f"{tally['failed']} failed or cancelled; "
             f"{tally['total']} reviewer record(s)",
         )
     if not verdicts:
@@ -4640,6 +4732,186 @@ def _render_memo_finding(
         document, finding, candidate_kind=candidate_kind, nominal=nominal
     )
     _qc_render_disposition(document, finding, candidate_kind=candidate_kind)
+
+
+# How each research requirement disposition reads in a report (final-qc/5).
+QC_REQUIREMENT_DISPOSITION_LABELS: dict[str, str] = {
+    "covered": "Covered",
+    "missing": "Missing",
+    "not_applicable": "Not applicable",
+    "not_assessed": "Not assessed",
+    "not_shown": "Not shown to the reviewers",
+}
+_QC_REQUIREMENT_DISPOSITION_ORDER = (
+    "missing",
+    "not_assessed",
+    "not_shown",
+    "not_applicable",
+    "covered",
+)
+
+
+def qc_requirement_coverage(qc_result: dict) -> dict | None:
+    """The persisted research requirement accounting, or ``None`` (pre-v5)."""
+    coverage = qc_result.get("requirement_coverage")
+    return coverage if isinstance(coverage, dict) else None
+
+
+def qc_requirement_entries(coverage: dict) -> list[dict]:
+    """Entries in reading order: what needs attention first, then the rest,
+    each group in profile order."""
+    entries = [
+        item for item in _qc_list(coverage.get("entries")) if isinstance(item, dict)
+    ]
+    rank = {name: index for index, name in enumerate(_QC_REQUIREMENT_DISPOSITION_ORDER)}
+    return sorted(
+        entries, key=lambda item: rank.get(str(item.get("disposition")), 99)
+    )
+
+
+def qc_requirement_counts_line(coverage: dict) -> str:
+    """"12 covered · 2 missing · …" — every disposition that occurs."""
+    counts: dict[str, int] = {}
+    for item in _qc_list(coverage.get("entries")):
+        if isinstance(item, dict):
+            key = str(item.get("disposition") or "")
+            counts[key] = counts.get(key, 0) + 1
+    parts = [
+        f"{counts[name]} {QC_REQUIREMENT_DISPOSITION_LABELS[name].lower()}"
+        for name in ("covered", "missing", "not_applicable", "not_assessed", "not_shown")
+        if counts.get(name)
+    ]
+    return " · ".join(parts) or "no controlling requirements"
+
+
+def qc_requirement_finding(qc_result: dict, entry: dict) -> tuple[str, dict] | None:
+    """The candidate a missing requirement's finding became, by the original
+    claim's content address, else by the completeness lens and exact title.
+    Returns ``(collection, finding)``; mirrors ``QCResult.finding_for_origin``.
+    """
+    origin_id = str(entry.get("origin_id") or "")
+    title = str(entry.get("finding_title") or "").strip()
+    collections = (
+        ("findings", _qc_list(qc_result.get("findings"))),
+        ("disputed", _qc_list(qc_result.get("disputed"))),
+        ("refuted", _qc_list(qc_result.get("refuted"))),
+        ("inconclusive", _qc_list(qc_result.get("inconclusive"))),
+    )
+    if origin_id:
+        for key, items in collections:
+            for item in items:
+                if isinstance(item, dict) and origin_id in _qc_list(
+                    item.get("candidate_origins")
+                ):
+                    return key, item
+    if title:
+        for key, items in collections:
+            for item in items:
+                if (
+                    isinstance(item, dict)
+                    and item.get("lens_id") == "completeness"
+                    and str(item.get("title") or "").strip() == title
+                ):
+                    return key, item
+    return None
+
+
+_QC_COLLECTION_OUTCOMES = {
+    "findings": "upheld",
+    "disputed": "disputed",
+    "refuted": "refuted",
+    "inconclusive": "inconclusive",
+}
+
+
+def _qc_requirement_where(document, qc_result: dict, entry: dict) -> str:
+    disposition = str(entry.get("disposition") or "")
+    if disposition == "covered":
+        refs = [str(ref) for ref in _qc_list(entry.get("element_refs")) if str(ref)]
+        return ", ".join(refs) or "Not recorded"
+    if disposition != "missing":
+        return "—"
+    linked = qc_requirement_finding(qc_result, entry)
+    if linked is None:
+        title = str(entry.get("finding_title") or "").strip()
+        return (
+            f"Finding \"{title}\" not found in this report"
+            if title
+            else "No finding raised (tracked as an open question, or none)"
+        )
+    collection, finding = linked
+    ordinals = getattr(document, "_qc_ordinals", {}) or {}
+    ordinal = ordinals.get(id(finding)) or str(finding.get("finding_id") or "")
+    return f"{ordinal} ({_QC_COLLECTION_OUTCOMES[collection]})".strip()
+
+
+def _qc_render_requirement_coverage(document, qc_result: dict) -> None:
+    """Every controlling research requirement and what the review found."""
+    coverage = qc_requirement_coverage(qc_result)
+    if coverage is None:
+        # Predates final-qc/5, or the run had no requirements profile.
+        return
+    document.add_page_break()
+    _qc_heading(document, "Research Requirement Coverage", 1)
+    document.add_paragraph(
+        "The completeness lens accounted for each controlling requirement in "
+        "the requirements research (grounded specification requirements). "
+        "These dispositions are the lens's own, not the verifier panel's: "
+        "only findings face the panel, so a missing requirement's finding "
+        "carries the panel's outcome. Not assessed and not shown mean the "
+        "review did not account for the requirement; read them as open."
+    )
+    _qc_add_label(document, "Dispositions", qc_requirement_counts_line(coverage))
+    unverified = coverage.get("unverified_count") or 0
+    process = coverage.get("process_count") or 0
+    unlisted = coverage.get("unlisted_count") or 0
+    _qc_add_label(
+        document,
+        "Not held against the draft",
+        f"{unverified} unverified research lead(s), {process} process "
+        "advisory item(s)",
+    )
+    if unlisted:
+        _qc_add_label(
+            document,
+            "Entries ignored",
+            f"{unlisted} entry(ies) named an id outside the controlling "
+            "requirements",
+            color=_QC_CAUTION,
+        )
+    entries = qc_requirement_entries(coverage)
+    if not entries:
+        document.add_paragraph(
+            "The requirements research held no controlling requirement."
+        )
+        return
+    rows: list[list[object]] = []
+    for entry in entries:
+        details = [
+            str(entry.get(key) or "").strip()
+            for key in ("authority", "code_reference")
+            if str(entry.get(key) or "").strip()
+        ]
+        requirement = str(entry.get("requirement") or "").strip() or "Not recorded"
+        if details:
+            requirement += f" ({'; '.join(details)})"
+        rows.append(
+            [
+                requirement,
+                QC_REQUIREMENT_DISPOSITION_LABELS.get(
+                    str(entry.get("disposition") or ""),
+                    str(entry.get("disposition") or "Not recorded"),
+                ),
+                _qc_requirement_where(document, qc_result, entry),
+                str(entry.get("note") or "").strip() or "—",
+            ]
+        )
+    _qc_add_table(
+        document,
+        ["Requirement", "Disposition", "Where / finding", "Note"],
+        rows,
+        [3600, 1300, 1600, 2860],
+    )
 
 
 def _qc_render_consolidation(document, qc_result: dict) -> None:
@@ -4854,8 +5126,12 @@ def _qc_candidate_digest_rows(
             basis = "\n".join([*disclosure, basis])
         else:
             panel = f"{tally['uphold']} of {tally['total']} seats upheld"
+            if tally.get("unverifiable"):
+                panel += f", {tally['unverifiable']} could not verify"
             refuting = [
-                item for item in completed if item.get("upholds") is False
+                item
+                for item in completed
+                if item.get("upholds") is False and not _qc_cannot_verify(item)
             ]
             note = next(
                 (
@@ -5051,9 +5327,13 @@ def _qc_render_disputed_appendix(document, qc_result: dict) -> None:
         return
     document.add_paragraph(
         "Every required verifier seat completed for these candidates and the "
-        "reviewers did not agree. That disagreement is itself decision-relevant "
-        "evidence, so the candidate is escalated rather than recorded as either "
-        "a surviving finding or a refutation. Each one requires a human "
+        "panel did not settle them: the reviewers did not agree, a critical "
+        "or high refutation cited no validated evidence, or a reviewer could "
+        "not check the finding and the others did not refute it by a "
+        "majority (final-qc/5; each candidate's Why disputed line says which). "
+        "That is itself decision-relevant evidence, so the candidate is "
+        "escalated rather than recorded as either a surviving finding or a "
+        "refutation. Each one requires a human "
         "disposition before the section is issue-ready. Their operations were "
         "not validated and must not be applied from this record."
     )
@@ -5734,6 +6014,7 @@ def build_qc_memo(qc_result: dict, section: SpecSection, *, stale: bool) -> byte
     _qc_render_export_current_state(document, qc_result, stale=stale)
     _qc_render_methodology(document, qc_result)
     _qc_render_lenses(document, qc_result)
+    _qc_render_requirement_coverage(document, qc_result)
     _qc_render_consolidation(document, qc_result)
     _qc_render_surviving_findings(document, qc_result)
     _qc_render_refuted_appendix(document, qc_result)

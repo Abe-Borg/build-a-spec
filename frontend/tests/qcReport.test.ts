@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { QcCandidateOrigin, QcConsolidation } from "../src/types.ts";
+import type {
+  QcCandidateOrigin,
+  QcConsolidation,
+  QcRequirementCoverage,
+  QcRequirementDisposition,
+} from "../src/types.ts";
 import {
   QC_GROUNDING_METHODOLOGY_NOTE,
   QC_OPS_SOURCE_LABELS,
@@ -35,6 +40,17 @@ import {
   type QcReportResult,
   type QcReportVerdict,
   qcPricingBases,
+  QC_REQUIREMENT_COVERAGE_FRAMING,
+  QC_REQUIREMENT_DISPOSITION_LABELS,
+  qcRequirementAttentionEntries,
+  qcRequirementCountsLine,
+  qcRequirementCoverage,
+  qcRequirementDispositionLabel,
+  qcRequirementEntries,
+  qcRequirementFinding,
+  qcRequirementNotHeldLine,
+  qcRequirementUnlinkedNote,
+  qcVerdictCannotVerify,
 } from "../src/lib/qcReport.ts";
 
 test("phase token ceilings use the saved manifest without inventing legacy limits", () => {
@@ -1664,4 +1680,223 @@ test("a run whose seats ran on their own model shows both saved pricing bases", 
   );
   assert.deepEqual(qcPricingBases({ model: "claude-opus-5-5", cost_basis: lens }), single);
   assert.deepEqual(qcPricingBases({ model: "claude-opus-5-5" }), []);
+});
+
+// ---------------------------------------------------------------------------
+// final-qc/5: a seat may answer "cannot verify", and the run accounts for
+// every controlling research requirement.
+// ---------------------------------------------------------------------------
+
+test("a seat that could not verify is neither an uphold nor a refutation", () => {
+  const candidate = finding({
+    verification_outcome: "disputed",
+    dispute_reason: "unverifiable",
+    verdicts: [
+      verdict(1, { upholds: true, note: "upheld" }),
+      verdict(2, { cannot_verify: true, note: "Needs the 2025 edition text." }),
+      verdict(3, { upholds: false }),
+    ],
+  });
+  const metrics = buildQcReportMetrics(
+    result({ schema_version: 5, disputed: [candidate] }),
+  );
+  assert.equal(metrics.upholdingVerdicts, 1);
+  assert.equal(metrics.refutingVerdicts, 1);
+  assert.equal(metrics.unverifiableVerdicts, 1);
+  // A defensive read: a record claiming both is still not an uphold.
+  const contradictory = buildQcReportMetrics(
+    result({
+      findings: [
+        finding({ verdicts: [verdict(1, { upholds: true, cannot_verify: true })] }),
+      ],
+    }),
+  );
+  assert.equal(contradictory.upholdingVerdicts, 0);
+  assert.equal(contradictory.refutingVerdicts, 0);
+  assert.equal(contradictory.unverifiableVerdicts, 1);
+  // Only an explicit true counts; an older record answered on the merits.
+  assert.equal(qcVerdictCannotVerify(verdict(1)), false);
+  assert.equal(qcVerdictCannotVerify(verdict(1, { cannot_verify: false })), false);
+  assert.equal(qcVerdictCannotVerify(verdict(1, { cannot_verify: true })), true);
+});
+
+test("an older report counts its votes exactly as before", () => {
+  const metrics = buildQcReportMetrics(
+    result({
+      findings: [
+        finding({ verdicts: [verdict(1, { upholds: true }), verdict(2), verdict(3)] }),
+      ],
+    }),
+  );
+  assert.equal(metrics.upholdingVerdicts, 1);
+  assert.equal(metrics.refutingVerdicts, 2);
+  assert.equal(metrics.unverifiableVerdicts, 0);
+});
+
+function requirement(
+  id: string,
+  disposition: string,
+  overrides: Partial<QcRequirementDisposition> = {},
+): QcRequirementDisposition {
+  return {
+    requirement_id: id,
+    disposition,
+    requirement: `Requirement ${id}`,
+    authority: "NFPA 13",
+    code_reference: "§8.15",
+    element_ids: [],
+    element_refs: [],
+    note: "",
+    finding_title: "",
+    origin_id: "",
+    ...overrides,
+  };
+}
+
+function coverage(
+  entries: QcRequirementDisposition[],
+  overrides: Partial<QcRequirementCoverage> = {},
+): QcRequirementCoverage {
+  return {
+    lens_id: "completeness",
+    entries,
+    unverified_count: 0,
+    process_count: 0,
+    unlisted_count: 0,
+    ...overrides,
+  };
+}
+
+test("a report before final-qc/5 has no requirement coverage", () => {
+  assert.equal(qcRequirementCoverage(result({})), null);
+  assert.equal(qcRequirementCoverage(null), null);
+  assert.equal(
+    qcRequirementCoverage(
+      result({ requirement_coverage: [] as unknown as QcRequirementCoverage }),
+    ),
+    null,
+  );
+  const record = coverage([]);
+  assert.equal(qcRequirementCoverage(result({ requirement_coverage: record })), record);
+});
+
+test("coverage entries read what needs attention first, profile order within", () => {
+  const record = coverage([
+    requirement("r-1", "covered"),
+    requirement("r-2", "not_applicable"),
+    requirement("r-3", "missing"),
+    requirement("r-4", "not_shown"),
+    requirement("r-5", "covered"),
+    requirement("r-6", "not_assessed"),
+    requirement("r-7", "missing"),
+  ]);
+  assert.deepEqual(
+    qcRequirementEntries(record).map((entry) => entry.requirement_id),
+    ["r-3", "r-7", "r-6", "r-4", "r-2", "r-1", "r-5"],
+  );
+  assert.deepEqual(
+    qcRequirementAttentionEntries(record).map((entry) => entry.requirement_id),
+    ["r-3", "r-7", "r-6", "r-4"],
+  );
+  // The input is left alone.
+  assert.equal(record.entries[0].requirement_id, "r-1");
+});
+
+test("the counts line names only what occurs, in the memo's order", () => {
+  const record = coverage([
+    requirement("r-1", "covered"),
+    requirement("r-2", "missing"),
+    requirement("r-3", "covered"),
+    requirement("r-4", "not_shown"),
+  ]);
+  assert.equal(
+    qcRequirementCountsLine(record),
+    "2 covered · 1 missing · 1 not shown to the reviewers",
+  );
+  assert.equal(qcRequirementCountsLine(coverage([])), "no controlling requirements");
+  assert.equal(
+    qcRequirementNotHeldLine(coverage([], { unverified_count: 3, process_count: 1 })),
+    "3 unverified research lead(s), 1 process advisory item(s)",
+  );
+});
+
+test("dispositions carry the Word report's labels", () => {
+  assert.deepEqual(QC_REQUIREMENT_DISPOSITION_LABELS, {
+    covered: "Covered",
+    missing: "Missing",
+    not_applicable: "Not applicable",
+    not_assessed: "Not assessed",
+    not_shown: "Not shown to the reviewers",
+  });
+  assert.equal(qcRequirementDispositionLabel("not_assessed"), "Not assessed");
+  assert.equal(qcRequirementDispositionLabel("someday"), "someday");
+  assert.match(QC_REQUIREMENT_COVERAGE_FRAMING, /lens's own, not the verifier panel's/);
+  assert.match(QC_REQUIREMENT_COVERAGE_FRAMING, /read them as open\.$/);
+});
+
+test("a missing requirement links to its finding by origin, in any collection", () => {
+  const merged = finding({
+    finding_id: "qc-merged",
+    lens_id: "code_compliance",
+    title: "Renamed by consolidation",
+    verification_outcome: "disputed",
+    dispute_reason: "unverifiable",
+    candidate_origins: ["origin-other", "origin-a"],
+  });
+  const report = result({ schema_version: 5, disputed: [merged] });
+  const link = qcRequirementFinding(
+    report,
+    requirement("r-1", "missing", {
+      origin_id: "origin-a",
+      finding_title: "Density not stated",
+    }),
+  );
+  assert.equal(link?.finding, merged);
+  assert.equal(link?.collection, "disputed");
+  assert.equal(link?.outcome, "disputed");
+});
+
+test("without an origin, a missing requirement links by the completeness lens and title", () => {
+  const survivor = finding({
+    finding_id: "qc-survivor",
+    lens_id: "completeness",
+    title: "  Density not stated ",
+  });
+  const otherLens = finding({
+    finding_id: "qc-other-lens",
+    lens_id: "code_compliance",
+    title: "Density not stated",
+  });
+  const refuted = finding({
+    finding_id: "qc-refuted",
+    lens_id: "completeness",
+    title: "Hangers not specified",
+    verification_outcome: "refuted",
+  });
+  const report = result({ findings: [otherLens, survivor], refuted: [refuted] });
+  const byTitle = qcRequirementFinding(
+    report,
+    requirement("r-1", "missing", { finding_title: "Density not stated" }),
+  );
+  assert.equal(byTitle?.finding, survivor);
+  assert.equal(byTitle?.outcome, "upheld");
+  const refutedLink = qcRequirementFinding(
+    report,
+    requirement("r-2", "missing", {
+      origin_id: "origin-gone",
+      finding_title: "Hangers not specified",
+    }),
+  );
+  assert.equal(refutedLink?.finding, refuted);
+  assert.equal(refutedLink?.outcome, "refuted");
+  // Nothing matches: say so, distinguishing "no finding raised".
+  const none = requirement("r-3", "missing");
+  assert.equal(qcRequirementFinding(report, none), null);
+  assert.equal(
+    qcRequirementUnlinkedNote(none),
+    "No finding raised (tracked as an open question, or none)",
+  );
+  const lost = requirement("r-4", "missing", { finding_title: "Gone" });
+  assert.equal(qcRequirementFinding(report, lost), null);
+  assert.equal(qcRequirementUnlinkedNote(lost), 'Finding "Gone" not found in this report');
 });

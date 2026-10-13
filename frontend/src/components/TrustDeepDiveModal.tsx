@@ -1042,10 +1042,15 @@ function Dossier() {
               <b className="text-ink">2 · Adversarial verification.</b> Every
               candidate finding is handed to a fresh panel of independent
               Claude Sonnet 5.5 reviewers instructed to <em>refute</em> it — three
-              for critical and high, two for medium and low. A finding survives only when{" "}
+              for critical and high, two for medium and low. A reviewer that
+              cannot reach the text that decides a finding — a standard it
+              could not retrieve, a document nobody supplied — says so and
+              names what it would need, instead of refuting it. A finding
+              survives only when{" "}
               <b className="text-ink">every seat upholds it</b>; a majority
-              refuting kills it, and anything in between is recorded as{" "}
-              <b className="text-ink">disputed</b> — a real disagreement that
+              of the panel refuting kills it, and anything in between is
+              recorded as <b className="text-ink">disputed</b> — a real
+              disagreement, or a finding the reviewers could not check, that
               blocks issue readiness until you adjudicate it yourself
               (critical/high refutations additionally need at least one
               validated citation to count). Survivors
@@ -1101,11 +1106,15 @@ function Dossier() {
               <b className="text-ink">established project facts</b> (as inputs
               the team recorded — a provision that follows a confirmed fact is
               not a defect for lacking web support, one that contradicts a fact
-              is a finding), the discipline, and each lens’s brief. Then, per
-              finding, the finding itself plus the document context the
-              verifier needs — the verifier seats get the standards editions
-              in effect with their recorded basis, the research profile, the
-              attached documents and the facts too, so a reviewer asked to
+              is a finding), the{" "}
+              <b className="text-ink">open Waiting on you items</b> (so a
+              clause written around a question you have not answered yet is
+              not reported as an oversight), the discipline, and each lens’s
+              brief. Then, per finding, the finding itself plus the document
+              context the verifier needs — the verifier seats get the
+              standards editions in effect with their recorded basis, the
+              research profile, the attached documents, the facts and the
+              open items too, so a reviewer asked to
               refute “this cites an edition the jurisdiction did not adopt”,
               “this requirement the research found is missing”, “this
               contradicts the owner’s standard” or “this is not what the
@@ -1840,10 +1849,11 @@ function Dossier() {
               error.</b> A QC finding surviving its refuters — three for critical
               and high findings, two for medium and low — means every one of
               them failed to knock it down. It does not make the finding true; a
-              split panel — or a critical/high refutation no seat could back
-              with a validated citation — is recorded as disputed rather than
-              decided for you; and the report shows you the refuted and
-              disputed ones too so you can disagree with the panel.
+              split panel, a finding the reviewers could not check, or a
+              critical/high refutation no seat could back with a validated
+              citation is recorded as disputed rather than decided for you;
+              and the report shows you the refuted and disputed ones too so
+              you can disagree with the panel.
             </>,
             <>
               <b className="text-ink">Lint is exactly as smart as its rules.</b>{" "}

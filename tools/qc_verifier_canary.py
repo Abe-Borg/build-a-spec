@@ -158,6 +158,7 @@ def main() -> int:
         "Live verifier canary passed: provider accepted the strict schema and "
         "returned the required verdict fields "
         f"(upholds={verdict['upholds']}, "
+        f"cannot_verify={verdict['cannot_verify']}, "
         f"ops_adequate={verdict['ops_adequate']})."
     )
     return 0

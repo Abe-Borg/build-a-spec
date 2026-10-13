@@ -60,6 +60,9 @@ export type QcVerifierSeatStatus =
   | "active"
   | "upheld"
   | "not_upheld"
+  /** final-qc/5: the seat completed but could not check the finding either
+   *  way — neither an uphold nor a refutation. */
+  | "unverifiable"
   | "failed"
   | "cancelled";
 
@@ -135,6 +138,9 @@ export interface QcCandidateLiveState {
   /** Set only when `outcome` is "disputed". */
   disputeReason: string;
   upholds: number;
+  /** Completed seats that could not verify the finding (final-qc/5), from
+   *  `candidate_complete`; 0 on an older log. */
+  unverifiable: number;
 }
 
 export type QcValidationLiveStatus =
@@ -705,6 +711,7 @@ function blankCandidate(entry: QcCandidateRosterEntry): QcCandidateLiveState & {
     disputeReason: "",
     reportedOutcome: null,
     upholds: 0,
+    unverifiable: 0,
   };
 }
 
@@ -712,6 +719,7 @@ function seatIsAccountedFor(seat: QcVerifierSeatLiveState): boolean {
   return (
     seat.status === "upheld" ||
     seat.status === "not_upheld" ||
+    seat.status === "unverifiable" ||
     seat.status === "failed" ||
     seat.status === "cancelled"
   );
@@ -1052,7 +1060,14 @@ export function foldQcLiveState(
         const candidate = ensureCandidate(event.candidate_id);
         const seat = ensureSeat(candidate, event.reviewer_index);
         if (event.status === "completed") {
-          seat.status = event.upholds ? "upheld" : "not_upheld";
+          // Checked first: a seat that could not verify voted neither way,
+          // whatever `upholds` says. An older log has no field (= false).
+          seat.status =
+            event.cannot_verify === true
+              ? "unverifiable"
+              : event.upholds
+                ? "upheld"
+                : "not_upheld";
         } else if (event.status === "cancelled") {
           seat.status = "cancelled";
         } else {
@@ -1076,6 +1091,7 @@ export function foldQcLiveState(
         candidate.reportedOutcome = event.outcome;
         candidate.disputeReason = event.dispute_reason ?? "";
         candidate.upholds = event.upholds ?? candidate.upholds;
+        candidate.unverifiable = event.unverifiable ?? candidate.unverifiable;
         break;
       }
       case "verification_complete":
@@ -1375,6 +1391,8 @@ export type QcAgentTimelineEntry =
       kind: "verdict";
       status: string;
       upholds: boolean | null;
+      /** final-qc/5: the seat could not check the finding either way. */
+      cannotVerify: boolean;
       revisedSeverity: string | null;
       opsAdequate: boolean | null;
       note: string;
@@ -1515,6 +1533,7 @@ export function foldQcAgentTimeline(
           kind: "verdict",
           status: event.status,
           upholds: completed ? (event.upholds ?? null) : null,
+          cannotVerify: completed && event.cannot_verify === true,
           revisedSeverity: completed ? (event.revised_severity ?? null) : null,
           opsAdequate: completed ? (event.ops_adequate ?? null) : null,
           note: event.note ?? "",

@@ -209,7 +209,9 @@ follow + `stream_end`; event types `qc_started`, `lens_complete`,
 {status, raw/grouped/panels_avoided counts}, `verify_progress` {done,total},
 `qc_complete`, `qc_failed`, plus the Review Room's per-worker frames —
 `lens_*`/`verifier_*` started, activity, search, fetch, thinking (a reasoning
-summary chunk, 2026-10-08), retry and complete),
+summary chunk, 2026-10-08), retry and complete; since final-qc/5 a completed
+seat's `verifier_complete` carries `cannot_verify` and `candidate_complete`
+an `unverifiable` count),
 `POST /api/qc/apply` (`{finding_ids}` → one undoable version; per-finding
 `applied`/`stale`/`no_ops`/`not_open`/`unknown` outcomes; duplicate ids and
 identical operations are deduplicated; different operations claiming the same
@@ -2258,6 +2260,77 @@ Owner decision (Abraham), the follow-up the PR #319 review left open.
 Never describe a retained review as current on the document version alone.
 Tests: `tests/test_qc_context.py`. Full record and reversion evidence in
 `docs/as-built.md` under the same heading. No paid API call was made.
+
+## Final QC v5: research coverage, open questions, and cannot verify — implemented notes (2026-10-13)
+
+Group B of step 9 of the prompt-review follow-up (owner: "do 6, 8, one
+PR"). `QC_REPORT_SCHEMA_VERSION` 5, `QC_PROTOCOL_VERSION` `final-qc/5`.
+
+- **Cannot verify.** `QC_VERDICT_SCHEMA` gains a required boolean
+  `cannot_verify`; `normalize_verdict` reads it absent as False, refuses a
+  non-boolean, and lets it win (`upholds`, `ops_adequate` False, evidence
+  empty). `QCVerdict.cannot_verify` is last in field order and left out of
+  the record when False (`QCFinding.to_dict`), so a seat that answered on
+  the merits keeps its bytes; a persisted True beside an uphold or an
+  approved fix is refused. `panel_outcome`: unanimous uphold upholds;
+  `refutes > upholds + cannot_verify` (a majority of the WHOLE panel)
+  refutes, evidence gate unchanged; otherwise disputed, `split_panel` when
+  checking seats disagree, else `DISPUTE_REASON_UNVERIFIABLE`. With no such
+  seat the table is exactly v4's (exhaustively pinned). The verifier prompt
+  says "uncertain on the merits" refutes and unreachable text answers
+  cannot_verify; `VERIFICATION_RULE_V5`, `_majority_rule_prose` (one-seat
+  branches corrected: a lone cannot-verify seat disputes), the finding id
+  (hashed only when True), live events, readiness detail, the chat's QC
+  block and `read_qc_finding`, the Word report and the chat policy all name
+  it. So do the Word report's disputed appendix and the one-seat
+  `QC_VERIFIERS_STANDARD` warning and README row (a lone seat that cannot
+  verify disputes its finding; Codex review on PR #323).
+- **Version gates.** `_QC_SCHEMA_V4`/`_QC_SCHEMA_V5` name the floors; every
+  gate that meant "v4 shape" compares against `_QC_SCHEMA_V4`, never the
+  current version (a bump would have sent v4 records down the v3 path).
+  `_PROTOCOL_BY_SCHEMA` and `_RULE_BY_SCHEMA` check each schema against its
+  own protocol and rule. A v4 report loads, verifies and exports as the
+  final-qc/4 record it is and is not audit-grade (readiness and apply
+  compare the current pair); a v4 record carrying a cannot-verify seat or a
+  coverage record is refused.
+- **Open follow-ups.** `followups.qc_followups_block` renders the OPEN
+  items (no age, no [NEXT], relocated element resolved against the
+  reviewed snapshot, `<open_followups>` defused) once per run into both
+  cached prefixes after the facts, and all three seat builders; empty
+  renders nothing. The lens and seat prompts name it as data; a seat
+  refutes a finding reporting as missing what an item tracks. The
+  manifest's always-present `followups` key (`followups_manifest_facts`)
+  hashes the item lines, not the directive, so settling or raising an item
+  after a run reads the review stale (the project facts' posture — the
+  owner's trade to revisit). Threaded through `run_final_qc`,
+  `QCRunner.start` (start route snapshots `dataclass_replace` copies: items
+  resolve in place), `matches_inputs`, `apply.matches_current_inputs` and
+  `_qc_export_current_state`.
+- **Research coverage.** `QC_FINDINGS_SCHEMA` gains a nullable
+  `requirement_coverage` (covered / missing / not_applicable, element ids,
+  note, finding title); every lens but `completeness` sends null, so the
+  lens lineages are unchanged. `reconcile_requirement_coverage` holds the
+  completeness lens's entries against the profile: one
+  `QCRequirementDisposition` per `controlling_requirement` (grounded with an
+  accepted source, not [PROCESS] — the render's own markers), in profile
+  order; `not_shown` when the render cap left it out, `not_assessed` when
+  the lens gave no usable entry (covered citing no provision of the
+  snapshot, not_applicable with no why, none at all, or the lens failed);
+  covered records `element_refs`, missing links its finding by origin id
+  (`_mint_origin_id`) and title (`QCResult.finding_for_origin`). Present on
+  every v5 result with a profile, absent otherwise (enforced on load). Not
+  a readiness gate: the dispositions are the lens's, and a missing one's
+  finding carries the panel's outcome. Rendered in the Word report (after
+  the lens work papers), the review report's QC closing (what needs
+  attention), the chat's QC block (counts) and `read_qc_finding`'s index,
+  and the report modal and drawer.
+
+Never count a cannot-verify seat as a refutation, never compare a v4-shape
+gate against the current schema, and never let a requirement the review did
+not account for read as accounted for. Tests: `tests/test_qc_final_qc_v5.py`
+(plus updated pins). Full record, reversion evidence and the release-note
+draft are in `docs/as-built.md` under the same heading. No paid API call was
+made.
 
 ## As-built history
 

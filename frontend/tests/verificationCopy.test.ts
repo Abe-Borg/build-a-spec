@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-// Final QC's adjudication rule is final-qc/4 (backend/qc/engine.py
-// `panel_outcome`): every seat upholds → upheld; refuters outnumber upholders
-// → refuted; anything else → disputed. The v3 rule it replaced ("majority,
-// tie to the refuters") outlived the code in three user-facing copy sites,
-// and every one of them also quotes the panel sizes. This test reads the
-// sizes off `backend/settings.py` so a change to a panel size fails the copy
-// that quotes it — the trust dossier's own "every number is real" contract.
+// Final QC's adjudication rule is final-qc/5 (backend/qc/engine.py
+// `panel_outcome`): every seat upholds → upheld; refuters outnumber every
+// other seat → refuted; anything else → disputed. A seat that could not
+// verify the finding is never a refuter, so a finding nobody could check
+// comes to a person. The v3 rule ("majority, tie to the refuters") outlived
+// the code in three user-facing copy sites, and every one of them also quotes
+// the panel sizes. This test reads the sizes off `backend/settings.py` so a
+// change to a panel size fails the copy that quotes it — the trust dossier's
+// own "every number is real" contract.
 
 const settings = readFileSync(
   new URL("../../backend/settings.py", import.meta.url),
@@ -114,9 +116,10 @@ const APP_DESCRIPTION_SITES = SITES.filter(([name]) => name !== "QCReportModal")
 // methodology both state verbatim (Chunk 5.3: the two projections must never
 // teach different meanings). tests/test_qc_audit_report.py pins the same
 // literal against the RENDERED memo and against this file.
-export const V4_RULE_SENTENCE =
+export const RULE_SENTENCE =
   "A finding survives only when every seat upholds it, is refuted when the " +
-  "refuting seats outnumber the upholding ones, and is disputed otherwise; " +
+  "refuting seats outnumber all the others, and is disputed otherwise; a " +
+  "seat that could not verify the finding never counts as refuting it, and " +
   "a critical or high refutation additionally needs at least one validated " +
   "citation.";
 
@@ -149,7 +152,7 @@ test("the report modal derives the panel sizes from the run it describes", () =>
   );
 });
 
-test("every copy site states the final-qc/4 outcomes and none the retired majority rule", () => {
+test("every copy site states the final-qc/5 outcomes and none the retired majority rule", () => {
   for (const [name, source] of SITES) {
     const text = fold(source);
     assert.match(text, /\bdisputed\b/, `${name} must name the disputed outcome`);
@@ -167,17 +170,30 @@ test("every copy site states the final-qc/4 outcomes and none the retired majori
       /validated citation/i,
       `${name} must state the critical/high evidence gate`,
     );
+    // final-qc/5: a reviewer that cannot check a finding says so instead of
+    // refuting it. A site that omits it still teaches "refute when unsure"
+    // as the whole story.
+    assert.match(
+      text,
+      /could not (check|verify)/i,
+      `${name} must say what happens to a finding a reviewer could not check`,
+    );
     assert.doesNotMatch(
       text,
       /tie goes|panel'?s majority|surviving three refuters/i,
       `${name} still states the retired v3 rule`,
+    );
+    assert.doesNotMatch(
+      text,
+      /outnumber the upholding ones/,
+      `${name} still states the final-qc/4 refutation bar`,
     );
   }
 });
 
 test("the report modal's methodology states the memo's rule sentence verbatim", () => {
   assert.ok(
-    report.includes(V4_RULE_SENTENCE),
+    report.includes(RULE_SENTENCE),
     "QCReportModal's methodology must carry the same rule sentence the Word memo renders",
   );
 });

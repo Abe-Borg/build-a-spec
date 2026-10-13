@@ -35,7 +35,7 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         CONSOLIDATION_STATUS_SKIPPED,
         QC_PROTOCOL_VERSION,
         QC_REPORT_SCHEMA_VERSION,
-        VERIFICATION_RULE_V4,
+        VERIFICATION_RULE_V5,
         QCCandidateOrigin,
         QCConsolidation,
         QCConsolidationGroup,
@@ -48,6 +48,8 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         panel_outcome,
         qc_input_fingerprint,
         qc_version_fingerprint,
+        reconcile_requirement_coverage,
+        _render_profile,
     )
     from backend.qc.apply import _effective_discipline
     from backend.qc.schema import QC_LENSES
@@ -81,6 +83,8 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         # from birth.
         reference_docs=list(session.references.docs),
         project_facts=list(session.facts.active()),
+        # And the open "Waiting on you" items (final-qc/5).
+        followups=session.followups.open_items(),
     )
     lens_ids = {lens.lens_id for lens in QC_LENSES}
     default_lens_id = "coordination_consistency"
@@ -96,13 +100,13 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         )
         panel_size = max(1, panel_size)
         finding.verification_panel_size = panel_size
-        # Current-schema fixture: v4 upholds only on a unanimous panel, and
-        # carries the rule identity rather than an integer bar. Derived
+        # Current-schema fixture: v4 and v5 uphold only on a unanimous panel,
+        # and carry the rule identity rather than an integer bar. Derived
         # through the engine's own helper below so a future rule change
         # breaks this fixture loudly instead of silently minting a record
         # the reload check would reject.
         finding.verification_threshold = panel_size
-        finding.verification_rule = VERIFICATION_RULE_V4
+        finding.verification_rule = VERIFICATION_RULE_V5
         finding.dispute_reason = ""
         has_ops = bool(finding.proposed_ops)
         finding.ops_semantic_status = "approved" if has_ops else "not_proposed"
@@ -227,6 +231,18 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         max_tokens=settings.QC_MAX_TOKENS,
         cost_basis=usage_pricing_snapshot(settings.QC_MODEL),
         research_profile_present=profile is not None,
+        # final-qc/5: a run reviewed against a profile accounts for it. The
+        # fixture's completeness lens gave no entries, so every controlling
+        # requirement reads not_assessed — the honest record of a review
+        # that never looked.
+        requirement_coverage=reconcile_requirement_coverage(
+            profile,
+            _render_profile(profile),
+            entries=None,
+            lens_findings=[],
+            lens_completed=True,
+            section=session.doc.doc,
+        ),
     )
 
 
@@ -1371,12 +1387,16 @@ def qc_findings_response(
     tokens: dict[str, int] | None = None,
     container: str | None = None,
     refusal_category: str | None = None,
+    requirement_coverage: list[dict] | None = None,
 ) -> SimpleNamespace:
     """A terminal Final-QC lens response: search results + submit_qc_findings.
 
     ``findings`` are raw payload finding dicts (the engine normalizes them);
     ``lens`` is only for readability in the test. ``findings=None`` produces a
-    response with NO tool call (a parse-failure case)."""
+    response with NO tool call (a parse-failure case).
+    ``requirement_coverage`` scripts the research requirement accounting
+    (final-qc/5) verbatim; left out of the payload when not given, which the
+    engine reads as null."""
     content: list[SimpleNamespace] = []
     if searched_urls:
         content.append(search_result_block(searched_urls))
@@ -1403,6 +1423,11 @@ def qc_findings_response(
                     "summary": summary,
                     "reviewed_checks": checks,
                     "findings": findings,
+                    **(
+                        {"requirement_coverage": requirement_coverage}
+                        if requirement_coverage is not None
+                        else {}
+                    ),
                 },
             )
         )
@@ -1490,8 +1515,12 @@ def qc_verdict_response(
     tokens: dict[str, int] | None = None,
     container: str | None = None,
     refusal_category: str | None = None,
+    cannot_verify: bool = False,
 ) -> SimpleNamespace:
     """A Final-QC verifier response: a submit_qc_verdict tool call.
+
+    ``cannot_verify`` (final-qc/5) is the seat saying it could not check the
+    finding; pass ``upholds=False`` beside it, as the schema asks.
 
     ``evidence`` scripts ``refutation_evidence`` entries verbatim (each
     ``{"type": "source", "url": ...}`` or
@@ -1510,6 +1539,7 @@ def qc_verdict_response(
             "submit_qc_verdict",
             {
                 "upholds": upholds,
+                "cannot_verify": cannot_verify,
                 "revised_severity": severity,
                 "note": note,
                 "ops_adequate": (

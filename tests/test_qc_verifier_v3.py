@@ -153,6 +153,9 @@ def test_verdict_schema_avoids_nullable_enum_and_requires_fix_review() -> None:
     assert "enum" not in revised
     assert set(QC_VERDICT_SCHEMA["required"]) == {
         "upholds",
+        # final-qc/5: a seat that could not check the finding says so
+        # instead of refuting it.
+        "cannot_verify",
         "revised_severity",
         "note",
         "ops_adequate",
@@ -495,8 +498,8 @@ def test_v3_semantic_fields_round_trip_and_v2_remains_readable() -> None:
     result = _run(SequencedFakeClient(scripts))
     payload = result.to_dict()
 
-    assert payload["schema_version"] == 4 == QC_REPORT_SCHEMA_VERSION
-    assert payload["protocol_version"] == "final-qc/4" == QC_PROTOCOL_VERSION
+    assert payload["schema_version"] == 5 == QC_REPORT_SCHEMA_VERSION
+    assert payload["protocol_version"] == "final-qc/5" == QC_PROTOCOL_VERSION
     restored = QCResult.from_dict(copy.deepcopy(payload))
     assert restored is not None
     assert restored.findings[0].ops_semantic_status == "approved"

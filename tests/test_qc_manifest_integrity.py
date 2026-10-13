@@ -299,10 +299,14 @@ def test_pricing_rates_are_not_part_of_reviewed_input_identity() -> None:
 # out here rather than rebuilt from the source under test — a test that
 # recomputes the value it is pinning passes vacuously through any drift.
 _SHIPPED_MAJORITY_RULE = (
-    "final-qc/4 adjudication of a fully completed panel. "
+    "final-qc/5 adjudication of a fully completed panel. "
     "2-seat panels (medium/low): all uphold = upheld, split = disputed, "
     "all refute = refuted. 3-seat panels (critical/high): all uphold = "
-    "upheld, majority uphold = disputed, majority refute = refuted. A "
+    "upheld, majority uphold = disputed, majority refute = refuted. A seat "
+    "that cannot verify the finding (the text deciding it was out of its "
+    "reach) counts neither way: refute and majority refute mean refuting "
+    "seats, and a candidate they do not refute is disputed with reason "
+    "unverifiable unless seats that checked it split. A "
     "critical/high refutation additionally requires at least one "
     "validated evidence citation from a refuting seat (a retrieved "
     "source or a resolvable document reference; tool activity alone does "
@@ -346,7 +350,12 @@ def test_a_one_seat_panel_never_claims_a_split_can_happen() -> None:
     """
     one_standard = _majority_rule_prose(1, 3)
     assert "split = disputed" not in one_standard
-    assert "no medium/low candidate can be disputed" in one_standard
+    # final-qc/5: a lone seat that cannot verify its candidate disputes it,
+    # so "no medium/low candidate can be disputed" stopped being true.
+    assert (
+        "a medium/low candidate is disputed only when its seat cannot "
+        "verify it" in one_standard
+    )
     # The critical panel is untouched at its shipped size.
     assert "majority uphold = disputed" in one_standard
 

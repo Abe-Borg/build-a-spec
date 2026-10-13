@@ -29,6 +29,15 @@ QC_CONSOLIDATION_TOOL_NAME = "submit_qc_consolidation"
 
 SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "low")
 QC_CHECK_OUTCOMES: tuple[str, ...] = ("passed", "finding", "not_applicable")
+# What the completeness lens says about each controlling research requirement
+# (final-qc/5). The engine adds two of its own when it reconciles the
+# accounting against the profile (``not_assessed``, ``not_shown``); a lens can
+# never claim those.
+QC_REQUIREMENT_DISPOSITIONS: tuple[str, ...] = (
+    "covered",
+    "missing",
+    "not_applicable",
+)
 # Rank for the median-severity math (higher = more severe).
 SEVERITY_RANK: dict[str, int] = {"critical": 3, "high": 2, "medium": 1, "low": 0}
 _RANK_SEVERITY: dict[int, str] = {v: k for k, v in SEVERITY_RANK.items()}
@@ -125,7 +134,21 @@ QC_LENSES: tuple[QCLens, ...] = (
             "requirement, and one the project consciously departs from "
             "should say so. If no research profile is supplied, skip profile "
             "coverage and say so — judge scope from section conventions "
-            "alone."
+            "alone, and leave requirement_coverage an empty list.\n\n"
+            "Account for every controlling requirement in "
+            "requirement_coverage: one entry per [r-…] id in "
+            "<project_requirements_profile> whose line is marked neither "
+            "[PROCESS] nor [UNVERIFIED]. covered — the draft states it; cite "
+            "every provision that does (a provision coordinating it with the "
+            "section that owns it counts). missing — the draft does not "
+            "state it, or states something that conflicts with it; raise a "
+            "finding for it and give that finding's exact title, unless an "
+            "item in <open_followups> already tracks the gap, in which case "
+            "say so in note and raise none. not_applicable — it does not "
+            "govern this project or this section: say why (the "
+            "jurisdiction, the occupancy or system, the edition in effect, "
+            "or another section's scope). A requirement is not covered "
+            "because a related one is."
         ),
     ),
     QCLens(
@@ -263,7 +286,7 @@ _QC_OP_SCHEMA: dict[str, Any] = {
 QC_FINDINGS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["summary", "reviewed_checks", "findings"],
+    "required": ["summary", "reviewed_checks", "findings", "requirement_coverage"],
     "properties": {
         "summary": {
             "type": "string",
@@ -379,6 +402,63 @@ QC_FINDINGS_SCHEMA: dict[str, Any] = {
                 },
             },
         },
+        "requirement_coverage": {
+            "type": ["array", "null"],
+            "description": (
+                "Null unless your lens brief asks you to account for the "
+                "research requirements. Then one entry per requirement it "
+                "names, and an empty list when there are none."
+            ),
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "requirement_id",
+                    "disposition",
+                    "element_ids",
+                    "note",
+                    "finding_title",
+                ],
+                "properties": {
+                    "requirement_id": {
+                        "type": "string",
+                        "description": (
+                            "The requirement's [r-…] id from "
+                            "<project_requirements_profile>."
+                        ),
+                    },
+                    "disposition": {
+                        "type": "string",
+                        "enum": list(QC_REQUIREMENT_DISPOSITIONS),
+                    },
+                    "element_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "For covered: the [id: …] of every provision "
+                            "that states it — at least one. Empty otherwise."
+                        ),
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": (
+                            "One line. For not_applicable, why it does not "
+                            "govern this project or section; for covered "
+                            "and missing, what the draft says or lacks."
+                        ),
+                    },
+                    "finding_title": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "For missing: the exact title of the finding you "
+                            "raised for it in findings, or null when an item "
+                            "in <open_followups> already tracks the gap. Null "
+                            "for every other disposition."
+                        ),
+                    },
+                },
+            },
+        },
     },
 }
 
@@ -430,6 +510,7 @@ QC_VERDICT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "required": [
         "upholds",
+        "cannot_verify",
         "revised_severity",
         "note",
         "ops_adequate",
@@ -442,6 +523,23 @@ QC_VERDICT_SCHEMA: dict[str, Any] = {
             "description": (
                 "True only if the finding is a real, actionable defect that "
                 "survives your refutation attempt."
+            ),
+        },
+        "cannot_verify": {
+            "type": "boolean",
+            "description": (
+                "True only when you could not check the finding either way "
+                "because the text that decides it was out of your reach — a "
+                "standard or code section you could not retrieve, or a "
+                "project document or fact nobody supplied — and nothing in "
+                "the specification, the attached documents, the research "
+                "profile, the established facts or a page you retrieved "
+                "settles it. Say in note exactly what you would need to "
+                "see. The finding then goes to a person instead of being "
+                "counted as refuted. When true, set upholds and "
+                "ops_adequate to false and leave refutation_evidence "
+                "empty. A finding that is wrong, weak or unsupported on "
+                "what you can read is refuted, not unverifiable."
             ),
         },
         "revised_severity": {
@@ -712,7 +810,49 @@ def normalize_findings(payload: dict) -> dict[str, Any]:
         "summary": str(payload.get("summary") or "").strip(),
         "reviewed_checks": reviewed_checks,
         "findings": findings,
+        "requirement_coverage": normalize_requirement_coverage(
+            payload.get("requirement_coverage")
+        ),
     }
+
+
+def normalize_requirement_coverage(raw: object) -> list[dict[str, Any]] | None:
+    """Clamp a lens's research requirement accounting to well-formed entries.
+
+    Shape only: ``None`` when the lens supplied no list (every lens but the
+    one whose brief asks for it). An entry without an id or with a
+    disposition outside :data:`QC_REQUIREMENT_DISPOSITIONS` drops; whether
+    each entry is a requirement the profile holds, cites provisions that
+    exist, and names a finding the lens raised is the engine's to decide
+    (``reconcile_requirement_coverage``), against the profile and snapshot.
+    """
+    if not isinstance(raw, list):
+        return None
+    entries: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        requirement_id = str(entry.get("requirement_id") or "").strip()
+        disposition = str(entry.get("disposition") or "").strip().lower()
+        if not requirement_id or disposition not in QC_REQUIREMENT_DISPOSITIONS:
+            continue
+        title = entry.get("finding_title")
+        entries.append(
+            {
+                "requirement_id": requirement_id,
+                "disposition": disposition,
+                "element_ids": [
+                    str(value).strip()
+                    for value in (entry.get("element_ids") or [])
+                    if isinstance(value, str) and value.strip()
+                ],
+                "note": " ".join(str(entry.get("note") or "").split()),
+                "finding_title": (
+                    title.strip() if isinstance(title, str) else ""
+                ),
+            }
+        )
+    return entries
 
 
 def normalize_verdict(
@@ -731,6 +871,14 @@ def normalize_verdict(
     kept even when malformed entries around them are dropped — the payload
     is untrusted model output, and a bad entry must not cost a good one.
     An upholding verdict carries none: the gate exists for refutations.
+
+    ``cannot_verify`` (final-qc/5) is the seat saying it could not check the
+    finding either way. It wins over whatever else the seat answered: such a
+    seat upholds nothing, approves no operations and cites no refutation, so
+    a contradictory ``upholds=true`` beside it is not counted as an uphold
+    the seat never made on the merits. Absent reads as False — the seat
+    answered on the merits — so a reply from a model without strict tools
+    that leaves it out is still a verdict; anything but a boolean is not.
     """
     upholds = payload.get("upholds")
     if not isinstance(upholds, bool):
@@ -738,6 +886,13 @@ def normalize_verdict(
     ops_adequate = payload.get("ops_adequate")
     if not isinstance(ops_adequate, bool):
         raise ValueError("QC verdict 'ops_adequate' must be a JSON boolean.")
+    cannot_verify = payload.get("cannot_verify")
+    if cannot_verify is None:
+        cannot_verify = False
+    if not isinstance(cannot_verify, bool):
+        raise ValueError("QC verdict 'cannot_verify' must be a JSON boolean.")
+    if cannot_verify:
+        upholds = False
     revised = str(payload.get("revised_severity") or "").strip().lower()
     if revised not in SEVERITIES:
         revised = ""
@@ -745,13 +900,16 @@ def normalize_verdict(
         "upholds": upholds,
         "revised_severity": revised,
         "note": str(payload.get("note") or "").strip(),
-        "ops_adequate": bool(ops_adequate and upholds and has_proposed_ops),
+        "ops_adequate": bool(
+            ops_adequate and upholds and has_proposed_ops and not cannot_verify
+        ),
         "ops_note": str(payload.get("ops_note") or "").strip(),
         "refutation_evidence": (
-            [] if upholds else normalize_refutation_evidence(
+            [] if upholds or cannot_verify else normalize_refutation_evidence(
                 payload.get("refutation_evidence")
             )
         ),
+        "cannot_verify": cannot_verify,
     }
 
 

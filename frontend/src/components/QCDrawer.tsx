@@ -46,6 +46,8 @@ import {
   qcInconclusiveCandidates,
   qcOperationEvaluation,
   qcPrimaryReport,
+  qcRequirementCountsLine,
+  qcRequirementCoverage,
   qcSessionCost,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
@@ -327,6 +329,8 @@ function seatDisplay(seat: QcVerifierSeatLiveState): {
 } {
   if (seat.status === "upheld") return { label: "upheld", tone: "text-accent border-accent/35 bg-accent/8" };
   if (seat.status === "not_upheld") return { label: "not upheld", tone: "text-ink-dim border-edge bg-bg/30" };
+  // final-qc/5: neither a vote to uphold nor one to refute.
+  if (seat.status === "unverifiable") return { label: "could not verify", tone: "text-warn border-warn/35 bg-warn/8" };
   if (seat.status === "failed") return { label: "failed", tone: "text-err border-err/35 bg-err/8" };
   if (seat.status === "cancelled") return { label: "cancelled", tone: "text-warn border-warn/35 bg-warn/8" };
   if (seat.status === "active") {
@@ -356,7 +360,7 @@ function QcVerifierSeat({
     seat.revisedSeverity ? `revised severity ${seat.revisedSeverity}` : "",
     seat.opsAdequate === true
       ? "fix approved"
-      : seat.opsAdequate === false
+      : seat.opsAdequate === false && seat.status !== "unverifiable"
         ? "fix not approved"
         : "",
     seat.error,
@@ -819,6 +823,9 @@ function QcRunRecap({
     [inconclusive, "inconclusive"],
     [safeFixes, "safe fixes"],
   ] as const;
+  // final-qc/5: what the completeness lens found of each controlling
+  // research requirement. The full table is in the report.
+  const requirementCoverage = qcRequirementCoverage(report);
   const statusTone =
     disposition.tone === "ok"
       ? "bg-ok/15 text-ok"
@@ -855,6 +862,11 @@ function QcRunRecap({
           </div>
         ))}
       </dl>
+      {requirementCoverage && (
+        <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
+          Research requirements: {qcRequirementCountsLine(requirementCoverage)}.
+        </p>
+      )}
     </section>
   );
 }
@@ -1733,15 +1745,17 @@ export default function QCDrawer({
                           {finding.dispute_reason ===
                           "insufficient_refutation_evidence"
                             ? "refuted without cited evidence"
-                            : "the reviewers disagreed"}
+                            : finding.dispute_reason === "unverifiable"
+                              ? "the reviewers could not check it"
+                              : "the reviewers disagreed"}
                         </li>
                       ))}
                     </ul>
                   )}
                   <p className="mt-1 text-[10px] leading-snug text-ink-faint">
-                    Every reviewer reported, and they did not agree. These are
-                    not applied automatically — read each one and either
-                    address it or dismiss it with a reason.
+                    Every reviewer reported, and they did not agree or could
+                    not check it. These are not applied automatically — read
+                    each one and either address it or dismiss it with a reason.
                   </p>
                 </div>
               )}

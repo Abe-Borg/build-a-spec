@@ -1444,3 +1444,133 @@ test("the click-through lists merged candidates per lens and never calls a batch
   assert.match(modal, /const batchWaiting =/);
   assert.match(modal, /!batchWaiting &&/);
 });
+
+// ---------------------------------------------------------------------------
+// final-qc/5: a reviewer seat may answer "cannot verify" — neither an uphold
+// nor a refutation.
+// ---------------------------------------------------------------------------
+
+test("a seat that could not verify folds to unverifiable, not to a refutation", () => {
+  const events: QcEvent[] = [
+    started(),
+    roster(1),
+    {
+      type: "verifier_complete",
+      seq: 2,
+      candidate_id: "candidate-1",
+      reviewer_index: 1,
+      status: "completed",
+      upholds: false,
+      cannot_verify: true,
+      ops_adequate: false,
+      note: "Needs NFPA 13-2025 §8.15.1, which I could not retrieve.",
+    },
+    { type: "verifier_complete", seq: 3, candidate_id: "candidate-1", reviewer_index: 2, status: "completed", upholds: true, cannot_verify: false, ops_adequate: false },
+    // A seat that says both is still a seat that could not verify.
+    { type: "verifier_complete", seq: 4, candidate_id: "candidate-1", reviewer_index: 3, status: "completed", upholds: true, cannot_verify: true, ops_adequate: false },
+    {
+      type: "candidate_complete",
+      seq: 5,
+      candidate_id: "candidate-1",
+      outcome: "disputed",
+      dispute_reason: "unverifiable",
+      panel_size: 3,
+      uphold_requires: 3,
+      completed_seats: 3,
+      upholds: 1,
+      unverifiable: 2,
+    },
+  ];
+  const live = foldQcLiveState(events);
+  const candidate = live.candidates[0];
+  assert.deepEqual(
+    candidate.seats.map((seat) => seat.status),
+    ["unverifiable", "upheld", "unverifiable"],
+  );
+  // An unverifiable seat is accounted for, so the panel resolves.
+  assert.equal(candidate.outcome, "disputed");
+  assert.equal(candidate.disputeReason, "unverifiable");
+  assert.equal(candidate.upholds, 1);
+  assert.equal(candidate.unverifiable, 2);
+  assert.equal(live.resolved.length, 1);
+  assert.equal(
+    candidate.seats[0].note,
+    "Needs NFPA 13-2025 §8.15.1, which I could not retrieve.",
+  );
+
+  const timeline = foldQcAgentTimeline(events, {
+    kind: "seat",
+    candidateId: "candidate-1",
+    reviewerIndex: 1,
+  });
+  const verdict = timeline[timeline.length - 1];
+  assert.equal(verdict.kind, "verdict");
+  assert.equal(verdict.kind === "verdict" && verdict.cannotVerify, true);
+  const upheld = foldQcAgentTimeline(events, {
+    kind: "seat",
+    candidateId: "candidate-1",
+    reviewerIndex: 2,
+  }).at(-1);
+  assert.equal(upheld?.kind === "verdict" && upheld.cannotVerify, false);
+  assert.equal(upheld?.kind === "verdict" && upheld.upholds, true);
+});
+
+test("an older log without cannot_verify folds exactly as before", () => {
+  const events: QcEvent[] = [
+    started(),
+    roster(1),
+    { type: "verifier_complete", seq: 2, candidate_id: "candidate-1", reviewer_index: 1, status: "completed", upholds: false },
+    { type: "verifier_complete", seq: 3, candidate_id: "candidate-1", reviewer_index: 2, status: "completed", upholds: true },
+    { type: "verifier_complete", seq: 4, candidate_id: "candidate-1", reviewer_index: 3, status: "failed", error: "provider" },
+    { type: "candidate_complete", seq: 5, candidate_id: "candidate-1", outcome: "inconclusive", panel_size: 3, uphold_requires: 3, completed_seats: 2, upholds: 1 },
+  ];
+  const candidate = foldQcLiveState(events).candidates[0];
+  assert.deepEqual(
+    candidate.seats.map((seat) => seat.status),
+    ["not_upheld", "upheld", "failed"],
+  );
+  assert.equal(candidate.outcome, "inconclusive");
+  assert.equal(candidate.unverifiable, 0);
+  const verdict = foldQcAgentTimeline(events, {
+    kind: "seat",
+    candidateId: "candidate-1",
+    reviewerIndex: 1,
+  }).at(-1);
+  assert.equal(verdict?.kind === "verdict" && verdict.cannotVerify, false);
+  assert.equal(verdict?.kind === "verdict" && verdict.upholds, false);
+  // A failed seat never reads as one that could not verify.
+  const failed = foldQcAgentTimeline(events, {
+    kind: "seat",
+    candidateId: "candidate-1",
+    reviewerIndex: 3,
+  }).at(-1);
+  assert.equal(failed?.kind === "verdict" && failed.cannotVerify, false);
+});
+
+test("a replayed cannot-verify frame folds once and keeps its count", () => {
+  const frames: QcEvent[] = [
+    started(),
+    roster(1),
+    { type: "verifier_complete", seq: 2, candidate_id: "candidate-1", reviewer_index: 1, status: "completed", upholds: false, cannot_verify: true },
+    { type: "candidate_complete", seq: 3, candidate_id: "candidate-1", outcome: "disputed", dispute_reason: "unverifiable", panel_size: 3, completed_seats: 3, upholds: 0, unverifiable: 3 },
+  ];
+  let snapshot: QcSnapshot | null = null;
+  for (const frame of [...frames, ...frames]) snapshot = mergeQcEvent(snapshot, frame);
+  assert.equal(snapshot?.events.length, frames.length);
+  const candidate = foldQcLiveState(snapshot?.events ?? []).candidates[0];
+  assert.equal(candidate.seats[0].status, "unverifiable");
+  assert.equal(candidate.unverifiable, 3);
+});
+
+test("the Review Room names a seat that could not verify and an unverifiable dispute", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const read = (name: string) =>
+    readFileSync(join(here, "..", "src", "components", name), "utf8");
+  const drawer = read("QCDrawer.tsx");
+  const modal = read("QcAgentActivityModal.tsx");
+  assert.match(drawer, /seat\.status === "unverifiable"\) return \{ label: "could not verify"/);
+  assert.match(drawer, /"the reviewers could not check it"/);
+  assert.match(modal, /unverifiable:\s*"the reviewers could not check it, so it comes to you/);
+  assert.match(modal, /Could not verify the finding/);
+  assert.match(modal, /entry\.cannotVerify/);
+});

@@ -588,9 +588,11 @@ class SessionState:
     # between rounds; stopping commits whatever was produced so far (like
     # Claude.ai's stop button) rather than rolling back like a failure.
     stop_requested: threading.Event = field(default_factory=threading.Event)
-    # Where THIS session last saved itself, as an absolute path on the
-    # user's machine. Empty until the first save, which is what makes the
-    # panel's Save button ask once and overwrite silently after that.
+    # Where THIS session saves itself, as an absolute path on the user's
+    # machine: the file it was opened from (a native Open or the Project
+    # panel's sibling open of a ``.baspec``) or last saved to. Empty until
+    # then, which is what makes the panel's Save button ask once and
+    # overwrite silently after that.
     #
     # It lives here — rather than in the native shell that performs the
     # write, or in the frontend that draws the button — because "the same

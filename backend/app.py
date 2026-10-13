@@ -8888,6 +8888,7 @@ def create_app(
         *,
         trace_mode: str,
         project_home: dict[str, str] | None = None,
+        opened_path: str = "",
         extra: dict[str, Any] | None = None,
         refuse_if_busy: bool = False,
     ) -> JSONResponse:
@@ -8907,6 +8908,14 @@ def create_app(
         file belongs to the same project; a sibling that turns out to belong
         to another project, or none, opens without a home rather than
         inheriting one.
+
+        ``opened_path`` (open-section only) is the file the bytes were read
+        from. It becomes the file Save overwrites, inside the same guard
+        (``sessions.adopt_opened_project_file``; owner rule, 2026-10-13) —
+        ``load_project`` cleared the previous section's target, and a section
+        opened from the panel writes back to its own file. An upload has no
+        path: the native Open binds its file afterwards through the shell's
+        ``bind_project_home``.
 
         ``refuse_if_busy`` (open-section only) repeats the caller's
         running-work refusal inside the commit's guard. Staging takes seconds
@@ -9009,6 +9018,8 @@ def create_app(
                     ):
                         session.project_home = dict(project_home)
                         home_kept.append(True)
+                if opened_path:
+                    sessions.adopt_opened_project_file(session, opened_path)
             return None
 
         refusal = await run_in_threadpool(_commit_load)
@@ -9166,7 +9177,8 @@ def create_app(
         merge the panel lists) to a file that must sit directly in the
         project folder; the bytes then run the exact load-file path
         (``_load_project_bytes``), so every validation stays shared. The home
-        carries over when the opened file belongs to the same project.
+        carries over when the opened file belongs to the same project, and
+        the opened file becomes the one Save overwrites.
 
         Refusals, each before anything is replaced: a tutorial (409
         ``tutorial_active``), running work (409 ``workspace_busy``, checked
@@ -9272,6 +9284,7 @@ def create_app(
             payload,
             trace_mode="section",
             project_home=home,
+            opened_path=path,
             extra={"section": number},
             refuse_if_busy=True,
         )

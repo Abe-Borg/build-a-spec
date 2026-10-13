@@ -5825,6 +5825,8 @@ new SSE event, no new dep, no project-format bump.
   the same story: a browser upload has no path to adopt, so the alternative
   would be two different behaviors for the same button. Opening a project
   therefore clears the target, and the first Save afterwards asks.
+  (Superseded 2026-10-13 by owner request: opening a `.baspec` now makes it
+  the target. See "Save writes back to the file you opened" below.)
 - **The shell owns the decision; the frontend only draws it.**
   ``js_api.save_project()`` overwrites when the session has a target and asks
   when it does not; ``save_project_as()`` always asks. Both return one
@@ -23234,6 +23236,99 @@ you decide which keeps it. It reads the file as last saved, only its
 document, for that turn only, and never edits it; a section not saved beside
 its project brief, or a browser session, cannot read the others, and the
 assistant says so."
+
+## Save writes back to the file you opened — implemented notes (2026-10-13)
+
+Owner report (Abraham): "if I open a baspec file, work on it, and then click
+save, it asks me where to save again. if I open an existing baspec file, it
+should save to that existing baspec file without asking me." That was the
+rule recorded under "Save asks once, then overwrites": only a save set
+`SessionState.save_target`, and `load_project` cleared it. The owner's request
+replaces that rule. Opening a `.baspec` now sets the target, the way a desktop
+app treats a document it opened. No new endpoint, SSE event, dependency,
+capability or project-format change.
+
+- **`load_project` still clears the target.** A load replaces the session,
+  and the bytes it receives carry no path. The two callers that know the
+  opened file's path re-bind it after the clear, through one helper,
+  `sessions.adopt_opened_project_file(session, path, generation=)`.
+- **Native Open.** The shell already gave the frontend a single-use token for
+  the picked path, and the frontend already called `bind_project_home(token,
+  generation)` after `/api/project/load-file`. For a token of kind `project`
+  that call now adopts the path too, under the generation the load reported.
+  The home and the target are stored under one guard (it is re-entrant), so
+  a reset cannot land between them. The result gains `save_target`
+  (`{"path", "name"}` or `None`), and `bindNativeProjectHome` sets the panel's
+  `saveTarget` from it, so the button draws its overwrite form at once. A
+  token of kind `project_brief` is never adopted. That pick (a brief, or a
+  sibling's `.baspec`) seeds a different section, and overwriting the sibling
+  would destroy it.
+- **The Project panel's sibling open.** `_load_project_bytes` gains
+  `opened_path` (open-section only). The commit adopts the resolved section
+  file inside the same guard that re-assigns the home. The response's
+  `project_save_target` carries it, whether or not the home was kept. A file
+  the user opened is the file Save should write back to, even when it turned
+  out to belong to another project.
+- **Only `.baspec` is adopted** (`PACKAGE_EXTENSION`, case-insensitive). Save
+  writes only the package format. Overwriting an opened legacy `.json` would
+  leave a package under a `.json` name and destroy the legacy file. So a
+  legacy open keeps the old behavior, and its first Save asks.
+- **`remember_project_save_target` now checks the generation and writes under
+  `session_state_guard()`.** A reset or load holds the guard while it clears
+  the target and advances the generation. Before, neither could be ruled out
+  landing between the check and the write. The save path shares the helper,
+  so it gains the same guarantee.
+- **A save reads its target with its payload** (Codex review on PR #313).
+  `_save_project_file` read `session.save_target` after the package render.
+  Before this change a load cleared the target in the meantime, so a save
+  that overlapped an Open fell through to the dialog. Now the Open adopts its
+  own file. A target read late is that file, and the outgoing project's bytes
+  would silently replace it. The Save button stays enabled while a file
+  loads, and Open stays enabled while a save runs, so the overlap is
+  reachable. `sessions.project_save_package` captures the package inputs,
+  the generation and the target in one guard, and `project_package` now
+  wraps it. A stale save writes its own file and binds nothing.
+  `test_a_save_overlapping_an_open_writes_its_own_file_never_the_opened_one`
+  runs the open inside the render seam. It failed before the fix (the
+  opened file's bytes changed) and passes after.
+- **Unchanged.** Save as… (always asks; opens in the target's folder; offers
+  a fresh timestamped name), the fallback to the dialog for a target that can
+  no longer be written, New session clearing the target, the tutorial
+  refusal, the browser download path, and the rule that the path is never
+  persisted. Home discovery is unchanged too. A side effect: a brief exported
+  right after an open now records the opened file's name in its section
+  registry (`section_record.file_name` reads the target), where before it
+  recorded none until the first save.
+- **Copy.** Help's "Save, and keep the good work", the tour's project-package
+  chapter text (no step added or removed, so `TOUR_VERSION` stays 9), and the
+  code comments that said "empty until the first save".
+- **Tests.** `tests/test_save_overwrite.py` gains four: the reported bug end
+  to end (native open, load-file, bind, Save writes the opened file with no
+  Save dialog and no second file), Save as… after an open (asks, opens in
+  the opened file's folder, leaves the opened file alone), a legacy `.json`
+  open (not adopted; the first Save asks; the `.json` bytes are unchanged),
+  and the helper (only `.baspec`, any case, only for the current
+  generation). `tests/test_project_home.py`: open-section sets the target to
+  the resolved sibling file and reports it, an upload alone sets none, and a
+  sibling `.baspec` picked to seed a new section is never adopted. The exact
+  result dicts gain `save_target`. `tests/test_close_prompt.py`: a stale bind
+  adopts nothing; a fresh one reports the target. Five probes, each reverted
+  in place and restored: no adoption in the shell's bind → 4 red; adopting
+  regardless of the token's kind → 1; no adoption on open-section → 1; no
+  extension check → 2; no generation guard on adoption → 1. 5 of 5 caught.
+  Ruff clean; the touched and neighbouring files (save/overwrite, project
+  home, close prompt, session wipe, briefs, brief merge, next section,
+  package, docs consistency) pass; `npm test` 572 and `npm run build` pass.
+
+No paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Projects", item "Save writes back to the project you opened":
+"Opening a .baspec project and pressing Save now writes back to that file
+with no dialog, including a section opened from the Project panel. Save as…
+still asks for a new file. A legacy .json project is never overwritten: its
+first Save asks where the .baspec should go."
 
 ## The user chooses which sections the assistant may read — implemented notes (2026-10-13)
 

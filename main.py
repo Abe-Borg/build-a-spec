@@ -1139,11 +1139,20 @@ class _CloseController:
         refuse every bind. Absent or malformed, the generation is sampled
         here, which still protects the folder read itself.
 
-        Returns ``{"ok", "home", "error"}`` — ``home`` is ``{"folder",
-        "brief_name"}`` or ``None`` (the file is not beside its project's
-        brief, or the project has no brief yet).
+        A project open (``kind == "project"``) also makes the opened
+        ``.baspec`` the file Save overwrites (owner rule, 2026-10-13;
+        ``sessions.adopt_opened_project_file``), under the same generation —
+        the load cleared the previous session's target, and this is the one
+        place that knows the opened file's path. Its first Save then writes
+        back to that file with no dialog; Save as… still asks. A legacy
+        ``.json`` project is not adopted, and a brief pick never is.
+
+        Returns ``{"ok", "home", "save_target", "error"}`` — ``home`` is
+        ``{"folder", "brief_name"}`` or ``None`` (the file is not beside its
+        project's brief, or the project has no brief yet); ``save_target`` is
+        ``{"path", "name"}`` when the opened file was adopted, else ``None``.
         """
-        refusal: dict[str, Any] = {"ok": False, "home": None}
+        refusal: dict[str, Any] = {"ok": False, "home": None, "save_target": None}
         if not self._trusted_page():
             return {**refusal, "error": "This page cannot open files."}
         with self._recent_opens_lock:
@@ -1173,12 +1182,28 @@ class _CloseController:
                 "error": "The session changed before its project folder could be read.",
             }
         home = sessions.discover_project_home(session, path)
-        if not sessions.remember_project_home(session, home, generation=expected):
+        # One guard around both stores (it is re-entrant), so a reset cannot
+        # land between them and leave the fresh session holding half.
+        with session.session_state_guard():
+            if not sessions.remember_project_home(session, home, generation=expected):
+                return {
+                    **refusal,
+                    "error": "The session changed before its project folder could be read.",
+                }
+            # A project the user opened is the file Save writes back to. A
+            # picked brief, or a sibling section picked to SEED a new one, is
+            # never adopted: the new section is not that file.
+            adopted = kind == "project" and sessions.adopt_opened_project_file(
+                session, path, generation=expected
+            )
             return {
-                **refusal,
-                "error": "The session changed before its project folder could be read.",
+                "ok": True,
+                "home": sessions.project_home_payload(session),
+                "save_target": (
+                    sessions.project_save_target(session) if adopted else None
+                ),
+                "error": "",
             }
-        return {"ok": True, "home": sessions.project_home_payload(session), "error": ""}
 
     # --- internals ---------------------------------------------------------
     def _force_close(self) -> None:
@@ -1285,16 +1310,19 @@ class _CloseController:
                 error="Return to your project before saving it.",
             )
         session = workspace.session
-        # Sampled beside the payload: a reset or project load while the Save
-        # dialog is up must not bind the replacement session to this file.
-        generation = session.generation
         try:
             # Captured under the session guard, rendered outside it — the
             # HTTP route's twin. This used to package the live session with
             # no guard at all, so a save landing while a turn committed could
             # mix pre- and post-commit state, on the one action meant to
-            # prevent loss.
-            payload, filename = sessions.project_package(session)
+            # prevent loss. The generation and the target are captured in
+            # the same guard: a reset or project load while the render runs
+            # or the Save dialog is up must not bind the replacement session
+            # to this file, and an open that adopts its own file meanwhile
+            # must not become where these bytes are written.
+            payload, filename, generation, current = sessions.project_save_package(
+                session
+            )
         except ProjectPackageError as exc:
             return self._save_result(False, error=str(exc))
         except Exception:
@@ -1311,10 +1339,10 @@ class _CloseController:
                 error="This project could not be packaged for saving.",
             )
 
-        # Where this session already saves itself, and whether this call is allowed
-        # to write there without asking. Kept apart: "Save as…" forces the
-        # dialog but should still OPEN in the folder the user last chose.
-        current = str(getattr(session, "save_target", "") or "")
+        # Where this session already saves itself (``current``, captured
+        # with the payload), and whether this call is allowed to write there
+        # without asking. Kept apart: "Save as…" forces the dialog but should
+        # still OPEN in the folder the user last chose.
         remembered = "" if force_dialog else current
         if remembered:
             written = self._resolved_write(remembered, payload)

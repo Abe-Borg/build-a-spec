@@ -679,12 +679,15 @@ def test_bind_project_home_refuses_an_unknown_token_and_binds_only_the_loaded_se
     session.invalidate_model_turn()  # something replaced the session since
     refused = controller.bind_project_home(stale, loaded_generation)
     assert refused["ok"] is False and refused["home"] is None
+    assert refused["save_target"] is None
     assert session.project_home is None
+    assert session.save_target == "", "a replaced session never adopts the file"
 
     bound = controller.bind_project_home(fresh, session.generation)
     assert bound == {
         "ok": True,
         "home": {"folder": str(tmp_path), "brief_name": "p.basproject"},
+        "save_target": {"path": str(section), "name": "21 13 13.baspec"},
         "error": "",
     }
     assert session.project_home["brief_path"] == str(tmp_path / "p.basproject")

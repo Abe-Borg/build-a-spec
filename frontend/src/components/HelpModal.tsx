@@ -461,9 +461,10 @@ function HowToUse({
                 Save a <Tag>.baspec</Tag> project to restore the whole
                 workspace later — document, versions, conversation, figures,
                 references, research and QC records, and any retained source
-                package. The first save of a session asks where it goes; every
-                save after that overwrites that file, and <Tag>Save as…</Tag>
-                beside Save writes a new one. Turn a finished section into a
+                package. Save writes back to the <Tag>.baspec</Tag> you opened
+                with no dialog; a new session's first save asks where it goes,
+                and every save after that overwrites that file.{" "}
+                <Tag>Save as…</Tag> beside Save writes a new one. Turn a finished section into a
                 reusable template from the New session dialog, or export a{" "}
                 <Tag>.basproject</Tag> project brief so the project's next
                 section starts with its profile, editions, research,

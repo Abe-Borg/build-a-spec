@@ -756,16 +756,25 @@ class ProjectFactStore:
             current_section=current_section,
             current_discipline=current_discipline,
             max_tokens=FACTS_CONTEXT_MAX_TOKENS,
+            # The chat alone: the fan-out lines are hashed into the Final QC
+            # manifest, and a marker there would flip retained reports stale.
+            mark_panel_edits=True,
         )
         out = [
             "ESTABLISHED PROJECT FACTS (project-level inputs recorded with "
             "record_project_facts; they carry between sections of this project "
             "and apply unless the user says otherwise):",
             *lines,
-            "Do not re-ask or re-derive these. When the user contradicts one, "
-            "supersede it with record_project_facts in the same turn — never "
-            "draft silently against it. A provision drafted from a confirmed "
-            "fact may cite its id as source_item_id.",
+            "Do not re-ask or re-derive the confirmed ones. An [assumed] fact "
+            "is a working default: raise it with the user once, in one line, "
+            "when a provision you draft rests on it, and when they agree "
+            "supersede it with the same statement, status confirmed and "
+            "source_kind user. When the user contradicts "
+            "a fact, supersede it with record_project_facts in the same turn — "
+            "never draft silently against it. A provision drafted from a fact "
+            "cites its id as source_item_id, and is stamped confirmed only when "
+            "the fact is confirmed and the user's own (source: user, or edited "
+            "in the panel) or the user approved the provision.",
         ]
         if omitted:
             out.append(
@@ -944,7 +953,12 @@ def fact_label(fact: ProjectFact) -> str:
     return fact.scope
 
 
-def _render_one(fact: ProjectFact, escape: Callable[[str], str]) -> list[str]:
+def _render_one(
+    fact: ProjectFact,
+    escape: Callable[[str], str],
+    *,
+    mark_panel_edits: bool = False,
+) -> list[str]:
     provenance: list[str] = []
     if fact.recorded_in and fact.recorded_at:
         provenance.append(
@@ -958,6 +972,11 @@ def _render_one(fact: ProjectFact, escape: Callable[[str], str]) -> list[str]:
     if fact.source_ref:
         source = f"{source} {escape(fact.source_ref)}"
     provenance.append(f"source: {source}")
+    if mark_panel_edits and fact.edited_at:
+        # Only the panel's ``update`` stamps ``edited_at`` (a brief merge
+        # carries another section's panel edit), so this is a person's word
+        # on a fact whose source may still name research or the model.
+        provenance.append("edited in the panel")
     line = (
         f"- {fact.pid} [{escape(fact_label(fact))}, {fact.status}] "
         f"{escape(fact.statement)} ({'; '.join(provenance)})"
@@ -975,6 +994,7 @@ def render_fact_lines(
     current_discipline: str = "",
     max_tokens: int = FACTS_CONTEXT_MAX_TOKENS,
     escape: Callable[[str], str] | None = None,
+    mark_panel_edits: bool = False,
 ) -> tuple[list[str], int]:
     """The grouped fact lines, trimmed to a token estimate. ``(lines, omitted)``.
 
@@ -1000,7 +1020,7 @@ def render_fact_lines(
     )
     entries: list[tuple[int, list[str], int]] = []
     for fact in ordered:
-        rendered = _render_one(fact, esc)
+        rendered = _render_one(fact, esc, mark_panel_edits=mark_panel_edits)
         entries.append(
             (
                 _group_of(fact, current, discipline),
@@ -1880,7 +1900,9 @@ _FACT_FIELD_PROPERTIES: dict[str, Any] = {
         "enum": list(FACT_TOOL_STATUSES),
         "description": (
             "confirmed = the user stated it or a grounded source establishes "
-            "it; assumed = your default the user accepted. Defaults to assumed."
+            "it; assumed = your default the user has not explicitly "
+            "confirmed (an explicit yes makes it confirmed, source_kind "
+            "user). Defaults to assumed."
         ),
     },
     "source_kind": {
@@ -1923,7 +1945,9 @@ RECORD_PROJECT_FACTS_TOOL: dict[str, Any] = {
         "source_ref instead), or anything already in the identity, profile or "
         "standards blocks.\n\n"
         "status: confirmed when the user stated it or a grounded source "
-        "establishes it; assumed when it is your default the user accepted. "
+        "establishes it; assumed when it is your default the user has not "
+        "explicitly confirmed (an explicit yes makes it confirmed, with "
+        "source_kind user). "
         "scope: project (every section), discipline (every section of this "
         "session's discipline — bound to it automatically, so another "
         "discipline's sections read it as coordination information), or "

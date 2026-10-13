@@ -1837,7 +1837,9 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                             "type": "string",
                             "enum": list(STATUSES),
                             "description": (
-                                "confirmed or assumed. needs_input and "
+                                "confirmed or assumed. confirmed only for "
+                                "what the user stated or approved — a source "
+                                "you cite is not an approval. needs_input and "
                                 "imported are refused: needs_input is a "
                                 "retired status only older documents carry, "
                                 "imported is seeded by the app."

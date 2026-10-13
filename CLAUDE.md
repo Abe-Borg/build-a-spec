@@ -1753,6 +1753,53 @@ Tests: `tests/test_prompt55_effort.py`, `tests/test_qc_phase_effort.py`.
 Full record, reversion evidence and the release-note draft are in
 `docs/as-built.md` under the same heading. No paid API call was made.
 
+## A provision is confirmed only when a person approved it — implemented notes (2026-10-13)
+
+Step 4 of the prompt-review follow-up; owner decision (option A). A
+provision's `confirmed` meant the user stated or approved it; a project
+fact's means the user stated it OR a grounded source (research, an attached
+document, Final QC) established it; and `_PROJECT_FACTS_POLICY` said "a
+provision drafted from a confirmed fact may be stamped confirmed". So a
+research finding could become a confirmed provision nobody looked at, which
+the Review drawer never lists and `no_assumed_left` never holds back.
+
+- **The rule.** `_PROVENANCE`: nothing but the user confirms a provision; a
+  research item, document, QC finding, or a fact one of them established (or
+  an assumed fact) is a source to cite, and what is drafted from it is
+  assumed until the user approves it. A user-stated fact (source: user,
+  confirmed) counts as the user's statement. `_PROJECT_FACTS_POLICY` says a
+  fact's "confirmed" means established and a provision's means approved;
+  `_REFERENCE_DOC_POLICY` says the document alone confirms nothing;
+  `_RESEARCH_POLICY` says a citation never confirms. `FULL_DRAFT_DIRECTIVE`
+  and `ADAPT_IMPORTED_DIRECTIVE` follow, and so does the edit tool's
+  `status` property description (its top-level description is unchanged, so
+  retained Final QC reports stay current).
+- **Assumed facts are not settled.** The policy and the per-turn facts block
+  (`ProjectFactStore.context_block`) keep "do not re-ask or re-derive" for
+  confirmed facts only; an assumed fact is drafted to, what rests on it is
+  assumed, and it is raised once when a provision depends on it (agreed →
+  superseded by the same statement recorded confirmed).
+- **No guard, deliberately.** Approval happens in chat ("yes, add it"), which
+  a batch cannot see, so refusing confirmed-plus-research-source would refuse
+  the user's own approvals (the step 3 reasoning). The prompt is the control.
+- **Review fixes (Codex, PR #310).** An upgrade names `source_kind` user (a
+  replacement inherits the old kind). Every assumed-fact definition (policy,
+  `RECORD_PROJECT_FACTS_TOOL`, the harvest prompt and tool, the panel
+  tooltip) reserves assumed for a default the user let stand; an explicit yes
+  is confirmed, source user. The chat's facts block marks a panel-edited fact
+  "edited in the panel" (`render_fact_lines(mark_panel_edits=True)`, chat
+  only: the fan-out lines are hashed into the QC manifest), and the rule
+  accepts it as the user's own.
+- **Unchanged.** Final QC (its facts block already said a provision on an
+  assumed fact is assumed; its fan-out and manifest render no marker),
+  readiness, statuses already in saved documents, the specification text.
+
+Never tell the model that a source, a citation or a fact it did not hear from
+the user confirms a provision. Tests: `tests/test_confirmed_meaning.py`,
+`tests/test_project_facts.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

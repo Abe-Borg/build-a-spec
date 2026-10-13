@@ -216,6 +216,50 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — only you confirm a provision
+
+(2026-10-13, step 4 of the prompt-review follow-up; owner decision. docs/as-
+built.md's "A provision is confirmed only when a person approved it" is the
+record; in the next release.)
+
+"Confirmed" meant two things. On a provision it meant you stated it or
+approved it. On a project fact it means you stated it *or* a source
+established it: a research finding, an attached document or a Final QC
+finding. And the assistant was told a provision drafted from a confirmed
+fact could be stamped confirmed, so a research finding could become a
+confirmed provision you never looked at — one the Review drawer never listed
+and the readiness checklist never held back.
+
+- **Only you confirm a provision.** A provision the assistant draws from
+  research, an attached document, Final QC, or a project fact you did not
+  state yourself is stamped **assumed**, with its ◆ source chip showing where
+  it came from. It waits in the Review drawer until you confirm it (one
+  press-and-hold confirms a whole article or PART), and the readiness
+  checklist reads "N assumed block(s) awaiting review" until you do.
+  A provision you stated or approved in chat, or one drawn from a fact you
+  stated yourself, is confirmed as before.
+- **A project fact's "confirmed" keeps its meaning**: established, by you or a
+  grounded source. The assistant is told the two words differ.
+- **An assumed fact is no longer treated as settled.** It is still carried
+  forward and drafted to, but the assistant raises it with you once, in one
+  line, when a provision it drafts rests on it, and records it as confirmed —
+  as your word — when you agree. "Assumed" now means a default you let stand
+  without explicitly confirming it, everywhere it is defined (the assistant,
+  the Project facts panel and Harvest facts…). Confirmed facts stay settled:
+  not re-asked, not re-derived.
+- **A fact you edit in the Project facts panel counts as yours.** The
+  assistant sees it marked "edited in the panel", so a provision drawn from a
+  confirmed fact you edited there can be confirmed.
+- **The whole-section passes say the same**: "Draft full section" stamps
+  research- and document-derived provisions assumed, and "Adapt imported
+  draft" confirms a kept block only where you stated or approved it.
+
+Expect more assumed blocks to review after a full draft on a researched
+project; that is the point. Nothing else changed: Final QC, readiness's
+rules, the specification text and saved projects are untouched (a provision
+already stamped confirmed stays confirmed). Open chat sessions rewrite their
+cached prompt once. No paid API call was made.
+
 ## Current Status — Final QC's verifier seats think at medium
 
 (2026-10-12, owner decision, for cost. docs/as-built.md's "Final QC's

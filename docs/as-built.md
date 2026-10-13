@@ -24617,29 +24617,51 @@ right: "bookmarkEnd", path: ""}}`, with `deleted: 94`, `moved: 0`,
   `bookmarkEnd`. Reproduced exactly (same detail, `path: ""`) on a
   three-provision master; with no link, or with the end inside the
   paragraph, it passed.
-- **The fix.** `_join_to_next` reaches past body-level zero-width range
+- **The join.** `_join_to_next` reaches past body-level zero-width range
   markup (`_BETWEEN_PARAGRAPHS`: `bookmarkStart`, `bookmarkEnd`,
   `commentRangeStart`/`End`, `permStart`/`End`, `proofErr`) to find the
-  next paragraph; the leftover joins the front of that paragraph, and the
-  markup stays where it was. The move and custom XML range markers belong
-  to the same family, but `_resolve_wrappers` removes them before any join
-  runs. Reject All uses the same join, so an inserted copy holding a link
-  right before such markup (a moved provision) now passes too; it failed
+  next paragraph. In the text that markup follows the paragraph's leftover
+  content, so it moves into the joined paragraph right after that content,
+  in its own order. The move and custom XML range markers belong to the
+  same family, but `_resolve_wrappers` removes them before any join runs.
+  Reject All uses the same join, so an inserted copy holding a link right
+  before such markup (a moved provision) now passes too; it failed
   `reject_check_failed` before.
-- **Why it is not a tolerance.** Range markup marks a position in the text
-  stream between one paragraph mark and the next paragraph's first
-  character; it holds no content, so Word's join of a removed mark is not
-  blocked by it. Nothing is dropped from the comparison: leftover content
-  that shows anything still lands in the next paragraph, where the
-  comparison sees it (pinned), and with a table or nothing after the
-  markup the paragraph still stays. The emptied-link-before-a-table
-  refusal ("Found, not done" 2 of the custom XML note) is unchanged, and
-  fails closed as before.
+- **The comparison.** Range markup right before a paragraph, outside it,
+  is at that paragraph's first position in the text, exactly where the
+  same markup at the start of the paragraph is (after its properties), so
+  `canonical_body` and `_Canon._children` read it there
+  (`_fold_leading_markup`, at every block level). This is not a
+  tolerance: both spellings are one position, and Word itself writes a
+  bookmark that ends after a paragraph mark the body-level way. Markup at
+  the end of the previous paragraph (its mark lies between) or anywhere
+  past the paragraph's first position is still a difference, and markup
+  before a table or the end of a container is compared where it is (all
+  pinned). `Difference.index` counts the folded children. The real-Word
+  judge shares the comparison, so it applies there too.
+- **Codex review on PR #326** caught the first push leaving the markup in
+  place: right for an emptied link, wrong for leftover text, where it put a
+  bookmark or comment end in front of words it should follow.
+  `tracked_export.accepted_revision_baseline` resolves an upload's pending
+  revisions with this same `accept_all`, so a pending deleted paragraph
+  mark before such markup would have retargeted the user's bookmark in the
+  tracked export's baseline. A second attempt kept the markup in place
+  only when the leftover showed nothing; the judge's faithful-Word test
+  then failed with redline comments on, because Build-a-Spec's comment
+  anchor on the deleted provision is leftover content too. Strict text
+  order plus the same-position comparison handles both. Such a pending
+  mark now joins its paragraph in the accepted baseline (it stayed before),
+  as an adjacent one already did; `accepted_revision_baseline`'s origin
+  remap handles the merged paragraph as it does that case.
+- **The table case is unchanged.** With a table or nothing after the
+  markup, there is no paragraph to join and the paragraph stays: the
+  emptied-link-before-a-table refusal ("Found, not done" 2 of the custom
+  XML note) still fails closed.
 - **Real Word has not judged it yet.** `tests/word_judge.py` gains
   `targeted/link-before-bookmark-end` (delete the linked provision; move a
   linked provision above the end). It runs on the owner's next
   `BUILD_A_SPEC_WORD_JUDGE=1` run; the judge's own tests render both cases
-  through the app's self-check here.
+  through the app's self-check here, with comments on.
 - **Sweep** (local, not committed): 300 seeded masters × native moves
   off/on, with body-level bookmark ends, body-level bookmark starts and
   proofing marks around provisions that hold links, under delete, rewrite,
@@ -24649,7 +24671,7 @@ right: "bookmarkEnd", path: ""}}`, with `deleted: 94`, `moved: 0`,
   `reject_check_failed`, 34 `untrackable_markup`. No case went from ok to
   refused; 184 went from refused to ok, and 6 that had failed the accept
   check now fail the reject check, which it had masked. Every remaining
-  refusal is a move (next bullet).
+  refusal is a move (next bullet). Same counts on the final design.
 - **Found, not done.** Moving a provision whose own bookmark closes at
   body level after it. `_classify_runs` makes unmodelled children between
   two anchored elements lead the later one, so the formatted export moves
@@ -24666,36 +24688,48 @@ right: "bookmarkEnd", path: ""}}`, with `deleted: 94`, `moved: 0`,
   `_markup_between_master("bookmark end")`, provision A moved to position
   2.
 - **Unchanged.** The writer, the clean export, every refusal reason and
-  message, the comparison's tolerances, the package audit, the comment
-  pass, the SSE and REST surfaces, and every model request byte.
+  message, the judge's own tolerances, the package audit, the comment
+  pass (its proof strips anchors from the redline body and never joins),
+  the SSE and REST surfaces, and every model request byte.
 
 ### Tests
 
-- `tests/test_revisions.py`: the join reaches past each of five kinds of
-  body-level markup on Accept All (a deleted paragraph holding an emptied
-  link) and leaves the markup in place; Reject All mirrors it for an
-  inserted paragraph; visible leftover content still joins and is
-  compared; with a table or the end of the body after the markup, the
-  paragraph stays.
-- `tests/test_redline_original.py`: `_markup_between_master(between)` and
-  two matrix rows through `_verify`, both native-move settings: the
+- `tests/test_revisions.py` (18): the join reaches past each of five
+  kinds of body-level markup on Accept All (a deleted paragraph holding an
+  emptied link) and Reject All (an inserted one); with leftover text the
+  markup lands right after it, in its own order, both ways; with a table
+  or the end of the body after the markup the paragraph stays; markup
+  right before a paragraph compares as its start (five kinds), markup at
+  the end of the previous paragraph or mid-paragraph does not, and markup
+  before a table is not moved.
+- `tests/test_redline_original.py` (8): `_markup_between_master(between)`
+  and two matrix rows through `_verify`, both native-move settings: the
   reported deletion beside a body-level bookmark end, bookmark start and
   proofing mark (pinning that the deleted linked paragraph is followed
   directly by the markup), and a linked provision moved above a body-level
   bookmark end.
-- `tests/test_tracked_word_export.py`: the owner's path through the API
-  (import, delete in the panel, `mode=preserved&track_changes=true`) is a
-  200 whose Accept All and Reject All hold.
+- `tests/test_tracked_word_export.py` (2): the owner's path through the
+  API (import, delete in the panel, `mode=preserved&track_changes=true`)
+  is a 200 whose Accept All and Reject All hold; and a pending deleted
+  paragraph mark in the upload, before its bookmark's body-level end,
+  keeps the end after the joined words in the accepted baseline and
+  exports.
 
-**Revert matrix.** The whole oracle change reverted: 7 of the 9 new oracle
-tests red (the two "paragraph stays" tests pin unchanged behaviour), 8 of 8
-matrix rows red, and the route test red with the reported 409 message.
-Each of the seven markup kinds dropped from `_BETWEEN_PARAGRAPHS` in turn:
-`bookmarkStart` 3 red, `bookmarkEnd` 8, `commentRangeStart` 1,
-`commentRangeEnd` 1, `permStart` 1, `permEnd` 1, `proofErr` 3. Every
-reversion restored. Ruff, and every test file that uses the oracle (656
-tests, 54 skipped for the real-Word judge), pass; the full suite runs in
-CI. No paid API call was made.
+**Revert matrix** (each in place over the new tests, the judge's
+faithful-Word test and the existing tests the filter matches, 34 in all;
+restored after each). The checker back to master's: 25 red; the 9 that
+pass pin unchanged behaviour (the five "still a difference" / "not moved"
+/ "paragraph stays" tests and four existing tests). The same-position
+comparison removed: 22 red, the reported case and the judge's
+faithful-Word test among them. The markup left in place after the joined
+content: 8 red, Codex's case and the baseline test among them. Each of
+the seven markup kinds dropped from `_BETWEEN_PARAGRAPHS` (it feeds both
+the join and the comparison): `bookmarkStart` 4 red, `bookmarkEnd` 13,
+`commentRangeStart` 2, `commentRangeEnd` 4, `permStart` 2, `permEnd` 2,
+`proofErr` 4. Ruff, and
+every test file that uses the oracle (666 passed, 54 skipped for the
+real-Word judge), pass; the full suite runs in CI. No paid API call was
+made.
 
 ### Release-note draft (for the release after 1.26.0)
 

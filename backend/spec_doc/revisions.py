@@ -20,7 +20,8 @@ Accept All (:func:`accept_all`):
   (see the comparison below). Zero-width range markup between the two
   (a bookmark closing after the paragraph it covers, a comment or
   permission range, a proofing mark) is a position, not a block: the join
-  reaches past it and the markup stays where it was. With no next
+  reaches past it, and the markup keeps its place in the text, moving into
+  the joined paragraph right after the joined content. With no next
   paragraph to join, it stays (Word cannot remove a container's last
   paragraph mark);
 * a row flagged deleted (``w:trPr/w:del``) is removed, one flagged inserted
@@ -46,6 +47,10 @@ Word splits text into runs — the one thing it re-does on every save anyway:
 * a bookmark is compared by NAME (ids are file-local), and the caller may
   exclude names — the one documented Reject-All limit: a moved provision's
   bookmarks stay with its new copy;
+* range markup (bookmark, comment and permission ranges, proofing marks)
+  right before a paragraph, outside it, is compared at the start of that
+  paragraph: both are the paragraph's first position in the text, and
+  Word writes a bookmark that ends after a paragraph mark the first way;
 * an empty hyperlink is dropped (Word shows nothing for it);
 * so is an inline ``w:customXml`` holding nothing but its own
   ``w:customXmlPr``: Word removes custom XML markup when it opens a file
@@ -341,19 +346,24 @@ def _join_to_next(paragraph) -> None:
 
     Zero-width range markup between the two (a bookmark closing after the
     mark it covers, a comment range, a permission range, a proofing mark)
-    marks a position, not a block, so the join reaches past it and the
-    markup stays where it was."""
+    marks a position, not a block, so the join reaches past it. In the text
+    it follows the joined content, so it moves into the paragraph right
+    after that content, in its own order."""
     content = _content(paragraph)
     if not content:
         _remove(paragraph)
         return
+    skipped = []
     following = paragraph.getnext()
     while following is not None and (
         not isinstance(following.tag, str) or following.tag in _BETWEEN_PARAGRAPHS
     ):
+        if isinstance(following.tag, str):
+            skipped.append(following)
         following = following.getnext()
     if following is None or following.tag != _W_P:
         return
+    content = content + skipped
     properties = following.find(_W_PPR)
     index = 0 if properties is None else following.index(properties) + 1
     for offset, child in enumerate(content):
@@ -527,7 +537,30 @@ class _Canon:
                     children[-1] = merged
                     continue
             children.append(canonical)
-        return children
+        return _fold_leading_markup(children)
+
+
+def _fold_leading_markup(children: list) -> list:
+    """Range markup right before a paragraph, at block level, is at that
+    paragraph's first position in the text — exactly where the same markup
+    at the start of the paragraph is — so it is compared there: moved in
+    after the paragraph's properties, in its own order. Markup before
+    anything else (a table, the end of a container) stays where it is."""
+    folded: list = []
+    pending: list = []
+    for child in children:
+        if child[0] in _BETWEEN_PARAGRAPHS:
+            pending.append(child)
+            continue
+        if pending and child[0] == _W_P:
+            inner = list(child[2])
+            at = 1 if inner and inner[0][0] == _W_PPR else 0
+            child = (child[0], child[1], tuple(inner[:at] + pending + inner[at:]), child[3])
+            pending = []
+        folded.extend(pending)
+        pending = []
+        folded.append(child)
+    return folded + pending
 
 
 def _run_properties(run: tuple):
@@ -579,7 +612,7 @@ def canonical_body(body, *, exclude_bookmarks=frozenset()) -> list[tuple]:
     tail = [children.pop()] if children and children[-1][0] == _W_SECTPR else []
     while children and _is_formatting_free_empty(children[-1]):
         children.pop()
-    return children + tail
+    return _fold_leading_markup(children) + tail
 
 
 def _first_path(left, right, path: list[str]) -> list[str]:

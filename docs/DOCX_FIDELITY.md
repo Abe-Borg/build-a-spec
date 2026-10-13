@@ -410,8 +410,12 @@ paragraph mark joins what its paragraph still holds to the next paragraph, as
 Word does, and reaches past body-level range markup to find it: a bookmark
 closing after the paragraph it covers (Word's own shape for a bookmark that
 takes in the mark), a comment or permission range or a proofing mark is a
-position in the text, not a block, and stays where it was. So a deleted
-provision holding a link (left holding the emptied link) still joins the next
+position in the text, not a block. The markup keeps that position: it moves
+into the joined paragraph right after the joined content, never in front of
+it. Range markup right before a paragraph, outside it, is at that
+paragraph's first position, exactly where the same markup at the start of
+the paragraph is, so the comparison reads it there. So a deleted provision
+holding a link (left holding the emptied link) still joins the next
 provision when such a bookmark closes between them. No bookmark name
 may appear twice in the redline, and every other package member must be
 byte-identical. When the redline carries Word's own "Moved" marks (below), a

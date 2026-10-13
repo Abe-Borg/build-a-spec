@@ -152,10 +152,16 @@ from ..qc.apply import (
     capture_fix_evidence,
     finding_evidence_keys,
     fix_survives,
+    matches_current_inputs,
     ops_with_fix_reasons,
     stage_chat_apply,
 )
-from ..qc.context import qc_review_context_block
+from ..qc.context import (
+    READ_QC_FINDING_TOOL,
+    QCFindingReadRefusal,
+    qc_review_context_block,
+    read_qc_finding,
+)
 from ..qc.fix_log import fix_log_entries, now_iso as fix_log_now
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import refusal_category, response_container_id
@@ -285,10 +291,10 @@ def _chat_tools() -> list[dict[str, Any]]:
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
     ``suggest_prompts``, ``read_reference_doc``, ``apply_qc_fixes``,
-    ``track_followups``, ``record_project_facts``, ``recall_conversation``
-    and then ``read_project_section`` (2026-10-13) are appended LAST, in
-    that order, so each addition leaves the existing tool bytes intact as
-    a stable cached prefix. ``suggest_prompts`` is RETIRED — suggested replies ride the
+    ``track_followups``, ``record_project_facts``, ``recall_conversation``,
+    ``read_project_section`` and then ``read_qc_finding`` (both 2026-10-13)
+    are appended LAST, in that order, so each addition leaves the existing
+    tool bytes intact as a stable cached prefix. ``suggest_prompts`` is RETIRED — suggested replies ride the
     reply's ``<suggested_replies>`` block (``backend/suggestions.py``) — but
     stays declared, at its old position, so saved histories that called it
     remain valid requests; removal is scheduled for a later release.
@@ -314,6 +320,7 @@ def _chat_tools() -> list[dict[str, Any]]:
         RECORD_PROJECT_FACTS_TOOL,
         RECALL_CONVERSATION_TOOL,
         READ_PROJECT_SECTION_TOOL,
+        READ_QC_FINDING_TOOL,
     ]
 
 
@@ -2987,14 +2994,19 @@ _ELIDED_READ_TOOL_NOTES: dict[str, str] = {
         "every later request. The section's saved file is where it was — "
         "call read_project_section again to re-read it.]"
     ),
+    READ_QC_FINDING_TOOL["name"]: (
+        "[Final QC record omitted from history to keep it out of every "
+        "later request. The retained review still holds it — call "
+        "read_qc_finding again to re-read it.]"
+    ),
 }
 
 
 def _elide_reference_tool_results(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Drop ``read_reference_doc`` and ``read_project_section`` bodies from
-    committed history (COW).
+    """Drop ``read_reference_doc``, ``read_project_section`` and
+    ``read_qc_finding`` bodies from committed history (COW).
 
     A reference document is large and the store already holds it verbatim, so
     leaving the text in history would re-bill it on every later turn and bloat
@@ -3111,7 +3123,8 @@ def _committed_messages(
     - ``read_reference_doc`` tool results shed the document body (see
       :func:`_elide_reference_tool_results`) — the reference store holds it;
       ``read_project_section`` results shed the sibling section's text the
-      same way — its saved file holds it.
+      same way — its saved file holds it — and ``read_qc_finding`` results
+      shed the QC record — the retained review holds it.
     - Edit results shed the document outline they returned (see
       :func:`history_hygiene.elide_stale_outlines`) — it was the model's id
       map WITHIN this turn; every later turn's PROJECT CONTEXT carries the
@@ -4339,6 +4352,78 @@ def _run_read_project_section(
     )
 
 
+def _run_read_qc_finding(
+    session: SessionState,
+    block: dict[str, Any],
+    trace_handle: Any = None,
+    *,
+    budget: TurnReferenceBudget | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``read_qc_finding`` tool_use block (2026-10-13).
+
+    The ``read_project_section`` shape: the record is returned for this turn,
+    charged to the turn's reference ``budget``, elided from committed
+    history afterwards (:func:`_elide_reference_tool_results`), and every
+    way the read can fail is an ``is_error`` result, never a turn failure.
+    The retained result and the tree are the session's own attributes, read
+    under the turn guard the caller holds; the tree is this turn's
+    provisional one, so an edit earlier in the turn reads as STALE, the
+    same answer ``apply_qc_fixes`` would give. So do the other review
+    inputs: the full-input comparison is ``matches_current_inputs`` with the
+    apply path's ``block=False`` (Codex review on PR #319), so a report the
+    apply tool would refuse is never described as applyable.
+    """
+    result = getattr(session.qc, "result", None)
+    try:
+        text = read_qc_finding(
+            result,
+            block.get("input"),
+            current_version_index=session.doc.index,
+            current_section=session.doc.doc,
+            inputs_current=(
+                result is not None and matches_current_inputs(session, result)
+            ),
+        )
+    except QCFindingReadRefusal as exc:
+        _trace.note(trace_handle, f"read_qc_finding refused: {exc}")
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": f"read_qc_finding: {exc}",
+                "is_error": True,
+            },
+            [],
+        )
+    if budget is not None and not budget.take(len(text)):
+        _trace.note(
+            trace_handle,
+            f"read_qc_finding refused: turn budget spent "
+            f"({budget.spent}/{budget.limit} chars)",
+        )
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": (
+                    f"read_qc_finding: this turn has already read "
+                    f"{budget.spent:,} characters of reference material and "
+                    f"this record ({len(text):,} characters) does not fit in "
+                    f"the {budget.limit:,}-character per-turn budget. "
+                    "Nothing was read. Work with what you have already read "
+                    "this turn, or reply and read it next turn."
+                ),
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(trace_handle, f"read_qc_finding ({len(text)} chars)")
+    return (
+        {"type": "tool_result", "tool_use_id": block.get("id"), "content": text},
+        [],
+    )
+
+
 @dataclass
 class _QcApplyStaging:
     """Turn-local record of what apply_qc_fixes staged this turn.
@@ -4592,6 +4677,10 @@ def _run_tool(
         )
     if name == READ_PROJECT_SECTION_TOOL["name"]:
         return _run_read_project_section(
+            session, block, trace_handle, budget=reference_budget
+        )
+    if name == READ_QC_FINDING_TOOL["name"]:
+        return _run_read_qc_finding(
             session, block, trace_handle, budget=reference_budget
         )
     if name == "apply_qc_fixes":

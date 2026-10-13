@@ -577,9 +577,12 @@ def test_a_turn_reads_a_sibling_and_commits_without_its_text(tmp_path, monkeypat
     assert '"type": "error"' not in resp.text
     first_request, second_request = fake.messages.requests
     # The first request's project block said the sections are readable and
-    # declared the tool last.
+    # declared the tool (last when it shipped; read_qc_finding follows it).
     assert "can be read in full with read_project_section" in request_project_block_text(first_request)
-    assert [t["name"] for t in first_request["tools"]][-1] == "read_project_section"
+    assert [t["name"] for t in first_request["tools"]][-2:] == [
+        "read_project_section",
+        "read_qc_finding",
+    ]
     # The continuation round carried the sibling's text.
     continuation = json.dumps(second_request["messages"])
     assert BODY_MARKER in continuation
@@ -725,7 +728,10 @@ def test_read_project_section_refuses_before_resolving_when_it_cannot_work(tmp_p
 
 def test_the_tool_is_declared_last_and_every_module_s_prompt_teaches_it():
     tools = _chat_tools()
-    assert tools[-1] is READ_PROJECT_SECTION_TOOL
+    # Last when it shipped; read_qc_finding (2026-10-13) was appended after
+    # it, which leaves this tool's place in the cached prefix unchanged.
+    assert tools[-2] is READ_PROJECT_SECTION_TOOL
+    assert tools[-1]["name"] == "read_qc_finding"
     assert READ_PROJECT_SECTION_TOOL["input_schema"]["required"] == ["number"]
     assert "last saved" in READ_PROJECT_SECTION_TOOL["description"].lower() or (
         "last SAVED" in READ_PROJECT_SECTION_TOOL["description"]

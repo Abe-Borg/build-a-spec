@@ -4138,6 +4138,23 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def _dropped_items_note(dropped: int) -> str:
+    """What a trimmed rendering says about the findings it left out.
+
+    Without it a reader — the chat, or a Final QC lens or seat — had no way
+    to know the list was partial, and could read a requirement's absence as
+    research never finding it (owner request, 2026-10-13).
+    """
+    noun = "finding was" if dropped == 1 else "findings were"
+    return (
+        f"\n\nNOTE: {dropped} lower-confidence research {noun} left out of "
+        "this list to keep it within its size limit (lowest confidence "
+        "first); every finding is in the Research drawer. A requirement "
+        "missing from this list may still have been found: never treat its "
+        "absence here as evidence that research did not find it."
+    )
+
+
 def research_context_block(
     profile: RequirementsProfile,
     *,
@@ -4148,9 +4165,12 @@ def research_context_block(
     Returns ``(block_text, dropped_item_count)``. When the rendered block
     exceeds ``max_tokens`` (estimated), whole items are dropped from the
     rendering only — lowest confidence first, later items first among ties
-    — until it fits. The structured profile keeps every item: a
-    requirement the drafting context didn't see is still a requirement the
-    project has (it stays visible in the research drawer).
+    — until it fits, and the block ends with a note saying how many were
+    left out (:func:`_dropped_items_note`, counted inside the cap). The
+    structured profile keeps every item: a requirement the drafting context
+    didn't see is still a requirement the project has (it stays visible in
+    the research drawer). An untrimmed profile renders byte for byte as
+    before.
     """
     candidate = profile.render_text()
     if _estimate_tokens(candidate) <= max_tokens:
@@ -4163,7 +4183,7 @@ def research_context_block(
         items.pop(lowest)
         dropped += 1
         trimmed = dataclasses.replace(profile, items=items)
-        candidate = trimmed.render_text()
+        candidate = trimmed.render_text() + _dropped_items_note(dropped)
         if _estimate_tokens(candidate) <= max_tokens:
             return candidate, dropped
     return candidate, dropped

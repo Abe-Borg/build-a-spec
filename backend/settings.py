@@ -421,9 +421,18 @@ QC_THINKING_DISPLAY_MODELS: tuple[str, ...] = (
 
 # Per-request allowances for the interview loop's web_search / web_fetch
 # server tools. They renew every continuation round — per-call runaway
-# guards, not a session budget.
+# guards, not a session budget. Fetches are 8 since 2026-10-13 (owner
+# decision; 4 before): a turn that checks several sources — a standard, a
+# data sheet, an adopted amendment — met 4 inside one request, and the model
+# reads a refused fetch (``max_uses_exceeded``) as a spent budget and stops
+# looking (research's 2026-10-08 finding). 8 is still under the provider's
+# ten-step pause, so it takes a ninth fetch in one request to meet it. Pages
+# keep the 50,000-token ceiling, so one request's worst case grows from about
+# 200k to 400k tokens of page text; a turn that starts near the window and
+# fetches that much ends cut off, and commit keeps only the passages its
+# reply quoted (``ELIDE_FETCHED_PAGE_TEXT``), so the next turn is unaffected.
 CHAT_MAX_SEARCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_SEARCHES", 8, minimum=1)
-CHAT_MAX_FETCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_FETCHES", 4, minimum=1)
+CHAT_MAX_FETCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_FETCHES", 8, minimum=1)
 
 # Whether a completed research round / Final QC run auto-sends one debrief
 # chat turn (the model briefs the user on the findings and asks whether to

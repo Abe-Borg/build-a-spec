@@ -2125,6 +2125,59 @@ anything other than "pending" is flagged in it. Tests:
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
 
+## The chat reads a Final QC finding in full — implemented notes (2026-10-13)
+
+Owner decisions (Abraham), from the chat-capability review: the chat reads
+any Final QC finding on demand, fetches up to 8 pages a request, and is told
+when research findings were trimmed from its view. ("Think harder" per
+message and a change-history tool were declined.)
+
+- **`read_qc_finding`** (`qc/context.READ_QC_FINDING_TOOL`, `{finding_id?}`)
+  is declared LAST in `_chat_tools`, after `read_project_section` (the
+  cached-prefix contract; `tests/test_app.py` and
+  `tests/test_project_sections.py` pin the order). `qc/context.read_qc_finding`
+  renders one record of the RETAINED result (`session.qc.result`, any list:
+  findings, disputed, refuted, inconclusive) — rationale, reviewed text,
+  source checks, proposed ops as JSON with the fix class
+  (`finding_fix_class`, open surviving findings only), every verdict with
+  its note, ops note and refutation evidence, the combined lens claims
+  (`origins_for`, when more than one) and the disposition — or, with no id,
+  an index of every record by category. Freshness is the apply path's own
+  answer: the turn's provisional tree (an edit earlier in the turn reads
+  STALE) and every other review input (`matches_current_inputs`, the apply
+  path's `block=False`; Codex review on PR #319), so a fix `apply_qc_fixes`
+  would refuse is never called applyable. Framed `<qc_finding>` with its own
+  tag (attributes bounded to 64 characters that never cross `<`, the
+  reply-chip matcher's shape) and the reply-chip tag made inert; a header says it
+  is the review's data, its sources are not research findings, and a safe
+  fix applies only through `apply_qc_fixes`. Charged to the turn's
+  `TurnReferenceBudget`, elided at commit through `_ELIDED_READ_TOOL_NOTES`.
+  No review or an unknown id is an `is_error` (`QCFindingReadRefusal`).
+- **Told where.** A bullet in the stable prompt's "# Final QC findings";
+  the FINAL QC REVIEW block's header and rollup line name the tool. The QC
+  manifest is untouched (Final QC echoes only `apply_spec_edits`'
+  description), so retained results stay current.
+- **`CHAT_MAX_FETCHES` = 8** (was 4); pages keep 50k tokens, so a request's
+  worst case grows from about 200k to 400k tokens of page text. 8 is still
+  under the provider's ten-step pause, so meeting it takes a ninth fetch in
+  one request. A turn that overflows the window ends cut off; commit keeps
+  only quoted passages, so the next turn is unaffected.
+- **A trimmed research list says so.** `research_context_block` appends
+  `_dropped_items_note(n)` (counted inside the cap) when it drops findings.
+  It is the shared renderer, so Final QC's lenses and seats (`_render_profile`)
+  get the note too; the QC manifest hashes the profile, not the render, so
+  nothing reads stale. An untrimmed profile renders byte for byte.
+- **Bytes that changed once.** The tool list, the stable prompt and the
+  fetch tool's `max_uses`: every open session rewrites its cached prefix
+  once.
+
+Never let a QC record into committed history, never let the tool apply or
+dismiss, and never resolve a finding outside the retained result. Tests:
+`tests/test_qc_finding_read.py`, `tests/test_research_engine.py`,
+`tests/test_settings.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No
+paid API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

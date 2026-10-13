@@ -48,7 +48,8 @@ STATUSES = ("confirmed", "assumed", "needs_input", "imported")
 # safer than silently confirming a model guess. "imported" (Phase 5) marks
 # master-spec content not yet reviewed against this project — the
 # gap-and-adapt interview upgrades it to confirmed/assumed (or deletes it)
-# article by article; remaining imported blocks are scheduled in the export.
+# article by article; remaining imported blocks are scheduled in the review
+# report and hold issue readiness.
 DEFAULT_STATUS = "assumed"
 #: The statuses the model may stamp (``spec_voice`` enforces it; the tool
 #: description names only these). ``needs_input`` is retired and ``imported``
@@ -2044,14 +2045,16 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "required final 0-based index among its existing siblings. Articles "
         "stay within their current part, and paragraphs stay within their "
         "current article or parent paragraph; sections and parts cannot be "
-        "moved, and content cannot be reparented.\n"
+        "moved, and move never changes an element's parent.\n"
         "- replace: target_id = an article (text = new title), a paragraph "
         "(text and/or status), or 'sec' to set the section header (text = "
         "section title, numbering = section number like '21 13 13').\n"
         "- delete: target_id = an article or paragraph id.\n"
         "- set_status: target_id = a paragraph id; status = confirmed | "
-        "assumed. Changes only the provision's status — use it to confirm an "
-        "assumed block (gap-and-adapt) without retyping its text.\n"
+        "assumed. Changes only the provision's status, without retyping its "
+        "text — confirmed once the user has approved the provision, or "
+        "assumed for an imported block you keep as fitting this project "
+        "(gap-and-adapt).\n"
         "- set_standard_edition: target_id = 'sec'; standard = the "
         "designation (e.g. 'NFPA 13'); edition = the jurisdiction-adopted "
         "edition (e.g. '2019'); basis = the stated adoption that makes it "
@@ -2195,7 +2198,9 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                                 "goes into the specification text. A batch "
                                 "with an operation lacking a reason is "
                                 "rejected whole. On set_standard_edition the "
-                                "basis is the reason."
+                                "basis is the reason, and there a research "
+                                "item is cited by its id, as that operation "
+                                "asks: an edition's basis never reaches Word."
                             ),
                         },
                     },

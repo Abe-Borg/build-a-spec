@@ -2755,7 +2755,8 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
     )
     if lint_items:
         lines = [
-            "LINT REPORT (deterministic, advisory — stale-edition findings "
+            "LINT REPORT (deterministic; it never blocks an edit, but each "
+            "issue holds issue readiness until fixed — stale-edition findings "
             "are drafting errors to fix):"
         ]
         for issue in lint_items:
@@ -2816,9 +2817,11 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
         parts.append(
             f"IMPORTED-STARTER REVIEW: {imported_count} provision(s) still "
             "carry status 'imported' (see the (imported) chips in the "
-            "outline above). Issue readiness blocks until each is confirmed, "
-            "adapted, or deleted — the gap-and-adapt pass. This is the "
-            "standing work list whenever the user has no other priority."
+            "outline above). The gap-and-adapt pass keeps each (assumed, or "
+            "confirmed once the user approves it), adapts it, or deletes it; "
+            "issue readiness holds while any block is imported or assumed, "
+            "so the user's approval is the last step. This is the standing "
+            "work list whenever the user has no other priority."
         )
     # A cover page, revision history or table of contents ahead of the
     # section is carried through to the export verbatim and is not in the

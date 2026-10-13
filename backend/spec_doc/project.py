@@ -791,10 +791,13 @@ def load_project(data: Any, session) -> None:
     session.last_context_sizes = None
     # Where the OUTGOING session had been saving itself. Assign
     # UNCONDITIONALLY (load_project does not call session.reset()): the file
-    # being opened is a different project, and the next Save must ask where
-    # it goes rather than overwrite the one that was open. Guarded with
-    # hasattr for the lightweight session objects format-1 compatibility
-    # callers still pass.
+    # being opened is a different project, and the next Save must never
+    # overwrite the one that was open. The callers that know the opened
+    # file's path re-bind it as the new target AFTER this clear (the native
+    # shell's ``bind_project_home``, the open-section commit), so Save writes
+    # back to the file that was opened; a load from anywhere else asks.
+    # Guarded with hasattr for the lightweight session objects format-1
+    # compatibility callers still pass.
     if hasattr(session, "save_target"):
         session.save_target = ""
     # The project folder the OUTGOING session lived in, for the same reason

@@ -216,6 +216,38 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — Save writes back to the project you opened
+
+(2026-10-13, owner request. docs/as-built.md's "Save writes back to the file
+you opened" is the record; in the next release.)
+
+Opening an existing `.baspec` and pressing Save opened the Save dialog again,
+offering a new timestamped name, as if the project had never been saved. That
+was by design: only a Save could set the file that later saves overwrite, and
+opening a project cleared it. Now opening a project sets it too.
+
+- **Save overwrites the file you opened, with no dialog.** This works for a
+  project opened with Open and for a section opened from the Project panel.
+  The Save button's tooltip names that file right after the open, and Save &
+  close on the close prompt writes it too.
+- **Save as… is unchanged.** It still asks, opens in the opened file's
+  folder, suggests a new name, and leaves the opened file alone. From then on
+  Save writes the new file.
+- **A legacy `.json` project is not overwritten.** Save writes only the
+  `.baspec` format, so the first Save after opening a `.json` project still
+  asks where the converted `.baspec` should go. The `.json` file is never
+  touched.
+- **Starting a new section from a sibling's `.baspec`** (New session → New
+  section in an existing project) never makes that sibling's file the Save
+  target. The new section is a different file, so its first Save asks.
+- **The safety rules stay the same.** The file belongs to the session:
+  New session, or opening another project, clears it. A file that can no
+  longer be written (moved, deleted, read-only, a disconnected drive) makes
+  Save ask again rather than fail. A browser (dev) session has no file path
+  and still downloads.
+
+No paid API call was made.
+
 ## Current Status — the assistant reads the project's other sections
 
 (2026-10-13, owner request. docs/as-built.md's "The assistant reads the
@@ -4083,12 +4115,15 @@ What worked before (Phase 2) and still does:
   full document version history, import report, and exact source DOCX when one
   exists—undo and source-preserving export still work after resume. Legacy JSON
   projects remain load-compatible but do not contain source bytes.
-- Save behaves like a save button: the first save of a session asks for a name
-  and a folder, and every save after that overwrites that file in place with no
-  dialog (**Save as…** appears under a caret beside Save once there is a file to
-  say "as" against, and re-points where Save writes). The target belongs to the
-  session — starting a new session or opening another project clears it, so the
-  next Save asks again rather than silently overwriting the project you left.
+- Save behaves like a save button: a project opened from a `.baspec` saves
+  back to that file with no dialog; otherwise the first save of a session asks
+  for a name and a folder, and every save after that overwrites that file in
+  place with no dialog (**Save as…** appears under a caret beside Save once
+  there is a file to say "as" against, and re-points where Save writes). The
+  target belongs to the session — starting a new session clears it, and
+  opening another project replaces it with that project's file, so Save never
+  silently overwrites the project you left. A legacy `.json` project is never
+  overwritten: its first Save asks where the `.baspec` goes.
 - API key management: `ANTHROPIC_API_KEY` env var → OS credential manager (via `keyring`) → key file fallback, same posture as Spec Critic. A banner in the UI stores your key if none is found.
 - Session reset, prompt-cached system prompt, hermetic test suite (no network, no key).
 

@@ -172,8 +172,9 @@ interface Props {
   /** The verifier seats' model id (`health.qc_verifier_model`). */
   qcVerifierModel?: string;
   changedIds: ReadonlySet<string>;
-  /** The file this session already saved itself to, or null when it never
-   *  has. Null draws a plain Save that asks where; a target draws Save (which
+  /** The file this session saves to (the `.baspec` it was opened from or
+   *  last saved to), or null when there is none yet. Null draws a plain Save
+   *  that asks where; a target draws Save (which
    *  overwrites it) beside the caret that holds Save as…. Server-owned — see
    *  DocPayload.project_save_target for why it is never inferred here. */
   saveTarget: SaveTarget | null;
@@ -1394,8 +1395,9 @@ export default function ArtifactPanel({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {/* Save asks where exactly once per session, then overwrites that
-              file the way a save button is expected to. The dialog does not
+          {/* Save asks where at most once per session (never for a .baspec
+              the session was opened from), then overwrites that file the
+              way a save button is expected to. The dialog does not
               disappear with it — it moves behind the caret as Save as…, which
               is also how the user re-points the target. The caret only exists
               once there IS a target: before the first save, plain Save already

@@ -217,6 +217,60 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — research findings quote their source and say when they apply
+
+(2026-10-13, the prompt-review follow-up, item 7. docs/as-built.md's
+"Research findings quote their source and say when they apply" is the
+record; in the next release.)
+
+A research finding used to state a requirement in the research agent's own
+words, and "grounded" meant only that a page it cited was really retrieved —
+not that the page said what the finding says. Two things are new on every
+finding a research round produces:
+
+- **The source's own words, checked.** Each finding carries the sentence or
+  two of the page that state it, copied word for word. Inside the round —
+  the only time the fetched text exists — the app looks for that passage on
+  the pages the finding cites and the agent actually read. It tolerates what
+  copying does (spacing, capitals, curly quotes and dashes, a gap marked
+  "...") but not paraphrase, and it only looks at the finding's own cited
+  pages. The findings report shows the passage with **Found on
+  example.gov** in green or **Not found on a fetched page** in amber. A
+  search-result snippet can't be checked (its text is encrypted), and a
+  passage from past the point where a long page was cut off reads as not
+  found, never as found. Fetched PDFs are read too.
+- **When it applies.** A finding that governs only under a condition — the
+  AHJ having adopted a given edition, a building height, new work rather
+  than an alteration, a permit date inside a transition period — says so in
+  its own field, shown as **Applies when:** in the report.
+
+What reads them:
+
+- **The assistant** drafts to a conditional finding only where the
+  project's facts meet the condition, and otherwise asks or leaves the
+  provision out and tracks the question. Before drafting a value or a
+  threshold from a finding it reads the found passage, and when the passage
+  and the finding's summary disagree, the passage wins and it tells you.
+  An unchecked passage is never presented as the source's words. Neither
+  the condition nor the passage is ever copied into the specification.
+- **Final QC.** The completeness lens marks a conditional requirement not
+  applicable when the project facts show the condition is not met, and
+  missing when the facts don't settle it (unless a Waiting-on-you item
+  already tracks the question). The compliance lens checks the draft's
+  values against found passages.
+- **The redline on your original** adds the condition and, only when it
+  was found, the source text to the research comment.
+
+Findings from earlier rounds have neither field and read exactly as before:
+the saved file, the cached research block and Final QC's record of the
+research are byte for byte unchanged until a new round adds a finding. A
+finding found again in a later round keeps the better passage (a found one
+beats one that was not). Final QC's lens instructions changed, so a saved
+Final QC review reads out of date once (the same release as the earlier
+prompt-review steps). Open chat sessions rewrite their cached prompt once.
+No paid API call was made: how often real pages yield a found passage is
+unmeasured until research runs.
+
 ## Current Status — Final QC accounts for the research, sees your open questions, and says when it cannot check
 
 (2026-10-13, the prompt-review follow-up. docs/as-built.md's "Final QC v5:
@@ -4423,7 +4477,7 @@ Shipped in v0.4.0 (Phase 4) and still current (the near-verbatim port of Spec Cr
 - **Grounded requirements research, on demand.** A "Research requirements" button in the panel launches four parallel streaming web-search agents — governing codes & amendments, AHJ requirements (including the water purveyor), client/insurer standards, site environment — each searching as the project's own locale (the first starts a few seconds ahead so the other three can read its cached copy of the instructions and project material they share), with pause-turn continuation, per-dimension search budgets, a 2× runaway ceiling, and a fetched-PDF elision guard so a 600-page code PDF can't 400 its own continuation. Research never auto-triggers: dozens of web searches are real spend, so you pull the trigger. **You watch it work, live**: the panel opens onto a per-agent board where each of the four agents narrates in real time — what it's doing ("Searching the web…", "Reading a source…"), the actual search queries and source URLs as they happen, running search/source counts, and retry notices — until each card settles into its findings summary.
 - **Research limits preserve gathered findings.** Each area's search and fetch budgets count across its whole conversation and are checked before every request. Each request itself may run at most 12 searches and 12 fetches, the same for every area and on every request of the conversation, so the tool definitions at the head of the prompt cache never change and a continuation can read what it re-sends from the cache — and more than the provider's ten-call pause lets one request make (research turns parallel tool calls off, so a step makes one web call and the pause is a bound on calls), so the model never meets the per-request limit (a met limit reads to it as a spent budget and it hands in early; at 8 searches and 4 fetches, v1.23.0 to v1.25.1, every area did); the request that crosses a budget can finish up to 11 searches or 11 fetches past it (nine in practice), all metered. Each request reserves context space for the answer and the sources the provider's pause lets it add — at most ten results, fetches first — rather than for the whole allowance; when even that no longer fits, the area switches once to shorter pages (9,000 tokens each instead of 50,000) with the same allowance — never to fewer fetches, which the model could run into — and hands in only when even the shorter pages no longer fit. When a search, fetch, continuation, reminder or context guard is reached, the agent gets one final submission request with web tools removed. Its original retrieved sources and billed usage remain available for grounding and accounting. The request is shaped for the research model: on the default Claude Sonnet 5.5 it runs at the model's lowest thinking setting (`between_tools`) and lets the model choose the output tool itself, because Sonnet 5.5 refuses disabled thinking and a forced tool choice; if that reply records nothing, the agent is asked once more before the area fails. Claude Sonnet 5 (and Claude Opus 5 at effort `high` or below) keep disabled thinking and the forced tool, exactly as before. Claude Opus 5.5 cannot turn thinking off, so its submission keeps adaptive thinking and asks the API to drop the thinking the removed web tools invalidated.
 - **Rounds append; nothing is overwritten.** Run research again — after the interview turns up a new concern, or to retry a dimension that failed — and the new findings are added to what you already have. A requirement found again is confirmed in place (citations union, grounding and confidence take the better of the two) rather than duplicated, so item ids stay stable for the ◆ provenance chips your provisions already cite. Once a session has more than one round, every finding carries the date of the round that last **grounded** it in a retrieved source — a round that merely re-states an item without grounding it confirms nothing and does not re-date it — and the report breaks out what each round added versus re-confirmed. A round that fails or is stopped costs only that round; the earlier ones are untouched, and the message says so. Rounds survive save/resume and keep counting.
-- **Citations or it didn't happen.** Every reported item is validated accepted-vs-cited: a URL the model cites must match one the server tools actually retrieved, or the item renders **[UNVERIFIED]** (kept as a lead, never a fact). Process/schedule facts render **[PROCESS]** and never become spec text. One dimension failing never cancels the others; partial profiles are flagged; total failure aborts clean. A **View report** button opens the full findings report in a modal — every agent's items grouped by dimension, with each dimension's completion status and search/fetch telemetry, requirement, authority, code reference, confidence, and grounded sources.
+- **Citations or it didn't happen.** Every reported item is validated accepted-vs-cited: a URL the model cites must match one the server tools actually retrieved, or the item renders **[UNVERIFIED]** (kept as a lead, never a fact). Process/schedule facts render **[PROCESS]** and never become spec text. One dimension failing never cancels the others; partial profiles are flagged; total failure aborts clean. A **View report** button opens the full findings report in a modal — every agent's items grouped by dimension, with each dimension's completion status and search/fetch telemetry, requirement, authority, code reference, the condition it applies under, the passage it quotes from a fetched page (marked found or not found on that page by the app), confidence, and grounded sources.
 - **Research → drafting, closed loop.** The profile block joins the drafting context every turn (token-capped, trimmed lowest-confidence-first; the structured profile keeps everything). Provisions drafted from a research item carry its `source_item_id` — a ◆ chip in the panel answers "why is this paragraph here?" with the requirement and its accepted sources. When a grounded item establishes the jurisdiction's adopted edition, the model records a Phase 3 `set_standard_edition` override citing the item — and the lint immediately checks the draft against it.
 - **Research results persist**: the profile rides the project file; a resumed project restores it into the panel drawer and the drafting context.
 

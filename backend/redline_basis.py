@@ -459,6 +459,13 @@ def _research_paragraphs(item) -> tuple:
         paragraphs.append((f"Authority: {trimmed(item.authority, 200)}",))
     if str(item.code_reference or "").strip():
         paragraphs.append((f"Code reference: {trimmed(item.code_reference, 200)}",))
+    # Item 7 (2026-10-13): the condition, and the source's own words — but
+    # only a quote found on a fetched page. One that was not found is the
+    # research's claim about what a page said, never shown as the page.
+    if str(getattr(item, "applies_when", "") or "").strip():
+        paragraphs.append((f"Applies when: {trimmed(item.applies_when, 300)}",))
+    if getattr(item, "quote_found", False):
+        paragraphs.append((f'Source text: "{trimmed(item.quote, 400)}"',))
     if item.grounded:
         paragraphs.extend(
             _link_paragraphs("Sources:", ((url, url) for url in item.accepted_sources))

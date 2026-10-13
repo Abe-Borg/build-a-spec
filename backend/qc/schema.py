@@ -85,7 +85,11 @@ QC_LENSES: tuple[QCLens, ...] = (
             "contradict the recorded basis in <standards_in_effect>, and "
             "provisions an authority having jurisdiction would reject. A "
             "newer published edition is a separate observation, never a "
-            "defect in a citation that matches the edition in effect. Cite "
+            "defect in a citation that matches the edition in effect. Where "
+            "an item in <project_requirements_profile> carries a Quote "
+            "found on a fetched page, those are the source's words: check "
+            "the draft's values against them. A quote marked not found was "
+            "never checked and is no stronger than the item's summary. Cite "
             "the URLs you actually retrieved."
         ),
     ),
@@ -148,7 +152,11 @@ QC_LENSES: tuple[QCLens, ...] = (
             "govern this project or this section: say why (the "
             "jurisdiction, the occupancy or system, the edition in effect, "
             "or another section's scope). A requirement is not covered "
-            "because a related one is."
+            "because a related one is. A line carrying 'Applies when' "
+            "governs only where the project meets that condition: "
+            "not_applicable when <established_project_facts> show it does "
+            "not; when they do not say, the unsettled condition is the gap — "
+            "missing, unless an item in <open_followups> already tracks it."
         ),
     ),
     QCLens(

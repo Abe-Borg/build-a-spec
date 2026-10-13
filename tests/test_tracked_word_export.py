@@ -107,6 +107,29 @@ def test_exports_use_the_personal_author_and_keep_other_reviewers(client, monkey
     assert sessions.get_session().source_docx_bytes == source
 
 
+def test_deleting_a_linked_provision_before_a_body_level_bookmark_end_exports(client):
+    """The reported 409 (``accept_check_failed``; first difference a
+    paragraph against a ``bookmarkEnd``): a provision holding a hyperlink,
+    whose bookmark closes after it at body level, deleted in the panel. The
+    tracked export now hands the file over, and both resolutions hold."""
+    from tests.test_redline_original import _markup_between_master
+
+    source = _markup_between_master("bookmark end")
+    _import(client, source)
+    doc = client.get("/api/doc").json()["doc"]
+    first = doc["parts"][0]["articles"][0]["paragraphs"][0]["id"]
+    edit = client.post(
+        "/api/doc/edit", json={"ops": [{"action": "delete", "target_id": first}]}
+    )
+    assert edit.status_code == 200, edit.text
+    response = _export(client)
+    assert response.status_code == 200, response.text
+    body = _body(response.content)
+    clean = client.get("/api/export/docx", params={"mode": "preserved"})
+    assert first_difference(accept_all(body), _body(clean.content)) is None
+    assert first_difference(reject_all(body), _body(source)) is None
+
+
 def test_unedited_export_has_tracking_on_without_inventing_revisions(client):
     source = _master_bytes()
     _import(client, source)
@@ -189,6 +212,47 @@ def test_pending_paragraph_mark_remaps_origins_without_losing_the_original(clien
     assert first_difference(accept_all(body), _body(clean)) is None
     assert session.source_docx_bytes == source
     assert b"basOriginIndex" not in _members(result.content)["word/document.xml"]
+
+
+def test_pending_paragraph_mark_keeps_a_body_level_bookmark_end_after_its_text(client):
+    """A pending deleted paragraph mark, on a paragraph whose bookmark closes
+    after it at body level: the accepted baseline joins the paragraph to the
+    next one past the bookmark's end, and the end keeps its place in the
+    text — after the joined words, never in front of them."""
+    from docx import Document
+    from backend.spec_doc.source_render import render_preserving_docx
+
+    document = Document(io.BytesIO(_master_bytes()))
+    paragraph = document.paragraphs[4]._p
+    properties = paragraph.get_or_add_pPr()
+    start = etree.Element(qn("w:bookmarkStart"))
+    start.set(qn("w:id"), "801")
+    start.set(qn("w:name"), "_Ref801")
+    properties.addnext(start)
+    deletion = etree.SubElement(etree.SubElement(properties, qn("w:rPr")), qn("w:del"))
+    deletion.set(qn("w:id"), "800")
+    deletion.set(qn("w:author"), "Previous reviewer")
+    end = etree.Element(qn("w:bookmarkEnd"))
+    end.set(qn("w:id"), "801")
+    paragraph.addnext(end)
+    source = _save(document)
+    _import(client, source)
+    _reword_first(client)
+    session = sessions.get_session()
+    accepted, mapped = accepted_revision_baseline(source, session.source_format_map)
+    (joined,) = [
+        p for p in _body(accepted).iter(qn("w:p"))
+        if p.find(qn("w:bookmarkStart")) is not None
+    ]
+    order = [etree.QName(c).localname for c in joined if etree.QName(c).localname != "pPr"]
+    assert order[0] == "bookmarkStart" and order[-1] == "bookmarkEnd"
+    assert "r" in order[1:-1]
+    result = _export(client)
+    assert result.status_code == 200, result.text
+    body = _body(result.content)
+    assert first_difference(reject_all(body), _body(accepted)) is None
+    clean = render_preserving_docx(source_bytes=accepted, format_map=mapped, current=session.doc.doc)
+    assert first_difference(accept_all(body), _body(clean)) is None
 
 
 def test_prior_header_and_footer_revisions_keep_their_accepted_appearance(client):

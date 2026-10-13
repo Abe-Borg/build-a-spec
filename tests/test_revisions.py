@@ -474,6 +474,189 @@ def test_a_deleted_paragraph_left_with_only_emptied_custom_xml_joins_nothing():
     assert len(rejected.findall(f".//{{{W}}}customXml")) == 2
 
 
+#: Body-level markup between a paragraph mark and the next paragraph: it
+#: marks a position in the text stream and holds no content. A bookmark
+#: covering a whole paragraph, mark included, is Word's own shape for the
+#: first: its end is written after the paragraph, at body level.
+_BETWEEN = {
+    "bookmark end": "<w:bookmarkEnd w:id='7'/>",
+    "bookmark start": "<w:bookmarkStart w:id='8' w:name='_Ref8'/>",
+    "comment range": "<w:commentRangeStart w:id='9'/><w:commentRangeEnd w:id='9'/>",
+    "permission range": "<w:permStart w:id='10' w:edGrp='everyone'/><w:permEnd w:id='10'/>",
+    "proofing mark": "<w:proofErr w:type='gramEnd'/>",
+}
+
+
+def _linked_deletion(n: int = 1) -> str:
+    """A deleted paragraph holding a hyperlink: its runs are deleted inside
+    the link (a hyperlink cannot sit inside ``w:del``), so Accept All leaves
+    the link behind, empty — content the join must hand on."""
+    return (
+        f"<w:p><w:pPr><w:rPr><w:del {_rev(n)}/></w:rPr></w:pPr>"
+        f"<w:del {_rev(n + 1)}><w:r><w:delText xml:space='preserve'>Comply with "
+        "</w:delText></w:r></w:del><w:hyperlink w:anchor='std'>"
+        f"<w:del {_rev(n + 2)}><w:r><w:delText>the standard</w:delText></w:r></w:del>"
+        "</w:hyperlink></w:p>"
+    )
+
+
+@pytest.mark.parametrize("between", list(_BETWEEN))
+def test_a_removed_mark_joins_past_zero_width_markup(between):
+    """The reported refusal: a deleted provision holding a link, then a
+    bookmark closing after it at body level. The markup between the mark and
+    the next paragraph is a position, not a block, so the leftover (here an
+    emptied link) still joins the next paragraph, with the markup after it
+    in text order — equal to the body with the provision simply gone."""
+    markup = _BETWEEN[between]
+    after = "<w:p><w:r><w:t>Survivor.</w:t></w:r></w:p>"
+    body = _body(_linked_deletion() + markup + after)
+    accepted = accept_all(body)
+    assert _texts(accepted) == ["Survivor."]
+    (joined,) = accepted
+    assert joined[0].tag == f"{{{W}}}hyperlink" and not len(joined[0])  # emptied
+    assert _equal(accepted, _body(markup + after))
+    original = (
+        "<w:p><w:r><w:t xml:space='preserve'>Comply with </w:t></w:r>"
+        "<w:hyperlink w:anchor='std'><w:r><w:t>the standard</w:t></w:r></w:hyperlink></w:p>"
+    )
+    assert _equal(reject_all(body), _body(original + markup + after))
+
+
+def test_an_inserted_mark_joins_past_zero_width_markup_on_reject():
+    """The mirror image: an inserted paragraph holding a link (a moved
+    copy) right before a bookmark that closes at body level. Reject All
+    hands its emptied link on to the next paragraph; the end stays put."""
+    inserted = (
+        f"<w:p><w:pPr><w:rPr><w:ins {_rev(1)}/></w:rPr></w:pPr><w:hyperlink w:anchor='std'>"
+        f"<w:ins {_rev(2)}><w:r><w:t>the standard</w:t></w:r></w:ins></w:hyperlink></w:p>"
+    )
+    rest = (
+        "<w:bookmarkEnd w:id='7'/><w:p><w:r><w:t>Survivor.</w:t></w:r></w:p>"
+    )
+    body = _body(
+        "<w:p><w:bookmarkStart w:id='7' w:name='_Ref7'/><w:r><w:t>A.</w:t></w:r></w:p>"
+        + inserted + rest
+    )
+    expected = "<w:p><w:bookmarkStart w:id='7' w:name='_Ref7'/><w:r><w:t>A.</w:t></w:r></w:p>" + rest
+    assert _equal(reject_all(body), _body(expected))
+    assert _texts(accept_all(body)) == ["A.", "the standard", "bookmarkEnd", "Survivor."]
+
+
+#: Two markers in a row, so their own order is pinned too.
+_TWO_MARKERS = "<w:bookmarkEnd w:id='7'/><w:commentRangeEnd w:id='9'/>"
+
+
+def _children(paragraph) -> list[str]:
+    """A paragraph's content in order: each run's text, each marker's name."""
+    out = []
+    for child in paragraph:
+        name = etree.QName(child).localname
+        if name == "r":
+            out.append("".join(t.text or "" for t in child.iter(f"{{{W}}}t")))
+        elif name != "pPr":
+            out.append(name)
+    return out
+
+
+def test_markup_keeps_its_place_in_the_text_after_visible_joined_content():
+    """A pending revision in an upload (the tracked export resolves those
+    with this function): a deleted mark whose paragraph still holds text,
+    then markup that closes after it. In the text the markup follows that
+    text, so it moves into the joined paragraph right after it — never
+    before it, which would retarget a bookmark or comment."""
+    body = _body(
+        "<w:p><w:bookmarkStart w:id='7' w:name='_Ref7'/>"
+        f"<w:pPr><w:rPr><w:del {_rev(1)}/></w:rPr></w:pPr>"
+        "<w:r><w:t xml:space='preserve'>Kept </w:t></w:r></w:p>"
+        + _TWO_MARKERS
+        + "<w:p><w:r><w:t>next.</w:t></w:r></w:p>"
+    )
+    accepted = accept_all(body)
+    assert _texts(accepted) == ["Kept next."]
+    assert _children(accepted[0]) == [
+        "bookmarkStart",
+        "Kept ",
+        "bookmarkEnd",
+        "commentRangeEnd",
+        "next.",
+    ]
+
+
+def test_reject_all_keeps_markup_after_visible_joined_content_too():
+    """The mirror image: an inserted mark (a pending insertion in an upload)
+    whose paragraph keeps text that was there before it."""
+    body = _body(
+        f"<w:p><w:pPr><w:rPr><w:ins {_rev(1)}/></w:rPr></w:pPr>"
+        "<w:r><w:t xml:space='preserve'>Kept </w:t></w:r></w:p>"
+        + _TWO_MARKERS
+        + "<w:p><w:r><w:t>next.</w:t></w:r></w:p>"
+    )
+    rejected = reject_all(body)
+    assert _children(rejected[0]) == ["Kept ", "bookmarkEnd", "commentRangeEnd", "next."]
+
+
+@pytest.mark.parametrize("after", ["table", "end of body"])
+def test_markup_then_no_paragraph_still_leaves_the_paragraph(after):
+    """Only markup is reached past: with a table (or nothing) after it there
+    is still no paragraph to join, and a paragraph holding content stays —
+    the emptied-link-before-a-table refusal is unchanged."""
+    tail = _table(["AHU-1"]) if after == "table" else ""
+    body = _body(_linked_deletion() + "<w:bookmarkEnd w:id='7'/>" + tail)
+    accepted = accept_all(body)
+    assert accepted[0].tag == f"{{{W}}}p"
+    assert not _equal(accepted, _body("<w:bookmarkEnd w:id='7'/>" + tail))
+
+
+@pytest.mark.parametrize("between", list(_BETWEEN))
+def test_markup_right_before_a_paragraph_compares_as_its_start(between):
+    """Range markup outside a paragraph, right before it, sits at the
+    paragraph's first position in the text, exactly as the same markup at
+    its start (after its properties) does: the comparison sees one body."""
+    markup = _BETWEEN[between]
+    outside = _body(
+        f"<w:p><w:r><w:t>One.</w:t></w:r></w:p>{markup}"
+        "<w:p><w:pPr><w:jc w:val='right'/></w:pPr><w:r><w:t>Two.</w:t></w:r></w:p>"
+    )
+    inside = _body(
+        "<w:p><w:r><w:t>One.</w:t></w:r></w:p>"
+        f"<w:p><w:pPr><w:jc w:val='right'/></w:pPr>{markup}<w:r><w:t>Two.</w:t></w:r></w:p>"
+    )
+    assert _equal(outside, inside)
+    assert len(canonical_body(outside)) == 2
+
+
+@pytest.mark.parametrize(
+    "elsewhere",
+    [
+        # the end of the paragraph before: its mark lies between the two
+        "<w:p><w:r><w:t>One.</w:t></w:r>{m}</w:p>"
+        "<w:p><w:r><w:t>Two.</w:t></w:r></w:p>",
+        # after the paragraph's first word
+        "<w:p><w:r><w:t>One.</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Tw</w:t></w:r>{m}<w:r><w:t>o.</w:t></w:r></w:p>",
+    ],
+    ids=["end-of-previous", "mid-paragraph"],
+)
+def test_markup_anywhere_else_is_still_a_difference(elsewhere):
+    """Only the next paragraph's first position is the same place."""
+    markup = _BETWEEN["bookmark end"]
+    outside = _body(
+        f"<w:p><w:r><w:t>One.</w:t></w:r></w:p>{markup}"
+        "<w:p><w:r><w:t>Two.</w:t></w:r></w:p>"
+    )
+    assert not _equal(outside, _body(elsewhere.format(m=markup)))
+
+
+def test_markup_before_a_table_is_not_moved_anywhere():
+    """No paragraph follows it, so it is compared where it is."""
+    markup = _BETWEEN["bookmark end"]
+    before = _body(markup + _table(["AHU-1"]))
+    assert [c[0] for c in canonical_body(before)] == [
+        f"{{{W}}}bookmarkEnd",
+        f"{{{W}}}tbl",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------

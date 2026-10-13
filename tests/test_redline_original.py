@@ -1126,6 +1126,98 @@ def test_a_replacement_running_into_a_link_keeps_the_link_whole(tmp_path):
         assert link.find(qn("w:bookmarkEnd")) is not None
 
 
+#: Body-level markup a Word master can hold between two provisions. A
+#: bookmark covering a whole paragraph, mark included (a cross-reference
+#: target), is Word's own shape for the first: its end follows the paragraph.
+_BETWEEN_PROVISIONS = ("bookmark end", "bookmark start", "proofing mark")
+
+
+def _markup_between_master(between: str) -> bytes:
+    """A typed-letter master whose provision A holds a hyperlink, with
+    ``between`` written at body level between A and B, and a provision C
+    that also holds one."""
+    from tests.docx_fidelity_helpers import _append_hyperlink
+
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1\tSUMMARY",
+    ):
+        document.add_paragraph(line)
+    first = document.add_paragraph()
+    first.add_run("A.\tSection includes vibration isolation per ")
+    _append_hyperlink(first, "the client standard", "https://example.com/std")
+    first.add_run(".")
+    second = document.add_paragraph("B.\tRelated requirements are specified elsewhere.")
+    third = document.add_paragraph()
+    third.add_run("C.\tComply with ")
+    _append_hyperlink(third, "the owner standard", "https://example.com/owner")
+    third.add_run(".")
+    document.add_paragraph("END OF SECTION")
+    if between == "bookmark end":
+        start = etree.Element(qn("w:bookmarkStart"))
+        start.set(qn("w:id"), "12")
+        start.set(qn("w:name"), "_Ref12")
+        first._p.insert(1, start)  # after its w:pPr
+        end = etree.Element(qn("w:bookmarkEnd"))
+        end.set(qn("w:id"), "12")
+        first._p.addnext(end)
+    elif between == "bookmark start":
+        start = etree.Element(qn("w:bookmarkStart"))
+        start.set(qn("w:id"), "13")
+        start.set(qn("w:name"), "_Ref13")
+        second._p.addprevious(start)
+        etree.SubElement(second._p, qn("w:bookmarkEnd")).set(qn("w:id"), "13")
+    else:
+        proof = etree.Element(qn("w:proofErr"))
+        proof.set(qn("w:type"), "gramEnd")
+        first._p.addnext(proof)
+    return _save(document)
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("between", _BETWEEN_PROVISIONS)
+def test_a_deleted_linked_provision_before_body_level_markup(tmp_path, between, native):
+    """The reported refusal (``accept_check_failed``, first difference a
+    paragraph against a ``bookmarkEnd``): deleting a provision that holds a
+    link, when a bookmark closes after it at body level. Accept All leaves
+    the link empty and joins it to the next provision past the markup; the
+    markup stays where the formatted export keeps it."""
+    source = _markup_between_master(between)
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+    section = _edit(imported.section, {"action": "delete", "target_id": first.uid})
+    redline, _ = _verify(source, imported, section, native_moves=native)
+    # The shape itself: the deleted provision keeps its link (its runs are
+    # deleted inside it), and the markup follows its mark directly.
+    flag = f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:del')}"
+    (deleted,) = [p for p in _body(redline).iter(qn("w:p")) if p.find(flag) is not None]
+    assert deleted.find(qn("w:hyperlink")) is not None
+    assert etree.QName(deleted.getnext()).localname == {
+        "bookmark end": "bookmarkEnd",
+        "bookmark start": "bookmarkStart",
+        "proofing mark": "proofErr",
+    }[between]
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_a_linked_provision_moved_above_a_body_level_bookmark_end(tmp_path, native):
+    """The mirror image, on Reject All: provision C (holding a link) moves
+    up to sit right after A, whose bookmark closes at body level. Its
+    inserted copy is left holding an emptied link on Reject All, which joins
+    the next provision past the bookmark's end."""
+    source = _markup_between_master("bookmark end")
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section = _edit(
+        imported.section,
+        {"action": "move", "target_id": article.paragraphs[2].uid, "position": 1},
+    )
+    _verify(source, imported, section, native_moves=native)
+
+
 def _page_field_master() -> bytes:
     """Provision A holds a complex PAGE field."""
     from tests.docx_fidelity_helpers import _append_page_field

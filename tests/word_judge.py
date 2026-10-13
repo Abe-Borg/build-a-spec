@@ -644,16 +644,17 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
     letters, Word numbering, whole provisions and articles and tables
     deleted, moves (plain, with children, with a bookmark, a table, across
     section breaks), emptied section-break holders (and their numbering
-    cancel), hyperlinks, a field, the fallback, the untrackable last
-    paragraph, a leading page break, front matter, a picture, a bold mark,
-    row properties, Track Changes already on, and inline custom XML
-    (deleted, rewritten, moved, in a deleted table) — and Word's own "Moved"
-    marks (Phase 2, PR B): one move, a move with children, a block of
-    siblings, two named moves, a move beside an edit, a move holding a
-    link, a moved bookmark, a style-numbered master and a move a section
-    break forced. With ``settings.REDLINE_COMMENTS`` on, every change also
-    carries Build-a-Spec's comment (Phase 3), and one master already holds a
-    reviewer's comment."""
+    cancel), hyperlinks (and a linked provision deleted, or moved, beside a
+    bookmark that closes at body level), a field, the fallback, the
+    untrackable last paragraph, a leading page break, front matter, a
+    picture, a bold mark, row properties, Track Changes already on, and
+    inline custom XML (deleted, rewritten, moved, in a deleted table) — and
+    Word's own "Moved" marks (Phase 2, PR B): one move, a move with
+    children, a block of siblings, two named moves, a move beside an edit,
+    a move holding a link, a moved bookmark, a style-numbered master and a
+    move a section break forced. With ``settings.REDLINE_COMMENTS`` on,
+    every change also carries Build-a-Spec's comment (Phase 3), and one
+    master already holds a reviewer's comment."""
     from tests import test_redline_original as matrix
     from tests.test_import_office_master import _office_master
     from tests.test_redline_comments import _commented_master
@@ -880,6 +881,14 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
                         )
                     ),
                 ),
+            ),
+        ),
+        JudgeGroup(
+            "targeted/link-before-bookmark-end",
+            upload(matrix._markup_between_master, "bookmark end"),
+            (
+                ("delete-linked-provision", _edit(_delete_provision(0))),
+                ("move-link-above-end", _edit(_move_provision(2, 1))),
             ),
         ),
         JudgeGroup(

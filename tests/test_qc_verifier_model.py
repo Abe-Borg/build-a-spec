@@ -2,7 +2,8 @@
 
 Owner decision (2026-10-08): the five lenses and the grouping calls stay on
 ``settings.QC_MODEL`` (Claude Opus 5.5); the verifier seats run on
-``settings.QC_VERIFIER_MODEL`` (Claude Sonnet 5.5, at "high"). A seat's cost
+``settings.QC_VERIFIER_MODEL`` (Claude Sonnet 5.5, at "medium" since
+2026-10-12; "high" before). A seat's cost
 is reading the shared section, so its per-token price is the lever.
 
 What must stay true when one run spans two models:

@@ -636,7 +636,7 @@ function Dossier() {
               <>
                 Claude Sonnet 5.5 <Mono>(claude-sonnet-5-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “medium” for research by default, following Sonnet 5.5's recalibrated effort scale. Template AI Generalize and conversation condensing use this model too; condensing writes its summary at “high”. Final QC's verifier seats run on it at “high”: each one judges a single finding with the whole section in view, and its own model setting lets you put the seats back on Opus.",
+              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “medium” for research by default, following Sonnet 5.5's recalibrated effort scale. Template AI Generalize and conversation condensing use this model too; condensing writes its summary at “high”. Final QC's verifier seats run on it at “medium”: each one judges a single finding with the whole section in view, and its own model setting lets you put the seats back on Opus.",
             ],
             [
               "Project-fact harvest",
@@ -1110,7 +1110,7 @@ function Dossier() {
               “medium” (the lenses ran at “high” until the model maker
               recalibrated the levels for Opus 5.5, whose “medium” matches or
               exceeds Opus 5’s “high”). Claude Sonnet 5.5 for the two or three
-              verifier calls <em>per finding</em>, at “high”: a seat adjudicates
+              verifier calls <em>per finding</em>, at “medium”: a seat adjudicates
               one already-stated claim with the same document in front of it,
               and almost all of what it costs is reading that document, which
               Sonnet 5.5 does at half the price. Each stage has its own model

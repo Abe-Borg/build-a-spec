@@ -260,6 +260,34 @@ rules, the specification text and saved projects are untouched (a provision
 already stamped confirmed stays confirmed). Open chat sessions rewrite their
 cached prompt once. No paid API call was made.
 
+## Current Status — Final QC's verifier seats think at medium
+
+(2026-10-12, owner decision, for cost. docs/as-built.md's "Final QC's
+verifier seats run at medium" is the record; in the next release.)
+
+Each Final QC finding is checked by a panel of two or three verifier seats
+on Claude Sonnet 5.5. Since they moved to Sonnet 5.5 on 2026-10-08 they had
+thought at `high`, Sonnet 5.5's own default. They now think at `medium`, the
+same level as the five lenses and the grouping calls.
+
+- **What it saves.** A seat's cost is mostly reading the shared copy of the
+  section, which is unchanged; the saving is the seats' thinking, billed as
+  output. How much is unmeasured until the next Final QC run.
+- **What it risks.** Sonnet 5.5's guide notes that at `low` and `medium` it
+  often answers a reasoning task that ends in a structured verdict without
+  thinking first. If seats start upholding or refuting findings too readily,
+  `BUILD_A_SPEC_QC_VERIFIER_EFFORT=high` puts them back. In PowerShell:
+  `$env:BUILD_A_SPEC_QC_VERIFIER_EFFORT = "high"`; in Command Prompt:
+  `set BUILD_A_SPEC_QC_VERIFIER_EFFORT=high`.
+- **The seat model no longer sets the depth.** Seats pinned back to Opus
+  with `BUILD_A_SPEC_QC_VERIFIER_MODEL` also run at `medium`, as before.
+  `BUILD_A_SPEC_QC_EFFORT`, when set, still moves both phases.
+- **A Final QC result made with seats at `high` reads out of date once.**
+  The seats' effort is one of a review's recorded inputs. Re-run Final QC
+  before applying its fixes.
+
+No paid API call was made.
+
 ## Current Status — editions come from you or the research, never a guess
 
 (2026-10-12, step 3 of the prompt-review follow-up; owner decision. docs/as-
@@ -661,6 +689,8 @@ money without giving up rigor or quality. Four changes came out of it.
   `$env:BUILD_A_SPEC_QC_VERIFIER_MODEL = "claude-opus-5-5"`; in Command
   Prompt: `set BUILD_A_SPEC_QC_VERIFIER_MODEL=claude-opus-5-5`.
   `BUILD_A_SPEC_QC_MODEL`, when set on its own, still moves both phases.
+  (Since 2026-10-12 the seats think at `medium`; see "Final QC's verifier
+  seats think at medium" above.)
 - **The report names both models and prices each call at its own.** The Word
   report and the report window list "Model (lens review and grouping)" and
   "Model (verifier seats)"; every seat is priced at its model's rates, the
@@ -3881,7 +3911,8 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   turn since the 5.5 prompting upgrade's P55-3, and told to carry the pass
   through in that one turn rather than stop partway to check in; research
   `high` — see below; Final QC's lenses `medium` since P55-3, re-based
-  for Opus 5.5, and its Sonnet 5.5 verifier seats `high` since 2026-10-08),
+  for Opus 5.5, and its Sonnet 5.5 verifier seats `medium` since 2026-10-12,
+  `high` from 2026-10-08),
   and
   thinking blocks are preserved verbatim
   across tool-use continuation rounds as the API requires — the previous
@@ -4407,14 +4438,14 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS` | `45` | Staggered research launch: the areas of a round read the same tools, instructions and project block (your attached documents and project facts included), so one area is sent first and the others wait for it to start answering, then read its cached copy instead of each paying to store their own. This is the longest they wait, in seconds; a wait that runs out, a Stop, or a first area whose request ends or fails releases them at once. An area sent different tools never waits. Changes no request, only when it is sent; budgets, grounding and findings are unchanged. Research's own switch, separate from `BUILD_A_SPEC_QC_WARM_WAIT_SECONDS`. `0` starts every area at once, as before. In PowerShell: `$env:BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS = "0"`; in Command Prompt: `set BUILD_A_SPEC_RESEARCH_WARM_WAIT_SECONDS=0`. Floor 0. |
 | `BUILD_A_SPEC_CONTINUATION_CACHE` | `1` | Continuation caching (Chunk 4 of the cost program, on by default since the Tier 1 finish program's session CT-3): when a research area or a streamed Final QC call pauses mid-answer and is resumed, the resumed request carries one automatic 5-minute cache breakpoint, so it can read what its own earlier request already cached instead of paying full price to send the whole conversation again. First requests and the batched verifier transport never carry it. Every request is otherwise byte for byte what it was, and a retained Final QC result stays current either way. Watched by the cost self-checks: a resume the provider refuses because of the breakpoint is sent once more without it, and the breakpoint switches off for that engine (research or Final QC) until the app restarts; six or more measured resumes that together cost more than they saved switch it off the same way (Settings → Developer tools → Cost self-checks). `0` switches it off: no request carries it. In PowerShell: `$env:BUILD_A_SPEC_CONTINUATION_CACHE = "0"`; in Command Prompt: `set BUILD_A_SPEC_CONTINUATION_CACHE=0`. |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC lenses and grouping calls. Set on its own, it also moves the verifier seats (see the next row). |
-| `BUILD_A_SPEC_QC_VERIFIER_MODEL` | `claude-sonnet-5-5` | Model for the Final QC verifier seats, which check each candidate finding (owner decision, 2026-10-08; they ran on the QC model before). Unset, it follows `BUILD_A_SPEC_QC_MODEL` when that is set, else Claude Sonnet 5.5. The seats' default effort follows this model: `high` on Sonnet 5.5, `medium` on any other. Each seat is priced at this model's rates, the report names both models, and Settings lists the seats as **Final QC verifiers**. The seat model is a recorded review input, so a result made with other seats reads stale. In PowerShell: `$env:BUILD_A_SPEC_QC_VERIFIER_MODEL = "claude-opus-5-5"`; in Command Prompt: `set BUILD_A_SPEC_QC_VERIFIER_MODEL=claude-opus-5-5`. |
+| `BUILD_A_SPEC_QC_VERIFIER_MODEL` | `claude-sonnet-5-5` | Model for the Final QC verifier seats, which check each candidate finding (owner decision, 2026-10-08; they ran on the QC model before). Unset, it follows `BUILD_A_SPEC_QC_MODEL` when that is set, else Claude Sonnet 5.5. The seats' default effort is `medium` on every seat model (since 2026-10-12; Sonnet 5.5 seats defaulted to `high` from 2026-10-08). Each seat is priced at this model's rates, the report names both models, and Settings lists the seats as **Final QC verifiers**. The seat model is a recorded review input, so a result made with other seats reads stale. In PowerShell: `$env:BUILD_A_SPEC_QC_VERIFIER_MODEL = "claude-opus-5-5"`; in Command Prompt: `set BUILD_A_SPEC_QC_VERIFIER_MODEL=claude-opus-5-5`. |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Global QC output/thinking ceiling. Caps every phase, including explicit phase overrides. |
 | `BUILD_A_SPEC_QC_LENS_MAX_TOKENS` | `64000` (or global QC ceiling, if lower) | Per-request ceiling for the five review lenses, including continuations. |
 | `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_TOKENS` | `32000` (or global QC ceiling, if lower) | Per-request ceiling for candidate grouping. |
 | `BUILD_A_SPEC_QC_VERIFIER_MAX_TOKENS` | `32000` (or global QC ceiling, if lower) | Per-request ceiling for verifier seats in both transports, streamed warm leads, and continuations. Phase ceilings bound runaway thinking/output; reaching a ceiling leaves incomplete coverage. Resolved limits are hashed in the audit manifest, so earlier reports become stale once. Prompt-cache reuse is unchanged. |
-| `BUILD_A_SPEC_QC_EFFORT` | `medium` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback that sets both phases when set explicitly (unset, the seats follow their own model's default). `medium` since the 5.5 prompting upgrade (P55-3): `high` was chosen for Opus 5, and the Opus 5.5 guide says its `medium` matches or exceeds Opus 5's `high`. Effort is part of a review's recorded inputs, so a Final QC result made at the old default reads stale once after the update — re-run Final QC before applying its fixes. `high` restores the old depth (and, set explicitly, moves the verifier seats with it). |
+| `BUILD_A_SPEC_QC_EFFORT` | `medium` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback for both phases. `medium` since the 5.5 prompting upgrade (P55-3): `high` was chosen for Opus 5, and the Opus 5.5 guide says its `medium` matches or exceeds Opus 5's `high`. Effort is part of a review's recorded inputs, so a Final QC result made at the old default reads stale once after the update — re-run Final QC before applying its fixes. `high` restores the old depth (and, set explicitly, moves the verifier seats with it). |
 | `BUILD_A_SPEC_QC_LENS_EFFORT` | = `QC_EFFORT` (`medium`) | Effort for phase 1 (the five lenses and the consolidation call). `BUILD_A_SPEC_QC_LENS_EFFORT=high` puts the lenses back at the pre-P55-3 depth while the verifier seats keep their own effort. |
-| `BUILD_A_SPEC_QC_VERIFIER_EFFORT` | `high` on Sonnet 5.5 seats, else `medium` | Effort for phase 2 (the verifier seats — ~90% of a run's calls, answering a bounded question each). The default follows the seat model: `high`, Sonnet 5.5's own default, since the seats moved to it on 2026-10-08; `medium` on any other seat model, which is what the Opus 5.5 seats ran at. Falls back to `QC_EFFORT` instead when that is explicitly set, so a global `low` is never silently overridden upward. |
+| `BUILD_A_SPEC_QC_VERIFIER_EFFORT` | `medium` (follows `BUILD_A_SPEC_QC_EFFORT`) | Effort for phase 2 (the verifier seats — ~90% of a run's calls, answering a bounded question each). `medium` on every seat model since 2026-10-12 (owner decision, for cost); from 2026-10-08, when the seats moved to Sonnet 5.5, they defaulted to `high`, Sonnet 5.5's own default. Unset, it follows `BUILD_A_SPEC_QC_EFFORT`. Effort is part of a review's recorded inputs, so a Final QC result made while the seats ran at `high` reads stale once — re-run Final QC before applying its fixes. `high` restores the previous depth: in PowerShell `$env:BUILD_A_SPEC_QC_VERIFIER_EFFORT = "high"`; in Command Prompt `set BUILD_A_SPEC_QC_VERIFIER_EFFORT=high`. |
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding can never be `disputed` and a single reviewer's refusal deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |

@@ -471,28 +471,23 @@ def test_the_shipped_qc_effort_is_medium():
     assert [arg.value for arg in call.args] == ["BUILD_A_SPEC_QC_EFFORT", "medium"]
 
 
-def test_the_verifier_default_follows_the_seat_model():
-    """Still behind the explicitly-set global; otherwise the seat model's own
-    level — "high" on Sonnet 5.5 (owner decision, 2026-10-08), "medium" (the
-    Opus 5.5 level P55-3 set) on any other seat model."""
+def test_the_verifier_default_is_the_global_qc_effort():
+    """The seats fall back to QC_EFFORT ("medium") on every seat model (owner
+    decision, 2026-10-12). From 2026-10-08 Sonnet 5.5 seats defaulted to
+    "high" through a per-model table; the seat model no longer sets depth."""
     call = _assign_target("QC_VERIFIER_EFFORT")
     assert getattr(call.func, "id", "") == "_effort_env"
     name, default = call.args
     assert name.value == "BUILD_A_SPEC_QC_VERIFIER_EFFORT"
-    assert isinstance(default, ast.IfExp)
-    fallback = default.orelse
-    assert isinstance(fallback, ast.Call)
-    assert ast.unparse(fallback) == (
-        "_QC_VERIFIER_EFFORT_BY_MODEL.get(QC_VERIFIER_MODEL, 'medium')"
-    )
-    assert settings._QC_VERIFIER_EFFORT_BY_MODEL == {settings.MODEL_SONNET_55: "high"}
+    assert isinstance(default, ast.Name) and default.id == "QC_EFFORT"
+    assert not hasattr(settings, "_QC_VERIFIER_EFFORT_BY_MODEL")
 
 
-def test_the_lens_phases_default_to_medium_and_sonnet_seats_to_high():
+def test_the_lens_phases_and_the_sonnet_seats_default_to_medium():
     assert settings.QC_EFFORT == "medium"
     assert settings.QC_LENS_EFFORT == "medium"
     assert settings.QC_VERIFIER_MODEL == settings.MODEL_SONNET_55
-    assert settings.QC_VERIFIER_EFFORT == "high"
+    assert settings.QC_VERIFIER_EFFORT == "medium"
 
 
 _LENS_KEYS = {lens.lens_id: f"[[QC-LENS:{lens.lens_id}]]" for lens in QC_LENSES}
@@ -582,7 +577,7 @@ def _qc_efforts(client) -> dict[str, set[str]]:
     return kinds
 
 
-def test_a_lens_and_a_grouping_call_go_at_medium_and_a_sonnet_seat_at_high():
+def test_a_lens_a_grouping_call_and_a_sonnet_seat_all_go_at_medium():
     client = SequencedFakeClient(_qc_scripts())
     result, _store = _run_qc(
         client,
@@ -592,13 +587,13 @@ def test_a_lens_and_a_grouping_call_go_at_medium_and_a_sonnet_seat_at_high():
     assert _qc_efforts(client) == {
         "lens": {"medium"},
         "consolidation": {"medium"},
-        "verifier": {"high"},
+        "verifier": {"medium"},
     }
     assert result.effort == "medium"
-    assert result.verifier_effort == "high"
+    assert result.verifier_effort == "medium"
     configuration = result.input_manifest["configuration"]
     assert configuration["effort"] == "medium"
-    assert configuration["verifier_effort"] == "high"
+    assert configuration["verifier_effort"] == "medium"
     assert configuration["verifier_model"] == settings.MODEL_SONNET_55
 
 
@@ -606,7 +601,7 @@ def test_a_lens_and_a_grouping_call_go_at_medium_and_a_sonnet_seat_at_high():
     ("env", "lens", "verifier"),
     [
         ({"BUILD_A_SPEC_QC_EFFORT": "high"}, "high", "high"),
-        ({"BUILD_A_SPEC_QC_LENS_EFFORT": "xhigh"}, "xhigh", "high"),
+        ({"BUILD_A_SPEC_QC_LENS_EFFORT": "xhigh"}, "xhigh", "medium"),
         ({"BUILD_A_SPEC_QC_VERIFIER_EFFORT": "low"}, "medium", "low"),
         (
             {"BUILD_A_SPEC_QC_EFFORT": "low", "BUILD_A_SPEC_QC_LENS_EFFORT": "high"},
@@ -651,4 +646,31 @@ def test_a_result_retained_at_high_reads_stale_against_the_new_default(monkeypat
     assert current(before, store) is False
 
     after, store = _run_qc(SequencedFakeClient(_qc_scripts()), batch_verification=False)
+    assert current(after, store) is True
+
+
+def test_a_result_whose_seats_ran_at_high_reads_stale_against_medium(monkeypatch):
+    """The 2026-10-12 release note says a Final QC result made while the
+    Sonnet 5.5 seats ran at "high" reads stale once. The seat effort is in
+    the hashed manifest and the check rebuilds it from the live settings."""
+    monkeypatch.setattr(settings, "QC_BATCH_VERIFICATION", False)
+
+    def current(result, store) -> bool:
+        return result.matches_inputs(store.index, store.doc, None, DEFAULT_MODULE)
+
+    before, store = _run_qc(
+        SequencedFakeClient(_qc_scripts()),
+        batch_verification=False,
+        verifier_model=settings.QC_VERIFIER_MODEL,
+        verifier_effort="high",
+    )
+    assert before.verifier_effort == "high"
+    assert current(before, store) is False
+
+    after, store = _run_qc(
+        SequencedFakeClient(_qc_scripts()),
+        batch_verification=False,
+        verifier_model=settings.QC_VERIFIER_MODEL,
+    )
+    assert after.verifier_effort == "medium"
     assert current(after, store) is True

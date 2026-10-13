@@ -22614,6 +22614,81 @@ project rather than the newest one, and research asks which code cycle
 governs the project (permit date, transition period, existing buildings).
 Retained Final QC results read stale once after updating."
 
+## Final QC's verifier seats run at medium — implemented notes (2026-10-12)
+
+Owner decision (Abraham), asked after a review of every model call's effort
+level: "let's do the final qc verifier seats at medium." The seats had run
+at `high` since they moved to Claude Sonnet 5.5 on 2026-10-08 ("Final QC's
+verifier seats run on Sonnet 5.5 at high" above), chosen because `high` is
+Sonnet 5.5's own default and its guide says that at `low` and `medium` it
+often answers a reasoning task with a structured output without thinking
+first.
+
+What changed:
+
+- **`backend/settings.py`.** `_QC_VERIFIER_EFFORT_BY_MODEL` (`{Sonnet 5.5:
+  "high"}`) and the conditional around it are gone. `QC_VERIFIER_EFFORT =
+  _effort_env("BUILD_A_SPEC_QC_VERIFIER_EFFORT", QC_EFFORT)`, the same shape
+  as `QC_LENS_EFFORT`. With the table gone the old three-way resolution
+  collapses to this one line without losing a rule: an explicitly set
+  `BUILD_A_SPEC_QC_EFFORT` moves both phases (so a global `low` is still
+  never raised), `BUILD_A_SPEC_QC_VERIFIER_EFFORT` still wins, and seats
+  pinned back to Opus (`BUILD_A_SPEC_QC_VERIFIER_MODEL` or a lone
+  `BUILD_A_SPEC_QC_MODEL`) still run at `medium`. The seat model no longer
+  sets the depth on any model.
+- **Copy.** The trust explainer's Sonnet 5.5 card and Final QC card say
+  "medium"; README's configuration table rows for
+  `BUILD_A_SPEC_QC_VERIFIER_MODEL`, `BUILD_A_SPEC_QC_EFFORT` and
+  `BUILD_A_SPEC_QC_VERIFIER_EFFORT`, the adaptive-thinking bullet and a new
+  Current Status section say the same. The 2026-10-08 Current Status section
+  and CLAUDE.md's 2026-10-08 notes gain a superseded line; CLAUDE.md's
+  adaptive-thinking invariant and research-effort erratum name the new level.
+- **Stale once.** `verifier_effort` is part of the hashed QC input manifest
+  (`configuration.verifier_effort`), and `matches_inputs` rebuilds it from
+  the live setting, so a retained result whose seats ran at `high` reads
+  stale against the new default. Pinned by
+  `test_a_result_whose_seats_ran_at_high_reads_stale_against_medium`. The
+  release's `application_version` would read every retained report stale
+  once anyway.
+- **Cost.** A seat's cost is mostly reading the shared prefix (the
+  2026-10-08 notes: halving the measured run's seat output saved about 13%),
+  so the saving is the seats' thinking, billed as output at Sonnet 5.5's
+  $10/M. Unmeasured; compare the next run's Final QC verifier lines in
+  Settings → Developer tools → This session's cost, or run
+  `tools\qc_export_cost_profile.py` on the exports, which records each
+  report's `verifier_effort`.
+- **Unchanged.** Every other request byte (the seats' model, prompts,
+  cached prefix and TTLs), the lenses and grouping at `medium`, panel sizes,
+  adjudication, both transports (still byte-identical seat requests), the QC
+  protocol version, the SSE protocol and readiness. A different effort is a
+  different messages-cache key, but QC's cache entries live within one run,
+  so there is nothing carried across runs to lose.
+
+Tests: `tests/test_prompt55_effort.py` pins the assignment from source (the
+default is the name `QC_EFFORT`, the table is gone), the loaded defaults, the
+efforts a real run sends (lens, grouping and Sonnet seat all `medium`), the
+override matrix ("lens only" now leaves the seats at `medium`) and the stale
+check; `tests/test_qc_phase_effort.py` pins the shipped defaults run the way
+the app runs them and that seats are `medium` on every seat model while an
+explicit global still wins. Reverting `backend/settings.py` alone turned 6
+tests red (the source pin, the loaded defaults, the run's efforts, the "lens
+only" override, the stale check, the shipped-defaults run); restored. The
+four touched test files (79) and the related Final QC, fake-validator and
+docs-consistency files (340) pass.
+
+No paid API call was made; how the seats' verdicts and cost move at
+`medium` is unmeasured until the owner runs Final QC.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Final QC", item "Verifier seats think at medium": "Final QC's
+verifier seats, which check each finding on Claude Sonnet 5.5, now think at
+`medium` effort instead of `high`, the same level as the five specialist
+reviewers. This lowers what each run spends on the seats' thinking. Set
+`BUILD_A_SPEC_QC_VERIFIER_EFFORT=high` before starting the app to restore
+the previous depth. A Final QC result made before this update reads out of
+date once; run Final QC again before applying its fixes."
+
 ## A provision is confirmed only when a person approved it — implemented notes (2026-10-13)
 
 Step 4 of the prompt-review follow-up (an outside review Abraham forwarded,

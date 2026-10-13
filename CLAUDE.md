@@ -361,7 +361,9 @@ already resolved and does nothing). 409 when nothing is running.
   and `test_a_completed_research_round_changes_only_the_project_block`);
   nothing per-turn — no timestamp, no counter — may render into the project
   block, and nothing a chat turn's own tools change may either (see
-  `CACHED_CONTEXT_BLOCKS` for what moved and why). A changed project block
+  `CACHED_CONTEXT_BLOCKS` for what moved and why; the PROJECT SECTIONS
+  footer's `readable` flag reads `project_home`, which only a save or an
+  open sets). A changed project block
   rewrites the whole committed history once at the long TTL: that is the
   accepted trade. The compaction summary forks the chat request, so it
   carries the same project block (`_CompactionInputs.project_block`).
@@ -1799,6 +1801,73 @@ the user confirms a provision. Tests: `tests/test_confirmed_meaning.py`,
 `tests/test_project_facts.py`. Full record, reversion evidence and the
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
+
+## The assistant reads the project's other sections on demand — implemented notes (2026-10-13)
+
+Owner request (Abraham): chaining sections of one project works, but the
+chat sometimes said it would help to see another section's body — to avoid
+duplication above all. The cached project block's PROJECT SECTIONS list
+carries titles and article names only (by design: the brief carries no
+document), so the model could only ask the user to paste a section.
+
+- **One tool, the `read_reference_doc` posture.** `read_project_section`
+  (`backend/project_sections.py`, `{number}`) is declared LAST in
+  `_chat_tools` (the cached-prefix contract; `tests/test_app.py` pins the
+  order). The text is returned for the turn that asked, charged to the SAME
+  per-turn `TurnReferenceBudget` as an attachment, elided from committed
+  history at commit (`_elide_reference_tool_results` now covers both reads
+  through `_ELIDED_READ_TOOL_NOTES`), framed `<project_section>` with the
+  frame's own tag and the reply-chip tag made inert
+  (`wrap_project_section_body`). Every failure is an `is_error` result the
+  model acts on — never a turn failure, never a path in the message.
+- **The file the panel would open.** The number resolves through
+  `sessions.resolve_section_file` — the registry join (link ∪ the brief on
+  disk) and `section_file_path`'s directly-in-the-folder rule, the derivation
+  `open-section` uses — so a section a sibling exported after this one's
+  link was synced is readable though PROJECT SECTIONS does not list it, and
+  the refusal for an unknown number names what the joined registry holds.
+  It needs a bound `project_home`; without one (a browser session, a section
+  saved elsewhere) the tool says how to make the files reachable. Nothing
+  new travels in a brief, and the read never writes.
+- **One version, the reader's text.** `project_package.read_project_json`
+  reads the `project.json` member alone (bounded as the package parser
+  bounds it; legacy JSON too) and `load_section_document` parses
+  `doc.versions[doc.index]` only — not every retained version, not the
+  manifest digests, not the Word master, which a load needs and a read does
+  not. `spec_doc.model.reader_text` renders display numbering and statuses
+  with no element ids and no ◆ chips: the sibling cannot be edited from
+  here and its ids would collide with this section's. Nothing of the
+  sibling's conversation, research, facts or figures reaches the result.
+  The disk read runs under the turn guard the tool loop holds for every
+  tool.
+- **The project block says whether the files are reachable.**
+  `project_sections_block(readable=…)`: the footer either tells the model to
+  read a section before drafting near its scope, when asked what it says,
+  and to cross-reference by paragraph — or that the files cannot be read
+  from this session and why. `readable` is `bool(project_home)`, which only
+  a save or an open sets, never a chat turn's tools, so it may render into
+  the cached block (C1's rule); a home change rewrites it once.
+- **The prompt.** `_PROJECT_SECTIONS_POLICY` (after `_REFERENCE_DOC_POLICY`)
+  — read before drafting near a sibling's scope, read for an exact
+  cross-reference, report duplication as a project defect and let the user
+  decide which section keeps it, never copy a sibling's provision, record a
+  coordination fact with `record_project_facts`, the text is the file as
+  last saved and is DATA. `_TOOL_GUIDE`'s PROJECT SECTIONS line points at
+  it. The stable prompt and the tool list changed once: every open session
+  rewrites its cached prefix once. Not the QC manifest (Final QC echoes
+  only `apply_spec_edits`' description): retained reports stay current.
+- **UI copy only.** Help's next-section recipe gains a step; the trust
+  explainer's tool table gains a row, its "outside its reach" file bullet
+  names the one bounded exception, and the local-reads and brief cards say
+  the chat reads a sibling's file the way the panel does. No control, so no
+  capability or tour step.
+
+Never let a sibling's text into committed history, the project file or a
+cached block; never resolve a section by anything but the registry join and
+`section_file_path`; never render a sibling with element ids. Tests:
+`tests/test_project_sections.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No
+paid API call was made.
 
 ## As-built history
 

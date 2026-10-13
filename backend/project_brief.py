@@ -1551,6 +1551,7 @@ def project_sections_block(
     current_section_number: str,
     *,
     max_tokens: int = SECTIONS_CONTEXT_MAX_TOKENS,
+    readable: bool = False,
 ) -> str:
     """The other sections of this project, for the cached project block.
 
@@ -1558,6 +1559,15 @@ def project_sections_block(
     session builds a byte-identical request. Under the cap the article lists
     go first (titles only — never provision text), then trailing sections,
     with a disclosed count.
+
+    ``readable`` says whether the listed sections' saved files can be read
+    on demand with ``read_project_section`` (2026-10-13): true when the
+    session has a bound project home (its own file is saved beside the
+    brief in the project folder), false for a browser session or a section
+    saved elsewhere. The footer tells the model which, so it reads when it
+    can and never asks the user to paste a section it could have read — or
+    tries a read that cannot work. A home is bound by a save or an open,
+    never by a chat turn, so the footer is as cacheable as the list.
     """
     if not isinstance(link, dict):
         return ""
@@ -1585,7 +1595,21 @@ def project_sections_block(
     )
     footer = (
         "A provision that belongs to a listed section is cross-referenced "
-        '("as specified in Section 21 13 13"), never restated here.'
+        '("as specified in Section 21 13 13"), never restated here. '
+        + (
+            "Each listed section's current text can be read in full with "
+            "read_project_section (by its number): read one before drafting "
+            "anything that borders on its scope, when the user asks what it "
+            "says or whether something is already covered, and to "
+            "cross-reference a provision by its article and paragraph."
+            if readable
+            else "Their text cannot be read from this session (the section "
+            "open here is not saved in its project folder, or this is a "
+            "browser session): coordinate from the titles and article lists "
+            "above, ask the user when a provision's placement is in doubt, "
+            "and say once that saving this section beside its project brief "
+            "in the desktop app would let you read the others."
+        )
     )
     with_articles = True
     lines = [_section_line(r, with_articles=True) for r in others]

@@ -161,6 +161,7 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
         "track_followups",
         "record_project_facts",
         "recall_conversation",
+        "read_project_section",
     ]
     # Both web tools invoke directly. The provider default for the
     # ``_20260209`` versions is a code-execution caller, whose pause_turn

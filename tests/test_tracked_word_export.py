@@ -107,6 +107,29 @@ def test_exports_use_the_personal_author_and_keep_other_reviewers(client, monkey
     assert sessions.get_session().source_docx_bytes == source
 
 
+def test_deleting_a_linked_provision_before_a_body_level_bookmark_end_exports(client):
+    """The reported 409 (``accept_check_failed``; first difference a
+    paragraph against a ``bookmarkEnd``): a provision holding a hyperlink,
+    whose bookmark closes after it at body level, deleted in the panel. The
+    tracked export now hands the file over, and both resolutions hold."""
+    from tests.test_redline_original import _markup_between_master
+
+    source = _markup_between_master("bookmark end")
+    _import(client, source)
+    doc = client.get("/api/doc").json()["doc"]
+    first = doc["parts"][0]["articles"][0]["paragraphs"][0]["id"]
+    edit = client.post(
+        "/api/doc/edit", json={"ops": [{"action": "delete", "target_id": first}]}
+    )
+    assert edit.status_code == 200, edit.text
+    response = _export(client)
+    assert response.status_code == 200, response.text
+    body = _body(response.content)
+    clean = client.get("/api/export/docx", params={"mode": "preserved"})
+    assert first_difference(accept_all(body), _body(clean.content)) is None
+    assert first_difference(reject_all(body), _body(source)) is None
+
+
 def test_unedited_export_has_tracking_on_without_inventing_revisions(client):
     source = _master_bytes()
     _import(client, source)

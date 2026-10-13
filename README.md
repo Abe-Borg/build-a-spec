@@ -2665,6 +2665,13 @@ The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Lin
   keeps it, empty). In the redline, deleted and inserted words inside a link
   are marked inside the link, so Accept All and Reject All still give the
   formatted export and your original.
+- **Deleting a provision that holds a link exports beside a whole-paragraph
+  bookmark.** When a bookmark closes right after a paragraph (Word's shape for
+  a cross-reference target that takes in the paragraph mark), the redline's
+  own check used to stop at it and refuse the file (`accept_check_failed`, or
+  `reject_check_failed` for a moved copy). It now reaches past the bookmark's
+  end, as Word does, and the export goes through. Moving a provision whose
+  own bookmark closes that way is still refused.
 - **Still rebuilt from its first run:** a hyperlink holding anything but
   runs, bookmarks and spelling marks — a field inside a link, a link inside
   a link — along with the other cases listed above.

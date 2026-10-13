@@ -474,6 +474,100 @@ def test_a_deleted_paragraph_left_with_only_emptied_custom_xml_joins_nothing():
     assert len(rejected.findall(f".//{{{W}}}customXml")) == 2
 
 
+#: Body-level markup between a paragraph mark and the next paragraph: it
+#: marks a position in the text stream and holds no content. A bookmark
+#: covering a whole paragraph, mark included, is Word's own shape for the
+#: first: its end is written after the paragraph, at body level.
+_BETWEEN = {
+    "bookmark end": "<w:bookmarkEnd w:id='7'/>",
+    "bookmark start": "<w:bookmarkStart w:id='8' w:name='_Ref8'/>",
+    "comment range": "<w:commentRangeStart w:id='9'/><w:commentRangeEnd w:id='9'/>",
+    "permission range": "<w:permStart w:id='10' w:edGrp='everyone'/><w:permEnd w:id='10'/>",
+    "proofing mark": "<w:proofErr w:type='gramEnd'/>",
+}
+
+
+def _linked_deletion(n: int = 1) -> str:
+    """A deleted paragraph holding a hyperlink: its runs are deleted inside
+    the link (a hyperlink cannot sit inside ``w:del``), so Accept All leaves
+    the link behind, empty — content the join must hand on."""
+    return (
+        f"<w:p><w:pPr><w:rPr><w:del {_rev(n)}/></w:rPr></w:pPr>"
+        f"<w:del {_rev(n + 1)}><w:r><w:delText xml:space='preserve'>Comply with "
+        "</w:delText></w:r></w:del><w:hyperlink w:anchor='std'>"
+        f"<w:del {_rev(n + 2)}><w:r><w:delText>the standard</w:delText></w:r></w:del>"
+        "</w:hyperlink></w:p>"
+    )
+
+
+@pytest.mark.parametrize("between", list(_BETWEEN))
+def test_a_removed_mark_joins_past_zero_width_markup_which_stays_put(between):
+    """The reported refusal: a deleted provision holding a link, then a
+    bookmark closing after it at body level. The markup between the mark and
+    the next paragraph is a position, not a block, so the leftover (here an
+    emptied link) still joins the next paragraph, and the markup stays where
+    it was — equal to the body with the provision simply gone."""
+    markup = _BETWEEN[between]
+    after = "<w:p><w:r><w:t>Survivor.</w:t></w:r></w:p>"
+    body = _body(_linked_deletion() + markup + after)
+    accepted = accept_all(body)
+    assert accepted[0].tag != f"{{{W}}}p" and _texts(accepted)[-1] == "Survivor."
+    assert accepted[-1].find(f"{{{W}}}hyperlink") is not None  # joined, emptied
+    assert _equal(accepted, _body(markup + after))
+    original = (
+        "<w:p><w:r><w:t xml:space='preserve'>Comply with </w:t></w:r>"
+        "<w:hyperlink w:anchor='std'><w:r><w:t>the standard</w:t></w:r></w:hyperlink></w:p>"
+    )
+    assert _equal(reject_all(body), _body(original + markup + after))
+
+
+def test_an_inserted_mark_joins_past_zero_width_markup_on_reject():
+    """The mirror image: an inserted paragraph holding a link (a moved
+    copy) right before a bookmark that closes at body level. Reject All
+    hands its emptied link on to the next paragraph; the end stays put."""
+    inserted = (
+        f"<w:p><w:pPr><w:rPr><w:ins {_rev(1)}/></w:rPr></w:pPr><w:hyperlink w:anchor='std'>"
+        f"<w:ins {_rev(2)}><w:r><w:t>the standard</w:t></w:r></w:ins></w:hyperlink></w:p>"
+    )
+    rest = (
+        "<w:bookmarkEnd w:id='7'/><w:p><w:r><w:t>Survivor.</w:t></w:r></w:p>"
+    )
+    body = _body(
+        "<w:p><w:bookmarkStart w:id='7' w:name='_Ref7'/><w:r><w:t>A.</w:t></w:r></w:p>"
+        + inserted + rest
+    )
+    expected = "<w:p><w:bookmarkStart w:id='7' w:name='_Ref7'/><w:r><w:t>A.</w:t></w:r></w:p>" + rest
+    assert _equal(reject_all(body), _body(expected))
+    assert _texts(accept_all(body)) == ["A.", "the standard", "bookmarkEnd", "Survivor."]
+
+
+def test_visible_leftover_content_still_joins_past_markup_and_is_compared():
+    """Reaching past the markup never hides content: what is left joins the
+    next paragraph in front of its own text, where the comparison sees it."""
+    body = _body(
+        f"<w:p><w:pPr><w:rPr><w:del {_rev(1)}/></w:rPr></w:pPr>"
+        "<w:r><w:t xml:space='preserve'>Kept </w:t></w:r></w:p>"
+        "<w:bookmarkEnd w:id='7'/><w:p><w:r><w:t>next.</w:t></w:r></w:p>"
+    )
+    accepted = accept_all(body)
+    assert _texts(accepted) == ["bookmarkEnd", "Kept next."]
+    assert not _equal(
+        accepted, _body("<w:bookmarkEnd w:id='7'/><w:p><w:r><w:t>next.</w:t></w:r></w:p>")
+    )
+
+
+@pytest.mark.parametrize("after", ["table", "end of body"])
+def test_markup_then_no_paragraph_still_leaves_the_paragraph(after):
+    """Only markup is reached past: with a table (or nothing) after it there
+    is still no paragraph to join, and a paragraph holding content stays —
+    the emptied-link-before-a-table refusal is unchanged."""
+    tail = _table(["AHU-1"]) if after == "table" else ""
+    body = _body(_linked_deletion() + "<w:bookmarkEnd w:id='7'/>" + tail)
+    accepted = accept_all(body)
+    assert accepted[0].tag == f"{{{W}}}p"
+    assert not _equal(accepted, _body("<w:bookmarkEnd w:id='7'/>" + tail))
+
+
 # ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------

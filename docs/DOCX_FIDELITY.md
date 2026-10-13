@@ -405,7 +405,14 @@ leaves it behind, empty. An empty paragraph still shows whatever it sets (its
 number, a page break before it, a border, its line height), so the export
 records that paragraph's formatting as a tracked formatting change whose side
 in that resolution is empty: what is left sets nothing, and an empty last
-paragraph that sets anything is a difference like any other. No bookmark name
+paragraph that sets anything is a difference like any other. A removed
+paragraph mark joins what its paragraph still holds to the next paragraph, as
+Word does, and reaches past body-level range markup to find it: a bookmark
+closing after the paragraph it covers (Word's own shape for a bookmark that
+takes in the mark), a comment or permission range or a proofing mark is a
+position in the text, not a block, and stays where it was. So a deleted
+provision holding a link (left holding the emptied link) still joins the next
+provision when such a bookmark closes between them. No bookmark name
 may appear twice in the redline, and every other package member must be
 byte-identical. When the redline carries Word's own "Moved" marks (below), a
 structural check of the moves runs too (`revisions.move_range_problem`): no
@@ -816,10 +823,12 @@ setup in [DOCX_RENDERER_WINDOWS.md](DOCX_RENDERER_WINDOWS.md)). It renders
 every markup shape the writer emits (word-level splices, typed letters, Word
 numbering, whole provisions, articles and tables deleted, moves plain and
 across section breaks and carrying a bookmark, emptied break holders,
-hyperlinks, a field, the fallback, the untrackable last paragraph, a picture,
-a leading page break, front matter, inline custom XML deleted, rewritten,
-moved and in a deleted table), and every corpus master under the corpus
-sweep's own scripted edit mixes, exactly as the app does. A hidden Word the
+hyperlinks (a linked provision deleted, or moved, beside a bookmark that
+closes at body level included), a field, the fallback, the untrackable last
+paragraph, a picture, a leading page break, front matter, inline custom XML
+deleted, rewritten, moved and in a deleted table), and every corpus master
+under the corpus sweep's own scripted edit mixes, exactly as the app does. A
+hidden Word the
 harness starts and owns (`tools/render_docx_word.py --resolve`) then opens
 each redline read-only, runs Accept All Changes or Reject All Changes, and
 saves the result as a new DOCX. The judge requires that:

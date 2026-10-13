@@ -24594,3 +24594,114 @@ statement can now run to 500 characters (it was 240), in the assistant's
 recording, the Project facts panel and the Harvest facts review sheet.
 Older builds cut a longer statement to 240 when they open the project, so
 keep every section of a project on this release or later."
+
+## A deleted link before a body-level bookmark end passes the redline's self-check — implemented notes (2026-10-13)
+
+Owner report (Abraham): "Export Word - Tracked Changes ON" refused a section
+with "The redline failed its own check (accept check failed)", three times
+in a row. The diagnostics bundle's `export` event
+(`mode=preserved`, `track_changes: true`, `ok: false`) recorded
+`refusal: {reason: accept_check_failed, detail: {index: 64, left: "p",
+right: "bookmarkEnd", path: ""}}`, with `deleted: 94`, `moved: 0`,
+`fallback: 0`. The other seven sections exported that session passed.
+
+- **The cause was the oracle, not the writer.** A hyperlink cannot sit
+  inside `w:del`, so a deleted provision holding one keeps the
+  `w:hyperlink` with its runs deleted inside it, and Accept All leaves the
+  link behind, empty. `revisions._join_to_next` hands that leftover to the
+  next paragraph, but it stopped at the first non-paragraph sibling. A
+  body-level `w:bookmarkEnd` right after the paragraph is Word's own shape
+  for a bookmark covering a whole paragraph, mark included (a
+  cross-reference target). So the deleted paragraph stayed, and the
+  accepted body had a `p` where the formatted export has the
+  `bookmarkEnd`. Reproduced exactly (same detail, `path: ""`) on a
+  three-provision master; with no link, or with the end inside the
+  paragraph, it passed.
+- **The fix.** `_join_to_next` reaches past body-level zero-width range
+  markup (`_BETWEEN_PARAGRAPHS`: `bookmarkStart`, `bookmarkEnd`,
+  `commentRangeStart`/`End`, `permStart`/`End`, `proofErr`) to find the
+  next paragraph; the leftover joins the front of that paragraph, and the
+  markup stays where it was. The move and custom XML range markers belong
+  to the same family, but `_resolve_wrappers` removes them before any join
+  runs. Reject All uses the same join, so an inserted copy holding a link
+  right before such markup (a moved provision) now passes too; it failed
+  `reject_check_failed` before.
+- **Why it is not a tolerance.** Range markup marks a position in the text
+  stream between one paragraph mark and the next paragraph's first
+  character; it holds no content, so Word's join of a removed mark is not
+  blocked by it. Nothing is dropped from the comparison: leftover content
+  that shows anything still lands in the next paragraph, where the
+  comparison sees it (pinned), and with a table or nothing after the
+  markup the paragraph still stays. The emptied-link-before-a-table
+  refusal ("Found, not done" 2 of the custom XML note) is unchanged, and
+  fails closed as before.
+- **Real Word has not judged it yet.** `tests/word_judge.py` gains
+  `targeted/link-before-bookmark-end` (delete the linked provision; move a
+  linked provision above the end). It runs on the owner's next
+  `BUILD_A_SPEC_WORD_JUDGE=1` run; the judge's own tests render both cases
+  through the app's self-check here.
+- **Sweep** (local, not committed): 300 seeded masters × native moves
+  off/on, with body-level bookmark ends, body-level bookmark starts and
+  proofing marks around provisions that hold links, under delete, rewrite,
+  add-and-delete and move edits. Before: 324 ok, 190
+  `accept_check_failed`, 6 `reject_check_failed`, 34
+  `untrackable_markup`. After: 508 ok, 0 `accept_check_failed`, 12
+  `reject_check_failed`, 34 `untrackable_markup`. No case went from ok to
+  refused; 184 went from refused to ok, and 6 that had failed the accept
+  check now fail the reject check, which it had masked. Every remaining
+  refusal is a move (next bullet).
+- **Found, not done.** Moving a provision whose own bookmark closes at
+  body level after it. `_classify_runs` makes unmodelled children between
+  two anchored elements lead the later one, so the formatted export moves
+  the paragraph and its `bookmarkStart` but leaves the `bookmarkEnd` at the
+  old spot. Moved down, the end sits before its start; moved up, the
+  bookmark stretches over the provisions between, and a REF field to it
+  would show their text. The redline refuses these moves rather than show
+  them: `untrackable_markup` (detail tag `bookmarkEnd`/`bookmarkStart`,
+  from `_check_trackable`) when the marker itself must move, or
+  `reject_check_failed` when the moved bookmark's orphaned end cannot be
+  named (`_Canon` names an end only from starts in its own body).
+  Suggested as its own task: a body-level end that closes a bookmark opened
+  in the paragraph above should trail that paragraph. Reproduced with
+  `_markup_between_master("bookmark end")`, provision A moved to position
+  2.
+- **Unchanged.** The writer, the clean export, every refusal reason and
+  message, the comparison's tolerances, the package audit, the comment
+  pass, the SSE and REST surfaces, and every model request byte.
+
+### Tests
+
+- `tests/test_revisions.py`: the join reaches past each of five kinds of
+  body-level markup on Accept All (a deleted paragraph holding an emptied
+  link) and leaves the markup in place; Reject All mirrors it for an
+  inserted paragraph; visible leftover content still joins and is
+  compared; with a table or the end of the body after the markup, the
+  paragraph stays.
+- `tests/test_redline_original.py`: `_markup_between_master(between)` and
+  two matrix rows through `_verify`, both native-move settings: the
+  reported deletion beside a body-level bookmark end, bookmark start and
+  proofing mark (pinning that the deleted linked paragraph is followed
+  directly by the markup), and a linked provision moved above a body-level
+  bookmark end.
+- `tests/test_tracked_word_export.py`: the owner's path through the API
+  (import, delete in the panel, `mode=preserved&track_changes=true`) is a
+  200 whose Accept All and Reject All hold.
+
+**Revert matrix.** The whole oracle change reverted: 7 of the 9 new oracle
+tests red (the two "paragraph stays" tests pin unchanged behaviour), 8 of 8
+matrix rows red, and the route test red with the reported 409 message.
+Each of the seven markup kinds dropped from `_BETWEEN_PARAGRAPHS` in turn:
+`bookmarkStart` 3 red, `bookmarkEnd` 8, `commentRangeStart` 1,
+`commentRangeEnd` 1, `permStart` 1, `permEnd` 1, `proofErr` 3. Every
+reversion restored. Ruff, and every test file that uses the oracle (656
+tests, 54 skipped for the real-Word judge), pass; the full suite runs in
+CI. No paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Word export", item "Fewer refused tracked exports": "Export Word -
+Tracked Changes ON, and the redline on your original, no longer refuse a
+section where you deleted a provision holding a link when a whole-paragraph
+bookmark closes right after it (the export said 'The redline failed its own
+check (accept check failed)'). Moving a provision whose own bookmark closes
+that way is still refused."

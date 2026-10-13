@@ -17,8 +17,12 @@ Accept All (:func:`accept_all`):
   paragraph still holds moves to the front of the next paragraph (which
   keeps its own properties, as in Word), and a paragraph holding nothing is
   simply gone — an emptied inline custom XML element counts as nothing
-  (see the comparison below). With no next paragraph to join, it stays
-  (Word cannot remove a container's last paragraph mark);
+  (see the comparison below). Zero-width range markup between the two
+  (a bookmark closing after the paragraph it covers, a comment or
+  permission range, a proofing mark) is a position, not a block: the join
+  reaches past it and the markup stays where it was. With no next
+  paragraph to join, it stays (Word cannot remove a container's last
+  paragraph mark);
 * a row flagged deleted (``w:trPr/w:del``) is removed, one flagged inserted
   loses the flag, and a table left with no rows is removed;
 * every recorded property change (``w:pPrChange``, ``w:rPrChange``, …)
@@ -306,6 +310,23 @@ def _emptied_custom_xml(element) -> bool:
     )
 
 
+#: Body-level markup that holds no content: it marks a position in the text
+#: stream between one paragraph mark and the next paragraph's first
+#: character. (The move and custom XML range markers are in this family too,
+#: and :func:`_resolve_wrappers` has removed them before any join runs.)
+_BETWEEN_PARAGRAPHS = frozenset(
+    {
+        _W_BOOKMARK_START,
+        _W_BOOKMARK_END,
+        qn("w:commentRangeStart"),
+        qn("w:commentRangeEnd"),
+        qn("w:permStart"),
+        qn("w:permEnd"),
+        qn("w:proofErr"),
+    }
+)
+
+
 def _content(paragraph) -> list:
     return [
         c for c in paragraph if c.tag != _W_PPR and not _emptied_custom_xml(c)
@@ -316,13 +337,20 @@ def _join_to_next(paragraph) -> None:
     """Word's resolution of a removed paragraph mark: the paragraph's
     remaining content joins the next paragraph, which keeps its own
     properties. Nothing left: the paragraph is simply gone. No next
-    paragraph to join: it stays."""
+    paragraph to join: it stays.
+
+    Zero-width range markup between the two (a bookmark closing after the
+    mark it covers, a comment range, a permission range, a proofing mark)
+    marks a position, not a block, so the join reaches past it and the
+    markup stays where it was."""
     content = _content(paragraph)
     if not content:
         _remove(paragraph)
         return
     following = paragraph.getnext()
-    while following is not None and not isinstance(following.tag, str):
+    while following is not None and (
+        not isinstance(following.tag, str) or following.tag in _BETWEEN_PARAGRAPHS
+    ):
         following = following.getnext()
     if following is None or following.tag != _W_P:
         return

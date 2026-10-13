@@ -117,6 +117,20 @@ package part. Inside the body:
   cover page stays ahead of the section it introduces. When that element is
   deleted, its blank spacers go with it and everything else stays where it
   was: an unmodelled block never migrates to the end of the file;
+* a bookmark END at body level right after a modelled element, closing a
+  bookmark opened inside it, belongs to that element and trails it. That is
+  Word's own shape for a bookmark that takes in a whole paragraph, mark
+  included (a `_Ref` cross-reference target): the start inside the
+  paragraph, the end after its mark. Moved, the bookmark stays whole (left to
+  lead the element below, the end used to stay behind: moved down, it ended
+  before it began, which Word drops; moved up, it stretched over the
+  provisions in between); a provision added after it lands outside it; when
+  the element is deleted, the end stays where it was, after any section
+  break the element's mark held. Only an unbroken run of such ends trails the
+  element — the first body child that is anything else, an end of another
+  bookmark included, stops it — so no two markers at one place in the text
+  are ever reordered. A bookmark START at body level keeps leading the
+  element below, whose bookmark it opens;
 * body content after the last modelled element (`END OF SECTION`, an
   appendix, the blank lines, page breaks and section breaks between them) is
   carried through verbatim, in place — but an element the tree DID model and
@@ -305,10 +319,11 @@ save. Beside the anchors it keeps the header/footer text, the front-matter
 text and `header_source`. That is all it records — the retained bytes are
 the format store. `spec_doc/source_render.py` reads it back: it walks the
 current tree into the elements to emit, assigns every unmodelled body child
-to exactly one place (leading content of the element below it, a group
-bound to its position — everything up to a section break, or what a deleted
-element leaves behind — or the trailing content after the last modelled
-element), places the position-bound groups, renders each element (clone,
+to exactly one place (leading content of the element below it, the bookmark
+ends trailing the element above it, a group bound to its position —
+everything up to a section break, or what a deleted element leaves behind —
+or the trailing content after the last modelled element), places the
+position-bound groups, renders each element (clone,
 splice through `spec_doc/source_splice.py`, fallback, or kin clone), and
 hands the result to `replace_document_xml_raw`. The map is bound to the
 upload by SHA-256; read beside different bytes its origin indexes address
@@ -398,7 +413,9 @@ and Reject All transforms over the redline's body (`spec_doc/revisions.py`,
 which shares no code with the writer) and compares them canonically against
 the clean body and the upload's body: adjacent runs with identical properties
 merged, empty runs and containers dropped, XML comments and processing
-instructions ignored, bookmarks compared by name, and a FORMATTING-FREE empty
+instructions ignored, bookmarks compared by name (a bookmark end with no
+start in the body ends nothing — ECMA-376 Part 1 §17.13.6.1 says Word
+ignores it — so it is not compared), and a FORMATTING-FREE empty
 last paragraph tolerated. Word cannot track a document's last paragraph mark,
 so when the last paragraph is deleted or appended, one of the two resolutions
 leaves it behind, empty. An empty paragraph still shows whatever it sets (its
@@ -507,7 +524,16 @@ the deleted old copy gives them up, because a file must never carry one
 bookmark name twice — which is the Reject-All exception above: Reject All
 restores a moved provision's text and formatting at its old position, but not
 its bookmarks (Word recreates `_GoBack` itself, and a TOC update restores
-`_Toc` anchors). The self-check excludes exactly those names.
+`_Toc` anchors). A bookmark that takes in the moved provision's whole
+paragraph is one of them: its end, after the paragraph mark, sits between
+paragraphs, where no tracked change can hold it, so it goes as it is right
+after the new copy (the copy holds the start) and nothing is left at the old
+place (`redline.bookmark_ends_moved` counts these). Reject All leaves that
+end without its start, which went with the inserted copy, and it ends
+nothing. The self-check excludes exactly those names. A bookmark START at
+body level that must move with the provision below it is still refused
+(`untrackable_markup`): its end, inside the moved copy, would be gone on
+Reject All while the start stayed.
 
 **A pure move is Word's own "Moved" marks** (Phase 2, PR B; the
 `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` switch, on by default — the export route
@@ -535,7 +561,9 @@ written:
   and tdf123460), which keeps every moved paragraph mark inside the range, as
   §17.13.5.21 and .26 require. A provision moved with its sub-provisions, or a
   run of siblings moved together — consecutive moves whose old copies are
-  consecutive too, in the same order — is ONE named move, so Word shows one;
+  consecutive too, in the same order — is ONE named move, so Word shows one.
+  A whole-paragraph bookmark's end between two of them (above) is not inside
+  any move, so it splits the run: each side is a named move of its own;
 * every id comes from the export's one counter, above everything already in
   the package: Word itself numbers bookmarks, revisions and move ranges from
   one counter, and a name is `move` and digits, unique in the file (Word
@@ -828,7 +856,9 @@ every markup shape the writer emits (word-level splices, typed letters, Word
 numbering, whole provisions, articles and tables deleted, moves plain and
 across section breaks and carrying a bookmark, emptied break holders,
 hyperlinks (a linked provision deleted, or moved, beside a bookmark that
-closes at body level included), a field, the fallback, the untrackable last
+closes at body level included), a bookmark taking in a whole paragraph (its
+provision moved down or up, natively too, or deleted, a provision added after
+it, a break holder moved or deleted), a field, the fallback, the untrackable last
 paragraph, a picture, a leading page break, front matter, inline custom XML
 deleted, rewritten, moved and in a deleted table), and every corpus master
 under the corpus sweep's own scripted edit mixes, exactly as the app does. A
@@ -841,7 +871,11 @@ saves the result as a new DOCX. The judge requires that:
 * Word read every change as `Build-a-Spec`'s (each `Revision.Author`, the name
   the Reviewing Pane shows), and none was left after Accept All or Reject All;
 * after Accept All the body is the formatted export's, and after Reject All
-  the upload's — losing only the bookmarks a moved copy carried.
+  the upload's — losing only the bookmarks a moved copy carried. Those are
+  left out of the comparison whether Word deletes them or keeps them,
+  collapsed, where the copy was (a bookmark taking in the copy's whole
+  paragraph ends outside the insertion, so either is possible), as the app's
+  own check leaves them out.
 
 **The comparison is symmetric.** A Word save rewrites more than it resolves
 (formatting spelled its own way, table-look flags, a hyperlink's history

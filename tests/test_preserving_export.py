@@ -1881,3 +1881,308 @@ def test_numbering_that_cannot_be_read_offsets_nothing():
         {},
         "",
     )
+
+
+# ---------------------------------------------------------------------------
+# A bookmark that takes in a whole paragraph, mark included
+# ---------------------------------------------------------------------------
+
+#: The words of the three provisions ``_whole_paragraph_bookmark_master``
+#: writes, in upload order (the label in front of them is the master's).
+BOOKMARKED_WORDS = (
+    "Section includes vibration isolation.",
+    "Related requirements are specified elsewhere.",
+    "Submit product data.",
+)
+_BOOKMARK_LEVELS = {1: ("decimalZero", "%1.%2"), 2: ("upperLetter", "%3.")}
+
+
+def _whole_paragraph_bookmark(paragraph, index: int) -> None:
+    """Wrap ``paragraph`` in bookmark ``_Ref1<index>`` the way Word writes a
+    bookmark over a whole paragraph, mark included (a cross-reference
+    target): the start inside it, right after its properties, the end after
+    it, at body level."""
+    start = etree.Element(qn("w:bookmarkStart"))
+    start.set(qn("w:id"), f"1{index}")
+    start.set(qn("w:name"), f"_Ref1{index}")
+    properties = paragraph._p.find(qn("w:pPr"))
+    paragraph._p.insert(
+        0 if properties is None else paragraph._p.index(properties) + 1, start
+    )
+    end = etree.Element(qn("w:bookmarkEnd"))
+    end.set(qn("w:id"), f"1{index}")
+    paragraph._p.addnext(end)
+
+
+def _whole_paragraph_bookmark_master(
+    *marked: int, numbered: bool = False, held_break: bool = False
+) -> bytes:
+    """Three provisions under 1.1 SUMMARY, the ``marked`` ones (indexes into
+    :data:`BOOKMARKED_WORDS`) each wrapped in a whole-paragraph bookmark
+    ``_Ref1<index>``. ``numbered`` numbers them with Word's own list (a move
+    is then a pure move, not a reletter); ``held_break`` puts a section
+    break in the last provision's mark, with a second article after it."""
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    for line in ("SECTION 23 05 48", "VIBRATION CONTROLS", "PART 1 - GENERAL"):
+        document.add_paragraph(line)
+    if numbered:
+        _define_numbering(document, 60, _BOOKMARK_LEVELS)
+
+    def article(title: str) -> None:
+        if numbered:
+            _numbered(document, title, 1, "60")
+        else:
+            document.add_paragraph(f"1.{article.count}\t{title}")
+        article.count += 1
+
+    def provision(index: int, words: str):
+        if numbered:
+            return _numbered(document, words, 2, "60")
+        return document.add_paragraph(f"{chr(ord('A') + index)}.\t{words}")
+
+    article.count = 1
+    article("SUMMARY")
+    provisions = [provision(i, words) for i, words in enumerate(BOOKMARKED_WORDS)]
+    for index in marked:
+        _whole_paragraph_bookmark(provisions[index], index)
+    if held_break:
+        _hold_break(provisions[-1], document)
+        article("SCHEDULE")
+        provision(0, "Provide isolators as scheduled.")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def _bookmark_layout(payload: bytes) -> list[str]:
+    """The body as its bookmarks see it, one entry per body child: a
+    paragraph's words (its label left off; deleted words in a redline
+    included), prefixed ``{name}`` for each
+    bookmark starting inside it and suffixed ``<break>`` when its mark ends
+    a Word section; ``end name`` / ``start name`` for a bookmark end or start
+    at body level (an end named by its start, ``?`` when it has none); the
+    element name for anything else."""
+    body = etree.fromstring(
+        zipfile.ZipFile(io.BytesIO(payload)).read("word/document.xml")
+    ).find(qn("w:body"))
+    names = {
+        start.get(qn("w:id")): start.get(qn("w:name"))
+        for start in body.iter(qn("w:bookmarkStart"))
+    }
+    layout = []
+    for child in body:
+        if child.tag == qn("w:sectPr"):
+            continue
+        if child.tag == qn("w:p"):
+            text = "".join(
+                "\t" if t.tag == qn("w:tab") else (t.text or "")
+                for t in child.iter(qn("w:t"), qn("w:delText"), qn("w:tab"))
+            )
+            words = text.split("\t", 1)[-1]  # a typed label ends at its tab
+            starts = "".join(
+                "{" + start.get(qn("w:name")) + "}"
+                for start in child.iter(qn("w:bookmarkStart"))
+            )
+            held = child.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is not None
+            layout.append(starts + words.strip() + ("<break>" if held else ""))
+        elif child.tag == qn("w:bookmarkEnd"):
+            layout.append("end " + names.get(child.get(qn("w:id")), "?"))
+        elif child.tag == qn("w:bookmarkStart"):
+            layout.append("start " + child.get(qn("w:name")))
+        else:
+            layout.append(etree.QName(child).localname)
+    return layout
+
+
+def _assert_whole(payload: bytes, index: int) -> None:
+    """Bookmark ``_Ref1<index>`` starts once, inside the paragraph holding
+    its provision's words, and ends once, right after that paragraph."""
+    name = f"_Ref1{index}"
+    layout = _bookmark_layout(payload)
+    holders = [i for i, entry in enumerate(layout) if "{" + name + "}" in entry]
+    assert len(holders) == 1, layout
+    assert BOOKMARKED_WORDS[index] in layout[holders[0]], layout
+    assert layout[holders[0] + 1] == f"end {name}", layout
+    assert layout.count(f"end {name}") == 1, layout
+
+
+def _move_provision(section, index: int, position: int):
+    target = section.parts[0].articles[0].paragraphs[index]
+    moved, _ = apply_edits(
+        section, [{"action": "move", "target_id": target.uid, "position": position}]
+    )
+    return moved
+
+
+@pytest.mark.parametrize("numbered", [False, True], ids=["typed", "numbered"])
+@pytest.mark.parametrize(
+    ("marked", "index", "position"),
+    [
+        (0, 0, 2),  # moved down past both others: the end used to stay above its start
+        (0, 0, 1),  # moved down one
+        (2, 2, 0),  # the last provision moved to the top: its end used to stay last
+        (1, 2, 1),  # another provision moved in above it: the end used to go along
+    ],
+    ids=["down-two", "down-one", "last-to-top", "neighbour-moved-in"],
+)
+def test_a_whole_paragraph_bookmark_moves_with_its_provision(
+    tmp_path, marked, index, position, numbered
+):
+    """A bookmark covering a whole paragraph, mark included, is Word's own
+    shape for a cross-reference target: its end follows the paragraph at
+    body level. The end used to lead the element below instead, so a move
+    left it behind — moved down, the end sat before its start (Word drops
+    the bookmark and a REF field to it breaks); moved up, it stretched over
+    the provisions in between. It trails its own paragraph now."""
+    source = _whole_paragraph_bookmark_master(marked, numbered=numbered)
+    imported = _parse(tmp_path, source)
+    section = _move_provision(imported.section, index, position)
+
+    exported = _render(source, section, imported.format_map)
+
+    _assert_whole(exported, marked)
+    words = [
+        entry
+        for entry in _bookmark_layout(exported)
+        if any(w in entry for w in BOOKMARKED_WORDS)
+    ]
+    expected = list(BOOKMARKED_WORDS)
+    expected.insert(position, expected.pop(index))
+    assert [next(w for w in BOOKMARKED_WORDS if w in e) for e in words] == expected
+
+
+def test_an_untouched_whole_paragraph_bookmark_round_trips(tmp_path):
+    """Trailing its paragraph changes nothing on an export with no edits:
+    every body child is the upload's, in the upload's order."""
+    source = _whole_paragraph_bookmark_master(0, 1, 2, held_break=True)
+    imported = _parse(tmp_path, source)
+
+    exported = _render(source, imported.section, imported.format_map)
+
+    before = [etree.tostring(el) for el in _body_children(source)]
+    assert [etree.tostring(el) for el in _body_children(exported)] == before
+
+
+@pytest.mark.parametrize("numbered", [False, True], ids=["typed", "numbered"])
+def test_a_provision_added_after_a_whole_paragraph_bookmark_lands_after_its_end(
+    tmp_path, numbered
+):
+    """The new provision is not part of the bookmarked paragraph: it used to
+    land between the paragraph and the bookmark's end, inside the bookmark."""
+    source = _whole_paragraph_bookmark_master(0, numbered=numbered)
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": article.uid,
+                "position": 1,
+                "text": "Comply with the seismic restraint manual.",
+            }
+        ],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    _assert_whole(exported, 0)
+    layout = _bookmark_layout(exported)
+    end = layout.index("end _Ref10")
+    assert "Comply with the seismic restraint manual." in layout[end + 1]
+
+
+def test_a_deleted_provision_leaves_its_bookmark_end_where_it_was(tmp_path):
+    """Its start goes with it; the end, which marks a place in the text and
+    holds nothing, stays at that place — after the break the provision's
+    mark held, never before it — and nothing else moves."""
+    source = _whole_paragraph_bookmark_master(2, held_break=True)
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section, [{"action": "delete", "target_id": article.paragraphs[2].uid}]
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    layout = _bookmark_layout(exported)
+    assert layout[layout.index(BOOKMARKED_WORDS[1]) :][:4] == [
+        BOOKMARKED_WORDS[1],
+        "<break>",
+        "end ?",
+        "SCHEDULE",
+    ]
+
+
+def test_a_moved_break_holder_takes_its_bookmark_and_leaves_its_break(tmp_path):
+    """The break stays where it was (it ends the section above it); the
+    bookmark goes with the provision whose paragraph it covers."""
+    source = _whole_paragraph_bookmark_master(2, held_break=True)
+    imported = _parse(tmp_path, source)
+    section = _move_provision(imported.section, 2, 0)
+
+    exported = _render(source, section, imported.format_map)
+
+    _assert_whole(exported, 2)
+    layout = _bookmark_layout(exported)
+    assert layout[layout.index("end _Ref12") + 1 :][:4] == [
+        BOOKMARKED_WORDS[0],
+        BOOKMARKED_WORDS[1],
+        "<break>",
+        "SCHEDULE",
+    ]
+    assert len(_section_breaks(exported)) == 1
+
+
+def test_a_body_level_bookmark_start_still_leads_the_provision_below(tmp_path):
+    """The mirror shape — a start at body level whose end is inside the
+    paragraph below — is that paragraph's: it keeps leading it, as before."""
+    source = _whole_paragraph_bookmark_master()
+    document = Document(io.BytesIO(source))
+    second = next(p for p in document.paragraphs if BOOKMARKED_WORDS[1] in p.text)
+    start = etree.Element(qn("w:bookmarkStart"))
+    start.set(qn("w:id"), "20")
+    start.set(qn("w:name"), "_Ref20")
+    second._p.addprevious(start)
+    etree.SubElement(second._p, qn("w:bookmarkEnd")).set(qn("w:id"), "20")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    section = _move_provision(imported.section, 1, 2)
+
+    exported = _render(source, section, imported.format_map)
+
+    layout = _bookmark_layout(exported)
+    assert layout[layout.index("start _Ref20") + 1].endswith(BOOKMARKED_WORDS[1])
+
+
+def test_only_the_bookmark_ends_right_after_the_paragraph_that_opened_them_trail_it(tmp_path):
+    """An end at the head of the run after a paragraph trails it only while
+    every end before it does too, so no two markers at one place in the text
+    are ever reordered: an end closing a bookmark opened further up stops
+    the run, and keeps leading the element below."""
+    source = _whole_paragraph_bookmark_master(1)
+    document = Document(io.BytesIO(source))
+    first, second = (
+        next(p for p in document.paragraphs if words in p.text)
+        for words in BOOKMARKED_WORDS[:2]
+    )
+    start = etree.Element(qn("w:bookmarkStart"))
+    start.set(qn("w:id"), "30")
+    start.set(qn("w:name"), "_Ref30")
+    first._p.append(start)  # opened in A, closed after B: spans A and B
+    end = etree.Element(qn("w:bookmarkEnd"))
+    end.set(qn("w:id"), "30")
+    second._p.addnext(end)  # ahead of B's own end, which then stays put too
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    section = _move_provision(imported.section, 1, 0)
+
+    exported = _render(source, section, imported.format_map)
+
+    layout = _bookmark_layout(exported)
+    assert layout[layout.index("end _Ref30") :][:3] == [
+        "end _Ref30",
+        "end _Ref11",
+        BOOKMARKED_WORDS[2],
+    ]

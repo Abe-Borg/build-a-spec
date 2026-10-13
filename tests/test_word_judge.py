@@ -277,6 +277,7 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
         "leftovers",
         "last_mark_untracked",
         "moves_native",
+        "bookmark_ends_moved",  # a whole-paragraph bookmark's end, moved along
     ):
         assert totals.get(kind, 0) > 0, kind
     assert {
@@ -310,7 +311,8 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
         "commentRangeStart@p",
         "commentRangeEnd@p",
     } <= markup, markup
-    assert moved == {"_Ref77", "_Ref44"}
+    # Inside its paragraph (77, 44), or taking in the whole of it (10, 12).
+    assert moved == {"_Ref77", "_Ref44", "_Ref10", "_Ref12"}
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +471,7 @@ def batches(tmp_path_factory):
                 "targeted/bookmarked",
                 "targeted/last-numbered",
                 "targeted/break-holder",
+                "targeted/whole-paragraph-bookmark",
             )
         }
 
@@ -660,6 +663,54 @@ def test_what_word_read_and_left_is_judged_too(batches, tmp_path, fake, message)
     )
     assert verdict.failures
     assert any(message in failure for failure in verdict.failures), verdict.failures
+
+
+def _reject_leaving_moved_bookmarks_collapsed(body):
+    """A Word whose Reject All keeps a bookmark whose start went with a
+    rejected insertion, collapsed where the insertion was: the end that closed
+    it after the paragraph mark, at body level, gets its start back, right
+    before it."""
+    rejected = reject_all(body)
+    started = {s.get(qn("w:id")) for s in rejected.iter(qn("w:bookmarkStart"))}
+    for end in list(rejected.iter(qn("w:bookmarkEnd"))):
+        if end.get(qn("w:id")) not in started:
+            start = etree.Element(qn("w:bookmarkStart"))
+            start.set(qn("w:id"), end.get(qn("w:id")))
+            start.set(qn("w:name"), f"_Ref{end.get(qn('w:id'))}")
+            end.addprevious(start)
+    return rejected
+
+
+def test_a_moved_bookmark_word_leaves_collapsed_is_still_the_moved_one(
+    batches, tmp_path
+):
+    """A provision moved with a bookmark that takes in its whole paragraph:
+    the start is in the inserted copy, the end after it, untracked. Word may
+    delete that bookmark on Reject All or leave it collapsed where the copy
+    was; D-6 promises neither, so neither is a difference — and the same
+    collapsed bookmark IS one when no move carried it."""
+    batch = batches["targeted/whole-paragraph-bookmark"]
+    fake = _fake_word(reject=_reject_leaving_moved_bookmarks_collapsed)
+    verdict = judge.judge_batch(batch, tmp_path / "collapsed", resolve=fake)
+    by_case = {case["case"]: case for case in verdict.cases}
+    moved = by_case["move-bookmarked-down"]
+    assert moved["status"] == "pass", moved
+    assert moved["lost_bookmarks"] == [] and moved["moved_bookmarks"] == ["_Ref10"]
+    assert by_case["move-last-bookmarked-up"]["status"] == "pass"
+
+    unmoved = judge.JudgeBatch(
+        batch.group,
+        batch.upload,
+        tuple(
+            judge.JudgeCase(
+                c.name, c.redline, c.clean, frozenset(), c.stats, comments=c.comments
+            )
+            for c in batch.rendered
+            if c.name == "move-bookmarked-down"
+        ),
+    )
+    verdict = judge.judge_batch(unmoved, tmp_path / "unmoved", resolve=fake)
+    assert any("Reject All in Word differs" in f for f in verdict.failures), verdict.failures
 
 
 def test_a_bookmark_lost_by_no_move_is_a_failure(batches, tmp_path):

@@ -487,6 +487,13 @@ _BETWEEN = {
 }
 
 
+#: A paragraph that opens bookmark 7, so the ``bookmark end`` above closes a
+#: real bookmark (an end with no start ends nothing, and is not compared).
+_OPENS_SEVEN = (
+    "<w:p><w:bookmarkStart w:id='7' w:name='_Ref7'/><w:r><w:t>Lead.</w:t></w:r></w:p>"
+)
+
+
 def _linked_deletion(n: int = 1) -> str:
     """A deleted paragraph holding a hyperlink: its runs are deleted inside
     the link (a hyperlink cannot sit inside ``w:del``), so Accept All leaves
@@ -509,17 +516,17 @@ def test_a_removed_mark_joins_past_zero_width_markup(between):
     in text order — equal to the body with the provision simply gone."""
     markup = _BETWEEN[between]
     after = "<w:p><w:r><w:t>Survivor.</w:t></w:r></w:p>"
-    body = _body(_linked_deletion() + markup + after)
+    body = _body(_OPENS_SEVEN + _linked_deletion() + markup + after)
     accepted = accept_all(body)
-    assert _texts(accepted) == ["Survivor."]
-    (joined,) = accepted
+    assert _texts(accepted) == ["Lead.", "Survivor."]
+    _lead, joined = accepted
     assert joined[0].tag == f"{{{W}}}hyperlink" and not len(joined[0])  # emptied
-    assert _equal(accepted, _body(markup + after))
+    assert _equal(accepted, _body(_OPENS_SEVEN + markup + after))
     original = (
         "<w:p><w:r><w:t xml:space='preserve'>Comply with </w:t></w:r>"
         "<w:hyperlink w:anchor='std'><w:r><w:t>the standard</w:t></w:r></w:hyperlink></w:p>"
     )
-    assert _equal(reject_all(body), _body(original + markup + after))
+    assert _equal(reject_all(body), _body(_OPENS_SEVEN + original + markup + after))
 
 
 def test_an_inserted_mark_joins_past_zero_width_markup_on_reject():
@@ -601,10 +608,11 @@ def test_markup_then_no_paragraph_still_leaves_the_paragraph(after):
     is still no paragraph to join, and a paragraph holding content stays —
     the emptied-link-before-a-table refusal is unchanged."""
     tail = _table(["AHU-1"]) if after == "table" else ""
-    body = _body(_linked_deletion() + "<w:bookmarkEnd w:id='7'/>" + tail)
+    end = "<w:bookmarkEnd w:id='7'/>"
+    body = _body(_OPENS_SEVEN + _linked_deletion() + end + tail)
     accepted = accept_all(body)
-    assert accepted[0].tag == f"{{{W}}}p"
-    assert not _equal(accepted, _body("<w:bookmarkEnd w:id='7'/>" + tail))
+    assert _texts(accepted)[:2] == ["Lead.", ""]  # the paragraph stays
+    assert not _equal(accepted, _body(_OPENS_SEVEN + end + tail))
 
 
 @pytest.mark.parametrize("between", list(_BETWEEN))
@@ -613,45 +621,51 @@ def test_markup_right_before_a_paragraph_compares_as_its_start(between):
     paragraph's first position in the text, exactly as the same markup at
     its start (after its properties) does: the comparison sees one body."""
     markup = _BETWEEN[between]
+    # "One." opens bookmark 7, so the bookmark end closes a real bookmark —
+    # one covering "One." mark and all, Word's own shape.
+    one = "<w:p><w:bookmarkStart w:id='7' w:name='_Ref7'/><w:r><w:t>One.</w:t></w:r></w:p>"
     outside = _body(
-        f"<w:p><w:r><w:t>One.</w:t></w:r></w:p>{markup}"
+        f"{one}{markup}"
         "<w:p><w:pPr><w:jc w:val='right'/></w:pPr><w:r><w:t>Two.</w:t></w:r></w:p>"
     )
     inside = _body(
-        "<w:p><w:r><w:t>One.</w:t></w:r></w:p>"
+        f"{one}"
         f"<w:p><w:pPr><w:jc w:val='right'/></w:pPr>{markup}<w:r><w:t>Two.</w:t></w:r></w:p>"
     )
     assert _equal(outside, inside)
     assert len(canonical_body(outside)) == 2
+    # ...and compared there, not dropped.
+    first = etree.QName(_body(markup)[0]).text
+    assert first in [c[0] for c in canonical_body(outside)[1][2]]
+
+
+#: "One." opening bookmark 7: the bookmark end below closes a real bookmark.
+_ONE = "<w:p><w:bookmarkStart w:id='7' w:name='_Ref7'/><w:r><w:t>One.</w:t></w:r>"
 
 
 @pytest.mark.parametrize(
     "elsewhere",
     [
         # the end of the paragraph before: its mark lies between the two
-        "<w:p><w:r><w:t>One.</w:t></w:r>{m}</w:p>"
-        "<w:p><w:r><w:t>Two.</w:t></w:r></w:p>",
+        _ONE + "{m}</w:p><w:p><w:r><w:t>Two.</w:t></w:r></w:p>",
         # after the paragraph's first word
-        "<w:p><w:r><w:t>One.</w:t></w:r></w:p>"
-        "<w:p><w:r><w:t>Tw</w:t></w:r>{m}<w:r><w:t>o.</w:t></w:r></w:p>",
+        _ONE + "</w:p><w:p><w:r><w:t>Tw</w:t></w:r>{m}<w:r><w:t>o.</w:t></w:r></w:p>",
     ],
     ids=["end-of-previous", "mid-paragraph"],
 )
 def test_markup_anywhere_else_is_still_a_difference(elsewhere):
     """Only the next paragraph's first position is the same place."""
     markup = _BETWEEN["bookmark end"]
-    outside = _body(
-        f"<w:p><w:r><w:t>One.</w:t></w:r></w:p>{markup}"
-        "<w:p><w:r><w:t>Two.</w:t></w:r></w:p>"
-    )
+    outside = _body(f"{_ONE}</w:p>{markup}<w:p><w:r><w:t>Two.</w:t></w:r></w:p>")
     assert not _equal(outside, _body(elsewhere.format(m=markup)))
 
 
 def test_markup_before_a_table_is_not_moved_anywhere():
     """No paragraph follows it, so it is compared where it is."""
     markup = _BETWEEN["bookmark end"]
-    before = _body(markup + _table(["AHU-1"]))
+    before = _body(_OPENS_SEVEN + markup + _table(["AHU-1"]))
     assert [c[0] for c in canonical_body(before)] == [
+        f"{{{W}}}p",
         f"{{{W}}}bookmarkEnd",
         f"{{{W}}}tbl",
     ]
@@ -886,6 +900,58 @@ def test_bookmarks_compare_by_name_and_can_be_excluded():
     bare = _body("<w:p><w:r><w:t>x</w:t></w:r></w:p>")
     assert not _equal(left, bare)
     assert _equal(left, bare, exclude_bookmarks={"_Ref1"})
+
+
+#: Word's shape for a bookmark covering a whole paragraph, mark included:
+#: the start inside the paragraph, the end after it, at body level.
+_WHOLE_PARAGRAPH_BOOKMARK = (
+    "<w:p><w:bookmarkStart w:id='12' w:name='_Ref12'/><w:r><w:t>A.</w:t></w:r></w:p>"
+    "<w:bookmarkEnd w:id='12'/>"
+)
+
+
+def test_a_bookmark_end_with_no_start_in_the_body_ends_nothing():
+    """ECMA-376 Part 1 §17.13.6.1: an end with no start of its id is ignored
+    and no bookmark is present. So it is not compared — wherever it sits —
+    which is what Reject All leaves of a moved provision's whole-paragraph
+    bookmark: the start went with the inserted copy, the end (between
+    paragraphs, so never inside a tracked change) stays."""
+    plain = "<w:p><w:r><w:t>B.</w:t></w:r></w:p>"
+    orphan = "<w:bookmarkEnd w:id='12'/>"
+    assert [c[0] for c in canonical_body(_body(orphan + plain))] == [f"{{{W}}}p"]
+    assert _equal(_body(plain + orphan + plain), _body(plain + plain))
+    assert _equal(_body(f"<w:p>{orphan}<w:r><w:t>B.</w:t></w:r></w:p>"), _body(plain))
+    # The redline's Reject All against the upload: the upload's bookmark is
+    # the moved one, excluded by name; the leftover end is nothing.
+    rejected = _body("<w:p><w:r><w:t>A.</w:t></w:r></w:p>" + plain + orphan)
+    upload = _body(_WHOLE_PARAGRAPH_BOOKMARK + plain)
+    assert not _equal(rejected, upload)
+    assert _equal(rejected, upload, exclude_bookmarks={"_Ref12"})
+
+
+def test_a_bookmark_end_with_its_start_is_still_compared_by_name():
+    """The end of a bookmark the body holds is a position like any other:
+    after the paragraph mark is not before it, and not after the next
+    paragraph."""
+    whole = _body(_WHOLE_PARAGRAPH_BOOKMARK + "<w:p><w:r><w:t>B.</w:t></w:r></w:p>")
+    short_of_the_mark = _body(
+        "<w:p><w:bookmarkStart w:id='12' w:name='_Ref12'/><w:r><w:t>A.</w:t></w:r>"
+        "<w:bookmarkEnd w:id='12'/></w:p><w:p><w:r><w:t>B.</w:t></w:r></w:p>"
+    )
+    stretched = _body(
+        "<w:p><w:bookmarkStart w:id='12' w:name='_Ref12'/><w:r><w:t>A.</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>B.</w:t></w:r></w:p><w:bookmarkEnd w:id='12'/>"
+    )
+    assert not _equal(whole, short_of_the_mark)
+    assert not _equal(whole, stretched)
+    # A start with no end is still compared: only an end can be ignored.
+    unclosed = _body(
+        "<w:p><w:bookmarkStart w:id='12' w:name='_Ref12'/><w:r><w:t>A.</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>B.</w:t></w:r></w:p>"
+    )
+    assert not _equal(unclosed, _body(
+        "<w:p><w:r><w:t>A.</w:t></w:r></w:p><w:p><w:r><w:t>B.</w:t></w:r></w:p>"
+    ))
 
 
 def test_trailing_empty_paragraphs_are_not_differences_but_inner_ones_are():

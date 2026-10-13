@@ -24,7 +24,11 @@ The contract (decided with Abraham, 2026-08-21):
     * body content the tree never modelled travels with the element below
       it — blank spacers, a cover page, a picture-only paragraph, a page
       break — except a SECTION BREAK, which belongs to the content above it
-      (see "Section breaks" below).
+      (see "Section breaks" below), and a body-level bookmark END closing a
+      bookmark opened inside the element right above it, which trails that
+      element: Word's own shape for a bookmark that takes in a whole
+      paragraph, mark included (a cross-reference target), kept whole
+      wherever the paragraph goes.
 
 What is deliberately NOT promised is the older mode's byte-exact whole-file
 clone. That promise bought so little editing surface (three of twenty-seven
@@ -142,6 +146,9 @@ _W_NUMPR = qn("w:numPr")
 _W_NUMID = qn("w:numId")
 _W_ILVL = qn("w:ilvl")
 _W_VAL = qn("w:val")
+_W_ID = qn("w:id")
+_W_BOOKMARK_START = qn("w:bookmarkStart")
+_W_BOOKMARK_END = qn("w:bookmarkEnd")
 _W14_PARA_ID = "{http://schemas.microsoft.com/office/word/2010/wordml}paraId"
 _W14_TEXT_ID = "{http://schemas.microsoft.com/office/word/2010/wordml}textId"
 # A paragraph carrying any of these is layout, not a spacer: a picture, a
@@ -916,6 +923,10 @@ class Record:
     moved: bool = False
     #: ``carried`` leading content: the uid of the element it travels with.
     owner: str = ""
+    #: ``carried`` content that FOLLOWS its owner instead of leading it: a
+    #: body-level bookmark end closing a bookmark opened inside the owner
+    #: (:meth:`_Assembler._closes_above`).
+    trails: bool = False
     #: Where ``_place`` put this record around a section break — content the
     #: redline must keep exactly there, because Word cannot track a moved
     #: section break.
@@ -1020,6 +1031,9 @@ class _Assembler:
         # them with it, the redline marks them deleted with it.
         self._dropped_spacers: list[int] = []
         self._tails: dict[int, list[int]] = {}
+        #: Bookmark ends that follow an emitted anchored element
+        #: (:meth:`_closes_above`), by that element's origin.
+        self._trails: dict[int, list[int]] = {}
         self._trailing: list[int] = []
         self._strip_break: set[int] = set()
         self._groups: list[_Group] = []
@@ -1041,21 +1055,63 @@ class _Assembler:
         uid = self._anchored.get(above, "")
         return _classify(uid)[0] == "part" and uid in self._parts_with_articles
 
+    def _closes_above(self, above: int, run: list[int]) -> list[int]:
+        """The bookmark ends at the head of ``run`` — the body children right
+        after anchored element ``above`` — that close a bookmark opened
+        inside ``above``.
+
+        That is Word's own shape for a bookmark covering a whole paragraph,
+        mark included (a ``_Ref`` cross-reference target): the start inside
+        the paragraph, the end after its mark, at body level. The end is the
+        paragraph's, so it trails the paragraph wherever it goes; left to
+        lead the element below, it stayed behind when the paragraph moved,
+        and the bookmark ended before it began (moved down) or stretched
+        over the provisions in between (moved up, or a provision added right
+        after it). The first child that is anything else ends the run, so
+        no markup at one place in the text is ever reordered; a body-level
+        START keeps leading the element below, whose bookmark it opens.
+        """
+        if above < 0:
+            return []
+        element = self._children[above]
+        opened = {start.get(_W_ID) for start in element.iter(_W_BOOKMARK_START)}
+        opened.discard(None)
+        closing = []
+        for index in run:
+            child = self._children[index]
+            if child.tag != _W_BOOKMARK_END or child.get(_W_ID) not in opened:
+                break
+            closing.append(index)
+        return closing
+
     def _classify_runs(self) -> None:
         """Assign every unmodelled body child to exactly one place.
 
         The children between two anchored elements lead the later one (they
         travel with it), except that everything up to and including the LAST
         section break among them is bound to its position: a break is the
-        end of the section above it, not the start of the element below.
+        end of the section above it, not the start of the element below. And
+        before any of that, the bookmark ends right after the earlier
+        element that close a bookmark opened inside it trail that element
+        (:meth:`_closes_above`) — or, when it was deleted, stay where it was,
+        after the place (and the section break) its mark held.
         Everything after the last anchored element is trailing content —
         ``END OF SECTION``, an appendix — carried verbatim, blanks, page
         breaks and section breaks included.
         """
         previous = -1
         boundaries = self._anchored_order + [len(self._children)]
+        # The trailing bookmark ends of an element the walk did not reach.
+        orphaned_trails: dict[int, list[int]] = {}
         for origin in boundaries:
             between = list(range(previous + 1, origin))
+            trail = self._closes_above(previous, between)
+            if trail:
+                between = between[len(trail):]
+                if previous in self._position:
+                    self._trails[previous] = trail
+                else:
+                    orphaned_trails[previous] = trail
             for index in between:
                 if self._is_stale_not_used(index, previous):
                     self._dropped.add(index)
@@ -1096,6 +1152,14 @@ class _Assembler:
                         leftover=origin not in self._position,
                         breaks=True,
                     )
+                )
+            if origin in orphaned_trails:
+                # Its bookmark start went with it; the end stays at its own
+                # place in the text — after the element's mark, so after the
+                # break that mark held (the holder's group, appended first,
+                # sorts first at the same position).
+                self._groups.append(
+                    _Group(position=origin + 0.5, members=orphaned_trails[origin])
                 )
 
     # -- placement ---------------------------------------------------------
@@ -1294,6 +1358,7 @@ class _Assembler:
                 by_gap.setdefault(group.gap, []).append(group)
         records: list[Record] = []
         emitted_tails: set[int] = set()
+        emitted_trails: set[int] = set()
         for gap in range(len(self.items) + 1):
             for group in by_gap.get(gap, ()):
                 records.extend(
@@ -1322,6 +1387,12 @@ class _Assembler:
                 # A holder still where its break belongs keeps the break.
                 record.pinned = True
             records.append(record)
+            if item.origin != NO_ORIGIN and item.origin not in emitted_trails:
+                emitted_trails.add(item.origin)
+                records.extend(
+                    Record(RECORD_CARRIED, i, owner=item.uid, trails=True)
+                    for i in self._trails.get(item.origin, ())
+                )
         records.extend(Record(RECORD_CARRIED, i) for i in self._trailing)
         return records, self._removed_records()
 
@@ -1659,8 +1730,6 @@ _TRACKED_WRAPPERS = frozenset(
 )
 _W_FLD_CHAR = qn("w:fldChar")
 _W_FLD_CHAR_TYPE = qn("w:fldCharType")
-_W_BOOKMARK_START = qn("w:bookmarkStart")
-_W_BOOKMARK_END = qn("w:bookmarkEnd")
 _W_NAME = qn("w:name")
 _ANNOTATION_TAGS = (
     qn("w:commentRangeStart"),
@@ -1853,6 +1922,9 @@ class _RedlineBuilder:
         #: Aligned with the body :meth:`render` returns: ``(change, uid)``
         #: for an element the redline marks as changed, else None.
         self.changes: list[tuple[str, str] | None] = []
+        #: Upload indexes of the bookmark ends that trail a MOVED element
+        #: (:meth:`_travelling`), set by :meth:`plan`.
+        self.travelling: set[int] = set()
         self.stats: dict = {
             "kept": 0,
             "spliced": 0,
@@ -1869,6 +1941,9 @@ class _RedlineBuilder:
             # when native moves are off: nothing was decided).
             "moves_native": 0,
             "moves_fallback": {},
+            # Bookmark ends that went, untracked, with a moved element whose
+            # bookmark they close (D-6).
+            "bookmark_ends_moved": 0,
         }
 
     # -- helpers -------------------------------------------------------------
@@ -1946,15 +2021,43 @@ class _RedlineBuilder:
                 self.stats["moves_added"] += 1
         return shared
 
+    def _travelling(self, records: list[Record], shared: set[int]) -> set[int]:
+        """The bookmark ends that go with a moved element, untracked.
+
+        A body-level bookmark end that closes a bookmark opened inside the
+        element above it trails that element (``Record.trails``), so when
+        the element moves, its end must move too — and markup between
+        paragraphs cannot be a tracked change. It needs none: it is part of
+        the moved element's bookmark, which D-6 already gives to the new
+        copy (the old copy gives up its start). So the end goes, as it is,
+        right after the new copy, and nothing is left at the old place.
+        Reject All then leaves it with no start (the start went with the
+        inserted copy), which ends nothing, and the self-check excludes the
+        bookmark by name like every other moved one. An end whose owner did
+        not move is left to the ordinary path, which refuses it by name."""
+        moved_owners = {
+            records[index].item.uid
+            for index in range(len(records))
+            if index not in shared
+            and records[index].item is not None
+            and records[index].source != NO_ORIGIN
+        }
+        return {
+            record.source
+            for index, record in enumerate(records)
+            if record.trails and index not in shared and record.owner in moved_owners
+        }
+
     def plan(self, records: list[Record], removed: list[Record]) -> list[Record]:
         """The redline's records in output order."""
         shared = self._shared(records)
+        self.travelling = self._travelling(records, shared)
         claimed = {records[i].source for i in shared}
         referenced = {r.source for r in records if r.source != NO_ORIGIN}
         removed_by_source = {r.source: r for r in removed}
         u_only: list[Record] = []
         for source in range(len(self.content)):
-            if source in claimed:
+            if source in claimed or source in self.travelling:
                 continue
             if source in removed_by_source:
                 u_only.append(removed_by_source[source])
@@ -2132,7 +2235,7 @@ class _RedlineBuilder:
         destinations: dict[int, int] = {}
         origins: dict[int, int] = {}
         for index, record in enumerate(ordered):
-            if not record.moved:
+            if not record.moved or record.source in self.travelling:
                 continue
             if record.kind in _REMOVED_KINDS:
                 origins[record.source] = index
@@ -2186,6 +2289,24 @@ class _RedlineBuilder:
         self._tracked(lambda: move_content(element, MOVE_TO, self.marks))
         return element, MOVE_TO
 
+    def _render_travelling(self, record: Record):
+        """A bookmark end that goes with its moved element (:meth:`_travelling`):
+        the upload's own element, untracked, and the name of the bookmark it
+        closes — a moved one (D-6)."""
+        self.stats["bookmark_ends_moved"] += 1
+        element = copy.deepcopy(self.content[record.source])
+        identifier = element.get(_W_ID)
+        name = next(
+            (
+                start.get(_W_NAME, "")
+                for child in self.content
+                for start in child.iter(_W_BOOKMARK_START)
+                if start.get(_W_ID) == identifier
+            ),
+            "",
+        )
+        return element, name
+
     def render(self, ordered: list[Record]) -> tuple[list, set[str]]:
         """The redline's body elements, and the bookmark names that moved
         with a new copy (the one documented Reject-All limit)."""
@@ -2217,6 +2338,12 @@ class _RedlineBuilder:
                     if record.moved
                     else (CHANGE_DELETED, self._uid_at(record.source))
                 )
+            elif record.moved and record.source in self.travelling:
+                element, name = self._render_travelling(record)
+                if name:
+                    moved_names.add(name)
+                rendered.append((element, None))
+                changes.append(None)
             elif record.moved:
                 element, flag = self._render_inserted(record)
                 moved_names |= _bookmark_names([element])

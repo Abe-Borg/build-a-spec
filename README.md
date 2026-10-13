@@ -2725,7 +2725,21 @@ The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Lin
   own check used to stop at it and refuse the file (`accept_check_failed`, or
   `reject_check_failed` for a moved copy). It now reaches past the bookmark's
   end, as Word does, and the export goes through. Moving a provision whose
-  own bookmark closes that way is still refused.
+  own bookmark closes that way now goes through too (next item).
+- **A whole-paragraph bookmark moves with its provision.** A bookmark that
+  takes in a whole paragraph, mark included, ends just after the paragraph.
+  That end used to stay where it was when the provision moved: moved down,
+  the bookmark ended before it began (Word drops it, and a cross-reference to
+  it breaks); moved up, or with a provision added right after it, the
+  bookmark stretched over provisions it never covered. *Export Word (keeps
+  your formatting)* now keeps the end right after its paragraph wherever the
+  paragraph goes, and a provision added after it lands outside it. The
+  redline on your original, which refused these moves (`untrackable_markup`
+  or `reject_check_failed`), now shows them: the bookmark goes with the moved
+  provision, as every moved provision's bookmarks do, and Reject All does not
+  restore it at the old place. Still refused, by name: moving a provision
+  whose bookmark opens just before its paragraph, outside it, and closes
+  inside it.
 - **Still rebuilt from its first run:** a hyperlink holding anything but
   runs, bookmarks and spelling marks — a field inside a link, a link inside
   a link — along with the other cases listed above.
@@ -2797,8 +2811,10 @@ Word run should check first.
   pairs the two halves of one move (real Word has yet to confirm how it shows
   them — the plan lists that first among the checks). A
   provision and its sub-provisions moved together, or a run of siblings
-  moved together, is one move. Moved-away text stays ordinary text, as in
-  Word's own files.
+  moved together, is one move — unless a bookmark taking in one of their
+  whole paragraphs ends between two of them: that end sits between
+  paragraphs, outside any move, so each side of it is a move of its own.
+  Moved-away text stays ordinary text, as in Word's own files.
 - **Word's own shape.** Each move's range opens inside its first paragraph,
   right after the paragraph's properties, and closes between paragraphs right
   after its last one, so every moved paragraph mark sits inside the range —

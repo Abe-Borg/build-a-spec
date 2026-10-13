@@ -47,6 +47,12 @@ Word splits text into runs — the one thing it re-does on every save anyway:
 * a bookmark is compared by NAME (ids are file-local), and the caller may
   exclude names — the one documented Reject-All limit: a moved provision's
   bookmarks stay with its new copy;
+* a bookmark END with no start in the body ends nothing — ECMA-376 Part 1
+  §17.13.6.1: Word ignores it and no bookmark is present — so it is not
+  compared. That is what Reject All leaves of a moved provision's bookmark
+  that takes in its whole paragraph: the start went with the inserted copy,
+  the end, between paragraphs, could not be tracked and stays. An end whose
+  start the body holds is compared where it is, before its start included;
 * range markup (bookmark, comment and permission ranges, proofing marks)
   right before a paragraph, outside it, is compared at the start of that
   paragraph: both are the paragraph's first position in the text, and
@@ -484,7 +490,12 @@ class _Canon:
             )
             return (tag, attributes, (), "")
         if tag == _W_BOOKMARK_END:
-            name = self.names.get(element.get(_W_ID, ""), "")
+            identifier = element.get(_W_ID, "")
+            if identifier not in self.names:
+                # An end with no start in the body ends nothing: Word ignores
+                # it (ECMA-376 Part 1 §17.13.6.1), so it is not compared.
+                return None
+            name = self.names[identifier]
             if name in self.excluded:
                 return None
             return (tag, (), (), name)

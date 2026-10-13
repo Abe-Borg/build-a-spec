@@ -2333,6 +2333,66 @@ not account for read as accounted for. Tests: `tests/test_qc_final_qc_v5.py`
 draft are in `docs/as-built.md` under the same heading. No paid API call was
 made.
 
+## Research findings quote their source and say when they apply — implemented notes (2026-10-13)
+
+Item 7 of step 9 of the prompt-review follow-up (owner: "then do 7, one
+PR"). Grounding proved a cited URL was retrieved, never that the page said
+what the item says, and a conditional rule had nowhere to put its
+condition but notes.
+
+- **Fields.** `ResearchItem.quote` (worker-written, folded to one line,
+  clamped at `QUOTE_MAX_CHARS` 400), `quote_source` (app-written only) and
+  `applies_when` (clamped at `APPLIES_WHEN_MAX_CHARS` 300). Neither enters
+  `_mint_item_id`. `to_dict` writes them only when set (`_item_payload`,
+  `_OPTIONAL_ITEM_FIELDS`), so a profile from before them keeps its bytes —
+  the QC `requirements_research` fingerprint and the chat's cached project
+  block included. `from_dict` (`_quote_fields_from_raw`) keeps a
+  `quote_source` only when there is a quote and it is one of the item's own
+  `accepted_sources`.
+- **Schema.** `quote` and `applies_when` are required nullable strings on
+  the submit tool's item (no length constraint: the strict-schema
+  convention); `_RESEARCH_PROTOCOL_BLOCK` says how to fill both. The
+  governing_codes briefs (both modules) put the adoption condition in
+  `applies_when`.
+- **The check** (`backend/research/quotes.py`), once per area right after
+  grounding in `_run_dimension`, over `all_responses` (the conversation the
+  model saw — never a restart's abandoned one): `fetched_page_texts` reads
+  each `web_fetch_tool_result` document (plain text; base64 PDF through
+  pypdf, first 300 pages, unreadable → unchecked), filed under the
+  result's URL AND its `server_tool_use`'s, paired across EVERY response (a
+  pause splits them; grounding accepts either URL — Codex review on PR #324);
+  `verify_item_quotes` looks only on the item's accepted sources;
+  `quote_found_in` folds case, whitespace, curly quotes/dashes, nbsp and
+  markdown marks, splits on `...`/`…`, and needs every fragment in order,
+  at least 20 characters in all. Search results are encrypted: never
+  checkable. Fetched text is cut at `max_content_tokens`, so the clip can
+  only turn a match into not found.
+- **Merge.** `_confirm_item`: `applies_when` keeps the prior unless blank;
+  `_merged_quote` moves the quote with its source — a fresh found quote
+  replaces an unfound prior, otherwise the prior stays and a blank fills.
+- **Readers.** `_render_item_line` adds `Applies when:` to the details and a
+  second line `    Quote (found on <url>|not found on a fetched page): "…"`
+  (`QUOTE_NOT_FOUND_LABEL`), each only when set; `_established_fact_line`
+  adds the condition only. `_profile_view` carries all three;
+  `ResearchReportModal` shows them (`lib/researchQuote`). The redline's
+  research comment adds `Applies when:` and, only when found, `Source text:`.
+  `_RESEARCH_POLICY` (chat) and the completeness and code_compliance lens
+  briefs say how to read them; none of it ever enters the specification.
+- **Not changed.** `QCRequirementDisposition` does not snapshot the
+  condition (the lens's note says why a requirement is not applicable).
+- **Bytes and cost.** The research system prompt and tool schema change
+  (research caches live within a round); the chat's stable prompt changes
+  once; lens briefs are in the QC manifest, so retained Final QC results
+  read stale once. Each item's output grows by its quote and condition,
+  billed as output; how often real pages yield a found quote is unmeasured.
+
+Never let a worker set `quote_source`, never look for a quote outside the
+item's own accepted sources' fetched text, never present an unfound quote as
+the source's words, and never serialize an empty field. Tests:
+`tests/test_research_quotes.py`, `frontend/tests/researchQuote.test.ts`.
+Full record, reversion evidence and the release-note draft are in
+`docs/as-built.md` under the same heading. No paid API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

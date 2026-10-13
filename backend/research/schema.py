@@ -80,7 +80,9 @@ REQUIREMENTS_RESEARCH_SCHEMA: dict[str, Any] = {
                     "actionability",
                     "authority",
                     "code_reference",
+                    "applies_when",
                     "source_urls",
+                    "quote",
                     "confidence",
                     "notes",
                 ],
@@ -120,6 +122,18 @@ REQUIREMENTS_RESEARCH_SCHEMA: dict[str, Any] = {
                         "type": ["string", "null"],
                         "description": "Code/standard section citation when one exists.",
                     },
+                    "applies_when": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "The condition under which this requirement "
+                            "governs a project, stated as a condition: "
+                            "'only where the AHJ has adopted the 2024 IFC', "
+                            "'only for buildings over 75 ft', 'only for "
+                            "alterations of existing systems'. Null when it "
+                            "governs the project described without "
+                            "condition."
+                        ),
+                    },
                     "source_urls": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -127,6 +141,17 @@ REQUIREMENTS_RESEARCH_SCHEMA: dict[str, Any] = {
                             "URLs of sources retrieved in this conversation "
                             "that support the requirement. Never cite a URL "
                             "you did not actually retrieve."
+                        ),
+                    },
+                    "quote": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "The sentence or two that state this "
+                            "requirement, copied word for word from a page "
+                            "you fetched in this conversation and cited in "
+                            "source_urls (mark a gap with '...'). Null when "
+                            "no fetched page states it — a search result "
+                            "alone cannot be quoted. Never paraphrase here."
                         ),
                     },
                     "confidence": {

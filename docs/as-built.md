@@ -24595,6 +24595,252 @@ recording, the Project facts panel and the Harvest facts review sheet.
 Older builds cut a longer statement to 240 when they open the project, so
 keep every section of a project on this release or later."
 
+## Research findings quote their source and say when they apply — implemented notes (2026-10-13)
+
+Item 7 of step 9 of the prompt-review follow-up (owner: "do all of A (one
+PR). do 6, 8, one PR. then do 7, one PR."). The outside review's point: a
+research item restated a requirement in the worker's words, and "grounded"
+proved only that a cited URL had been retrieved — not that the page said
+what the item says. And a conditional rule (an adoption that governs only
+after a permit date, a requirement only for alterations) had nowhere to put
+its condition but `notes`, which nothing downstream reads as scope.
+
+### The fields
+
+`ResearchItem` gains three, last in field order:
+
+- `quote` — the passage the worker copied, word for word, from a page it
+  fetched. Worker-written; `_clean_item_text` folds it to one line and
+  clamps it at `QUOTE_MAX_CHARS` (400) with a "…" mark (the strict-schema
+  convention forbids length constraints, so the clamp is at parse time).
+- `quote_source` — the accepted source whose fetched text was found to
+  contain the quote; "" when not found or not checkable. App-written only:
+  `_items_from_payload` never reads one from the payload, and
+  `verify_item_quotes` resets it before checking.
+- `applies_when` — the condition under which the item governs; "" when
+  unconditional or found before the field existed. Clamped at
+  `APPLIES_WHEN_MAX_CHARS` (300).
+
+None enters `_mint_item_id`, so ids, the merge key and every `[r-…]`
+citation are unchanged. `quote_found` is `quote and quote_source`.
+
+**Bytes.** `RequirementsProfile.to_dict` now writes each item through
+`_item_payload`, which drops the three fields when empty
+(`_OPTIONAL_ITEM_FIELDS`). A profile saved before them therefore serializes
+byte for byte as it did, and so does everything hashed or rendered from it:
+the QC manifest's `requirements_research` fingerprint (`profile_fingerprint`
+over `to_dict`), the chat's cached project block, the QC lens and seat
+renders. `from_dict` reads them leniently through `_quote_fields_from_raw`
+with one consistency rule: a `quote_source` survives only beside a quote
+and only when it is one of the item's own `accepted_sources` — a record
+claiming otherwise did not come from the check.
+
+### The schema and the protocol
+
+The submit tool's item requires `applies_when` (after `code_reference`) and
+`quote` (after `source_urls`), both `["string", "null"]`. The descriptions
+and two new `<output>` lines in `_RESEARCH_PROTOCOL_BLOCK` say: state a
+condition in `applies_when`, never only in notes, null when the item
+governs the project described without condition; copy `quote` word for word
+from a page fetched with web_fetch and cited in `source_urls`, mark a gap
+with "...", null when no fetched page states it (a search result alone
+cannot be quoted), never paraphrase, never from memory — and that the quote
+is checked and the reader told whether it was found. The governing_codes
+dimension brief in both modules now says "Report these as conditional
+rules, with the condition in applies_when".
+
+### The check
+
+`backend/research/quotes.py`, called once per area in `_run_dimension`
+right after the grounding loop, over `all_responses` — the conversation the
+model actually saw, the same set grounding pools (a conversation a restart
+abandoned is billed but never grounds or quotes anything). The fetched text
+exists only there: nothing persists it.
+
+- `fetched_page_texts(responses)` → `{normalized url: text}`. A
+  `web_fetch_tool_result` whose content is a `web_fetch_result` carries a
+  `document`: a plain-text source is read directly, a base64 PDF through
+  pypdf (first `_PDF_MAX_PAGES` = 300 pages; an unreadable PDF is logged
+  and simply not checked). The URL is the result's own, else its
+  `server_tool_use`'s input, paired by `tool_use_id` across EVERY response,
+  because a `pause_turn` can leave a call in one response and its result in
+  the next (`elide_web_results` pairs the same way). Error results and
+  documents without text are skipped; a page fetched twice keeps both texts.
+- `quote_found_in(quote, page)`: both sides fold (`_FOLD`: curly quotes and
+  dashes to ASCII, nbsp to space, markdown `* _ \` #` removed; casefold;
+  whitespace collapsed); the quote splits on `...`/`…` into fragments, each
+  stripped of surrounding quotation marks; every fragment must appear in
+  order, and the fragments together must reach `_MIN_QUOTE_CHARS` (20), so
+  "sprinklers" is never a quote. Paraphrase does not match — that is the
+  point.
+- `verify_item_quotes(items, responses)`: for an item with a quote and
+  accepted sources, looks only at the item's own accepted sources' fetched
+  text (folded once per page) and records the first that matches. A quote
+  found on a page the conversation read but the item did not cite does not
+  support the item's citation, so it stays not found.
+
+Two limits are structural, not bugs: search results are encrypted
+(`encrypted_content`), so a quote taken from a snippet can never be checked;
+and fetched text is cut at the fetch tool's `max_content_tokens` (50k, 9k
+past the near-window clip), so the cut can only turn a real match into not
+found, never the reverse.
+
+### The merge
+
+`_confirm_item` (a later round, or a project brief, re-finding an item):
+`applies_when` keeps the prior unless blank. `_merged_quote` moves the
+quote WITH its source — never one occurrence's passage beside the other's
+URL — and only strengthens: a fresh found quote replaces an unfound prior;
+otherwise the prior stays (found or not), and a blank prior fills from the
+fresh one. The brief merge (`merge_research_profiles`) goes through
+`_confirm_item`, so it follows.
+
+### The readers
+
+- `_render_item_line` (the chat's cached research block, Final QC's lens and
+  seat renders): `Applies when: …` joins the details after `Ref:`, and a
+  quote gets a second line, `    Quote (found on <url>): "…"` or
+  `    Quote (not found on a fetched page): "…"`
+  (`QUOTE_NOT_FOUND_LABEL`). Each appears only when set, so an item without
+  them renders byte for byte (pinned). `research_context_block`'s cap
+  still trims whole items; a quote adds at most about 100 tokens to one.
+- `_established_fact_line` (a later round's brief) adds the condition only:
+  that block is re-billed on every request of the round and the researcher
+  cannot act on the quote.
+- `research/runner._profile_view` carries all three to the drawer;
+  `ResearchReportModal` shows "Applies when:" and the quote as a blockquote
+  labelled **Found on <host>** (green) or **Not found on a fetched page**
+  (amber) through `lib/researchQuote` (`QUOTE_NOT_FOUND` is pinned to the
+  backend label). `types.ts` gains the optional fields.
+- The redline on the original (`redline_basis._research_paragraphs`) adds
+  `Applies when: …` and, only when found, `Source text: "…"`. An unfound
+  quote is the research's claim about a page and never goes in front of a
+  client as the page.
+- The chat's `_RESEARCH_POLICY` gains two bullets: draft to a conditional
+  item only where the project's facts meet the condition, else ask or leave
+  the provision out and track the question, and never write the condition
+  into the specification as narration (a scope qualifier stays); read a
+  found quote before drafting a value or threshold, and when quote and
+  summary disagree the quote wins and the chat says so; an unfound quote is
+  no stronger than the summary and is never presented as the source's
+  words; a quote is evidence, never specification text. The pinned
+  "grounded is not governing" bullet is untouched.
+- Final QC: the completeness brief marks a line carrying "Applies when"
+  not_applicable when `<established_project_facts>` show the condition is
+  not met, and missing when they do not settle it unless an
+  `<open_followups>` item tracks it; the code_compliance brief checks the
+  draft's values against a found quote and treats an unfound one as no
+  stronger than the summary.
+
+**Not changed.** `QCRequirementDisposition` does not snapshot the condition
+(the lens's note says why a requirement is not applicable); the coverage
+table, readiness, the QC protocol and report schema, the SSE protocol, and
+the research budgets, ceilings and request layout. The submission path is
+unchanged beyond the item schema.
+
+### Bytes and cost
+
+- The research system prompt (protocol block) and the submit tool's input
+  schema change: research cache lineages live within a round, so nothing
+  carries over.
+- The chat's stable prompt changes: every open session rewrites its cached
+  prefix once after upgrade.
+- Lens briefs are hashed into the QC manifest: every retained Final QC
+  result reads stale once (the same release as steps 6, 7 and group B).
+- Each item's output grows by its quote and condition, billed as research
+  output. Unmeasured; the 32k submission ceiling is far above a round's
+  usual payload.
+
+### Tests
+
+`tests/test_research_quotes.py` (20): the schema; the parse's fold, clamps
+and null handling and that the worker cannot set `quote_source`; the match
+through copying artefacts and marked gaps, and its refusal of paraphrase,
+reordering, scraps and empties; page text from plain text and a
+hand-built PDF (`tests/test_reference_docs._pdf_bytes`), errors and
+document-less results skipped, an unreadable PDF unchecked, a fetch split
+across two responses paired; only accepted sources counting and a stale
+source reset; a full round through `run_requirements_research` (found;
+fetched but not cited; search only; a condition) that survives save/load;
+a legacy profile's item bytes, round-trip and fingerprint, and its render
+and established-facts line pinned to the old strings; serialization only
+when set and the load's consistency rule; the render's two shapes; the
+merge's five cases; the drawer view; the redline's found/unfound/legacy
+paragraphs; the research protocol, both modules' briefs, the chat policy
+and both QC briefs. `tests/fakes.fetch_blocks` gains `text=`, `pdf=` and
+`echo_url=` (the default shape is unchanged). Frontend:
+`tests/researchQuote.test.ts` (5), registered in `package.json`.
+
+**Reversion evidence** (each reverted alone, the new file run, restored):
+
+| Reverted | Result |
+| --- | --- |
+| `quote` not required by the schema | red |
+| `applies_when` not required by the schema | red |
+| the quote not clamped at parse | red |
+| `applies_when` dropped at parse | red |
+| verification not wired into the round | red |
+| any fetched page counting, not the item's accepted sources | red |
+| a stale `quote_source` kept | red |
+| no pairing of a fetch's call and result across responses | red |
+| fetched PDFs not read | red |
+| curly quotes not folded | red |
+| the match case-sensitive | red |
+| markdown marks kept | red |
+| no ellipsis gaps | red |
+| fragment order ignored | red |
+| no minimum length | red |
+| every field serialized (`asdict`) | red |
+| a forged `quote_source` kept on load | red |
+| the condition missing from the render | red |
+| the quote line always rendered | red |
+| an unfound quote rendered as found | red |
+| the condition missing from the established-facts line | red |
+| the merge: fresh quote always wins | red |
+| the merge: a found prior losing to a found fresh quote | red |
+| the merge: a blank prior never filling | red |
+| the merge: the fresh condition winning | red |
+| the drawer view without the quote | red |
+| the redline showing an unfound quote | red |
+| the redline without the condition | red |
+| the protocol's quote line | red |
+| the protocol's condition line | red |
+| the hyperscale brief's `applies_when` | red |
+| the generic brief's `applies_when` | red |
+| the chat's condition bullet | red |
+| the chat's quote bullet | red |
+| the completeness brief's condition sentence | red |
+| the code_compliance brief's quote sentence | red |
+| frontend: every quote labelled found | red |
+| frontend: the not-found words drifting from the backend's | red |
+| frontend: the report without the label | red |
+| frontend: the report without "Applies when:" | red |
+
+40/40, plus one probe not observable by design: dropping the explicit
+`web_fetch_tool_result_error` skip changes nothing, because an error result
+carries neither a URL nor a document and is skipped anyway (the line stays
+as the explicit statement). Ruff clean; the touched backend test files,
+`npm test` (590) and `npm run build` pass. No paid API call was made: how
+often real pages yield a found quote, and how often workers fill
+`applies_when`, are unmeasured until the owner runs a round.
+
+**Review fix (Codex, PR #324).** A fetch whose result reports a different
+URL from the one asked for (a redirect, a canonical URL) filed its text
+under the result's URL only, while grounding accepts both — so an item
+citing the requested URL was grounded but its quote read not found.
+`fetched_page_texts` now files the text under both normalized URLs. Pinned
+by `test_a_redirected_fetch_is_found_under_either_url`; filing under one
+URL again turns it red.
+
+**Release-note draft:** "Research findings now carry the passage of the
+source that states them, checked against the page the research actually
+read — the findings report marks each Found on the site or Not found on a
+fetched page — and say when a requirement applies only under a condition,
+such as an adoption date or alterations only. The assistant drafts a
+conditional requirement only where your project meets the condition, and
+Final QC reads both. Findings from earlier rounds are unchanged; saved
+Final QC reviews ask for a re-run."
+
 ## A deleted link before a body-level bookmark end passes the redline's self-check — implemented notes (2026-10-13)
 
 Owner report (Abraham): "Export Word - Tracked Changes ON" refused a section

@@ -1285,6 +1285,13 @@ export interface ResearchItemView {
    *  rounds accumulated. */
   research_date?: string;
   round_index?: number;
+  /** Item 7 (2026-10-13): the condition under which the finding governs
+   *  ("" = unconditional, or found before the field existed); the passage
+   *  the research copied from a fetched page; and the source it was found
+   *  on ("" = not found on any of the item's fetched sources). */
+  applies_when?: string;
+  quote?: string;
+  quote_source?: string;
 }
 
 export interface ResearchDimensionView {

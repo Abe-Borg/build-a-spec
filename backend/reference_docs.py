@@ -546,7 +546,12 @@ project requires.
 # frame it happened to be rendering would leave the other one open, which is
 # exactly the hole this guard exists to close.
 _BLOCK_TAG_PATTERN = re.compile(
-    r"<\s*/?\s*attached_reference_documents?\s*>", re.IGNORECASE
+    # Attributes included: a tag carrying one still closes or opens the
+    # frame to a reader (Codex review on PR #306). The name must end at
+    # whitespace, "/" or ">" (``(?=[\s/>])``), not at a word boundary:
+    # "<attached_reference_document-note>" is another tag and passes through
+    # byte for byte (Codex review on PR #314).
+    r"<\s*/?\s*attached_reference_documents?(?=[\s/>])[^>]*>", re.IGNORECASE
 )
 
 # The chat loop's single-document frame. Defined here, beside the pattern

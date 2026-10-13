@@ -457,7 +457,9 @@ def test_a_rolled_back_turn_puts_the_provision_back(monkeypatch):
 
 
 def test_the_writing_policy_relocates_in_one_operation():
-    assert writing_policy.WRITING_POLICY_VERSION == 2
+    # The relocation rule arrived in version 2; the exact version is pinned
+    # with its hash in tests/test_writing_policy.py.
+    assert writing_policy.WRITING_POLICY_VERSION >= 2
     core = " ".join(writing_policy.core_text().split())
     assert "re-add its subparagraphs under the returned id" not in core
     assert (

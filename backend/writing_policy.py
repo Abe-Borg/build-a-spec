@@ -51,6 +51,12 @@ nobody re-opens them by accident:
   Final QC's op vocabulary has no ``relocate``: a QC fix may still relocate
   a leaf provision as add plus delete, and one that relocates nested
   content stays advisory (``spec_doc.obligations``).
+- Version 3 (2026-10-13, step 6): "Directives only" read as banning
+  definitions, REFERENCES entries, schedules, product criteria and scope
+  statements, all ordinary specification text; the voice rule now bans
+  commentary, not statements. And a qualifier that defines where a
+  requirement applies is scope to keep, which the "never explain where a
+  requirement comes from or why it applies" rule could be read to strike.
 """
 from __future__ import annotations
 
@@ -59,7 +65,7 @@ from dataclasses import dataclass
 from typing import Any
 
 WRITING_POLICY_ID = "spec-writing"
-WRITING_POLICY_VERSION = 2
+WRITING_POLICY_VERSION = 3
 WRITING_POLICY_LABEL = f"{WRITING_POLICY_ID}/{WRITING_POLICY_VERSION}"
 
 
@@ -175,12 +181,15 @@ SECTIONS: tuple[PolicySection, ...] = (
             "Contractor reads every word of it as a requirement, so it is "
             "never a place to talk to the user, explain yourself, or hold a "
             "place for something unknown.",
-            "Directives only. Each provision tells the Contractor what to "
-            "provide, install, submit, test, or coordinate (\"Provide…\", "
-            "\"Install…\", \"Submit…\", \"… shall …\"), in short, active "
-            "sentences in the template's style. State the requirement — "
-            "never the reason for it, the history behind it, or who decided "
-            "it.",
+            "Requirements, never commentary. A provision that directs work "
+            "tells the Contractor what to provide, install, submit, test, or "
+            "coordinate (\"Provide…\", \"Install…\", \"Submit…\", \"… shall "
+            "…\"), in short, active sentences in the template's style. "
+            "Definitions, REFERENCES entries, schedules, product properties "
+            "and criteria, and scope statements (\"This Section includes…\") "
+            "are specification text too, written as plain statements; none "
+            "needs an imperative. State the requirement — never the reason "
+            "for it, the history behind it, or who decided it.",
             "Never \"should\" — write \"shall\" or the imperative — and never "
             "\"in order to\": a reason does not belong in the text.",
             "Keep obligations (\"shall\", the imperative), permissions "
@@ -207,6 +216,9 @@ SECTIONS: tuple[PolicySection, ...] = (
             "requirement, a reference to the Drawings or to a submittal, or "
             "the clause left out until the answer arrives. Then ask for the "
             "value with track_followups.",
+            "A qualifier that defines where a requirement applies (\"in data "
+            "halls\", \"where piping passes through rated assemblies\") is "
+            "scope, not explanation: keep it.",
             "Never explain where a requirement comes from or why it applies. "
             "Do not narrate a code amendment, an adoption, a research "
             "finding, an owner standard, or an insurer requirement "

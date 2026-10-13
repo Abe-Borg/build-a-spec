@@ -7,11 +7,15 @@ Final QC reviews against it. The rules themselves live in
 how they were reconciled with the code that existed before them, where they
 are wired in, what they cannot do, and what has and has not been measured.
 
-Policy `spec-writing/2`. Version 1 was written 2026-10-06 from the owner's
+Policy `spec-writing/3`. Version 1 was written 2026-10-06 from the owner's
 coding-agent brief ("Integrate a shared, versioned writing policy into
 drafting and Final QC"); version 2 (2026-10-13, step 5 of the prompt-review
 follow-up) made a relocation one `relocate` operation, so a provision's
-subparagraphs can no longer be lost between two batches.
+subparagraphs can no longer be lost between two batches; version 3
+(the same day, step 6) made the voice rule ban commentary rather than
+statements — definitions, REFERENCES entries, schedules, product criteria and
+scope statements are specification text — and kept a qualifier that defines
+where a requirement applies as scope.
 
 ## What the policy says
 
@@ -37,6 +41,9 @@ Seven groups of rules, rendered as one block:
    drafting prompt), plus obligations/permissions/advice kept distinct, no
    mechanical "shall"/"furnish"/"provide" rewrites, vague language replaced
    only with supplied criteria, no trade assignments without authority.
+   Since version 3: requirements, never commentary — statements such as
+   definitions, schedules and scope need no imperative — and a qualifier
+   that defines where a requirement applies is scope to keep.
 5. **One authoritative requirement.** State it once; coordinate by
    reference; not every product needs its own submittal or execution
    provision; compare conditions before removing a duplicate.

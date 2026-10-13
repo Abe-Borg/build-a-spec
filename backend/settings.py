@@ -1,9 +1,10 @@
 """Runtime settings for Build-a-Spec.
 
 Model ids mirror Spec Critic's current stack (``api_config.py`` in the
-Claude-Spec-Critic repo): Sonnet 5.5 for interactive interview/drafting turns,
-Opus 5.5 for Final QC's lenses and grouping (its verifier seats run on Sonnet
-5.5), and Haiku 5.5 for bounded project-fact extraction.
+Claude-Spec-Critic repo), adapted since: Opus 5.5 for interactive
+interview/drafting turns (since 2026-10-13; Sonnet 5.5 before) and for Final
+QC's lenses and grouping, Sonnet 5.5 for research and Final QC's verifier
+seats, and Haiku 5.5 for bounded project-fact extraction.
 Every value is env-overridable with the same degrade-gracefully posture as
 Spec Critic — a bad value falls back to the default rather than crashing.
 
@@ -57,7 +58,21 @@ MODEL_OPUS_5 = "claude-opus-5"
 # BUILD_A_SPEC_QC_MODEL override on it are still priced and strict.
 MODEL_OPUS_55 = "claude-opus-5-5"
 
-INTERVIEW_MODEL_DEFAULT = MODEL_SONNET_55
+# The chat interview runs on Opus 5.5 at INTERVIEW_EFFORT ("medium") — owner
+# decision, 2026-10-13, a trial the owner may reverse (Sonnet 5.5 from
+# 2026-09-29). Anthropic documents Opus 5.5 as much less likely to state a
+# figure or cite a source its inputs don't support, more detail-oriented on
+# long inputs, and a clearer writer: the qualities a specification turn
+# rests on. Every token class costs twice Sonnet 5.5's. Three things follow
+# this setting and move with it: the two whole-section passes (at
+# DRAFT_PASS_EFFORT, "high"), the condensing summary (a fork of the chat's
+# cached request, so it must share its model; it thinks at COMPACTION_EFFORT,
+# "high", through PER_MESSAGE_EFFORT_MODELS, which lists Opus 5.5) and AI
+# template generalization. None of the chat's request shapes is Sonnet-only:
+# the chat never forces a tool and never disables thinking, and its committed
+# history carries no thinking blocks, so switching models loses no reasoning.
+# BUILD_A_SPEC_INTERVIEW_MODEL=claude-sonnet-5-5 restores the previous model.
+INTERVIEW_MODEL_DEFAULT = MODEL_OPUS_55
 INTERVIEW_MODEL = (
     os.environ.get("BUILD_A_SPEC_INTERVIEW_MODEL", "").strip()
     or INTERVIEW_MODEL_DEFAULT
@@ -818,7 +833,7 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 # are the app's only one-hour writes today (v1.8.0), and Chunk 4.2 puts the
 # interview on them too.
 #
-# Opus 5.5 ($4/$20) is the Final-QC model; Opus 5 ($5/$25) and Fable 5
+# Opus 5.5 ($4/$20) is the chat's and Final QC's lens model; Opus 5 ($5/$25) and Fable 5
 # ($10/$50) are retained because BUILD_A_SPEC_QC_MODEL can still select them. Web search bills
 # $10 / 1,000 requests ($0.01 each); web fetch has no per-request fee (token
 # cost only). Keep this current when Anthropic's list pricing moves.

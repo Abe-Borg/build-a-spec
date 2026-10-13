@@ -67,7 +67,7 @@ def test_empty_usage_is_a_noop_and_does_not_count_a_turn():
 
 
 def test_estimate_math_is_golden_against_pricing():
-    # Sonnet 5.5 (interview): $2/M in, $10/M out, $0.10/M cache-read; web $0.01.
+    # Opus 5.5 (interview): $4/M in, $20/M out, $0.20/M cache-read; web $0.01.
     ledger = UsageLedger()
     ledger.add(
         "interview",
@@ -79,11 +79,11 @@ def test_estimate_math_is_golden_against_pricing():
         },
     )
     snap = ledger.snapshot()
-    # 2.0 + 2.0 + 0.1 + 0.05 = 4.15
-    assert snap["estimated_cost_usd"]["by_category"]["interview"] == 4.15
-    assert snap["estimated_cost_usd"]["total"] == 4.15
-    # Cache saved = 1e6 * (2e-6 - 0.10e-6) = 1.9
-    assert snap["cache_saved_usd"] == 1.9
+    # 4.0 + 4.0 + 0.2 + 0.05 = 8.25
+    assert snap["estimated_cost_usd"]["by_category"]["interview"] == 8.25
+    assert snap["estimated_cost_usd"]["total"] == 8.25
+    # Cache saved = 1e6 * (4e-6 - 0.20e-6) = 3.8
+    assert snap["cache_saved_usd"] == 3.8
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +97,8 @@ def test_estimate_math_is_golden_against_pricing():
 
 
 def test_estimated_output_is_priced_at_the_output_rate():
-    # Sonnet 5 output is $10/M. 200k reported + 100k estimated = 300k at
-    # $10/M = 3.0, on top of 1M input at $2/M.
+    # Opus 5.5 (interview) output is $20/M. 200k reported + 100k estimated =
+    # 300k at $20/M = 6.0, on top of 1M input at $4/M.
     ledger = UsageLedger()
     ledger.add(
         "interview",
@@ -109,7 +109,7 @@ def test_estimated_output_is_priced_at_the_output_rate():
         },
     )
     snap = ledger.snapshot()
-    assert snap["estimated_cost_usd"]["by_category"]["interview"] == 5.0
+    assert snap["estimated_cost_usd"]["by_category"]["interview"] == 10.0
     # Disclosed, and the two counters stay separate in the bucket.
     assert snap["includes_estimated_output"] is True
     assert snap["totals"]["output_tokens"] == 200_000
@@ -157,8 +157,8 @@ def test_a_stopped_turns_estimate_reaches_the_session_meter(monkeypatch):
     assert usage["includes_estimated_output"] is True
     # The flag never became a counter on the way through the ledger.
     assert "usage_estimated" not in interview
-    # 1000 in @ $2/M + (4 + 496) out @ $10/M = 0.002 + 0.005
-    assert usage["estimated_cost_usd"]["by_category"]["interview"] == 0.007
+    # 1000 in @ $4/M + (4 + 496) out @ $20/M = 0.004 + 0.01
+    assert usage["estimated_cost_usd"]["by_category"]["interview"] == 0.014
 
 
 # ---------------------------------------------------------------------------
@@ -394,8 +394,8 @@ def test_interview_turn_adds_to_ledger(monkeypatch):
     assert usage["categories"]["interview"]["input_tokens"] == 1200
     assert usage["categories"]["interview"]["output_tokens"] == 400
     assert usage["categories"]["interview"]["web_search_requests"] == 2
-    # Estimated: 1200*2e-6 + 400*10e-6 + 2*0.01 = 0.0024 + 0.004 + 0.02
-    assert usage["estimated_cost_usd"]["total"] == round(0.0024 + 0.004 + 0.02, 6)
+    # Estimated (Opus 5.5): 1200*4e-6 + 400*20e-6 + 2*0.01 = 0.0048 + 0.008 + 0.02
+    assert usage["estimated_cost_usd"]["total"] == round(0.0048 + 0.008 + 0.02, 6)
 
 
 def test_failed_turn_still_adds_spend(monkeypatch):

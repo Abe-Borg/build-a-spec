@@ -8,8 +8,9 @@ now"), never a question or a fill-in-the-blank template.
 
 Where the chips travel (since the chips-in-the-reply change, 2026-10-06)
 -----------------------------------------------------------------------
-They used to be a ``suggest_prompts`` tool call. On Claude Sonnet 5.5 the
-reply has to come AFTER the last tool call (P55-2), so every turn paid one
+They used to be a ``suggest_prompts`` tool call. On Claude Sonnet 5.5 (and
+Opus 5.5, the chat's model since 2026-10-13) the reply has to come AFTER the
+last tool call (P55-2), so every turn paid one
 extra request whose only new content was ``{"suggested": N}`` — a full
 re-read of the request for nothing. Now the model ends its closing message
 with ONE fixed, tagged block::

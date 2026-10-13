@@ -419,16 +419,16 @@ function DataFlowDiagram() {
           Anthropic API
         </text>
         <text x="412" y="96" {...small}>
-          Claude Sonnet 5.5
-        </text>
-        <text x="412" y="112" {...faint}>
-          interview · research · QC verifiers
-        </text>
-        <text x="412" y="136" {...small}>
           Claude Opus 5.5
         </text>
+        <text x="412" y="112" {...faint}>
+          interview · Final QC lenses
+        </text>
+        <text x="412" y="136" {...small}>
+          Claude Sonnet 5.5
+        </text>
         <text x="412" y="152" {...faint}>
-          Final QC lenses only
+          research · QC verifiers
         </text>
         <text x="412" y="176" {...small}>
           Claude Haiku 5.5
@@ -632,11 +632,18 @@ function Dossier() {
           head={["Job", "Model", "Why"]}
           rows={[
             [
-              "Interview, drafting, research, Final QC verifier seats",
+              "Interview and drafting",
+              <>
+                Claude Opus 5.5 <Mono>(claude-opus-5-5)</Mono>
+              </>,
+              "Chosen for what a specification turn rests on: its maker documents it as much less likely to state a figure or cite a source its inputs don't support, more detail-oriented on long inputs, and a clearer writer. Reasoning effort is “medium” for the interview and “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”). Template AI Generalize and conversation condensing use this model too; condensing writes its summary at “high”. It costs twice Claude Sonnet 5.5 per token, and the interview's own model setting puts the chat back on Sonnet 5.5.",
+            ],
+            [
+              "Research and Final QC verifier seats",
               <>
                 Claude Sonnet 5.5 <Mono>(claude-sonnet-5-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “medium” for the interview, “high” for the two whole-section passes (“Draft full section” and “Adapt imported draft”), and “medium” for research by default, following Sonnet 5.5's recalibrated effort scale. Template AI Generalize and conversation condensing use this model too; condensing writes its summary at “high”. Final QC's verifier seats run on it at “medium”: each one judges a single finding with the whole section in view, and its own model setting lets you put the seats back on Opus.",
+              "Strong enough to run the research fan-out at half Opus's price, with reasoning effort “medium” by default, following Sonnet 5.5's recalibrated effort scale. Final QC's verifier seats run on it at “medium”: each one judges a single finding with the whole section in view, and its own model setting lets you put the seats back on Opus.",
             ],
             [
               "Project-fact harvest",
@@ -650,7 +657,7 @@ function Dossier() {
               <>
                 Claude Opus 5.5 <Mono>(claude-opus-5-5)</Mono>
               </>,
-              "A stronger reasoning model than the one that drafts, chosen for the part of the pass that has to catch what the drafter missed — the five lenses that read the whole section cold, and the step that groups their duplicate findings. It is measurably good at finding real defects without inventing them. It never touches the interview loop.",
+              "The app's strongest reasoning model, chosen for the part of the pass that has to catch what the drafter missed — the five lenses that read the whole section cold, and the step that groups their duplicate findings. It is measurably good at finding real defects without inventing them. The chat drafts on the same model by default, but no lens sees the conversation that produced the draft: each reads the finished section fresh, through one review focus.",
             ],
           ]}
         />
@@ -817,7 +824,7 @@ function Dossier() {
               your message without the tags.
             </>
           }
-          model="Claude Sonnet 5.5, effort “medium” (a whole-section pass runs at “high” — see the next card)."
+          model="Claude Opus 5.5, effort “medium” (a whole-section pass runs at “high” — see the next card)."
           bounds={
             <>
               At most 8 web searches and 4 fetches per round; a hard ceiling of
@@ -854,7 +861,7 @@ function Dossier() {
           sent="Identical to a normal turn."
           model={
             <>
-              Claude Sonnet 5.5 — one ordinary turn, but every round of it at
+              Claude Opus 5.5 — one ordinary turn, but every round of it at
               effort “high” rather than the interview’s “medium”: a whole-section
               pass is the longest multistep turn in the app, and the model
               maker’s guidance moves longer tool work up a level. The application
@@ -1323,7 +1330,7 @@ function Dossier() {
               prompt cache once and re-read from there by every agent in the run.
             </>
           }
-          model="Claude Sonnet 5.5, only when it chooses to open one during a turn you started."
+          model="Claude Opus 5.5, only when it chooses to open one during a turn you started."
           bounds={
             <>
               The model is instructed never to paste reference wording into a
@@ -1361,7 +1368,7 @@ function Dossier() {
               costs essentially nothing on every subsequent turn.
             </>
           }
-          model="Claude Sonnet 5.5, within the turn you started."
+          model="Claude Opus 5.5, within the turn you started."
           bounds="A figure is an exhibit. The model is instructed never to place a normative requirement only in a figure — enforceable words live in a provision."
         />
 
@@ -1383,7 +1390,7 @@ function Dossier() {
             </>
           }
           sent="A tiny payload of text at the end of the reply, replaced wholesale each turn. It stays with that reply in the stored conversation, so the model sees what it offered last time."
-          model="Claude Sonnet 5.5, inside the turn."
+          model="Claude Opus 5.5, inside the turn."
           bounds="Panel actions — research, QC, export, undo, save — are deliberately excluded from what a chip may propose."
         />
 
@@ -1702,7 +1709,7 @@ function Dossier() {
               arrive fresh with every message.
             </>
           }
-          model="Claude Sonnet 5.5 — the chat's own model and settings, with the summary itself written at effort “high” through a per-message instruction, so the chat's cached copy still reads."
+          model="Claude Opus 5.5 — the chat's own model and settings, with the summary itself written at effort “high” through a per-message instruction, so the chat's cached copy still reads."
           bounds={
             <>
               One summary at a time, at most 64,000 output tokens; after a
@@ -1955,8 +1962,8 @@ function Dossier() {
               turn is cheap; a full-section draft is one large turn; a research
               run is four long agents in parallel; and{" "}
               <b className="text-ink">Final QC is by far the most expensive
-              action</b> — a stronger model than the one that drafts, five
-              lenses, and two to three additional reviewers for every finding.
+              action</b> — five lenses on the app's strongest model, and two to
+              three additional reviewers for every finding.
             </>,
             <>
               <b className="text-ink">The meter is an estimate, computed

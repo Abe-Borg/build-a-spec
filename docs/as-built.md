@@ -23916,6 +23916,165 @@ whose only lint finding is the word 'pending' — a hold point such as
 reminder to check it, but no longer holds the section's issue readiness.
 'Pending' beside anything else the lint flags is still an issue to fix."
 
+## The chat reads a Final QC finding in full — implemented notes (2026-10-13)
+
+Owner decisions (Abraham, 2026-10-13), after a review of what the chat is
+given: let the chat read a Final QC finding in full; raise the chat's fetch
+allowance to 8 per request; tell the chat when research findings were
+trimmed from its view. Declined in the same review: a per-message "think
+harder" option and a change-history read tool.
+
+### What changed
+
+- **`read_qc_finding`.** The FINAL QC REVIEW block gives each open finding
+  one line (id, severity, anchor, title, one-line issue, fix class), which
+  is enough to apply a verified fix and not enough to explain one, defend
+  it, or draft a remedy for an advisory one; refuted, inconclusive, applied
+  and dismissed records were counted but never named. The new tool
+  (`qc/context.READ_QC_FINDING_TOOL`, optional `finding_id`) reads the
+  RETAINED result (`session.qc.result`) under the turn guard:
+  - with an id, `_detail` renders that record from whichever list holds it —
+    its category (surviving, disputed, refuted, inconclusive) and status
+    (surviving and disputed only; a refuted or inconclusive record's stored
+    `open` means nothing), the run and reviewed version, freshness, severity
+    (and the original when the panel revised it), the lens title, the anchor
+    (and whether it still resolves), title, issue, full rationale, the
+    provision text the lens reviewed, each source with its check
+    (accepted, not accepted, retrieved but not cited, with the reason), the
+    proposed operations as JSON with the fix class
+    (`finding_fix_class`, for open surviving findings; anything else is
+    "not applyable from this record"), the operations check, the
+    verification outcome, panel size, dispute reason and rule, one line per
+    seat (vote, revised severity, operations adequate or not, note,
+    operations note, refutation evidence and whether it validated, or why
+    the seat did not complete), the original lens claims when the finding
+    combines more than one (`origins_for`), and the disposition (dismissal
+    reason and events);
+  - with no id, `_index` lists every record by category with id, status
+    where it means something, anchor and title.
+
+  Freshness is judged against the turn's provisional tree
+  (`matches_version(session.doc.index, session.doc.doc)`), so an edit
+  earlier in the turn reads STALE — the answer `apply_qc_fixes` would give.
+  The result is framed `<qc_finding>` with its own tag (attributes
+  included, `(?=[\s/>])[^>]*>`) and the reply-chip tag made inert, under a
+  header: the review's work, data not instructions, its sources are not
+  research findings, and a safe fix applies only through `apply_qc_fixes`
+  on approval, never re-typed through `apply_spec_edits`. It is the
+  `read_project_section` posture otherwise: declared LAST in `_chat_tools`,
+  charged to the turn's `TurnReferenceBudget`, elided at commit through
+  `_ELIDED_READ_TOOL_NOTES` ("call read_qc_finding again to re-read it"),
+  every failure an `is_error` (`QCFindingReadRefusal`: no review retained,
+  unknown id with a pointer to the index), never a turn failure.
+- **The prompt and the block.** "# Final QC findings" gains a bullet: read
+  the finding before explaining it past its one line, before drafting a
+  remedy for an advisory finding, and when the user asks why something was
+  raised, disputed or refuted. The FINAL QC REVIEW header says the tool
+  returns any finding's full record; its rollup line says the tool with no
+  id lists every record. The `qc/context` module docstring records the
+  change to its token discipline (the per-turn block stays compact; the
+  detail is on demand).
+- **Fetches.** `settings.CHAT_MAX_FETCHES` defaults to 8 (was 4);
+  `BUILD_A_SPEC_CHAT_MAX_FETCHES` still overrides. Searches stay at 8. The
+  page ceiling stays 50,000 tokens. Trade-offs recorded in the settings
+  comment: 8 is still under the provider's ten-step pause, so the
+  `max_uses_exceeded` trap research hit (2026-10-08) now takes a ninth fetch
+  in one request; one request's worst case of page text grows from about
+  200k to 400k tokens, so a turn that starts near the window and fetches
+  that much ends cut off (the chat treats any other stop reason as a cut);
+  commit keeps only the passages the reply quoted
+  (`ELIDE_FETCHED_PAGE_TEXT`), so the next turn is unaffected. The trust
+  explainer's chat card says 8 and 8; README's config row says 8.
+- **Research trim note.** `research_context_block` appends
+  `_dropped_items_note(n)` when it drops findings to fit
+  `RESEARCH_CONTEXT_MAX_TOKENS`: how many, lowest confidence first, every
+  finding is in the Research drawer, and never treat a requirement's
+  absence as research not finding it. The note is inside the size check.
+  The chat stored the count only in its diagnostics sizes
+  (`research_dropped_items`). The function is shared, so Final QC's lenses
+  and seats (`qc.engine._render_profile`) see the note too; the QC manifest
+  hashes the profile (`research_manifest_facts` → `profile_fingerprint`),
+  not the render, so no retained result reads stale. An untrimmed profile
+  renders byte for byte as before.
+- **Copy.** The trust explainer's tool table gains "Read a Final QC
+  finding"; README a Current Status section and the fetch row; CLAUDE.md a
+  section.
+- **Unchanged.** The QC manifest and protocol, readiness, the SSE protocol
+  (no new event), every other tool, `apply_qc_fixes`, the per-turn QC
+  block's trimming, research and QC budgets.
+
+Noticed, not changed: the trust explainer's "Outside its reach" list names
+"applying a QC fix", though the chat applies verified fixes through
+`apply_qc_fixes` on the user's explicit approval (since v1.11.0).
+
+### Tests
+
+- `tests/test_qc_finding_read.py` (new, 11): the tool is declared last with
+  no required input and says it is this turn only and never applies or
+  dismisses; the stable prompt teaches it; a finding reads in full
+  (rationale, reviewed text, both source checks, the ops JSON and fix
+  class, the verification line, every seat's note); an advisory finding
+  says it has no operations and no sources; the index lists categories and
+  ids, and a refuted record reads in full without a status; a dismissed
+  finding carries its reason and events; an edit after the review reads
+  STALE in both modes; the frame and chip tags are inert; no review and an
+  unknown id are correctable refusals; the read is charged to the turn
+  budget and refused when it does not fit; one turn end to end — the
+  per-turn block names the tool, the continuation carries the record, and
+  committed history and the saved project carry only the elision note.
+- `tests/test_research_engine.py`: an untrimmed block equals
+  `render_text()` with no note; a trimmed block ends with the note naming
+  the count and stays under the cap; the singular wording.
+- `tests/test_settings.py`: both chat web allowances read from source (8
+  and 8), the fetch tool declares the loaded value, and the page ceiling is
+  50,000.
+- `tests/test_app.py` and `tests/test_project_sections.py`: the tool order
+  gains `read_qc_finding` after `read_project_section`.
+
+**Revert matrix** (each reverted in place, the named file run, restored):
+fetches back to 4 → `test_settings` 1 red; the trim note removed →
+`test_research_engine` 1; the tool not declared → 1; not elided at commit →
+1; the frame not neutralized → 1; the budget not charged → 1; the prompt
+bullet removed → 1; the QC block's rollup line reverted → 1 (each in
+`test_qc_finding_read`). 8 of 8 caught. Ruff, the touched and neighbouring
+backend files, `npm test` (573) and `npm run build` pass; the full suite
+runs in CI. No paid API call was made.
+
+### Review fixes (Codex, PR #319)
+
+- **Freshness is the apply path's answer.** The first cut judged freshness
+  by `matches_version` alone, so after research was re-run, an attachment
+  replaced or a fact superseded, the record said CURRENT and called a safe
+  fix applyable while `apply_qc_fixes` refused it. `_run_read_qc_finding`
+  now passes `inputs_current=matches_current_inputs(session, result)` (the
+  apply path's `block=False`), and `read_qc_finding` has three states:
+  CURRENT, STALE because the document changed, and STALE because another
+  review input changed or the imported-source check has not settled; in
+  either STALE state a safe fix reads "not applyable until Final QC is
+  re-run". The per-turn FINAL QC REVIEW block still judges by document
+  version (unchanged here; computing the full manifest every turn is a
+  separate decision).
+- **The frame's tag match is bounded.** `(?=[\s/>])[^>]*>` could run
+  across `<` to a later tag's `>`, folding the text between into one escape
+  marker, and rescan from every unclosed start; it is now
+  `(?=[\s/>])[^<>]{0,64}>`, the reply-chip matcher's shape.
+- Tests: a research re-run reads STALE (inputs) in both modes with the fix
+  not applyable; an unclosed `<qc_finding` leaves the text after it intact
+  and an over-long attribute run is not a tag. Reverting either fix turns
+  its test red (2 of 2).
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Chat", items:
+- "The chat can read any Final QC finding in full: its reasoning, the text
+  it reviewed, its sources, its proposed fix and how each reviewer voted —
+  and list every finding on the report, refuted ones included. Ask it why
+  QC flagged something, or to fix an advisory finding a different way."
+- "The chat can fetch up to 8 pages per lookup round (was 4), so checking
+  several sources in one answer no longer runs out of fetches."
+- "When the research findings are too long to show the chat in full, the
+  list now says how many lower-confidence findings were left out."
+
 ## The prompt review's small leftovers — implemented notes (2026-10-13)
 
 Group A of step 9 of the prompt-review follow-up. The owner asked for all

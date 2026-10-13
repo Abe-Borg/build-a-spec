@@ -256,6 +256,40 @@ stale once — the same release as the earlier steps, so you re-run once.
 Open chat sessions rewrite their cached prompt once. No paid API call was
 made.
 
+## Current Status — the chat reads Final QC findings in full, fetches more, and knows when research was trimmed
+
+(2026-10-13, owner decisions. docs/as-built.md's "The chat reads a Final QC
+finding in full" is the record; in the next release.)
+
+- **The chat can open any Final QC finding.** Its per-message summary of the
+  review still gives each open finding one line. A new read-only tool,
+  `read_qc_finding`, returns one finding's whole record on request: the
+  rationale, the provision text the reviewer saw, the sources it cited and
+  whether each checked out, its proposed operations and whether they are a
+  verified safe fix, every verifier's vote and note, the lens claims it
+  combines, and its dismissal reason if any. Asked with no finding, it lists
+  every record on the report — applied, dismissed, disputed, refuted and
+  inconclusive included — so "why did QC drop the one about the riser?" has
+  an answer. The record is read for that turn only and is removed from the
+  saved conversation afterwards, like an attached document's text. It never
+  applies or dismisses anything.
+- **Up to 8 page fetches per request** (was 4). A turn that checks several
+  sources — a standard, an FM data sheet, an adopted amendment — no longer
+  runs into the limit within one request; a refused fetch read to the model
+  as "no more lookups". Pages keep their 50,000-token ceiling, so a
+  fetch-heavy turn can bring in more text and cost more. `BUILD_A_SPEC_CHAT_MAX_FETCHES`
+  still overrides it.
+- **A trimmed research list says so.** When the research findings are too
+  long for the chat's context (over about 100,000 tokens), the
+  lowest-confidence ones are left out of what the chat sees. The list now
+  ends with a note saying how many were left out and not to treat a missing
+  requirement as one research never found. Final QC's reviewers read the
+  same list and get the same note. A list that fits is unchanged.
+
+Each open section rewrites the chat's cached conversation once after the
+update (a new tool and a new prompt line). Saved Final QC results stay
+current. No paid API call was made.
+
 ## Current Status — a "pending" hold point no longer blocks issue
 
 (2026-10-13, owner decision after step 7 of the prompt-review follow-up.
@@ -4769,7 +4803,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_CHAT_COMPACTION_THRESHOLD` | `600000` | Estimated tokens of committed conversation — the history as later requests send it, not the per-turn PROJECT CONTEXT or the cached project background, which condensing cannot shrink — at which routine condensing starts (owner decision D1). Floor 10,000. |
 | `BUILD_A_SPEC_CHAT_COMPACTION_KEEP_TURNS` | `3` | How many of the most recent turns stay word for word when the conversation is condensed (D1). Floor 1. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |
-| `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |
+| `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `8` | Interview web_fetch allowance per continuation round (`4` before 2026-10-13). Each fetched page can add up to 50,000 tokens. |
 | `BUILD_A_SPEC_SDK_MAX_RETRIES` | `2` | The Anthropic SDK's own request retries (429 / 5xx / connection errors, honoring `retry-after`) — the SDK's default, made explicit. Research and Final QC add their own 3-attempt policy on top, so one fan-out call is bounded by 3 × (1 + this) requests; the SDK's share is the one that behaves under rate limiting, so leave it unless real run telemetry says otherwise. Floor 0. |
 | `BUILD_A_SPEC_API_TIMEOUT_SECONDS` | `600` | Per-request read/write timeout for every model call (a streaming reply counts between chunks). The connect timeout stays the SDK's 5 s regardless. Floor 30. |
 | `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |

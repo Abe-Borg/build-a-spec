@@ -21,6 +21,7 @@ from backend.research.engine import (
     RESEARCH_SEARCHES_PER_REQUEST,
     DimensionStatus,
     ResearchItem,
+    _dropped_items_note,
     _estimate_tokens,
     build_dimension_user_message,
     established_facts_block,
@@ -1271,6 +1272,9 @@ def test_research_context_block_trims_lowest_confidence_first():
     )
     full, dropped_none = research_context_block(profile, max_tokens=100_000)
     assert dropped_none == 0 and "Fact 0" in full
+    # An untrimmed profile renders exactly as before: no note.
+    assert full == profile.render_text()
+    assert "left out of this list" not in full
 
     trimmed, dropped = research_context_block(profile, max_tokens=300)
     assert dropped > 0
@@ -1279,6 +1283,49 @@ def test_research_context_block_trims_lowest_confidence_first():
     assert "Fact 9 " in trimmed
     # Structured profile untouched.
     assert len(profile.items) == 10
+
+
+def test_a_trimmed_research_block_says_how_many_findings_it_left_out():
+    """The reader (the chat, a Final QC lens or seat) is told the list is
+    partial, by count, and not to read an absence as research's answer; the
+    note counts inside the cap (owner request, 2026-10-13)."""
+    items = [
+        {
+            "item_id": f"r-{i:03d}",
+            "dimension_id": "governing_codes",
+            "topic": "t",
+            "category": "governing_code",
+            "requirement": f"Fact {i} " + ("x" * 200),
+            "grounded": True,
+            "confidence": 0.1 + i * 0.05,
+            "actionability": "spec_requirement",
+        }
+        for i in range(10)
+    ]
+    profile = RequirementsProfile.from_dict(
+        {
+            "items": items,
+            "dimension_statuses": [
+                {"dimension_id": "governing_codes", "status": "completed"}
+            ],
+            "research_date": "2026-07-21",
+            "project": PROFILE.to_dict(),
+        }
+    )
+    trimmed, dropped = research_context_block(profile, max_tokens=500)
+    assert dropped > 1
+    assert trimmed.endswith(
+        f"NOTE: {dropped} lower-confidence research findings were left out "
+        "of this list to keep it within its size limit (lowest confidence "
+        "first); every finding is in the Research drawer. A requirement "
+        "missing from this list may still have been found: never treat its "
+        "absence here as evidence that research did not find it."
+    )
+    assert len(trimmed) // 4 <= 500
+    # One left out reads in the singular.
+    assert _dropped_items_note(1).startswith(
+        "\n\nNOTE: 1 lower-confidence research finding was left out"
+    )
 
 
 # ---------------------------------------------------------------------------

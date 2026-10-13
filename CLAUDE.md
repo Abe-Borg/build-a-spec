@@ -1933,7 +1933,8 @@ document), so the model could only ask the user to paste a section.
   sections are closed (or that all are) while still listing them for scope.
   The panel's per-row "assistant may read" checkbox carries capability
   `project.section-access` in the `project-panel` tour step; hidden in a
-  tour. Written only by the route, never by a turn's tools, so it may render
+  tour, locked while anything runs (a section swap's rows are the outgoing
+  section's; Codex review on PR #315). Written only by the route, never by a turn's tools, so it may render
   into the cached project block (a change rewrites it once).
 
 Never let a sibling's text into committed history, the project file or a

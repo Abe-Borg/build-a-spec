@@ -338,16 +338,22 @@ export default function ProjectPanel({
                   <label
                     className="mt-0.5 flex items-center gap-1 text-[10px] text-ink-faint"
                     title={
-                      row.assistant_readable !== false
-                        ? `The assistant may read section ${row.number}'s saved text when it needs it — to avoid duplicating it, to cross-reference it, or when you ask about it. Untick to close the section to it.`
-                        : `Section ${row.number} is closed to the assistant: it is told not to read it and works from the title and article list alone. Tick to open it.`
+                      busy
+                        ? "Wait for the current work to finish"
+                        : row.assistant_readable !== false
+                          ? `The assistant may read section ${row.number}'s saved text when it needs it — to avoid duplicating it, to cross-reference it, or when you ask about it. Untick to close the section to it.`
+                          : `Section ${row.number} is closed to the assistant: it is told not to read it and works from the title and article list alone. Tick to open it.`
                     }
                   >
+                    {/* Locked while anything runs, like Open: during a section
+                        swap the rows still shown are the outgoing section's, and
+                        a toggle landing after the swap would record the choice
+                        on the section that replaced it (Codex review on PR #315). */}
                     <input
                       type="checkbox"
                       className="accent-accent"
                       checked={row.assistant_readable !== false}
-                      disabled={accessBusy === row.number}
+                      disabled={busy || acting || accessBusy === row.number}
                       onChange={(event) => void setAccess(row.number, event.target.checked)}
                       data-capability="project.section-access"
                     />

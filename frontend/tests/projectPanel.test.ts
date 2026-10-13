@@ -173,6 +173,10 @@ test("each sibling row offers an 'assistant may read' box that sends the number,
   assert.ok(box, "the assistant-may-read box must be gated on a sibling registry row outside a tour");
   assert.match(box, /type="checkbox"/);
   assert.match(box, /checked=\{row\.assistant_readable !== false\}/);
+  // Locked while anything runs (a section swap included): a toggle landing
+  // after the swap would record the choice on the section that replaced
+  // the one whose rows were shown.
+  assert.match(box, /disabled=\{busy \|\| acting \|\| accessBusy === row\.number\}/);
   assert.match(box, /onChange=\{\(event\) => void setAccess\(row\.number, event\.target\.checked\)\}/);
   assert.match(box, /data-capability="project\.section-access"/);
   assert.match(panel, /await setSectionAccess\(number, readable\);\s*setAccessNonce/);

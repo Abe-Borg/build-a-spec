@@ -23297,7 +23297,12 @@ Project panel, default on, saved with the section.
   the current section and outside a tour, a checkbox "assistant may read"
   (`row.assistant_readable !== false`, so an older server reads as all
   readable) with capability `project.section-access`, disabled while that
-  row's change is in flight; `onChange` → `api.setSectionAccess(number,
+  row's change is in flight and — like Open — while anything runs (`busy ||
+  acting`): during a section swap the rows still shown are the outgoing
+  section's, and the route writes to whichever session is live when the
+  request lands, so a toggle sent mid-swap would have recorded the choice on
+  the section that replaced it (Codex review on PR #315, P2; the pin covers
+  the gate); `onChange` → `api.setSectionAccess(number,
   readable)` → a listing re-read (`accessNonce`), a failure shown in the
   panel's outcome line. `capabilities.ts` and the `project-panel` tour step
   gain the capability; the step's body gains one sentence; `TOUR_VERSION`

@@ -48,6 +48,7 @@ import {
   type HarvestActivity,
   type HarvestPhase,
 } from "../lib/harvestLifecycle";
+import { FACT_STATEMENT_MAX_CHARS } from "../lib/projectFacts";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
 
 const fieldClass =
@@ -156,7 +157,7 @@ function ProposalRow({
                 className={fieldClass + " resize-none"}
                 rows={2}
                 value={draft.statement}
-                maxLength={240}
+                maxLength={FACT_STATEMENT_MAX_CHARS}
                 onChange={(event) => onDraft({ ...draft, statement: event.target.value })}
                 aria-label="Fact statement"
               />

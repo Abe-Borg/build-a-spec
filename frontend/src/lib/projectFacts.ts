@@ -9,6 +9,12 @@
  */
 import type { ProjectFact } from "../types";
 
+/** The longest statement a fact may carry: the server's
+ *  `MAX_STATEMENT_CHARS` (backend/project_facts.py), which refuses anything
+ *  longer. Every statement field in the panel and the harvest sheet uses it,
+ *  and `tests/projectFacts.test.ts` pins it to the backend file. */
+export const FACT_STATEMENT_MAX_CHARS = 500;
+
 export interface ProjectFactGroups {
   /** Facts that hold for every section of the project. */
   project: ProjectFact[];

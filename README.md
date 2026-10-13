@@ -261,6 +261,49 @@ Claude Opus 5.5" is the record; in the next release.)
 No paid API call was made. Whether Opus earns its price on real sections is
 what the trial is for.
 
+## Current Status — the tool instructions match the new rules
+
+(2026-10-13, step 7 of the prompt-review follow-up. docs/as-built.md's "The
+tool instructions and per-turn notes match the new rules" is the record; in
+the next release.)
+
+The outside review covered the assistant's main instructions. This step
+read the rest of what it follows: each tool's instructions, the notes in
+each turn's project context, and the forms research, Final QC and the fact
+harvest fill in. Steps 1–6 had left a few of them stating the old rule:
+
+- **Moving content.** The edit tool still said content "cannot be
+  reparented", next to the relocate operation step 5 added. It now says
+  move never changes a parent; relocate, described beside it, does.
+- **Only you confirm.** The edit tool said to use set_status "to confirm an
+  assumed block". It now says confirmed once you have stated or approved
+  the provision. The imported-starter note now says your approval is the last
+  step, because an adapted block stays assumed until you approve it.
+- **Lint holds readiness.** The assistant was told lint is "advisory", and
+  the readiness checklist said "N advisory lint issue(s)", but every lint
+  issue holds issue readiness. All three now say lint never blocks an edit
+  but must be cleared before issue. The checklist line reads "N lint
+  issue(s) to fix".
+- **Editions from you or research.** The standards note, the project-facts
+  tool and the fact harvest named only your statement, or "the AHJ", as the
+  source of an adopted edition. They now name your statement or grounded
+  research, as step 3 set.
+- **Requirements, not "directives".** The lint's explanatory-prose message,
+  the lint guidance and the research guidance still asked for "a directive"
+  and said never explain where a requirement applies. They now ask for the
+  requirement alone, and keep scope wording like "in data halls" (step 6).
+- **The review report.** The adapt guidance said the export schedules
+  unreviewed imported blocks. The review report does that now, since the
+  specification export ends at END OF SECTION.
+- **Edition basis.** The rule "never name a source by its id" now notes that
+  a set_standard_edition basis does cite a research item by its id. That
+  basis never reaches Word.
+
+The standards note is part of what Final QC reviews against, so a retained
+Final QC result reads stale once — in the same release as step 6, so you
+re-run once. Open chat sessions rewrite their cached prompt once. No paid
+API call was made.
+
 ## Current Status — you choose which sections the assistant may read
 
 (2026-10-13, owner request. docs/as-built.md's "The user chooses which

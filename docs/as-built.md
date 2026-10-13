@@ -23573,6 +23573,153 @@ attempts anyway is refused before anything is read. The choice is saved with
 the section you are in, never in the project brief, so each section decides
 for itself."
 
+## The tool instructions and per-turn notes match the new rules — implemented notes (2026-10-13)
+
+Step 7 of the prompt-review follow-up (the outside review Abraham forwarded).
+The reviewer read the system prompt; the model also reads about 17,700
+characters of chat-tool descriptions, the instructions inside each turn's
+PROJECT CONTEXT blocks, and the output-tool fields that research, Final QC,
+the fact harvest, the compliance audit and template generalization fill in.
+Steps 1–6 changed that text only where a step touched it directly. This
+step read all of it against those steps and against what the code does.
+
+**What stated an old rule (fixed, wording only):**
+
+- `APPLY_SPEC_EDITS_TOOL` description, `move`: "content cannot be
+  reparented" — false since `relocate` (step 5), and it sat beside the
+  `parent_id` property that describes relocate. Now "move never changes an
+  element's parent", which is also true for Final QC: `_op_vocabulary()`
+  echoes this description into the lens prompt, and `QC_OP_ACTIONS` has no
+  relocate (the lens prompt's own relocation line is unchanged). No
+  relocate line was added to the shared description, for the same reason.
+- Same description, `set_status`: "use it to confirm an assumed block" —
+  step 4 made the user's statement or approval the only thing that
+  confirms. Now "confirmed once the user has stated or approved the
+  provision, or assumed for an imported block you keep as fitting this
+  project (gap-and-adapt)" (the first push said "approved" only; see the
+  review fixes below).
+- The `reason` property and `_TOOL_GUIDE`'s reason line say "never by an
+  id" and "on set_standard_edition the basis is the reason", while that
+  operation asks for a research item's id in the basis (step 3's guard
+  checks it). Both now say that there a research item is cited by its id
+  and that an edition's basis never reaches Word (true: section-metadata
+  ops store no reason trail, and no export reads `edition_overrides`).
+- `lint_clean` is a non-advisory readiness check and lint cannot be
+  dismissed, but the LINT REPORT header said "deterministic, advisory",
+  `_LINT_POLICY` said "Lint is advisory", and the checklist detail said
+  "N advisory lint issue(s)". Now: lint never blocks an edit, every issue
+  holds issue readiness until fixed; the detail reads "N lint issue(s) to
+  fix". The SSE table in CLAUDE.md follows.
+- IMPORTED-STARTER REVIEW said readiness blocks "until each is confirmed,
+  adapted, or deleted". An adapted (or kept) block is assumed, and
+  `no_assumed_left` gates too, so the user's approval is the last step; the
+  line now says so.
+- The pinned `standards_context_block` named only the user's statement as
+  the basis for a differing adopted edition; step 3 allows a grounded
+  research item too (the edit tool already said so). Now both, with the
+  basis named.
+- `RECORD_PROJECT_FACTS_TOOL` and the harvest prompt listed "adopted codes,
+  editions and amendments as confirmed by the user or the AHJ" — the model
+  hears from the AHJ only through the user or a source. The tool now says
+  "the user states or a grounded research item establishes (never from
+  your own knowledge)"; the harvest says the user stated it (including what
+  they report the AHJ confirmed) or a research finding marked `{grounded}`
+  establishes it, never an attached document alone (the first push listed
+  attachments; see the review fixes below) — the harvest's own label,
+  which `test_confirmed_needs_a_grounded_finding_…` requires (it refuses
+  "grounded source" in that prompt).
+- Step 6 replaced "Directives only" with "Requirements, never commentary",
+  but three places still asked for a directive: the `explanatory_prose`
+  lint message ("Explains instead of directing … Rewrite it as a directive
+  to the Contractor"; now "Explains instead of stating the requirement …
+  Rewrite it as the requirement alone"), `_LINT_POLICY` (now "as the
+  requirement alone, without the explanation"), and `_RESEARCH_POLICY`,
+  which also said never "explain where it applies" — the scope qualifier
+  step 6 keeps. It now says never explain why it applies, and that a
+  qualifier defining where the requirement applies is scope and stays.
+- `_GAP_AND_ADAPT`: "The export schedules every block still stamped
+  imported" — the specification export ends at END OF SECTION since
+  2026-10-06; the review report schedules them, and readiness holds. The
+  `DEFAULT_STATUS` comment in `spec_doc/model.py` follows.
+
+**Read and unchanged:** `create_figure`, `read_reference_doc`,
+`apply_qc_fixes`, `track_followups`, `recall_conversation`,
+`read_project_section`; the retired `suggest_prompts` (its removal needs
+evidence that a history naming an undeclared tool validates, not wording);
+the identity, profile, facts, WAITING ON THE USER, FINAL QC REVIEW, figure
+and reference blocks; the imported-DOCX editing boundary (its "moving
+content between parents is never available" covers relocate, which the
+source gate refuses by outcome); the research profile render; and the
+`submit_qc_findings`, `submit_qc_verdict`, `submit_qc_consolidation`,
+`submit_requirements_research`, `propose_project_facts`,
+`submit_compliance_audit` and `submit_template_document` fields (the last
+keeps its legacy `[TBD]`/needs_input preservation contract: it may not
+resolve them, and writes none).
+
+**Raised with the owner, not changed:** `EXPLANATORY_PROSE_PATTERNS` flags
+"pending" for a look only and the prompt says to leave it where it is a real
+condition of the work ("Do not fabricate piping pending acceptance of shop
+drawings"), but every lint issue gates `lint_clean` and none can be
+dismissed, so such a section never reads ready unless reworded. Verified
+with that sentence: one `explanatory_prose` issue, `lint_clean` false.
+
+**Bytes that changed once.** The tool list (the edit tool's description and
+`reason` property, the facts tool's description) and the stable prompt:
+every open session rewrites its cached prefix once. The pinned standards
+render is hashed into the QC manifest (`standards_basis_fingerprint`), so a
+retained Final QC result reads stale once — the same release as step 6's
+writing policy v3, so a user re-runs once. The edit tool's top-level
+description is not in the manifest; it changes the lens prompt's bytes,
+and QC caches live within a run. The harvest prompt and the lint message
+change no cached chat bytes.
+
+Tests: `tests/test_tool_text_review.py` (11): move and set_status wording,
+Final QC's op vocabulary equal to the description, the reason exception in
+the property and in both modules' prompts, the lint policy, the LINT REPORT
+header and the checklist detail (driven through `/api/doc/edit`,
+`/api/readiness` and a chat turn), the pinned standards block, the lint
+policy's and research policy's wording, the gap-and-adapt review report,
+and the facts tool and harvest edition sources. Pins updated:
+`tests/test_spec_voice_lint.py` (the lint message), `tests/test_adapt_draft.py`
+(the imported-review line), `tests/test_preserved_chrome_lint.py` (the
+checklist detail). The test files that read the changed text pass locally
+(the edit-reason, standards, voice-lint, spec-voice, module, harvest, lint,
+prompt, writing-policy, facts, confirmed-meaning, relocate, edition-basis,
+QC, app, tutorial, follow-up, adapt-draft, import and project-section files).
+
+Revert matrix (each reverted in place, the four affected test files run,
+then restored): move line → 1 red; set_status line → 1; the reason property
+→ 2; the prompt's reason line → 2; the LINT REPORT header → 1; the
+checklist detail → 2; the imported-review line → 1; the standards block →
+1; the lint policy's "directive" → 2; "Lint is advisory" → 2; the export
+schedules line → 2; the research policy's "where it applies" → 2; the facts
+tool → 1; the harvest line → 1; the lint message → 1. 15 of 15 caught.
+
+**Review fixes (Codex, PR #316).** P1: the first push listed "an attached
+document" among the sources that establish an adopted edition in the
+harvest prompt. `_REFERENCE_DOC_POLICY` and `read_reference_doc` say an
+attachment is never authority for a code requirement, step 3 allows only the
+user's statement or grounded research, and the harvest accepts a confirmed
+`source_kind="reference"` fact, so an unverified adoption could have reached
+later sections as settled input. The line now names the user and a
+`{grounded}` research finding only, "never an attached document alone".
+P2: `set_status` said "confirmed once the user has approved the provision",
+narrower than the provenance rule ("stated or approved"), so a requirement
+the user stated outright could have stayed assumed and held
+`no_assumed_left`. It now says "stated or approved". Probes: each fix
+reverted → 1 red in `tests/test_tool_text_review.py`.
+
+No paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Drafting", item "The assistant's tool instructions follow the new
+rules": "The readiness checklist no longer calls lint issues 'advisory': each
+one must be fixed before the section reads ready, and the line says so. The
+assistant's own instructions now say it confirms a provision only after you
+approve it, moves a provision to another article in one step, and takes an
+adopted edition only from you or grounded research."
+
 ## The chat runs on Claude Opus 5.5 — implemented notes (2026-10-13)
 
 Owner decision (Abraham, 2026-10-13), after asking whether to move the chat

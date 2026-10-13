@@ -122,7 +122,7 @@ def test_the_waterflow_draft_is_flagged_and_its_correction_is_clean():
     assert issue["rule"] == RULE_EXPLANATORY_PROSE
     for phrase in ("amends", "This amendment", "applies generally", "governs the"):
         assert f"'{phrase}'" in issue["message"]
-    assert "directive to the Contractor" in issue["message"]
+    assert "Rewrite it as the requirement alone" in issue["message"]
     assert _voice_issues(_section("SYSTEM DESCRIPTION", _WATERFLOW_DIRECTS)) == []
 
 

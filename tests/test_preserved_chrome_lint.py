@@ -143,7 +143,7 @@ def test_readiness_and_the_model_read_the_same_chrome(monkeypatch):
     )
     assert lint_check["ok"] is False
     assert lint_check["detail"] == (
-        f"{len(payload_lint)} advisory lint issue(s)."
+        f"{len(payload_lint)} lint issue(s) to fix."
     )
 
     # The model is the one that can offer to renumber the section, so its

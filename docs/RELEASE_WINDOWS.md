@@ -304,6 +304,13 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **The tool instructions match the new rules (next release).** Add a
+      provision with "should" in it: the readiness checklist's lint line
+      reads "1 lint issue(s) to fix", not "advisory". Import a starter and
+      ask the assistant to walk it: it stamps the blocks it keeps assumed
+      and asks you to approve them, never confirming one you have not
+      approved. Ask it to put a provision under a different article: it
+      relocates it in one step instead of saying it cannot.
 - [ ] **Six small wording fixes (next release).** Ask the assistant "explain
       why the hydrostatic test is two hours": it answers in chat and the
       document does not change. On a normal drafting turn the reply asks at

@@ -329,9 +329,10 @@ def standards_context_block(
         lines.append(line)
     lines.append(
         "Draft the PART 1 REFERENCES article from these editions. If the "
-        "user states a jurisdiction-adopted edition that differs, record it "
-        "with a set_standard_edition operation (adoption basis required) "
-        "before drafting to it."
+        "user states, or a grounded research item establishes, a "
+        "jurisdiction-adopted edition that differs, record it with a "
+        "set_standard_edition operation (adoption basis required: the "
+        "user's statement or the research item id) before drafting to it."
     )
     lines.append(_BASIS_IS_NOT_DOCUMENT_TEXT)
     suppressed_map = dict(suppressed or {})

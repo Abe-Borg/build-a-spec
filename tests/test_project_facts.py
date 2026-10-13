@@ -263,6 +263,24 @@ def test_caps_are_refused_with_their_lengths():
         store.record({"statement": "x", "source_kind": "brief"}, recorded_in="", recorded_at="")
 
 
+def test_a_statement_may_run_to_five_hundred_characters():
+    """Owner decision (2026-10-13): 240 characters was too tight. A statement
+    at the new limit records, survives a save-and-load round trip whole, and
+    the chat tool's description states the limit the store enforces."""
+    assert MAX_STATEMENT_CHARS == 500
+    statement = "x" * MAX_STATEMENT_CHARS
+    store = ProjectFactStore()
+    fact, _ = store.record({"statement": statement}, recorded_in="", recorded_at="")
+    assert fact.statement == statement
+    loaded = ProjectFactStore()
+    loaded.load(store.to_dict())
+    assert loaded.get(fact.pid).statement == statement
+    field = RECORD_PROJECT_FACTS_TOOL["input_schema"]["properties"]["record"]["items"][
+        "properties"
+    ]["statement"]
+    assert f"(max {MAX_STATEMENT_CHARS} characters)" in field["description"]
+
+
 def test_defaults_resolve_scope_status_and_section():
     store = ProjectFactStore()
     plain, _ = store.record({"statement": "A."}, recorded_in="21 13 13", recorded_at="d")

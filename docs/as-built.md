@@ -24525,3 +24525,72 @@ reported as an oversight, and lets a reviewer that cannot reach the text
 deciding a finding say so: such a finding now comes to you as disputed
 instead of being dropped as refuted. Saved Final QC reports open as before
 but ask for a re-run."
+
+## A project fact's statement runs to 500 characters — implemented notes (2026-10-13)
+
+Owner decision (Abraham): the 240-character cap on a project fact's
+statement was too tight; raise it to 500.
+
+### What changed
+
+- **The limit.** `project_facts.MAX_STATEMENT_CHARS` is 500 (was 240). It
+  is the one bound every path enforces: `record`, `supersede`'s
+  replacement, the panel's edit, `ProjectFact.from_dict` on project and
+  brief load, and the harvest's `proposal_problem` check. The harvest's
+  system prompt and `HARVEST_SCHEMA` already interpolated it.
+- **The chat tool says it.** `RECORD_PROJECT_FACTS_TOOL`'s statement
+  description hardcoded "(max 240 characters)"; it now interpolates the
+  constant, the harvest's posture, so the two cannot drift again.
+- **The frontend.** `lib/projectFacts.FACT_STATEMENT_MAX_CHARS` (500)
+  replaces three hardcoded `maxLength={240}`: the panel's `FactForm`
+  (adding and editing a fact) and its retire-with-replacement field
+  (`ProjectFactsPanel`), and the harvest sheet's edit field
+  (`HarvestDialog`). Statements already render in full (no
+  truncation), so no display change was needed.
+- **Unchanged.** `MAX_DETAIL_CHARS` (600), `MAX_ACTIVE_FACTS` (150), and
+  the facts blocks' token budgets (`FACTS_CONTEXT_MAX_TOKENS` 6,000,
+  `FACTS_FANOUT_MAX_TOKENS` 8,000). Longer statements fill a budget sooner;
+  `render_fact_lines` already trims by rank (coordination facts, then
+  assumed, later entries first) and the block says how many it left out.
+  The QC manifest hashes the facts' text, never the limit or the tool, so
+  retained Final QC reports stay current. The SSE protocol, readiness and
+  the project file's shape are unchanged.
+- **Bytes that changed once.** The `record_project_facts` tool's
+  description: every open chat session rewrites its cached prefix once.
+  The harvest's prompt and schema change too (single-shot; no cache spans
+  harvests).
+- **Mixed builds.** An older build's `from_dict` cuts a statement to 240
+  characters when it loads a project file or a brief. A section saved by an
+  older build after that writes the cut statement back, which a brief merge
+  then reads as a different fact. Release-noted: keep a project's sections
+  on this release or later once a long fact is recorded.
+
+### Tests
+
+- `tests/test_project_facts.py::test_a_statement_may_run_to_five_hundred_characters`:
+  the limit is 500, a statement at the limit records and survives
+  `to_dict`/`load` whole, and the tool's statement description names
+  the limit.
+- `tests/test_harvest.py::test_a_problem_is_shown_on_the_sheet_not_a_failure`
+  hardcoded a 300-character "too long" statement, which is now legal; it
+  uses `MAX_STATEMENT_CHARS + 1`.
+- `frontend/tests/projectFacts.test.ts`: `FACT_STATEMENT_MAX_CHARS` equals
+  the backend's `MAX_STATEMENT_CHARS` (read from the file) and 500, the
+  panel uses it on exactly two fields and the harvest sheet on one, and
+  neither file carries `maxLength={240}`.
+
+**Revert matrix** (each reverted in place, the named test run, restored):
+the constant back to 240 → the backend test and the frontend pin red; the
+tool description back to a literal "(max 240 characters)" → the backend
+test red; the harvest sheet's field back to `maxLength={240}` → the
+frontend pin red. 3 of 3 caught. Ruff, 457 tests across every fact,
+harvest, brief and project file, `npm test` (586) and `npm run build`
+pass; the full suite runs in CI. No paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Projects", item "Longer project facts": "A project fact's
+statement can now run to 500 characters (it was 240), in the assistant's
+recording, the Project facts panel and the Harvest facts review sheet.
+Older builds cut a longer statement to 240 when they open the project, so
+keep every section of a project on this release or later."

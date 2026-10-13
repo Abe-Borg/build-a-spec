@@ -27,6 +27,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ProjectFactInput } from "../lib/api";
 import { canOpenHarvest, harvestDoorHint, type HarvestActivity } from "../lib/harvestLifecycle";
 import {
+  FACT_STATEMENT_MAX_CHARS,
   factCounts,
   factProvenance,
   groupProjectFacts,
@@ -118,7 +119,7 @@ function FactForm({
         rows={2}
         value={draft.statement}
         placeholder="One fact, stated so a stranger could act on it"
-        maxLength={240}
+        maxLength={FACT_STATEMENT_MAX_CHARS}
         autoFocus
         onChange={(event) => setDraft({ ...draft, statement: event.target.value })}
         onKeyDown={(event) => {
@@ -397,7 +398,7 @@ export default function ProjectFactsPanel({
                   className={fieldClass}
                   value={replacement}
                   placeholder="Replacement statement (optional — recorded as a new fact)"
-                  maxLength={240}
+                  maxLength={FACT_STATEMENT_MAX_CHARS}
                   onChange={(event) => setReplacement(event.target.value)}
                   aria-label="Replacement fact"
                 />

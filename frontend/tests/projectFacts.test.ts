@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  FACT_STATEMENT_MAX_CHARS,
   factCounts,
   factProvenance,
   factSeq,
@@ -128,4 +130,24 @@ test("a discipline-wide fact is another discipline's only when both names are kn
     "discipline Fire Suppression · confirmed · recorded in 21 13 13 · source: user",
   );
   assert.equal(factProvenance(items[2]), "discipline · confirmed · recorded in 21 13 13 · source: user");
+});
+
+test("a fact statement's length limit is the server's, in every field that edits one", () => {
+  // The server refuses a statement past MAX_STATEMENT_CHARS; a field that
+  // let the user type further would only earn a refusal on save.
+  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+  const backend = read("../../backend/project_facts.py").match(
+    /^MAX_STATEMENT_CHARS = (\d+)$/m,
+  );
+  assert.ok(backend, "MAX_STATEMENT_CHARS not found in backend/project_facts.py");
+  assert.equal(FACT_STATEMENT_MAX_CHARS, Number(backend[1]));
+  assert.equal(FACT_STATEMENT_MAX_CHARS, 500);
+  for (const [file, fields] of [
+    ["../src/components/ProjectFactsPanel.tsx", 2],
+    ["../src/components/HarvestDialog.tsx", 1],
+  ] as const) {
+    const source = read(file);
+    assert.equal(source.split("maxLength={FACT_STATEMENT_MAX_CHARS}").length - 1, fields, file);
+    assert.ok(!source.includes("maxLength={240}"), file);
+  }
 });

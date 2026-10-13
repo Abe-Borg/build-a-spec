@@ -75,7 +75,7 @@ FACT_TOOL_STATUSES = ("confirmed", "assumed")
 # refused with a message telling the model to supersede something first — a
 # ledger nobody can read is worse than no ledger.
 MAX_ACTIVE_FACTS = 150
-MAX_STATEMENT_CHARS = 240
+MAX_STATEMENT_CHARS = 500
 MAX_DETAIL_CHARS = 600
 MAX_REASON_CHARS = 300
 MAX_SOURCE_REF_CHARS = 120
@@ -1984,7 +1984,7 @@ RECORD_PROJECT_FACTS_TOOL: dict[str, Any] = {
                             "type": "string",
                             "description": (
                                 "The fact, in one line a stranger could act on "
-                                "(max 240 characters)."
+                                f"(max {MAX_STATEMENT_CHARS} characters)."
                             ),
                         },
                         **_FACT_FIELD_PROPERTIES,

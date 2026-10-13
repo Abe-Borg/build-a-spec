@@ -105,8 +105,8 @@ def test_the_reason_rule_names_the_edition_basis_exception(prompt):
 def test_the_lint_policy_says_lint_holds_readiness(prompt):
     assert "Lint is advisory:" not in prompt
     assert (
-        "Lint never blocks an edit, but every issue it reports holds the "
-        "section's issue readiness until fixed" in prompt
+        "Lint never blocks an edit, but every issue it reports, except a "
+        "look-only one, holds the section's issue readiness until fixed" in prompt
     )
 
 

@@ -336,7 +336,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Deterministic lint, running on every change",
         body:
-          "This practice state contains real findings on purpose. Lint runs with no model call and no network: stale or unrecorded editions, unresolved placeholders, template markers, empty articles, duplicate article titles, and an unset section header. Each finding links to the block it came from. Lint is advisory — it never blocks an edit or a turn — but a clean report is required for issue readiness.",
+          "This practice state contains real findings on purpose. Lint runs with no model call and no network: stale or unrecorded editions, unresolved placeholders, template markers, empty articles, duplicate article titles, and an unset section header. Each finding links to the block it came from. Lint never blocks an edit or a turn, but every finding must be cleared for issue readiness, except a 'pending' left for a look: a real hold point stays.",
       },
       {
         id: "panel-tray",

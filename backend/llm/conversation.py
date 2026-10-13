@@ -124,6 +124,7 @@ from ..spec_doc import (
     open_questions,
     outline,
 )
+from ..spec_doc.linting import holds_readiness as lint_holds_readiness
 from ..spec_doc.model import apply_edits, iter_paragraphs, resolve_relocated
 from ..spec_doc.project import chat_transcript
 from ..spec_doc.source_format import SourceFormatMap
@@ -2768,13 +2769,17 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
     if lint_items:
         lines = [
             "LINT REPORT (deterministic; it never blocks an edit, but each "
-            "issue holds issue readiness until fixed — stale-edition findings "
-            "are drafting errors to fix):"
+            "issue holds issue readiness until fixed, except any marked "
+            "'look only' — stale-edition findings are drafting errors to "
+            "fix):"
         ]
         for issue in lint_items:
             where = issue.get("ref") or issue.get("element_id") or ""
+            rule = issue.get("rule")
+            if not lint_holds_readiness(issue):
+                rule = f"{rule}, look only"
             lines.append(
-                f"- [{issue.get('rule')}] {where}: {issue.get('message')} "
+                f"- [{rule}] {where}: {issue.get('message')} "
                 f"(element {issue.get('element_id')})"
             )
         lint_block = "\n".join(lines)

@@ -24133,6 +24133,19 @@ without its guard → 1; the inputs state never chosen → 3 (across
 tests across the QC, chat, app and context files, `npm test` (573) and
 `npm run build` pass; the full suite runs in CI. No paid API call was made.
 
+### Review fix (Codex, PR #321)
+
+The finding rows contradicted the freshness line: `_finding_line` still said
+"verified safe fix, N op(s) — apply via apply_qc_fixes on the user's
+explicit approval" under a STALE header (true for a document edit before
+this PR too). `_finding_line(finding, section, state)` now says "not
+applyable until Final QC is re-run" in either STALE state, the OPEN
+FINDINGS header names the ids as `read_qc_finding` inputs rather than
+apply inputs, and CURRENT reads "describes the document and its review
+inputs as they stand". Tests: a stale review (inputs, end to end; the
+document, unit) offers no row or header as applyable, and the current one
+still does. Reverting the row's state check turns 2 red.
+
 ### Release-note draft (for the release after 1.26.0)
 
 Section "Final QC", item "The chat knows when a review went stale": "The

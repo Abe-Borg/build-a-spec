@@ -69,17 +69,24 @@ def _one_line(text: str, limit: int = 240) -> str:
     return folded[: limit - 1].rstrip() + "…"
 
 
-def _finding_line(finding: Any, section: Any) -> str:
+def _finding_line(finding: Any, section: Any, state: str) -> str:
     ref = str(
         getattr(finding, "reviewed_ref", "")
         or getattr(finding, "element_id", "")
         or "section-level"
     )
     if finding_fix_class(finding, section) == FIX_CLASS_SAFE:
+        # A stale review's safe fix is never offered as applyable: the
+        # freshness line forbids it, so the row must agree (Codex review on
+        # PR #321 — the row still said "apply via apply_qc_fixes").
+        how = (
+            "apply via apply_qc_fixes on the user's explicit approval"
+            if state == _FRESH_CURRENT
+            else "not applyable until Final QC is re-run"
+        )
         fix = (
             "fix: verified safe fix, "
-            f"{len(finding.proposed_ops)} op(s) — apply via apply_qc_fixes "
-            "on the user's explicit approval"
+            f"{len(finding.proposed_ops)} op(s) — {how}"
         )
     else:
         fix = (
@@ -147,17 +154,25 @@ def _render(
         )
     else:
         lines.append(
-            "Freshness: CURRENT — this review describes the document as it "
-            "stands."
+            "Freshness: CURRENT — this review describes the document and its "
+            "review inputs as they stand."
         )
     if open_findings:
         lines.append("")
         lines.append(
-            f"OPEN FINDINGS ({len(open_findings)} — ids are apply_qc_fixes "
-            "inputs; never apply without the user's explicit approval in "
-            "this conversation):"
+            (
+                f"OPEN FINDINGS ({len(open_findings)} — ids are apply_qc_fixes "
+                "inputs; never apply without the user's explicit approval in "
+                "this conversation):"
+            )
+            if state == _FRESH_CURRENT
+            else (
+                f"OPEN FINDINGS ({len(open_findings)} — the review is stale, "
+                "so none is applyable until Final QC is re-run; ids are "
+                "read_qc_finding inputs):"
+            )
         )
-        lines.extend(_finding_line(f, section) for f in open_findings)
+        lines.extend(_finding_line(f, section, state) for f in open_findings)
     else:
         lines.append("")
         lines.append(

@@ -2191,7 +2191,9 @@ Owner decision (Abraham), the follow-up the PR #319 review left open.
   apply path's and the readiness `qc_current` gate's question,
   non-blocking, lock-free at turn start like the readiness poll. It never
   fails a turn: an exception logs a warning on `buildaspec.chat` and reads
-  as not current. The `read_qc_finding` runner uses the same helper. The
+  as not current. The `read_qc_finding` runner uses the same helper. In
+  either STALE state no finding row or header offers a fix as applyable
+  (`_finding_line(..., state)`; Codex review on PR #321). The
   "# Final QC findings" policy already says what to do with STALE, so the
   stable prompt is unchanged; the block is per-turn, so no cache moves.
 - **Trust explainer.** "Applying a QC fix" left the "outside its reach"

@@ -324,3 +324,47 @@ def test_the_document_reason_wins_when_both_moved() -> None:
         )
         assert "Freshness: STALE — the document changed after this review." in block
         assert "another review input" not in block
+
+
+def test_a_stale_review_never_offers_a_fix_as_applyable(monkeypatch) -> None:
+    """The freshness line and the finding rows agree (Codex review on PR
+    #321): once the review is stale, for either reason, no row and no header
+    says "apply via apply_qc_fixes"."""
+    from tests.test_context_sizes import _profile
+
+    client = _client()
+    _seed_and_install(client)
+    fake = FakeClient([text_turn(["ok"]), text_turn(["ok"])])
+    _patch_client(monkeypatch, fake)
+
+    client.post("/api/chat", json={"message": "fresh?"})
+    fresh = request_context_text(fake.messages.last_request)
+    assert "verified safe fix, 1 op(s) — apply via apply_qc_fixes" in fresh
+    assert "ids are apply_qc_fixes inputs" in fresh
+
+    sessions.get_session().research.profile_result = _profile(3)
+    client.post("/api/chat", json={"message": "and now?"})
+    moved = request_context_text(fake.messages.last_request)
+    assert "verified safe fix, 1 op(s) — not applyable until Final QC is re-run" in moved
+    assert "apply via apply_qc_fixes" not in moved
+    assert "ids are apply_qc_fixes inputs" not in moved
+    assert "the review is stale, so none is applyable" in moved
+
+
+def test_a_document_stale_review_never_offers_a_fix_as_applyable() -> None:
+    result = _unit_result(
+        [
+            _finding(
+                "qc-safe00000001",
+                ops=[{"action": "replace", "target_id": "pt1.a1.p1", "text": "X."}],
+            )
+        ]
+    )
+    from backend.spec_doc.model import SpecSection
+
+    block, _ = qc_review_context_block(
+        result, current_version_index=0, current_section=SpecSection.empty()
+    )
+    assert "Freshness: STALE — the document changed" in block
+    assert "verified safe fix, 1 op(s) — not applyable until Final QC is re-run" in block
+    assert "apply via apply_qc_fixes" not in block

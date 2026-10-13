@@ -1878,8 +1878,11 @@ Step 6 of the prompt-review follow-up: rules the model could read two ways.
   paragraph: explain/review/compare/advise turns answer in chat and leave
   the document alone unless the user asks for or approves a change.
 - **Frame guards.** `project_facts._FACTS_TAG_PATTERN` and
-  `reference_docs._BLOCK_TAG_PATTERN` take attributes (`\b[^>]*>`), the QC
-  frames' posture. Text without the tag renders byte for byte.
+  `reference_docs._BLOCK_TAG_PATTERN` take attributes (`(?=[\s/>])[^>]*>`):
+  the name must end at whitespace, `/` or `>`, so a longer tag such as
+  `<attached_reference_document-note>` passes through (Codex review on PR
+  #314; the `\b` the QC, harvest and compaction frames use treats `-`, `:`
+  and `.` as the name's end). Text without the tag renders byte for byte.
 - **Stale once.** The policy and the lens brief are in the QC manifest:
   every retained Final QC result reads stale once. The stable prompt
   changes once (cache rewrite).

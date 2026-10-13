@@ -237,7 +237,31 @@ def test_a_reference_frame_tag_is_defused_with_or_without_attributes(tag):
     assert "<" not in out and "[escaped tag:" in out
 
 
-def test_text_without_a_frame_tag_is_untouched():
-    plain = "See <attached_reference_documentation> and <established_project_factsheet>."
+@pytest.mark.parametrize(
+    "plain",
+    [
+        "See <attached_reference_documentation> and <established_project_factsheet>.",
+        # A hyphen, colon or dot after the name is a word boundary but not the
+        # end of the name: these are other tags (Codex review on PR #314).
+        "See <attached_reference_document-note> and <established_project_facts-note>.",
+        "See <attached_reference_documents:note> and </established_project_facts:x>.",
+        "See <attached_reference_document.v2 a=1> and <established_project_facts.old>.",
+    ],
+)
+def test_text_without_a_frame_tag_is_untouched(plain):
     assert neutralize_reference_delimiters(plain) == plain
     assert neutralize_fact_delimiters(plain) == plain
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "<attached_reference_document/>",
+        "<attached_reference_documents\n>",
+        f"<{FACTS_TAG}/>",
+        f"<{FACTS_TAG}\tsource=user>",
+    ],
+)
+def test_a_frame_tag_ended_by_slash_or_whitespace_is_defused(tag):
+    out = neutralize_reference_delimiters(neutralize_fact_delimiters(f"x {tag} y"))
+    assert "<" not in out and "[escaped tag:" in out

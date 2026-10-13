@@ -23075,9 +23075,10 @@ the model could read two ways, plus the frame guards its earlier steps left.
 - **Frame guards** (carried from steps 2–3). `project_facts._FACTS_TAG_PATTERN`
   and `reference_docs._BLOCK_TAG_PATTERN` matched only a bare tag
   (`\s*>`); a tag carrying attributes still opened or closed the frame to a
-  reader. Both now take `\b[^>]*>`, the QC standards/profile frames' and the
-  harvest's and compaction's posture. A sweep found no other frame pattern
-  without it. Text without the tag renders byte for byte.
+  reader. Both now take attributes. A sweep found no other frame pattern
+  without them. Text without the tag renders byte for byte. (The first push
+  used `\b[^>]*>`, the QC standards/profile frames' and the harvest's and
+  compaction's shape; see the review fix below.)
 
 Not in this step: the review's compaction-evidence item (missing-ledger
 lines keep attribution, status and a supporting quotation; a summary saying
@@ -23119,6 +23120,19 @@ directives only → 1; "exactly ONE" restored → 2; the turn budget reverted �
 the chip example reverted → 2; the chip naming rule removed → 2; the
 explanation paragraph removed → 2; the facts tag pattern reverted → 4; the
 reference tag pattern reverted → 2. 16 of 16 caught.
+
+**Review fix (Codex, PR #314).** `\b` ends a word at `-`, `:` or `.`, so
+`\b[^>]*>` also rewrote `<attached_reference_document-note>` or
+`<established_project_facts:x>` — other tags, which can never open or close
+the frame — into escape markers, corrupting source text the guard promises
+to pass through byte for byte. Both patterns now require the name to end at
+whitespace, `/` or `>` (`(?=[\s/>])[^>]*>`); a bare tag, one with
+attributes, a self-closing one and one ended by a newline are still
+defused. `test_text_without_a_frame_tag_is_untouched` gains the hyphen,
+colon and dot look-alikes, and a new test covers the slash and whitespace
+endings. Probes: each pattern back to `\b[^>]*>` → 3 red. The QC standards
+and profile, harvest and compaction frames keep `\b` in this PR; the same
+change for them is a separate task.
 
 No paid API call was made; how the live model's question count and chips
 change is unmeasured until the owner runs a session.

@@ -304,13 +304,14 @@ def standards_context_block(
         lines.append(
             "This module ships no pinned standards. Before citing any "
             "standard at a specific edition in document text, record that "
-            "edition with a set_standard_edition operation carrying a "
-            "stated basis — a grounded research item id, the user's "
-            "statement, or an honestly-labeled model proposal (e.g. "
-            '"model-proposed, unverified — current published edition per '
-            'training data"). Until an edition is recorded, cite the '
-            "designation without an edition year. Draft the PART 1 "
-            "REFERENCES article from the recorded editions."
+            "edition with a set_standard_edition operation whose basis is "
+            "the user's statement or a grounded research item id — never an "
+            "edition proposed from your own knowledge. Until an edition is "
+            "recorded, cite the designation without an edition year. An "
+            "entry above whose basis says it was model-proposed is "
+            "unverified: have the user confirm it or research establish it "
+            "and re-record it, or remove it. Draft the PART 1 REFERENCES "
+            "article from the recorded editions."
         )
         lines.append(_BASIS_IS_NOT_DOCUMENT_TEXT)
         return "\n".join(lines)

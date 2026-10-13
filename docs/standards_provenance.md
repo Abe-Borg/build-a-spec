@@ -79,8 +79,9 @@ NFPA 291-2025 (ANSI webstore, Amazon).
 `spec_modules/generic.py` (`generic-unpinned` basis) deliberately carries
 ZERO pinned editions, so it has no receipts here and never will. Every
 edition in effect for a generic-module project is recorded per-project via
-`set_standard_edition` with a stated basis (grounded research item, user
-statement, or an explicitly-labeled unverified model proposal), and the
+`set_standard_edition` with a stated basis (a grounded research item or the
+user's statement — since 2026-10-12 never a model proposal, which the chat
+path refuses: `spec_voice.check_edition_bases`), and the
 `unrecorded_edition` lint rule flags any year citation without a recorded
 basis. Do not add pins to the generic module — that would recreate the
 curation burden this module exists to avoid; author a new curated module

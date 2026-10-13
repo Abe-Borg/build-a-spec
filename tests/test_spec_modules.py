@@ -287,8 +287,12 @@ def test_generic_rendered_prompt_is_stable_and_clean():
     # Open-catalog guidance replaced the section list.
     assert "OPEN catalog" in prompt
     assert "MasterFormat section number and title" in prompt
-    # The no-pins drafting policy rides the module conventions.
-    assert "model-proposed, unverified" in prompt
+    # The no-pins drafting policy rides the module conventions: an edition
+    # enters on the user's word or grounded research, never a model proposal
+    # (owner, 2026-10-12).
+    assert "never an edition you propose from your own knowledge" in prompt
+    assert "honestly-labeled model proposal" not in prompt
+    assert "'model-proposed, unverified'" not in prompt
     # No unresolved module placeholders (engine blocks legitimately carry
     # brace-shaped op examples, so this is targeted, not a blanket ban).
     for placeholder in ("{discipline}", "{pinned_standards}", "{ibc}"):

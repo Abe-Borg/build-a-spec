@@ -780,8 +780,8 @@ CONTINUATION_CACHE = _bool_env("BUILD_A_SPEC_CONTINUATION_CACHE", True)
 QC_REFUSAL_FALLBACK = _bool_env("BUILD_A_SPEC_QC_REFUSAL_FALLBACK", True)
 
 # Per-call web allowances (runaway guards, not budgets — env-overridable).
-# The code-compliance lens gets the big search allowance to check standards'
-# actual current content; the other lenses and verifiers get the small one.
+# The code-compliance lens gets the big search allowance to check the actual
+# text of the editions in effect; the other lenses and verifiers get the small one.
 QC_MAX_SEARCHES_COMPLIANCE = _int_env("BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE", 24, minimum=1)
 QC_MAX_SEARCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_SEARCHES_LENS", 8, minimum=1)
 QC_MAX_FETCHES_COMPLIANCE = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE", 8, minimum=1)

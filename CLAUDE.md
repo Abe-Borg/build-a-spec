@@ -1685,6 +1685,45 @@ never add a seat path that skips it. Tests:
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
 
+## An edition comes from the user or the research, never a guess — implemented notes (2026-10-12)
+
+Step 3 of the prompt-review follow-up; owner decision (option A). The
+generic module let the model record a "model-proposed, unverified" edition
+from its training, and lint and Final QC then treated it as verified.
+
+- **The rule.** An edition's basis is the user's statement or a grounded
+  research item id. The generic module's playbook default and conventions
+  and the unpinned `standards_context_block` say so, and name an earlier
+  session's model-proposed entry unverified (confirm and re-record, or
+  remove). A lookup the model made itself is told to the user to confirm,
+  then recorded on the user's word. `set_standard_edition`'s description
+  already said "never from your own assumption" and did not change.
+- **The guard.** `spec_voice.check_edition_bases` runs in `_run_tool` after
+  `check_drafted_edits` and refuses, all or nothing, a batch whose
+  `set_standard_edition` records an edition on a basis naming a model
+  proposal, training data, the model's own knowledge or a best guess
+  (`_MODEL_PROPOSED_BASIS`; saved histories carry the old wording), or that
+  cites a research id the profile does not hold (`research_ids=` from
+  `fact_sources`). A phrase list cannot prove a basis is the user's; it is
+  the prompt's backstop (Codex review on PR #308). Removals and the user's
+  panel edits are not checked.
+- **Final QC** `code_compliance` checks the actual text of the edition in
+  effect for the project, with its adoption's amendments, not the newest; a
+  newer edition is a separate observation. **Research** `governing_codes`
+  (both modules) reports the rules that decide which adoption governs a
+  project (permit application or vesting date, transition period,
+  existing-building code) as conditional rules, applying one only where
+  project facts supply the date or say the work is an alteration.
+- **Stale once.** Lens briefs are in the QC manifest, and so is the
+  unpinned standards render: every retained Final QC result reads stale
+  once. The stable prompt changes for the generic module (cache rewrite).
+
+Never record an edition the user or grounded research did not supply.
+Tests: `tests/test_edition_basis.py`, `tests/test_standards.py`,
+`tests/test_spec_modules.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
+
 ## Final QC's verifier seats run at medium — implemented notes (2026-10-12)
 
 Owner decision (Abraham): the verifier seats go back to `medium`, for cost.

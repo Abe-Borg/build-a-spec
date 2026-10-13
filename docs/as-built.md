@@ -23719,3 +23719,122 @@ one must be fixed before the section reads ready, and the line says so. The
 assistant's own instructions now say it confirms a provision only after you
 approve it, moves a provision to another article in one step, and takes an
 adopted edition only from you or grounded research."
+
+## The chat runs on Claude Opus 5.5 — implemented notes (2026-10-13)
+
+Owner decision (Abraham, 2026-10-13), after asking whether to move the chat
+to Sonnet 5.5 at `high` or to Opus 5.5: the chat runs on Opus 5.5 at
+`medium`, and conversation condensing on Opus 5.5 at `high`. A trial: the
+owner will move it back if it does not help enough to be worth the price.
+
+### Why Opus at `medium`, not Sonnet at `high`
+
+Anthropic's cost guidance, as read for the decision: on research and
+knowledge work, effort curves are nearly flat ("`high` bought nothing
+measurable over `medium`"), so raising Sonnet 5.5's effort buys mostly
+latency and thinking tokens; the two whole-section passes already run at
+`high`. Opus 5.5 is a step in capability, not depth, and the documented
+gains match what a specification turn needs: much less likely to state a
+figure or cite a source its inputs don't support, more detail-oriented on
+long inputs without more false flags, clearer prose. Its maker's
+recommended start is `medium`, which it says matches or exceeds Opus 5 at
+`high`. Nothing was measured; this is the owner's call on the documented
+behaviour.
+
+### What changed
+
+- **`settings.INTERVIEW_MODEL_DEFAULT = MODEL_OPUS_55`** (was
+  `MODEL_SONNET_55`), with a comment naming the trial, the cost and what
+  follows the setting. Everything else follows it: the interview turn, both
+  whole-section passes (`DRAFT_PASS_EFFORT`, `high`), the condensing summary
+  (a fork of the chat's cached request: same model, same top-level effort,
+  `COMPACTION_EFFORT` `high` through the per-message effort message —
+  `PER_MESSAGE_EFFORT_MODELS` already lists Opus 5.5) and template AI
+  Generalize. `INTERVIEW_EFFORT` stays `medium`.
+- **No request shape changed.** Checked against Anthropic's Opus 5.5
+  migration checklist: the chat never sends forced `tool_choice`,
+  `between_tools` or disabled thinking; its committed history carries no
+  thinking blocks, so a model switch in either direction loses no reasoning
+  and trips no binding check; the within-turn `drop_block` path is
+  model-agnostic; `display: "summarized"` is accepted; the template call's
+  `single_output_tool_kwargs` leaves Opus 5.5 on automatic choice (strict
+  schema, as before). Opus 5.5 returns text between tool calls as
+  progress-update thinking blocks exactly as Sonnet 5.5 does, so P55-2's
+  reply-after-the-last-tool-call rule and the chips-in-the-reply design hold
+  unchanged. Its classifiers (cyber, bio, reasoning extraction) can decline
+  a chat turn; the chat still has no refusal fallback (decision D6) and the
+  decline is named, not called a cut-off.
+- **Cost.** Opus 5.5 is exactly twice Sonnet 5.5 on every token class
+  (input $4, output $20, 5-minute write $5, 1-hour write $8, read $0.20 per
+  MTok). `usage_ledger` prices `interview`, `template` and `compaction` at
+  the live `INTERVIEW_MODEL`, so the meter follows with no code change. Each
+  open section's first message after the upgrade writes its cache once more
+  (caches are model-scoped). README's condensing estimate moved from
+  $0.25–0.50 to $0.50–1.00.
+- **The QC drawer's "stronger than the drafter" claim compares models.**
+  It was a per-model boolean (`strongerThanDrafter: true` for every Opus or
+  Fable id) plus a hardcoded "than the Sonnet 5.5 model that drafts" in the
+  confirm dialog — paid-run consent copy that would now be false. `lib/
+  qcModel` gives each known model a tier (Haiku 1, Sonnet 2, Opus 3,
+  Fable 4); `qcModelLabel(id, drafterId)` claims it only when the lens
+  model's tier is strictly higher than the chat's, `drafterModelLabel` names
+  the chat's model, and `qcRunsOnCopy` takes the drafter as a third
+  argument. `health.model` (the live `INTERVIEW_MODEL`) is threaded App →
+  ArtifactPanel → QCDrawer → ConfirmQCModal as `drafterModel`/`drafter`.
+  Unknown ids on either side make no claim; a missing `health.model` reads
+  as the shipped chat default. With the defaults the drawer now says "Runs
+  on Claude Opus 5.5; Claude Sonnet 5.5 reviewers then check each finding."
+- **Copy.** The trust explainer's diagram (Opus 5.5: interview · Final QC
+  lenses; Sonnet 5.5: research · QC verifiers), its model table (a new
+  "Interview and drafting" row on Opus 5.5, "Research and Final QC verifier
+  seats" on Sonnet 5.5, the lens row no longer "stronger than the one that
+  drafts" and saying instead that no lens sees the conversation behind the
+  draft), the chat, whole-section, reference, figure, chip and condensing
+  runtime cards, and the cost card. Help's model list and its `health.model`
+  fallback. README: a Current Status section, the
+  `BUILD_A_SPEC_INTERVIEW_MODEL` and `_INTERVIEW_EFFORT` rows, the template
+  note, the condensing estimate, the Final QC feature bullet and three
+  P55-2 passages. Code comments in `settings.py`, `prompts.py` and
+  `suggestions.py`. CLAUDE.md's adaptive-thinking invariant and a new
+  section.
+- **Unchanged.** Research (Sonnet 5.5), Final QC lenses (Opus 5.5) and
+  seats (Sonnet 5.5), the fact harvest (Haiku 5.5), every effort default,
+  every prompt and tool byte, the SSE protocol, the QC manifest (interview
+  model is not a QC input, so retained reports stay current), readiness, the
+  project file.
+
+### Tests
+
+- `tests/test_settings.py::test_the_chat_and_its_condensing_run_on_opus_55`
+  reads `INTERVIEW_MODEL_DEFAULT` from the source (`ast`, so a developer's
+  environment cannot move it) and checks `_summary_effort_message` gives an
+  Opus 5.5 summary the `high` effort message at the shipped efforts.
+- `tests/test_usage.py`: four interview-priced figures moved to Opus 5.5
+  rates (the golden estimate 4.15 → 8.25 and cache saving 1.9 → 3.8, the
+  stopped-turn estimate 5.0 → 10.0 and 0.007 → 0.014, the ledger turn
+  0.0264 → 0.0328). These were the only backend failures among the 21 test
+  files that name the interview model (727 tests).
+- `frontend/tests/qcModel.test.ts`: the default lens model makes no claim
+  over the default chat; the claim compares tiers (Opus over Sonnet, Fable
+  over Opus, Sonnet over Haiku: yes; same tier, weaker, unknown: no); the
+  consent line with and without a Sonnet drafter; the drawer's source calls
+  each helper with the drafter.
+
+**Revert matrix** (each reverted in place, the named file run, restored):
+the default back to `MODEL_SONNET_55` → the settings pin red; Opus 5.5
+dropped from `PER_MESSAGE_EFFORT_MODELS` → the settings pin red. Ruff, the
+21 interview-model test files, `npm test` (573) and `npm run build` pass;
+the full suite runs in CI. No paid API call was made; whether Opus earns
+its price on real sections is unmeasured until the owner runs them.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Chat", item "The chat runs on Claude Opus 5.5": "The interview,
+'Draft full section', 'Adapt imported draft', conversation condensing and
+template AI Generalize now run on Claude Opus 5.5 instead of Claude Sonnet
+5.5, at the same effort levels. Opus 5.5 is much less likely to state a
+figure or cite a source your inputs don't support, and writes more clearly;
+it also costs twice as much per token, so expect the chat's line in Settings
+to roughly double. Set BUILD_A_SPEC_INTERVIEW_MODEL=claude-sonnet-5-5 to go
+back. Final QC's description no longer calls itself a stronger model than
+the drafter unless it is."

@@ -80,6 +80,7 @@ import { useQcTransportPreference } from "../lib/useQcTransportPreference";
 import QCReportModal from "./QCReportModal";
 import Tip from "./Tip";
 import {
+  drafterModelLabel,
   qcModelLabel,
   qcRunsOnCopy,
   qcVerifierModelLabel,
@@ -113,6 +114,8 @@ interface Props {
   qcModel?: string;
   /** The verifier seats' model id (`health.qc_verifier_model`). */
   qcVerifierModel?: string;
+  /** The chat's model id (`health.model`), the one that drafts. */
+  drafterModel?: string;
 }
 
 const QC_BUSY_MESSAGE = "Wait for the current action to finish.";
@@ -876,12 +879,14 @@ export default function QCDrawer({
   openNonce,
   qcModel,
   qcVerifierModel,
+  drafterModel,
 }: Props) {
-  const model = qcModelLabel(qcModel);
+  const model = qcModelLabel(qcModel, drafterModel);
+  const drafter = drafterModelLabel(drafterModel);
   // The verifier seats' model, named wherever the copy says who checks the
   // findings (Sonnet 5.5 by default since 2026-10-08).
   const seats = qcVerifierModelLabel(qcVerifierModel);
-  const runsOn = qcRunsOnCopy(qcModel, qcVerifierModel);
+  const runsOn = qcRunsOnCopy(qcModel, qcVerifierModel, drafterModel);
   const [expanded, setExpanded] = useState(false);
   // The tour opens the drawer by bumping the nonce; the user can still
   // collapse it freely — the tour never fights back.
@@ -1824,6 +1829,7 @@ export default function QCDrawer({
       <ConfirmQCModal
         isRerun={!!primaryReport}
         model={model}
+        drafter={drafter}
         seats={seats}
         costEstimate={costEstimate}
         busy={interactionBusy}
@@ -2179,6 +2185,7 @@ function DismissQCModal({
 function ConfirmQCModal({
   isRerun,
   model,
+  drafter,
   seats,
   costEstimate,
   busy,
@@ -2188,6 +2195,8 @@ function ConfirmQCModal({
 }: {
   isRerun: boolean;
   model: QcModelLabel;
+  /** The chat's model, the one that drafts. */
+  drafter: QcModelLabel;
   /** The verifier seats' model. */
   seats: QcModelLabel;
   costEstimate: string;
@@ -2329,7 +2338,7 @@ function ConfirmQCModal({
             goes out the door. It runs on{" "}
             <strong className="text-ink">{model.name}</strong>
             {model.strongerThanDrafter
-              ? ", a stronger reasoning model than the Sonnet\u00a05.5 model that drafts"
+              ? `, a stronger reasoning model than the ${drafter.name} model that drafts`
               : ""}{" "}
             — the point of the pass is to catch what the drafter missed.
           </p>

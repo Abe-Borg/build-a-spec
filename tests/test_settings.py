@@ -293,3 +293,35 @@ def test_the_chat_interview_and_research_ship_at_medium_effort():
         "INTERVIEW_EFFORT": ("BUILD_A_SPEC_INTERVIEW_EFFORT", "medium"),
         "RESEARCH_EFFORT": ("BUILD_A_SPEC_RESEARCH_EFFORT", "medium"),
     }
+
+
+def test_the_chat_and_its_condensing_run_on_opus_55(monkeypatch):
+    """The owner's 2026-10-13 trial: the chat runs on Opus 5.5 at "medium"
+    (pinned above) and the condensing summary, which forks the chat's request
+    and so shares its model, on Opus 5.5 at "high". The default is read from
+    the source, so a developer's environment cannot move it; the summary's
+    depth is checked through the function that builds it, at the shipped
+    efforts, so a model missing from the per-message effort list fails here
+    rather than condensing silently at the chat's depth."""
+    from backend.llm.conversation import _summary_effort_message
+
+    source = Path(settings.__file__).read_text(encoding="utf-8")
+    default = None
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "INTERVIEW_MODEL_DEFAULT"
+        ):
+            default = getattr(node.value, "id", None)
+    assert default == "MODEL_OPUS_55"
+
+    monkeypatch.setattr(settings, "INTERVIEW_EFFORT", "medium")
+    monkeypatch.setattr(settings, "COMPACTION_EFFORT", "high")
+    message = _summary_effort_message(settings.MODEL_OPUS_55, {"type": "adaptive"})
+    assert message == {
+        "role": "system",
+        "content": [],
+        "output_config": {"effort": "high"},
+    }

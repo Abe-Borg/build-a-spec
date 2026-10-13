@@ -171,6 +171,8 @@ interface Props {
   qcModel?: string;
   /** The verifier seats' model id (`health.qc_verifier_model`). */
   qcVerifierModel?: string;
+  /** The chat's model id (`health.model`), the one that drafts. */
+  drafterModel?: string;
   changedIds: ReadonlySet<string>;
   /** The file this session saves to (the `.baspec` it was opened from or
    *  last saved to), or null when there is none yet. Null draws a plain Save
@@ -463,6 +465,7 @@ export default function ArtifactPanel({
   usage,
   qcModel,
   qcVerifierModel,
+  drafterModel,
   changedIds,
   saveTarget,
   onSaveProject,
@@ -1914,6 +1917,7 @@ export default function ArtifactPanel({
               openNonce={drawerNonces?.qc}
               qcModel={qcModel}
               qcVerifierModel={qcVerifierModel}
+              drafterModel={drafterModel}
             />
           ),
           issues: (

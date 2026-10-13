@@ -2282,7 +2282,9 @@ PR"). `QC_REPORT_SCHEMA_VERSION` 5, `QC_PROTOCOL_VERSION` `final-qc/5`.
   branches corrected: a lone cannot-verify seat disputes), the finding id
   (hashed only when True), live events, readiness detail, the chat's QC
   block and `read_qc_finding`, the Word report and the chat policy all name
-  it.
+  it. So do the Word report's disputed appendix and the one-seat
+  `QC_VERIFIERS_STANDARD` warning and README row (a lone seat that cannot
+  verify disputes its finding; Codex review on PR #323).
 - **Version gates.** `_QC_SCHEMA_V4`/`_QC_SCHEMA_V5` name the floors; every
   gate that meant "v4 shape" compares against `_QC_SCHEMA_V4`, never the
   current version (a bump would have sent v4 records down the v3 path).

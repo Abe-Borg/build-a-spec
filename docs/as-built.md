@@ -24507,6 +24507,17 @@ answer cannot_verify, and how complete the lens's accounting is on real
 profiles, are unmeasured. `tools/qc_verifier_canary.py --run` (owner-only)
 sends the new strict schema as written and prints the new field.
 
+**Review fixes (Codex, PR #323).** The Word report's disputed-appendix
+introduction said every disputed panel's reviewers "did not agree"; it now
+names all three reasons (a split, an unevidenced critical/high refutation, a
+reviewer that could not check it) and points at each candidate's Why
+disputed line. The `QC_VERIFIERS_STANDARD=1` startup warning and its README
+row said no medium/low finding can be disputed; a lone seat that cannot
+verify now disputes its finding, and both say so. Pinned by
+`test_the_word_report_says_who_could_not_verify` and
+`test_the_one_seat_warning_says_a_lone_reviewer_can_dispute` (a settings
+reload under `caplog`); reverting either fix turns its test red.
+
 **Release-note draft:** "Final QC accounts for every grounded research
 requirement — covered, missing or not applicable — in its report, reads the
 questions still waiting on you so a clause left open on purpose is not

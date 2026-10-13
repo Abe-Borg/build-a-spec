@@ -450,6 +450,40 @@ def test_the_word_report_says_who_could_not_verify():
     assert "COULD NOT VERIFY" in text
     assert "At least one reviewer could not check the finding" in text
     assert "0 uphold / 0 refute / 2 could not verify" in text
+    # The appendix's introduction no longer says every disputed panel
+    # disagreed (Codex review on PR #323).
+    flat = _flat(text)
+    assert "the reviewers did not agree. That disagreement" not in flat
+    assert (
+        "a reviewer could not check the finding and the others did not "
+        "refute it by a majority" in flat
+    )
+
+
+def test_the_one_seat_warning_says_a_lone_reviewer_can_dispute(
+    monkeypatch, caplog
+):
+    """At one seat a panel cannot split, but a lone reviewer that cannot
+    verify its finding disputes it (Codex review on PR #323)."""
+    import importlib
+    import logging
+
+    from backend import settings as settings_module
+
+    monkeypatch.setenv("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", "1")
+    try:
+        with caplog.at_level(logging.WARNING, logger="buildaspec.settings"):
+            importlib.reload(settings_module)
+        text = _flat(caplog.text)
+        assert "no medium/low finding can be disputed" not in text
+        assert (
+            "a medium/low finding is disputed only when its single reviewer "
+            "cannot verify it" in text
+        )
+    finally:
+        monkeypatch.delenv("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", raising=False)
+        importlib.reload(settings_module)
+    assert settings_module.QC_VERIFIERS_STANDARD == 2
 
 
 def _document_text(payload: bytes) -> str:

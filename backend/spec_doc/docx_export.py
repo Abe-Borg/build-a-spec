@@ -5327,9 +5327,13 @@ def _qc_render_disputed_appendix(document, qc_result: dict) -> None:
         return
     document.add_paragraph(
         "Every required verifier seat completed for these candidates and the "
-        "reviewers did not agree. That disagreement is itself decision-relevant "
-        "evidence, so the candidate is escalated rather than recorded as either "
-        "a surviving finding or a refutation. Each one requires a human "
+        "panel did not settle them: the reviewers did not agree, a critical "
+        "or high refutation cited no validated evidence, or a reviewer could "
+        "not check the finding and the others did not refute it by a "
+        "majority (final-qc/5; each candidate's Why disputed line says which). "
+        "That is itself decision-relevant evidence, so the candidate is "
+        "escalated rather than recorded as either a surviving finding or a "
+        "refutation. Each one requires a human "
         "disposition before the section is issue-ready. Their operations were "
         "not validated and must not be applied from this record."
     )

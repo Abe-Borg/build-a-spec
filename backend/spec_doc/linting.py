@@ -863,8 +863,8 @@ def lint_document(
                     RULE_EXPLANATORY_PROSE,
                     paragraph.uid,
                     ref,
-                    f"Explains instead of directing: {found}. Rewrite it as "
-                    "a directive to the Contractor; the reason or basis "
+                    f"Explains instead of stating the requirement: {found}. "
+                    "Rewrite it as the requirement alone; the reason or basis "
                     "belongs in chat and the provision's source link, not "
                     "the text.",
                     hits[0]["match"],

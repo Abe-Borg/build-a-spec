@@ -2554,7 +2554,7 @@ def _readiness_payload(
             "ok": len(lint_items) == 0,
             "detail": "Lint clean."
             if not lint_items
-            else f"{len(lint_items)} advisory lint issue(s).",
+            else f"{len(lint_items)} lint issue(s) to fix.",
             "advisory": False,
         },
         {

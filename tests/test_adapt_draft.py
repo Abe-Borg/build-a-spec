@@ -249,7 +249,10 @@ def test_the_context_names_the_imported_review_debt(monkeypatch):
     context = request_context_text(fake.messages.requests[0])
     assert "IMPORTED-STARTER REVIEW:" in context
     assert "still carry status 'imported'" in context
-    assert "confirmed, adapted, or deleted" in context
+    # The way through names the user's approval as the last step: an
+    # adapted or kept block is assumed, and assumed holds readiness too.
+    assert "confirmed once the user approves it" in context
+    assert "issue readiness holds while any block is imported or assumed" in context
 
 
 def test_a_document_with_no_imported_blocks_carries_no_review_line(

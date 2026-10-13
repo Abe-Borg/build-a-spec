@@ -112,7 +112,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting) and, since 2026-10-07, each op's `reason` (the panel prints the newest under a changed block); `doc` is the authoritative full snapshot (rendering), whose `edit_reasons` carries every element's trail |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks — leftovers only since 2026-10-06: the model can write neither, and since PR 4 the user's edit API refuses a needs_input stamp too; the panel titles them Leftover placeholders); emitted when a turn changed the doc |
-| `lint` | `items`, `standards` | advisory lint issues + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
+| `lint` | `items`, `standards` | lint issues (they never block an edit; every one holds issue readiness) + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
 | `turn_complete` | `stop_reason`, `usage` | turn ended; history + doc version committed server-side. `usage` aggregates the turn's billed tokens across every round (input/output/cache/thinking + web-tool request counts) — raw material for the future cost meter. A turn stopped mid-stream adds `estimated_output_tokens` + `usage_estimated: true` (see "Disclosed stopped-turn output estimate"); `output_tokens` stays exactly what the provider reported |
 | `error` | `message` | turn failed; history untouched and doc rolled back (retry is safe) |
 
@@ -1989,6 +1989,60 @@ summary's format and is left for the bigger items. Tests:
 `tests/test_prompt_review_wording.py`, `tests/test_writing_policy.py`. Full
 record, reversion evidence and the release-note draft are in
 `docs/as-built.md` under the same heading. No paid API call was made.
+
+## The tool instructions and per-turn notes match the new rules — implemented notes (2026-10-13)
+
+Step 7 of the prompt-review follow-up: the text the outside review never saw
+(the tool descriptions, the PROJECT CONTEXT blocks' instructions, the
+research, Final QC and harvest output-tool fields), read against steps 1–6
+and the code. Fifteen places stated an old rule; all are wording.
+
+- **Edit tool.** `move`'s line says "move never changes an element's
+  parent" (was "content cannot be reparented", false since `relocate`);
+  true for Final QC too, which echoes this description and has no relocate.
+  `set_status`: "confirmed once the user has stated or approved the
+  provision" (was "use it to confirm an assumed block"; Codex review on PR
+  #316 kept "stated", the provenance rule's other half). The `reason` property and the
+  prompt's reason line note that a set_standard_edition basis cites a
+  research item by its id and never reaches Word (section metadata stores
+  no reason trail; no export reads `edition_overrides`).
+- **Lint holds readiness.** `lint_clean` is non-advisory, but the LINT
+  REPORT header and `_LINT_POLICY` said "advisory" and the readiness detail
+  said "N advisory lint issue(s)". Now: lint never blocks an edit, every
+  issue holds readiness; the detail reads "N lint issue(s) to fix".
+- **IMPORTED-STARTER REVIEW** names the user's approval as the last step:
+  an adapted or kept block is assumed, and `no_assumed_left` gates too.
+- **Editions.** The pinned `standards_context_block` names a grounded
+  research item beside the user's statement; `RECORD_PROJECT_FACTS_TOOL`
+  and the harvest prompt drop "confirmed by the user or the AHJ" (the
+  harvest keeps its own `{grounded}` label, which its tests require). An
+  attached document alone never establishes an edition (Codex review on PR
+  #316).
+- **Requirements, not directives** (step 6's rule): the explanatory-prose
+  lint message ("Explains instead of stating the requirement … Rewrite it
+  as the requirement alone"), `_LINT_POLICY`, and `_RESEARCH_POLICY`, which
+  also said never explain "where it applies" — it now keeps a scope
+  qualifier. `_GAP_AND_ADAPT` names the review report, not the export, as
+  where unreviewed imported blocks are scheduled.
+- **Stale once.** The standards render is hashed into the QC manifest, so a
+  retained Final QC result reads stale once (the same release as step 6's).
+  The tool list and the stable prompt change once (cache rewrite). The
+  edit tool's top-level description is not in the manifest; it changes the
+  lens prompt bytes only, and QC caches live within a run.
+- **Read and unchanged:** create_figure, read_reference_doc, apply_qc_fixes,
+  track_followups, recall_conversation, read_project_section, the retired
+  suggest_prompts (its removal needs API evidence, not wording), the
+  identity, profile, facts, Waiting on you, QC review, figure and reference
+  blocks, the editing boundary, and the research, QC, consolidation,
+  compliance and template output tools.
+
+Not changed, raised with the owner: a legitimate "pending" hold point
+("pending acceptance of shop drawings") is an `explanatory_prose` lint
+issue the prompt says to leave, lint cannot be dismissed, and `lint_clean`
+gates readiness, so such a section never reads ready. Tests:
+`tests/test_tool_text_review.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
 
 ## As-built history
 

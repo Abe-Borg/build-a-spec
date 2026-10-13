@@ -2503,7 +2503,9 @@ export default function App() {
    *
    *  Native shell (pywebview): the FIRST save of a session asks where, and
    *  every later one overwrites that file silently — `saveAs` is how the
-   *  dialog comes back. The shell owns which of the two happens, because the
+   *  dialog comes back. A session opened from a `.baspec` already has its
+   *  file (`bindNativeProjectHome`, or the open-section commit), so even its
+   *  first save overwrites it. The shell owns which of the two happens, because the
    *  target it acts on is session state the server clears on reset/load; this
    *  side only reports the answer back into `saveTarget` so the button can
    *  draw itself. Tutorial workspaces and the dev browser have no such target
@@ -3052,7 +3054,9 @@ export default function App() {
    *  returned, and the generation the load or seed reported — so a session
    *  replaced since then is never handed the folder. A folder that cannot be
    *  bound is a section with no home, which the panel already says; nothing
-   *  to report. */
+   *  to report. The same bind makes an opened `.baspec` the file Save
+   *  overwrites (the shell's `save_target`), so the button draws its
+   *  overwrite form at once; a brief-seeded section reports none. */
   const bindNativeProjectHome = async (
     token: string,
     generation: number | undefined,
@@ -3064,6 +3068,7 @@ export default function App() {
       const bound = await api.bind_project_home(token, generation);
       if (workspaceEpochRef.current !== epoch || !bound?.ok) return;
       setProjectHome(bound.home ?? null);
+      setSaveTarget(bound.save_target ?? null);
       setProjectSectionsNonce((n) => n + 1);
     } catch {
       // See above: no home is an honest state, not an error.

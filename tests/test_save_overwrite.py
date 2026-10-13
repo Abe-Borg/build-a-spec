@@ -4,7 +4,9 @@ Before this, every save went through the native Save dialog: the user named
 the file and picked its folder each time, and a session saved five times left
 five timestamped files with no way to say "the same one again". Now the FIRST
 save of a session establishes a target, later saves write it in place with no
-dialog, and the dialog moves behind "Save as…".
+dialog, and the dialog moves behind "Save as…". Since 2026-10-13 (owner rule)
+opening a ``.baspec`` establishes it too: Save writes back to the file that was
+opened, the way a desktop app treats a document it opened.
 
 What the tests here are really guarding is the other half of that: an
 overwrite is silent, so the target must never outlive the session that chose
@@ -26,6 +28,7 @@ from backend.spec_doc.project_package import parse_project_package
 
 import main
 from tests.test_close_prompt import (
+    _FakeFileDialog,
     _FakeWindow,
     _controller_with,
     _fake_webview,
@@ -170,9 +173,9 @@ def test_a_new_session_forgets_where_it_was_saving(tmp_path, monkeypatch):
 
 
 def test_opening_a_project_forgets_where_the_previous_one_was_saving():
-    # Loading a file is the same replacement as a reset. Deliberately it does
-    # NOT adopt the opened file as the target either: the rule is that a save
-    # establishes where a session saves, and nothing else does.
+    # Loading a file is the same replacement as a reset. The load itself knows
+    # no path (an upload is bytes), so it only clears; the callers that do
+    # know the opened file's path re-bind it afterwards (the tests below).
     session = SessionState()
     session.save_target = "/somewhere/the-previous-project.baspec"
 
@@ -180,6 +183,142 @@ def test_opening_a_project_forgets_where_the_previous_one_was_saving():
 
     assert session.save_target == ""
     assert sessions.project_save_target(session) is None
+
+
+# --- an opened .baspec is the file Save writes back to ----------------------
+
+
+def _save_dialogs(window) -> int:
+    """How many SAVE dialogs the window has shown (the Open dialog the
+    native open itself uses is not one)."""
+    return sum(
+        1
+        for args, _kwargs in window.dialog_calls
+        if args and args[0] == _FakeFileDialog.SAVE
+    )
+
+
+def _open_natively(controller, client, path):
+    """The frontend's native Open, end to end: the shell's dialog reads the
+    file, the bytes run load-file, then the shell binds with the token and
+    the generation the load reported — the order ``doLoadProject`` runs."""
+    picked = controller.open_file("project")
+    loaded = client.post(
+        "/api/project/load-file",
+        files={"file": (picked["name"], path.read_bytes(), "application/zip")},
+    )
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["project_save_target"] is None, "the load alone knows no path"
+    return controller.bind_project_home(picked["token"], loaded.json()["generation"])
+
+
+def test_opening_a_baspec_makes_save_write_back_to_it_without_asking(
+    tmp_path, monkeypatch
+):
+    # The reported bug (Abraham): open an existing .baspec, work, click Save,
+    # and the Save dialog asks where — again. It must write the opened file.
+    _fake_webview(monkeypatch)
+    opened = tmp_path / "Client X - 21 13 13.baspec"
+    _draft("SUMMARY")
+    opened.write_bytes(sessions.project_package(sessions.get_session())[0])
+    sessions.reset_session()
+    client = TestClient(create_app())
+    window = _FakeWindow(dialog_path=str(opened))
+    controller = _controller_with(window)
+
+    bound = _open_natively(controller, client, opened)
+
+    assert bound["ok"] is True
+    assert bound["save_target"] == {"path": str(opened), "name": opened.name}
+    assert client.get("/api/doc").json()["project_save_target"] == bound["save_target"]
+
+    _draft("REFERENCES")
+    saved = controller.save_project()
+
+    assert saved["ok"] is True
+    assert saved["target"] == str(opened)
+    assert _save_dialogs(window) == 0, "Save wrote the opened file without asking"
+    assert _articles(opened) == ["SUMMARY", "REFERENCES"]
+    assert not [p for p in tmp_path.iterdir() if p != opened], "no second file"
+
+
+def test_save_as_after_an_open_asks_and_leaves_the_opened_file_alone(
+    tmp_path, monkeypatch
+):
+    _fake_webview(monkeypatch)
+    opened = tmp_path / "opened.baspec"
+    _draft("SUMMARY")
+    opened.write_bytes(sessions.project_package(sessions.get_session())[0])
+    sessions.reset_session()
+    client = TestClient(create_app())
+    window = _FakeWindow(dialog_path=str(opened))
+    controller = _controller_with(window)
+    _open_natively(controller, client, opened)
+
+    copy = tmp_path / "copy.baspec"
+    window._dialog_path = str(copy)
+    _draft("REFERENCES")
+    saved_as = controller.save_project_as()
+
+    assert saved_as["ok"] is True and saved_as["target"] == str(copy)
+    assert _save_dialogs(window) == 1, "Save as… still asks"
+    _args, kwargs = window.dialog_calls[-1]
+    assert kwargs["directory"] == str(tmp_path), "…in the opened file's folder"
+    assert _articles(opened) == ["SUMMARY"], "the opened file is left alone"
+    assert _articles(copy) == ["SUMMARY", "REFERENCES"]
+
+
+def test_a_legacy_json_project_is_not_adopted_and_its_first_save_asks(
+    tmp_path, monkeypatch
+):
+    # Save writes only the .baspec package. Overwriting the .json the user
+    # opened would leave a package under a .json name and the legacy file
+    # gone, so a legacy open keeps the old posture: the first Save asks.
+    import json
+
+    _fake_webview(monkeypatch)
+    legacy = tmp_path / "old-project.json"
+    _draft("SUMMARY")
+    legacy.write_text(json.dumps(sessions.project_payload(sessions.get_session())))
+    original_bytes = legacy.read_bytes()
+    sessions.reset_session()
+    client = TestClient(create_app())
+    window = _FakeWindow(dialog_path=str(legacy))
+    controller = _controller_with(window)
+
+    bound = _open_natively(controller, client, legacy)
+
+    assert bound["ok"] is True and bound["save_target"] is None
+    assert sessions.get_session().save_target == ""
+
+    converted = tmp_path / "old-project.baspec"
+    window._dialog_path = str(converted)
+    assert controller.save_project()["ok"] is True
+    assert _save_dialogs(window) == 1, "the first save of a legacy open asks"
+    assert legacy.read_bytes() == original_bytes
+    assert _articles(converted) == ["SUMMARY"]
+
+
+def test_only_a_current_session_adopts_only_a_baspec():
+    session = SessionState()
+    generation = session.generation
+
+    assert sessions.adopt_opened_project_file(session, "/p/a.json") is False
+    assert sessions.adopt_opened_project_file(session, "") is False
+    assert session.save_target == ""
+    session.invalidate_model_turn()  # replaced since the open
+    assert (
+        sessions.adopt_opened_project_file(session, "/p/a.baspec", generation=generation)
+        is False
+    )
+    assert session.save_target == ""
+    assert sessions.adopt_opened_project_file(
+        session, "/p/A.BASPEC", generation=session.generation
+    )
+    assert sessions.project_save_target(session) == {
+        "path": "/p/A.BASPEC",
+        "name": "A.BASPEC",
+    }
 
 
 def test_a_tutorial_copy_never_becomes_the_file_save_overwrites(

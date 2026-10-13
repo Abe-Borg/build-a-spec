@@ -416,7 +416,13 @@ def test_open_section_runs_the_real_load_path(tmp_path):
     assert body["chat"], "the transcript comes back like a load-file"
     opened = sessions.get_session()
     assert opened.project_home == home, "the home survives the load"
-    assert opened.save_target == "", "an open never establishes a save target"
+    # Save writes back to the section file the panel opened (owner rule,
+    # 2026-10-13), and the payload says so, so the button draws it at once.
+    assert opened.save_target == os.path.realpath(first_file)
+    assert body["project_save_target"] == {
+        "path": os.path.realpath(first_file),
+        "name": first_file.name,
+    }
     via_section = _projection(opened)
 
     # The same bytes through the upload path: the same session, minus the home.
@@ -430,6 +436,7 @@ def test_open_section_runs_the_real_load_path(tmp_path):
     via_upload = sessions.get_session()
     assert _projection(via_upload) == via_section
     assert via_upload.project_home is None
+    assert via_upload.save_target == "", "an upload alone has no path to adopt"
     assert "home_kept" not in uploaded.json()
 
     # And back again, by the other number.
@@ -989,6 +996,7 @@ def test_a_natively_opened_file_binds_its_folder_for_the_session_its_load_produc
     assert bound == {
         "ok": True,
         "home": {"folder": str(folder), "brief_name": BRIEF_NAME},
+        "save_target": {"path": str(section_file), "name": section_file.name},
         "error": "",
     }
     assert client.get("/api/doc").json()["project_home"]["folder"] == str(folder)
@@ -1059,6 +1067,7 @@ def test_a_section_started_from_a_picked_brief_lives_in_the_brief_s_folder(
     assert bound == {
         "ok": True,
         "home": {"folder": str(folder), "brief_name": BRIEF_NAME},
+        "save_target": None,
         "error": "",
     }
     seeded = sessions.get_session()
@@ -1102,6 +1111,11 @@ def test_a_sibling_section_picked_to_start_from_binds_its_folder_only_when_linke
     )
     assert bound["ok"] is True
     assert bound["home"] == {"folder": str(folder), "brief_name": BRIEF_NAME}
+    # The sibling's file is where the seed CAME from, not the new section's
+    # file: Save must never overwrite it (an opened project is adopted, a
+    # seed never is).
+    assert bound["save_target"] is None
+    assert sessions.get_session().save_target == ""
 
     # An unlinked sibling, beside the same brief: nothing to bind.
     sessions.reset_session()
@@ -1117,7 +1131,7 @@ def test_a_sibling_section_picked_to_start_from_binds_its_folder_only_when_linke
     _started, bound = _start_from_picked(
         client, controller, picked, loose_file.read_bytes(), "application/zip"
     )
-    assert bound == {"ok": True, "home": None, "error": ""}
+    assert bound == {"ok": True, "home": None, "save_target": None, "error": ""}
     assert sessions.get_session().project_home is None
 
 

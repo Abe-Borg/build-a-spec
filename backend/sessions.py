@@ -19,7 +19,11 @@ from typing import Any, Callable, Iterator, Literal
 from .llm.conversation import SessionState, effective_discipline
 from .session_history import SessionIdentity, register_active_session_provider
 from .spec_doc.project import load_project, save_project
-from .spec_doc.project_package import ProjectPackageError, build_project_package
+from .spec_doc.project_package import (
+    PACKAGE_EXTENSION,
+    ProjectPackageError,
+    build_project_package,
+)
 
 WorkspaceScope = Literal["original", "tutorial", "scenario"]
 
@@ -784,7 +788,8 @@ def project_default_filename(session: SessionState) -> str:
 
 
 def project_save_target(session: SessionState) -> dict[str, str] | None:
-    """Where this session has already saved itself, or ``None`` if nowhere.
+    """The file this session saves to — the ``.baspec`` it was opened from or
+    last saved to — or ``None`` when there is none yet.
 
     ``{"path", "name"}`` — the absolute path the native shell will overwrite,
     and its basename for a button label that has to fit in a toolbar. The
@@ -819,10 +824,43 @@ def remember_project_save_target(
     target = str(path or "").strip()
     if not target:
         return False
-    if generation is not None and session.generation != generation:
+    # Checked and written under the guard a reset or load holds while it
+    # clears the target and advances the generation, so neither can land
+    # between the check and the write and leave the replacement bound.
+    with session.session_state_guard():
+        if generation is not None and session.generation != generation:
+            return False
+        session.save_target = target
+        return True
+
+
+def adopt_opened_project_file(
+    session: SessionState,
+    path: str,
+    *,
+    generation: int | None = None,
+) -> bool:
+    """Make the ``.baspec`` the user just opened the file Save overwrites.
+    Returns whether it stuck.
+
+    Owner rule (2026-10-13): opening an existing project file and pressing
+    Save writes back to that file, with no dialog — the way every desktop
+    app treats a document it opened. ``load_project`` still clears the
+    previous session's target (a load replaces the session); the two places
+    that know the opened file's path re-bind it right after: the native
+    Open's ``bind_project_home`` and the Project panel's sibling open.
+
+    Only the current ``.baspec`` format is adopted. A legacy ``.json``
+    project opens as before and its first Save asks, so the package is never
+    written under a ``.json`` name over the file the user opened. The
+    ``generation`` guard is :func:`remember_project_save_target`'s: a reset
+    or another load since the open replaced the session, and the
+    replacement never opened this file.
+    """
+    target = str(path or "").strip()
+    if not target.lower().endswith(PACKAGE_EXTENSION):
         return False
-    session.save_target = target
-    return True
+    return remember_project_save_target(session, target, generation=generation)
 
 
 # ---------------------------------------------------------------------------

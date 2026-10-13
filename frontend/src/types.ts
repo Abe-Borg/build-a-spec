@@ -1068,8 +1068,9 @@ export interface DocPayload {
   draft_prerequisites: DraftPrerequisites;
   research_status: ResearchRunStatus;
   /**
-   * The file this session already saved itself to, or null when it never
-   * has. Server-owned, and the panel's Save button is drawn off it: null
+   * The file this session saves to — the `.baspec` it was opened from or
+   * last saved to — or null when there is none yet. Server-owned, and the
+   * panel's Save button is drawn off it: null
    * means Save asks where; a target means Save overwrites that file and the
    * dialog moves behind "Save as…". Never inferred locally — a reset clears
    * it server-side, and a button that had kept its own copy would silently
@@ -2995,11 +2996,18 @@ declare global {
          *  `open_file` returned for a project open or a project-brief pick —
          *  the path never reaches this side — and `generation` the one the
          *  load or seed reported, so a session replaced since then is never
-         *  handed the folder. */
+         *  handed the folder. A project open of a `.baspec` also makes that
+         *  file the one Save overwrites: `save_target` reports it (null for
+         *  a brief pick or a legacy `.json`). Older shells omit the key. */
         bind_project_home?: (
           token: string,
           generation?: number,
-        ) => Promise<{ ok: boolean; home: ProjectHome | null; error: string }>;
+        ) => Promise<{
+          ok: boolean;
+          home: ProjectHome | null;
+          save_target?: SaveTarget | null;
+          error: string;
+        }>;
         /** Native Save dialog for a portable reusable starter. */
         save_template?: (templateId: string) => Promise<boolean>;
         /** Native Save dialog for the project brief (.basproject). Fetched

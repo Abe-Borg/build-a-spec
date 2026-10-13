@@ -124,7 +124,7 @@ from ..spec_doc import (
     open_questions,
     outline,
 )
-from ..spec_doc.model import apply_edits, iter_paragraphs
+from ..spec_doc.model import apply_edits, iter_paragraphs, resolve_relocated
 from ..spec_doc.project import chat_transcript
 from ..spec_doc.source_format import SourceFormatMap
 from ..spec_doc.source_mapping import (
@@ -1276,13 +1276,7 @@ class SessionState:
             # preservation gate have accepted the whole transaction.
             candidate, _candidate_ops = apply_edits(self.doc.doc, edits)
             self.validate_source_backed_candidate(candidate)
-        applied = self.doc.apply_edits(edits)
-        for record in applied:
-            if record.get("action") == "relocate":
-                # A relocated provision has new ids; its waiting question
-                # follows it (prompt-review follow-up, step 5).
-                self.followups.remap_elements(record.get("id_map") or {})
-        return applied
+        return self.doc.apply_edits(edits)
 
     def _active_source_scope(self) -> bool:
         """Whether current body mutations require source preservation.
@@ -2781,8 +2775,10 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
     # the document; the header still says WAITING ON THE USER and never
     # "open items", so the two lists are never conflated.
     try:
+        doc = session.doc.doc
         followup_block = session.followups.context_block(
-            message_index=assistant_bubble_count(session.history)
+            message_index=assistant_bubble_count(session.history),
+            resolve_element=lambda uid: resolve_relocated(doc, uid),
         )
     except Exception:  # noqa: BLE001 - context assembly must never fail a turn
         followup_block = ""

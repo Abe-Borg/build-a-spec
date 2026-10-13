@@ -310,7 +310,9 @@ invisible to CI and expensive to the user.
       with every subparagraph under it, the same words and status chips, and
       the original is gone. If a Waiting on you item pointed at a
       subparagraph, clicking it still finds the provision. Undo: the
-      provision and its subparagraphs return to where they were.
+      provision and its subparagraphs return to where they were, and the
+      same Waiting on you item now jumps to the old place; Redo: back to the
+      new one.
 - [ ] **Only you confirm a provision (next release).** On a section with a
       completed research round, press Draft full section: provisions with a
       ◆ research chip land stamped assumed (amber), not confirmed, and show

@@ -22896,13 +22896,19 @@ what already landed, by design — or a model that forgot the second step.
   shape, so the redline's deletion comment says why too). A reason-less
   relocation (a hand edit through `/api/doc/edit`) drops both trails, as a
   hand move or delete does.
-- **References.** `SessionState.apply_doc_edits` — the one entry point for
-  model and manual batches — re-points follow-ups after a relocation
-  (`FollowUpStore.remap_elements(id_map)`); the store is turn-atomic, so a
-  rolled-back turn puts the old links back with the document (pinned). A
-  document undo does not touch follow-ups (as for every other follow-up
-  change). Text references to the old number ("Paragraph 1.1.A") are still
-  the `unresolved_reference` lint's to report. The redline shows the original
+- **References.** The tree records where each relocated element went:
+  `SpecSection.relocations {old uid: new uid}` (serialized only when set,
+  so an unrelocated document's bytes are unchanged; refused on load when
+  malformed; cleared for a template). A Waiting on you item's `element_id`
+  is never rewritten. The per-turn WAITING ON THE USER block
+  (`FollowUpStore.context_block(resolve_element=…)`, passed
+  `model.resolve_relocated` by `_turn_context_text`) and the panel's jump
+  (`ArtifactPanel.scrollToElement` → `lib/followups.resolveRelocated`) read
+  it through the map, following a chain to its end (bounded, so a malformed
+  cycle cannot loop). Because the map rides the document's versions, undo,
+  redo and a new branch after undo all agree, and a relocated-away uid never
+  reappears on its branch. Text references to the old number ("Paragraph
+  1.1.A") are still the `unresolved_reference` lint's to report. The redline shows the original
   deleted and the copy inserted, each with its comment (`diff_sections`
   reports `deleted`/`inserted`; `build_docx` renders it — pinned). The
   panel's `doc_patch` handler lights every id in `id_map`
@@ -22950,9 +22956,9 @@ counted over the subtree (refused one level too deep, accepted at the
 limit); preserved content as subtree and destination; a batch with a
 relocation and a bad op leaves the provision where it was; reason trails
 copied plus the relocation's on both sides; a hand relocation drops them;
-the redline's deletion and insertion; a chat turn re-pointing a follow-up and
-returning `id_map`; a rolled-back turn restoring the link and the tree; the
-policy, the tool guide and the schema wording; Final QC's vocabulary and the
+the redline's deletion and insertion; a chat turn returning `id_map`; a
+rolled-back turn restoring the tree (the follow-up tests were reworked by the
+review fix below); the policy, the tool guide and the schema wording; Final QC's vocabulary and the
 top-level description without relocate. `tests/test_writing_policy.py`
 pins the v2 hash and the new brief-rule words; `tests/test_writing_policy_eval.py`
 the v2 label. Every test file that reads the edit tool, the op vocabulary,
@@ -22965,10 +22971,34 @@ each time; each reverted in place and restored): relocate not registered →
 carried → 2; source link not carried → 1; the depth check off by one → 1;
 the cycle check removed → 2; the preserved-content check removed → 1; the
 same-parent check removed → 1; extra fields accepted → 2; reason trails not
-copied → 1; follow-ups not re-pointed → 1; the policy rule reverted → 2; the
+copied → 1; follow-ups not re-pointed → 1 (that mechanism was replaced by
+the review fix below); the policy rule reverted → 2; the
 tool guide reverted → 1; the `parent_id` description reverted → 1. 15 of 15
 caught. The panel's subtree highlight has no test (it is in `App.tsx`'s
 event switch).
+
+**Codex review on PR #311 (one finding, fixed).** The first version
+re-pointed follow-ups when the relocation landed
+(`FollowUpStore.remap_elements` in `SessionState.apply_doc_edits`). A
+document undo restores only the tree, so after undo the item pointed at an
+id the undone document no longer had — and a branch from there could reuse
+that id for a different provision (ids are unique per branch, not across an
+abandoned future). Fixed by keeping the mapping on the tree
+(`relocations`) and resolving links when they are read; the remap was
+removed. Tests added (now 34 in `tests/test_relocate.py`): the tree records
+and chains relocations, saves and loads them, refuses five malformed maps,
+a template drops them; a chat turn leaves the link as given and the next
+turn's context names the new id; undo then names the old id and redo the
+new one, through the real routes; a rolled-back turn leaves no map.
+`frontend/tests/followups.test.ts` gains the resolver (chain, unknown id,
+no map, a cycle) and a source pin on the panel's jump. Probes for the fix,
+each reverted in place and restored: the map not recorded → 4 red; not
+serialized → 4; not loaded → 3; load not validated → 3; the chain not
+followed → 1; the block ignoring its resolver → 2; the chat passing none →
+2; a template keeping the map → 1; the panel's jump ignoring it → 1
+(`npm test`). 9 of 9 caught. The wide run (every test file that reads the
+edit tool, the vocabulary, the policy, follow-ups, the tree or templates):
+2,165 passed, 1 skipped; `npm test` 572; `npm run build` passes.
 
 No paid API call was made; how reliably the live model reaches for relocate
 instead of add plus delete is unmeasured until the owner runs one.

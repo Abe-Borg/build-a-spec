@@ -234,7 +234,7 @@ and lost the subparagraphs under the provision.
 - **New numbers, same history.** The moved provisions get new ids (an id
   names its parent), and each keeps its "why" trail, plus the reason for
   the move. A Waiting on you question linked to a moved provision follows
-  it.
+  it, and an undo or redo keeps the link right.
 - **The redline shows the original deleted and the copy inserted**, each with
   its comment, as before.
 - **Final QC is unchanged in what it can do.** A Final QC fix that would

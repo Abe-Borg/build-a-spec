@@ -194,6 +194,12 @@ export interface SpecDoc {
    *  newest few). A deleted element keeps its entry for the redline's
    *  comment; "sec" is the header. Present only once a model edit landed. */
   edit_reasons?: Record<string, string[]>;
+  /** Where each relocated element went: old id → new id (a relocate edit
+   *  gives a moved provision new ids). A Waiting on you item keeps the id it
+   *  was given and is jumped to through this map. Present only once
+   *  something was relocated; versioned with the tree, so undo keeps it
+   *  right. */
+  relocations?: Record<string, string>;
   section: { number: string; title: string };
   parts: DocPart[];
   version: { index: number; count: number };

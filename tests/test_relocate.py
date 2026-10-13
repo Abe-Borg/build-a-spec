@@ -13,8 +13,9 @@ forgets the second step: the obligations under the provision are gone.
 Now ``relocate`` moves an article or paragraph and everything under it to a
 new parent in ONE operation, inside the batch's one transaction. The copy is
 built before the original is removed, carrying text, status and source link;
-ids are new (``id_map``), reason trails follow, and a follow-up linked to
-the provision is re-pointed. The writing policy (version 2) and the tool
+ids are new (``id_map``), reason trails follow, and the tree records where
+each element went (``relocations``), so a Waiting on you item linked to the
+provision still finds it, through undo and redo too. The writing policy (version 2) and the tool
 guide say to use it.
 """
 from __future__ import annotations
@@ -36,6 +37,7 @@ from backend.spec_doc.model import (
     SpecEditError,
     SpecSection,
     apply_edits,
+    resolve_relocated,
 )
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.fakes import FakeClient, text_turn, tool_turn
@@ -314,9 +316,13 @@ def test_the_redline_shows_a_deletion_and_an_insertion():
     assert build_docx(moved, redline=diff)
 
 
-def test_a_waiting_question_follows_its_provision(monkeypatch):
+def _seed_session():
+    """The seeded document as a committed version (so undo has one to step
+    back to), plus a Waiting on you item linked to a subparagraph."""
     session = sessions.get_session()
+    session.doc.begin_turn()
     session.doc.doc = _seed()
+    session.doc.commit_turn()
     item, _ = session.followups.add(
         {
             "kind": "question",
@@ -324,51 +330,125 @@ def test_a_waiting_question_follows_its_provision(monkeypatch):
             "element_id": "pt1.a1.p1.p1",
         }
     )
-    edits = {
-        "edits": [
-            {
-                "action": "relocate",
-                "target_id": "pt1.a1.p1",
-                "parent_id": "pt3.a1",
-                "reason": "testing belongs in PART 3",
-            }
-        ]
-    }
+    return session, item
+
+
+_RELOCATE = {
+    "edits": [
+        {
+            "action": "relocate",
+            "target_id": "pt1.a1.p1",
+            "parent_id": "pt3.a1",
+            "reason": "testing belongs in PART 3",
+        }
+    ]
+}
+
+
+def _chat(fake, monkeypatch, message="go") -> list[dict]:
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    body = TestClient(create_app()).post("/api/chat", json={"message": message}).text
+    return [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+
+
+def _context_text(request: dict) -> str:
+    newest = request["messages"][-1]["content"]
+    return " ".join(b.get("text", "") for b in newest if isinstance(b, dict))
+
+
+def test_the_tree_records_where_each_element_went():
+    moved, applied = apply_edits(_seed(), _RELOCATE["edits"])
+    assert moved.relocations == applied[0]["id_map"]
+    assert resolve_relocated(moved, "pt1.a1.p1.p1") == "pt3.a1.p1.p1"
+    assert resolve_relocated(moved, "pt1.a1.p2") == "pt1.a1.p2"
+    # A second relocation chains.
+    again, _ = apply_edits(
+        moved,
+        [{"action": "relocate", "target_id": "pt3.a1.p1.p1", "parent_id": "pt1.a2", "reason": "x"}],
+    )
+    assert resolve_relocated(again, "pt1.a1.p1.p1") == "pt1.a2.p1"
+    # Saved and loaded; a document never relocated carries no key.
+    assert SpecSection.from_dict(again.to_dict()).relocations == again.relocations
+    assert "relocations" not in _seed().to_dict()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [["pt1.a1.p1"], {"": "pt3.a1.p1"}, {"pt1.a1.p1": ""}, {"pt1.a1.p1": "pt1.a1.p1"}, {"pt1.a1.p1": 3}],
+)
+def test_a_malformed_relocation_map_is_refused_on_load(bad):
+    data = _seed().to_dict()
+    data["relocations"] = bad
+    with pytest.raises(ValueError):
+        SpecSection.from_dict(data)
+
+
+def test_a_template_forgets_the_relocations():
+    from backend.templates import _canonical_document
+
+    moved, _ = apply_edits(_seed(), _RELOCATE["edits"])
+    assert "relocations" in moved.to_dict()
+    assert "relocations" not in _canonical_document(moved.to_dict(), rebase_statuses=False)
+
+
+def test_a_waiting_question_follows_its_provision(monkeypatch):
+    """The link is never rewritten; the next turn's context reads it through
+    the document's relocations."""
+    session, item = _seed_session()
     fake = FakeClient(
         [
-            tool_turn([], edits, tool_id="toolu_relocate"),
+            tool_turn([], _RELOCATE, tool_id="toolu_relocate"),
             text_turn(["Moved the hydrostatic test to PART 3."]),
+            text_turn(["Which pressure does the owner want?"]),
         ]
     )
-    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
-    body = TestClient(create_app()).post("/api/chat", json={"message": "go"}).text
-    events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+    events = _chat(fake, monkeypatch)
     assert events[-1]["type"] == "turn_complete"
     patch = next(e for e in events if e["type"] == "doc_patch")
     assert patch["ops"][0]["id_map"]["pt1.a1.p1.p1"] == "pt3.a1.p1.p1"
-    assert session.followups.get(item.fid).element_id == "pt3.a1.p1.p1"
+    assert patch["doc"]["relocations"]["pt1.a1.p1.p1"] == "pt3.a1.p1.p1"
     result = session.history[2]["content"][0]
     assert "is_error" not in result
     assert '"id_map"' in result["content"]
+    assert session.followups.get(item.fid).element_id == "pt1.a1.p1.p1"
+
+    events = _chat(fake, monkeypatch, "next")
+    assert events[-1]["type"] == "turn_complete"
+    context = _context_text(fake.messages.last_request)
+    assert "Relates to element pt3.a1.p1.p1." in context
+    assert "Relates to element pt1.a1.p1.p1." not in context
 
 
-def test_a_rolled_back_turn_puts_the_link_back(monkeypatch):
-    session = sessions.get_session()
-    session.doc.doc = _seed()
-    item, _ = session.followups.add(
-        {"kind": "question", "title": "Which pressure?", "element_id": "pt1.a1.p1"}
+def test_undo_and_redo_keep_the_link_right(monkeypatch):
+    """Codex review on PR #311: a link rewritten when the provision moved
+    would point at an id the undone document no longer has. The map rides
+    the document's versions instead."""
+    session, item = _seed_session()
+    fake = FakeClient(
+        [tool_turn([], _RELOCATE), text_turn(["Moved."]), text_turn(["Ok."]), text_turn(["Ok."])]
     )
-    edits = {
-        "edits": [
-            {"action": "relocate", "target_id": "pt1.a1.p1", "parent_id": "pt3.a1", "reason": "x"}
-        ]
-    }
-    fake = FakeClient([tool_turn([], edits), RuntimeError("provider fell over")])
-    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
-    body = TestClient(create_app()).post("/api/chat", json={"message": "go"}).text
-    assert '"type": "error"' in body
-    assert session.followups.get(item.fid).element_id == "pt1.a1.p1"
+    _chat(fake, monkeypatch)
+    client = TestClient(create_app())
+    assert client.post("/api/doc/undo").status_code == 200
+    doc = session.doc.doc
+    assert doc.relocations == {}
+    assert resolve_relocated(doc, item.element_id) == "pt1.a1.p1.p1"
+    _chat(fake, monkeypatch, "after undo")
+    assert "Relates to element pt1.a1.p1.p1." in _context_text(fake.messages.last_request)
+
+    assert client.post("/api/doc/redo").status_code == 200
+    _chat(fake, monkeypatch, "after redo")
+    assert "Relates to element pt3.a1.p1.p1." in _context_text(fake.messages.last_request)
+
+
+def test_a_rolled_back_turn_puts_the_provision_back(monkeypatch):
+    session, item = _seed_session()
+    fake = FakeClient([tool_turn([], _RELOCATE), RuntimeError("provider fell over")])
+    events = _chat(fake, monkeypatch)
+    assert events[-1]["type"] == "error"
+    assert session.doc.doc.relocations == {}
     assert session.doc.doc.parts[0].articles[0].paragraphs[0].uid == "pt1.a1.p1"
+    assert resolve_relocated(session.doc.doc, item.element_id) == "pt1.a1.p1.p1"
 
 
 # ---------------------------------------------------------------------------

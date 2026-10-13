@@ -233,6 +233,16 @@ class SpecSection:
     # redline shows (owner, 2026-10-08: "Reason: user cleared assumed status
     # after review" is not for the reader of the Word file).
     workflow_reasons: dict[str, list[str]] = field(default_factory=dict)
+    # Where each relocated element went: {old uid: new uid}, one entry per
+    # element a ``relocate`` op moved (prompt-review follow-up, step 5).
+    # Something outside the tree that names a provision — a Waiting on you
+    # item's element_id — keeps the id it was given and reads through this
+    # map (:func:`resolve_relocated`). On the tree, not rewritten into the
+    # links, so undo, redo and a new branch after undo all agree: each
+    # version carries exactly the relocations that happened in it, and a
+    # relocated-away uid never reappears on its branch (ids are never
+    # reused). Never specification text; never counted as content.
+    relocations: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "SpecSection":
@@ -294,6 +304,9 @@ class SpecSection:
             data["workflow_reasons"] = {
                 uid: list(reasons) for uid, reasons in self.workflow_reasons.items()
             }
+        if self.relocations:
+            # Absent until something is relocated.
+            data["relocations"] = dict(self.relocations)
         return data
 
     @classmethod
@@ -315,6 +328,7 @@ class SpecSection:
             workflow_reasons = _validate_edit_reasons_shape(
                 data.get("workflow_reasons"), name="workflow_reasons"
             )
+            relocations = _validate_relocations_shape(data.get("relocations"))
             result = cls(
                 number=str(section.get("number", "")),
                 title=str(section.get("title", "")),
@@ -325,6 +339,7 @@ class SpecSection:
                 suppressed_standards=suppressed,
                 edit_reasons=edit_reasons,
                 workflow_reasons=workflow_reasons,
+                relocations=relocations,
             )
         except (KeyError, TypeError, AttributeError) as exc:
             raise ValueError(f"Malformed document data: {exc}") from exc
@@ -408,6 +423,35 @@ def _validate_edit_reasons_shape(
                 raise ValueError(f"{name}[{uid!r}] must hold non-empty strings")
         result[uid] = [str(reason) for reason in reasons]
     return result
+
+
+def _validate_relocations_shape(data: Any) -> dict[str, str]:
+    """``relocations`` as saved: element uid → element uid. Absent is an
+    empty mapping; anything else malformed is refused, like a malformed
+    reason trail."""
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("relocations must map element ids to element ids")
+    result: dict[str, str] = {}
+    for old, new in data.items():
+        if not isinstance(old, str) or not old.strip():
+            raise ValueError("relocations keys must be element ids")
+        if not isinstance(new, str) or not new.strip() or new == old:
+            raise ValueError(f"relocations[{old!r}] must name another element id")
+        result[old] = new
+    return result
+
+
+def resolve_relocated(section: SpecSection, uid: str) -> str:
+    """``uid``, or where relocation took it: the end of its chain in
+    ``section.relocations``. A uid that was never relocated comes back as
+    is. Bounded by the map's size, so a malformed cycle cannot loop."""
+    seen = 0
+    while uid in section.relocations and seen <= len(section.relocations):
+        uid = section.relocations[uid]
+        seen += 1
+    return uid
 
 
 def _letters(index: int, first: str) -> str:
@@ -1132,6 +1176,7 @@ def _relocate(
             "relocate: target must be an article or paragraph id. Sections and "
             "parts cannot be relocated."
         )
+    section.relocations.update(id_map)
     for old_uid, new in id_map.items():
         if old_uid in section.edit_reasons:
             section.edit_reasons[new] = list(section.edit_reasons[old_uid])

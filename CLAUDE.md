@@ -1823,10 +1823,15 @@ or a forgotten second step lost them.
   parent (use move), a destination inside the subtree, a kind mismatch, depth
   past `MAX_PARAGRAPH_DEPTH` counting the subtree's height, preserved
   (`locked`) content in the subtree or as the destination.
-- **References.** `SessionState.apply_doc_edits` re-points follow-ups
-  (`FollowUpStore.remap_elements`, turn-atomic). The redline shows a deletion
-  plus an insertion, each with its reasons. The panel highlights the whole
-  moved subtree (`DocOp.id_map`).
+- **References.** The tree records where each element went
+  (`SpecSection.relocations {old uid: new uid}`, serialized only when set,
+  shape-checked on load, cleared for a template). A follow-up's
+  `element_id` is never rewritten: `FollowUpStore.context_block(
+  resolve_element=…)` and the panel's jump (`lib/followups.resolveRelocated`)
+  read through `model.resolve_relocated`, so undo, redo and a branch after
+  undo stay right (Codex review on PR #311 — a rewrite-on-relocate broke
+  them). The redline shows a deletion plus an insertion, each with its
+  reasons. The panel highlights the whole moved subtree (`DocOp.id_map`).
 - **Told where.** `parent_id`'s schema description and `_TOOL_GUIDE`; the
   tool's top-level description is unchanged (QC echoes it as its op
   vocabulary). Writing policy v2: one relocate operation; where it is not

@@ -55,7 +55,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 FOLLOWUP_KINDS = ("question", "decision", "todo")
 FOLLOWUP_STATUSES = ("open", "resolved")
@@ -377,20 +377,6 @@ class FollowUpStore:
         item.resolved_at = ""
         return True
 
-    def remap_elements(self, id_map: dict[str, str]) -> int:
-        """Point items at a relocated provision's new id; return how many moved.
-
-        A ``relocate`` edit gives the provision and everything under it new
-        ids. Turn-atomic like every other write here: a rolled-back turn puts
-        the old links back with the document."""
-        moved = 0
-        for item in self.items:
-            new = id_map.get(item.element_id) if item.element_id else None
-            if new:
-                item.element_id = new
-                moved += 1
-        return moved
-
     def _trim_resolved(self) -> None:
         resolved = [item for item in self.items if item.status == "resolved"]
         excess = len(resolved) - MAX_RESOLVED_KEPT
@@ -426,11 +412,19 @@ class FollowUpStore:
         pool = blocking or candidates
         return min(pool, key=lambda item: (item.raised_turn, _seq_of(item)))
 
-    def context_block(self, *, message_index: int = 0) -> str:
+    def context_block(
+        self,
+        *,
+        message_index: int = 0,
+        resolve_element: Callable[[str], str] | None = None,
+    ) -> str:
         """The WAITING ON THE USER block for this turn's PROJECT CONTEXT.
 
         Empty store renders ``""`` so a session with no tracked items builds
-        a byte-identical request.
+        a byte-identical request. ``resolve_element`` maps an item's
+        ``element_id`` to where the provision is now (a relocated one has a
+        new id; ``model.resolve_relocated``); the stored link is never
+        rewritten, so document undo and redo keep it right.
         """
         if not self.items:
             return ""
@@ -455,7 +449,12 @@ class FollowUpStore:
                 if item.detail:
                     lines.append(f"    Why it matters: {item.detail}")
                 if item.element_id:
-                    lines.append(f"    Relates to element {item.element_id}.")
+                    element = (
+                        resolve_element(item.element_id)
+                        if resolve_element
+                        else item.element_id
+                    )
+                    lines.append(f"    Relates to element {element}.")
             if nxt is not None:
                 lines.append(
                     "[NEXT] marks the one to surface in this turn's reply or "

@@ -207,7 +207,8 @@ Exact. Fact harvesting now uses Claude Haiku 5.5 at medium effort, with its
 own `BUILD_A_SPEC_HARVEST_MODEL` override. It uses automatic tool selection
 so adaptive thinking can run: Haiku's forced tool choice suppresses all
 thinking. Template AI Generalize continues to use the interview model
-(Sonnet 5.5 by default) and automatic selection. These two single-shot
+(Opus 5.5 by default since 2026-10-13; Sonnet 5.5 before) and automatic
+selection. These two single-shot
 calls force their output tool only on compatible overrides that retain
 adaptive thinking (`claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`).
 
@@ -241,6 +242,50 @@ with a real hold point could never read ready unless it was reworded.
 
 Open chat sessions rewrite their cached prompt once. No paid API call was
 made.
+
+## Current Status — the chat runs on Claude Opus 5.5
+
+(2026-10-13, owner decision, a trial. docs/as-built.md's "The chat runs on
+Claude Opus 5.5" is the record; in the next release.)
+
+- **What moved.** The interview and both whole-section passes ("Draft full
+  section", "Adapt imported draft") run on Claude Opus 5.5 instead of Claude
+  Sonnet 5.5. Conversation condensing and template AI Generalize use the
+  chat's model, so they moved with it. Effort is unchanged: `medium` for the
+  interview, `high` for the two passes, `high` for the condensing summary.
+- **Why.** Anthropic documents Opus 5.5 as much less likely to state a figure
+  or cite a source its inputs don't support, more detail-oriented on long
+  inputs, and a clearer writer — the qualities a specification turn rests
+  on.
+- **What it costs.** Every Opus 5.5 token class costs twice Sonnet 5.5's, so
+  the chat, condensing and template lines in Settings roughly double for the
+  same work. Research (Sonnet 5.5), Final QC (Opus 5.5 lenses, Sonnet 5.5
+  verifier seats) and the fact harvest (Haiku 5.5) are unchanged. A prompt
+  cache belongs to one model, so the first message in each open section
+  after the update writes the conversation's cache once more.
+- **Final QC no longer claims to be the stronger model when it isn't.** The
+  QC drawer called its lenses "a stronger reasoning model than the Sonnet 5.5
+  model that drafts". It now compares the lens model with the chat's actual
+  model and says so only when the lenses are a higher tier (for example,
+  with the chat set back to Sonnet 5.5).
+- **Going back.** Set `BUILD_A_SPEC_INTERVIEW_MODEL` to `claude-sonnet-5-5`
+  before starting the app. In PowerShell:
+
+  ```
+  $env:BUILD_A_SPEC_INTERVIEW_MODEL = "claude-sonnet-5-5"
+  ```
+
+  In Command Prompt:
+
+  ```
+  set BUILD_A_SPEC_INTERVIEW_MODEL=claude-sonnet-5-5
+  ```
+
+  Saved projects open on either model: the stored conversation carries no
+  model-bound reasoning.
+
+No paid API call was made. Whether Opus earns its price on real sections is
+what the trial is for.
 
 ## Current Status — the tool instructions match the new rules
 
@@ -2238,8 +2283,9 @@ fails on every message. Nothing is ever condensed in the guided tour.
 own **Conversation condensing** line in Settings. It is a fork of the last
 turn's request, so it reads that turn's cache instead of paying for the
 whole conversation again, and every later message re-reads a far shorter
-conversation. At 600,000 tokens a summary costs roughly $0.25–0.50 (an
-estimate at Sonnet 5.5 list prices; the usage line is the real number), and
+conversation. At 600,000 tokens a summary costs roughly $0.50–1.00 (an
+estimate at Opus 5.5 list prices, the chat's model since 2026-10-13 and twice
+Sonnet 5.5's; the usage line is the real number), and
 it pays for itself within a handful of later messages. The summary thinks at
 `BUILD_A_SPEC_COMPACTION_EFFORT` (`high` since 2026-10-08) while its request
 keeps the chat's own top-level effort, so it still reads the chat's cache:
@@ -3688,7 +3734,8 @@ and exactly what happened to every proposed fix. The compact queue remains
 beside it for fast remediation without making the user mine the report for
 actions.
 
-- **Five lenses, in parallel, on a stronger reviewer than the drafter.**
+- **Five lenses, in parallel, on the app's strongest model, reading the
+  section cold.**
   "Send to Final QC" fans out five independent Opus 5.5 reviews of the whole
   section: **code
   compliance** (verifies every citation/edition against the *actual text of
@@ -4027,7 +4074,7 @@ From-scratch drafting is a first-class path, not the fallback.
 
 - **"Draft full section" — the payoff of the no-limits work.** One accent
   button (in the panel header, offered while the page is empty or sparse) has
-  Sonnet lay down the *entire* section in a single turn: every PART, every
+  the model lay down the *entire* section in a single turn: every PART, every
   article the module conventionally carries, drafted from your interview
   answers, the project profile, the grounded research, and the standards
   editions in effect — provisions tagged with their research provenance,
@@ -4190,7 +4237,7 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   web searches per session. The Research button still owns the systematic
   jurisdiction/AHJ/client/insurer sweep. The same upgrade tells the model to
   make every tool call first and write its reply to the user after the final
-  one, ending it with the suggested-replies block: on Claude Sonnet 5.5 anything longer than a
+  one, ending it with the suggested-replies block: on Claude Sonnet 5.5 (and Opus 5.5, the chat's model since 2026-10-13) anything longer than a
   sentence or two written between tool calls comes back as a progress-update
   thinking block, which the chat collapses and commit drops, so the reply's
   substance belongs after the last tool call, where it stays text.
@@ -4667,10 +4714,10 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | Env var | Default | Effect |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | API key; overrides keyring/file, never persisted. |
-| `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5-5` | Model for interview/drafting turns, conversation condensing, and template AI Generalize. Fact harvesting has its own model setting. The template call forces its submission tool only on compatible overrides that retain adaptive thinking (`claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`); Sonnet 5.5, Opus 5.5, Haiku 5.5, and unverified overrides use automatic selection. |
+| `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-opus-5-5` | Model for interview/drafting turns, conversation condensing, and template AI Generalize. Opus 5.5 since 2026-10-13 (a trial; Sonnet 5.5 before). Set it to `claude-sonnet-5-5` to go back: in PowerShell `$env:BUILD_A_SPEC_INTERVIEW_MODEL = "claude-sonnet-5-5"`, in Command Prompt `set BUILD_A_SPEC_INTERVIEW_MODEL=claude-sonnet-5-5`. Fact harvesting has its own model setting. The template call forces its submission tool only on compatible overrides that retain adaptive thinking (`claude-sonnet-5`, `claude-opus-5`, `claude-fable-5`); Sonnet 5.5, Opus 5.5, Haiku 5.5, and unverified overrides use automatic selection. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The model's context window: the context gauge's denominator (the header's "142k / 1M" pill) and what the chat's backstop measures a request against — past 85% of it the oldest turns are condensed before sending. Pair it with a model override whose window differs; set lower, conversations are condensed earlier. |
-| `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary sends it as its top-level effort too, so it reads the chat's cache, and thinks at `BUILD_A_SPEC_COMPACTION_EFFORT`. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's. |
+| `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary sends it as its top-level effort too, so it reads the chat's cache, and thinks at `BUILD_A_SPEC_COMPACTION_EFFORT`. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's; kept at `medium` when the chat moved to Opus 5.5 on 2026-10-13 (Opus 5.5's own default, which its maker says matches or exceeds Opus 5 at `high`). |
 | `BUILD_A_SPEC_DRAFT_PASS_EFFORT` | `high` | Adaptive-thinking effort for every round of a whole-section pass — **Draft full section** and **Adapt imported draft** (the ready passes only; the turn that first asks for the section, project type or country runs at the interview effort). One level above the interview because these are the app's longest multistep turns, and the Sonnet 5.5 guide moves longer, harder tool work from `medium` to `high` (the 5.5 prompting upgrade, P55-3). The effort is decided once per turn, from the server's own directive, and recorded in the turn's trace (`prompt_refs` → `effort`). A top-level effort change means that turn and the next one re-write the conversation's cache instead of reading it; these passes normally run early, while the conversation is short. Set it equal to `BUILD_A_SPEC_INTERVIEW_EFFORT` to switch the boost off. In PowerShell: `$env:BUILD_A_SPEC_DRAFT_PASS_EFFORT = "medium"`; in Command Prompt: `set BUILD_A_SPEC_DRAFT_PASS_EFFORT=medium`. |
 | `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
 | `BUILD_A_SPEC_HARVEST_MODEL` | `claude-haiku-5-5` | Model for the Project facts panel's one-shot fact extraction, independent of the interview model. Haiku uses strict output schemas and automatic tool selection to preserve adaptive thinking; forcing its tool would suppress all thinking. Set `BUILD_A_SPEC_HARVEST_MODEL=claude-sonnet-5-5` to select Sonnet for this call. |
@@ -4824,8 +4871,9 @@ that trim is on by default (`BUILD_A_SPEC_ELIDE_FETCHED_PAGES`):
 
 The third paid check, also opt-in, runs ONE real interview turn (typically
 two or three requests, well under a dollar at list prices) to see whether
-the chat's reply really lands after its last tool call on Claude Sonnet 5.5
-(the 5.5 prompting upgrade, P55-2). On that model, anything longer than a
+the chat's reply really lands after its last tool call on the chat's model
+(Claude Opus 5.5 since 2026-10-13; Sonnet 5.5 when it was written — the 5.5
+prompting upgrade, P55-2). On both, anything longer than a
 sentence or two written between tool calls comes back as a progress-update
 thinking block, which the chat collapses and saved history drops. The
 canary drives the production engine on a fresh in-memory session and

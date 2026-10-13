@@ -384,7 +384,10 @@ already resolved and does nothing). 409 when nothing is running.
   default `medium`; research runs `RESEARCH_EFFORT`, default `medium`.
   Sonnet 5.5 recalibrated its effort scale; Anthropic's migration guidance
   starts multistep tool use at `medium`. Whole-section drafting/adaptation
-  still uses `DRAFT_PASS_EFFORT`, default `high`.
+  still uses `DRAFT_PASS_EFFORT`, default `high`. The chat runs
+  `INTERVIEW_MODEL`: Claude Opus 5.5 since 2026-10-13 (a trial; Sonnet 5.5
+  before, and research stays on Sonnet 5.5) — see "The chat runs on Claude
+  Opus 5.5" below.
   Fact harvesting independently selects `HARVEST_MODEL` (Claude Haiku 5.5,
   overridden by `BUILD_A_SPEC_HARVEST_MODEL`) and `HARVEST_EFFORT` (`high`
   since 2026-10-08, `medium` before).
@@ -2041,6 +2044,50 @@ section): a legitimate "pending" hold point no longer holds readiness. Tests:
 `tests/test_tool_text_review.py`. Full record, reversion evidence and the
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
+
+## The chat runs on Claude Opus 5.5 — implemented notes (2026-10-13)
+
+Owner decision (Abraham), a trial the owner may reverse: the chat on Opus
+5.5 at `medium`, condensing on Opus 5.5 at `high`.
+
+- **One default.** `settings.INTERVIEW_MODEL_DEFAULT = MODEL_OPUS_55` (was
+  `MODEL_SONNET_55`). The interview, both whole-section passes
+  (`DRAFT_PASS_EFFORT`, `high`), the condensing summary and template AI
+  Generalize follow it. Condensing must: it forks the chat's cached request,
+  and a cache belongs to one model. It still thinks at `COMPACTION_EFFORT`
+  (`high`) through the per-message effort message, because
+  `PER_MESSAGE_EFFORT_MODELS` lists Opus 5.5. `INTERVIEW_EFFORT` stays
+  `medium` (Opus 5.5's own default). `BUILD_A_SPEC_INTERVIEW_MODEL=
+  claude-sonnet-5-5` reverts.
+- **No request shape changed.** The chat never forces a tool, never sends
+  `between_tools` or disabled thinking, and commits no thinking blocks; the
+  template call's `single_output_tool_kwargs` already leaves Opus 5.5
+  unforced; the fake oracle already accepts Opus 5.5 chat requests. Opus 5.5
+  turns text between tool calls into progress-update thinking blocks as
+  Sonnet 5.5 does (P55-2 holds). Its safety classifiers (cyber, bio,
+  reasoning extraction) can decline a turn; the chat still has no refusal
+  fallback (D6) and names a decline.
+- **Cost.** Every Opus 5.5 token class is twice Sonnet 5.5's (input $4,
+  output $20, 5m write $5, 1h write $8, read $0.20 per MTok). The ledger
+  prices `interview`, `template` and `compaction` at the live
+  `INTERVIEW_MODEL`; `tests/test_usage.py`'s interview figures moved to Opus
+  rates. One cache rewrite per open session after upgrade.
+- **The QC drawer's strength claim compares models.** `lib/qcModel` gives
+  each known model a tier (Haiku < Sonnet < Opus < Fable);
+  `qcModelLabel(id, drafterId)` claims "stronger than the drafter" only when
+  the lens model's tier beats the chat's (`health.model`, threaded App →
+  ArtifactPanel → QCDrawer as `drafterModel`), and the confirm dialog names
+  the drafter instead of hardcoding "Sonnet 5.5". With the defaults (Opus
+  lenses, Opus chat) it claims nothing.
+- **Copy.** The trust explainer's diagram, model table and runtime cards,
+  Help's model list and fallback, and README name Opus 5.5 for the chat.
+  Research, the verifier seats and the harvest copy are unchanged.
+
+Never claim the QC model out-reasons the drafter without comparing it to
+the chat's configured model. Tests: `tests/test_settings.py::
+test_the_chat_and_its_condensing_run_on_opus_55`, `tests/test_usage.py`,
+`frontend/tests/qcModel.test.ts`. Full record and the release-note draft
+are in `docs/as-built.md` under the same heading. No paid API call was made.
 
 ## A "pending" hold point is a look, not a defect — implemented notes (2026-10-13)
 

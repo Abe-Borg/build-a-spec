@@ -3546,6 +3546,7 @@ export default function App() {
           usage={usage}
           qcModel={health?.qc_model}
           qcVerifierModel={health?.qc_verifier_model}
+          drafterModel={health?.model}
           changedIds={changedIds}
           saveTarget={saveTarget}
           onSaveProject={onSaveProject}

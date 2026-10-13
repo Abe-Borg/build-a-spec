@@ -243,8 +243,9 @@ Never fabricate project facts, code adoptions, or client standards — ask, or d
 
 
 # The one ordering sentence every directive that stages reply chips carries
-# (the 5.5 prompting upgrade, P55-2). On Claude Sonnet 5.5, text written
-# BETWEEN tool calls comes back as a progress-update thinking block, which
+# (the 5.5 prompting upgrade, P55-2). On Claude Sonnet 5.5 and Opus 5.5 (the
+# chat's model since 2026-10-13), text written BETWEEN tool calls comes back
+# as a progress-update thinking block, which
 # the chat collapses and commit drops — so a brief, a summary or a question
 # written before the last tool call can vanish from the transcript. Text
 # after the LAST tool call stays a text block. The suggested replies ride

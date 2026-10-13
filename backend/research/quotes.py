@@ -119,11 +119,14 @@ def _document_text(document: Any) -> str:
 def fetched_page_texts(responses: Iterable[Any]) -> dict[str, str]:
     """``normalized url -> text`` for every page the responses fetched.
 
-    The URL is the result's own, else the paired ``server_tool_use``'s
-    input — paired across every response, because a ``pause_turn`` can
-    leave a call in one response and its result in the next. A page
-    fetched twice keeps both texts. Error results and documents without
-    readable text are skipped.
+    The text is filed under the result's own URL AND the URL the paired
+    ``server_tool_use`` asked for, when they differ (a redirect, a
+    canonical URL): grounding accepts either, so an item citing the
+    requested URL must find the page too (Codex review on PR #324). The
+    pairing runs across every response, because a ``pause_turn`` can leave
+    a call in one response and its result in the next. A page fetched twice
+    keeps both texts. Error results and documents without readable text
+    are skipped.
     """
     responses = list(responses)
     requested: dict[str, str] = {}
@@ -145,17 +148,22 @@ def fetched_page_texts(responses: Iterable[Any]) -> dict[str, str]:
             result = _attr(block, "content")
             if result is None or _attr(result, "type") == "web_fetch_tool_result_error":
                 continue
-            url = _attr(result, "url") or requested.get(
-                str(_attr(block, "tool_use_id") or "")
-            )
+            keys: list[str] = []
+            for url in (
+                _attr(result, "url"),
+                requested.get(str(_attr(block, "tool_use_id") or "")),
+            ):
+                key = normalize_url(str(url)) or str(url).strip() if url else ""
+                if key and key not in keys:
+                    keys.append(key)
             document = _attr(result, "content") or _attr(result, "document")
-            if not url or document is None:
+            if not keys or document is None:
                 continue
             text = _document_text(document)
             if not text.strip():
                 continue
-            key = normalize_url(str(url)) or str(url).strip()
-            texts[key] = f"{texts[key]}\n{text}" if key in texts else text
+            for key in keys:
+                texts[key] = f"{texts[key]}\n{text}" if key in texts else text
     return texts
 
 

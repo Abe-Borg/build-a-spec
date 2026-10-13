@@ -200,6 +200,20 @@ def test_a_fetch_split_by_a_pause_is_paired_across_responses():
     assert pages == {"https://a.gov/doc": PAGE}
 
 
+def test_a_redirected_fetch_is_found_under_either_url():
+    """Grounding accepts the URL asked for and the URL the result reports;
+    the page text answers to both (Codex review on PR #324)."""
+    use, result = fetch_blocks("https://a.gov/old-path", text=PAGE)
+    result.content["url"] = "https://www.a.gov/new-path"
+    responses = [SimpleNamespace(content=[use, result])]
+    pages = fetched_page_texts(responses)
+    assert set(pages) == {"https://a.gov/old-path", "https://www.a.gov/new-path"}
+    for cited in ("https://a.gov/old-path", "https://www.a.gov/new-path"):
+        item = _item(source_urls=[cited], accepted_sources=[cited], quote=QUOTE)
+        verify_item_quotes([item], responses)
+        assert item.quote_source == cited
+
+
 def test_an_unreadable_pdf_is_simply_not_checked():
     responses = [SimpleNamespace(content=fetch_blocks("https://b.gov/x.pdf", pdf=b"not a pdf"))]
     assert fetched_page_texts(responses) == {}

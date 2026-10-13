@@ -2358,8 +2358,9 @@ condition but notes.
   grounding in `_run_dimension`, over `all_responses` (the conversation the
   model saw — never a restart's abandoned one): `fetched_page_texts` reads
   each `web_fetch_tool_result` document (plain text; base64 PDF through
-  pypdf, first 300 pages, unreadable → unchecked), URL from the result or
-  its `server_tool_use` paired across EVERY response (a pause splits them);
+  pypdf, first 300 pages, unreadable → unchecked), filed under the
+  result's URL AND its `server_tool_use`'s, paired across EVERY response (a
+  pause splits them; grounding accepts either URL — Codex review on PR #324);
   `verify_item_quotes` looks only on the item's accepted sources;
   `quote_found_in` folds case, whitespace, curly quotes/dashes, nbsp and
   markdown marks, splits on `...`/`…`, and needs every fragment in order,

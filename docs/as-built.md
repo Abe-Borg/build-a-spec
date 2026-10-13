@@ -24684,7 +24684,7 @@ unchanged beyond the item schema.
 
 ### Tests
 
-`tests/test_research_quotes.py` (19): the schema; the parse's fold, clamps
+`tests/test_research_quotes.py` (20): the schema; the parse's fold, clamps
 and null handling and that the worker cannot set `quote_source`; the match
 through copying artefacts and marked gaps, and its refusal of paraphrase,
 reordering, scraps and empties; page text from plain text and a
@@ -24754,6 +24754,14 @@ as the explicit statement). Ruff clean; the touched backend test files,
 `npm test` (590) and `npm run build` pass. No paid API call was made: how
 often real pages yield a found quote, and how often workers fill
 `applies_when`, are unmeasured until the owner runs a round.
+
+**Review fix (Codex, PR #324).** A fetch whose result reports a different
+URL from the one asked for (a redirect, a canonical URL) filed its text
+under the result's URL only, while grounding accepts both — so an item
+citing the requested URL was grounded but its quote read not found.
+`fetched_page_texts` now files the text under both normalized URLs. Pinned
+by `test_a_redirected_fetch_is_found_under_either_url`; filing under one
+URL again turns it red.
 
 **Release-note draft:** "Research findings now carry the passage of the
 source that states them, checked against the page the research actually

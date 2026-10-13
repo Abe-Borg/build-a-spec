@@ -1802,6 +1802,56 @@ the user confirms a provision. Tests: `tests/test_confirmed_meaning.py`,
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
 
+## A relocation lands whole or not at all — implemented notes (2026-10-13)
+
+Step 5 of the prompt-review follow-up. `move` only reorders siblings (an id
+names its parent), so writing policy v1 told the model to add the copy and
+delete the original in one batch, then "re-add its subparagraphs under the
+returned id in the same turn". The delete took the subparagraphs in the first
+batch; a Stop or `max_tokens` cut between batches (both commit what landed)
+or a forgotten second step lost them.
+
+- **`relocate`** (`model._relocate`, `_ACTIONS`): target an article
+  (`parent_id` = a part) or a paragraph (`parent_id` = an article, or a
+  paragraph to nest under); optional `position` among the new siblings;
+  only `target_id`/`parent_id`/`position`/`reason` accepted. The copy is
+  built and inserted before the original is removed, inside the batch's one
+  transaction. Text, status, source link and order carry; ids are new
+  (`{parent}.p{n}` from the destination's `next_seq`, children from 1, so
+  `from_dict`'s id rules hold); the record carries `id`, `previous_id`,
+  `parent_id` and `id_map`. Each element's `edit_reasons`/`workflow_reasons`
+  trail is copied to its new uid, and the reason is recorded on new and old
+  uids (`resets=True`, the delete shape). Refused: a part or `sec`, the same
+  parent (use move), a destination inside the subtree, a kind mismatch, depth
+  past `MAX_PARAGRAPH_DEPTH` counting the subtree's height, preserved
+  (`locked`) content in the subtree or as the destination.
+- **References.** The tree records where each element went
+  (`SpecSection.relocations {old uid: new uid}`, serialized only when set,
+  shape-checked on load, cleared for a template). A follow-up's
+  `element_id` is never rewritten: `FollowUpStore.context_block(
+  resolve_element=…)` and the panel's jump (`lib/followups.resolveRelocated`)
+  read through `model.resolve_relocated`, so undo, redo and a branch after
+  undo stay right (Codex review on PR #311 — a rewrite-on-relocate broke
+  them). The redline shows a deletion plus an insertion, each with its
+  reasons. The panel highlights the whole moved subtree (`DocOp.id_map`).
+- **Told where.** `parent_id`'s schema description and `_TOOL_GUIDE`; the
+  tool's top-level description is unchanged (QC echoes it as its op
+  vocabulary). Writing policy v2: one relocate operation; where it is not
+  available (Final QC: `QC_OP_ACTIONS` has no relocate), add plus delete in
+  one batch, never deleting a provision with subparagraphs before its
+  replacement and every subparagraph exist. A QC fix relocating nested
+  content stays advisory, as before.
+- **Stale once.** The policy is in the QC manifest, so every retained Final
+  QC result reads stale once; the stable prompt and tool schema change once.
+  The imported-source gate judges the outcome, not the op name, so it needed
+  nothing.
+
+Never reintroduce a relocation recipe that deletes a provision before its
+subparagraphs exist elsewhere. Tests: `tests/test_relocate.py`,
+`tests/test_writing_policy.py`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
+
 ## The assistant reads the project's other sections on demand — implemented notes (2026-10-13)
 
 Owner request (Abraham): chaining sections of one project works, but the

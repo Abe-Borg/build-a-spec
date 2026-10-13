@@ -1819,9 +1819,15 @@ export default function App() {
           refreshReadiness();
         } else if (evt.type === "doc_patch") {
           setDoc(evt.doc);
+          // A relocation lights the moved provision and everything under it
+          // (its id_map lists the new ids, the moved one first).
           const changed = evt.ops
             .filter((op) => op.action !== "delete")
-            .map((op) => op.id);
+            .flatMap((op) =>
+              op.action === "relocate" && op.id_map
+                ? Object.values(op.id_map)
+                : [op.id],
+            );
           setChangedIds((prev) => new Set([...prev, ...changed]));
           // Nudge the doc panel to the first changed block as it lands.
           if (changed.length > 0) {

@@ -7,8 +7,11 @@ Final QC reviews against it. The rules themselves live in
 how they were reconciled with the code that existed before them, where they
 are wired in, what they cannot do, and what has and has not been measured.
 
-Policy `spec-writing/1`, written 2026-10-06 from the owner's coding-agent brief
-("Integrate a shared, versioned writing policy into drafting and Final QC").
+Policy `spec-writing/2`. Version 1 was written 2026-10-06 from the owner's
+coding-agent brief ("Integrate a shared, versioned writing policy into
+drafting and Final QC"); version 2 (2026-10-13, step 5 of the prompt-review
+follow-up) made a relocation one `relocate` operation, so a provision's
+subparagraphs can no longer be lost between two batches.
 
 ## What the policy says
 
@@ -42,9 +45,13 @@ Seven groups of rules, rendered as one block:
    substitute a test method for a product specification, assume equivalence
    or invent criteria; a cited test method sets no acceptance limit.
 7. **Relocating content with this app's edit operations.** `move` only
-   reorders siblings; a relocation is an add plus a delete carrying text,
-   status and `source_item_id`; subparagraphs travel too; an imported
-   boundary that forbids it is reported with the permitted next step.
+   reorders siblings; a relocation to another parent is one `relocate`
+   operation carrying the provision and everything under it (text, status
+   and `source_item_id`, new ids); where `relocate` is not available (Final
+   QC's op vocabulary), an add plus a delete in one batch, never deleting a
+   provision with subparagraphs before its replacement and every
+   subparagraph exist; an imported boundary that forbids it is reported with
+   the permitted next step.
 
 The drafting rendering adds the owner's three specification-voice examples.
 The brief's compact V1 placement example is **not** in any production
@@ -59,7 +66,7 @@ is the first fixture case and an opt-in arm of the evaluation tool instead.
 | `_SPEC_CONVENTIONS_ENGINE` in `prompts.py`: three-part structure and "imperative, terse language" | Folded into policy groups 1 and 4 | The brief: reconcile, don't append a competing policy |
 | `_SPEC_VOICE` in `prompts.py` | Policy group 4, text unchanged, examples in the drafting rendering | One source; Final QC now reads the same voice rules |
 | Module `domain_conventions` under "# Spec conventions" | Same text under "# Discipline conventions" | Domain knowledge only; it never overrides the policy |
-| `_TOOL_GUIDE`: move never reparents | Unchanged, plus a pointer to the relocation rule | Move semantics stay where the tool is explained |
+| `_TOOL_GUIDE`: move never reparents | Unchanged, plus a pointer to the relocation rule; since version 2 it names `relocate` (`parent_id`, `id_map`) | Move semantics stay where the tool is explained |
 | `_GAP_AND_ADAPT` and `ADAPT_IMPORTED_DIRECTIVE` | One bullet each: the starter's layout is its template convention; adapting is technical, placement fixes stay editorial | The imported-document path the brief asks to exercise |
 | `FULL_DRAFT_DIRECTIVE` | "…and place each requirement by function, as the writing policy says" | Whole-section drafting follows the same rule |
 | Coordination lens: "every product specified has submittal requirements; every product has execution provisions" | "carry the submittal and execution coverage the template and section scope call for … never demand a clause per product" | The blanket rule the brief names |
@@ -153,10 +160,15 @@ and the document tool's contract was to stay unchanged.
 
 **Genuine capability gaps** (not closed here, by design):
 
-- No reparenting operation. A cross-PART relocation is add + delete, so the
-  provision gets a new element id, and any text reference to its old number
-  must be updated (the lint now reports the stale ones).
-- One Final QC fix cannot relocate a provision with subparagraphs.
+- ~~No reparenting operation.~~ Since version 2 the chat has `relocate`,
+  which moves a provision and its subparagraphs to a new parent in one
+  transactional step. It still assigns new element ids (an id names its
+  parent), so any text reference to the old number must be updated (the
+  lint reports the stale ones); a follow-up linked to the provision is
+  re-pointed.
+- One Final QC fix cannot relocate a provision with subparagraphs: QC's op
+  vocabulary (`QC_OP_ACTIONS`) has no `relocate`, so such a fix stays
+  advisory.
 - On an imported Word master in source-preserving mode, moving content
   between parents is never available and `add_paragraph` works only inside
   proven islands. A relocation there stays advisory; the model names the

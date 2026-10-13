@@ -233,6 +233,16 @@ class SpecSection:
     # redline shows (owner, 2026-10-08: "Reason: user cleared assumed status
     # after review" is not for the reader of the Word file).
     workflow_reasons: dict[str, list[str]] = field(default_factory=dict)
+    # Where each relocated element went: {old uid: new uid}, one entry per
+    # element a ``relocate`` op moved (prompt-review follow-up, step 5).
+    # Something outside the tree that names a provision — a Waiting on you
+    # item's element_id — keeps the id it was given and reads through this
+    # map (:func:`resolve_relocated`). On the tree, not rewritten into the
+    # links, so undo, redo and a new branch after undo all agree: each
+    # version carries exactly the relocations that happened in it, and a
+    # relocated-away uid never reappears on its branch (ids are never
+    # reused). Never specification text; never counted as content.
+    relocations: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "SpecSection":
@@ -294,6 +304,9 @@ class SpecSection:
             data["workflow_reasons"] = {
                 uid: list(reasons) for uid, reasons in self.workflow_reasons.items()
             }
+        if self.relocations:
+            # Absent until something is relocated.
+            data["relocations"] = dict(self.relocations)
         return data
 
     @classmethod
@@ -315,6 +328,7 @@ class SpecSection:
             workflow_reasons = _validate_edit_reasons_shape(
                 data.get("workflow_reasons"), name="workflow_reasons"
             )
+            relocations = _validate_relocations_shape(data.get("relocations"))
             result = cls(
                 number=str(section.get("number", "")),
                 title=str(section.get("title", "")),
@@ -325,6 +339,7 @@ class SpecSection:
                 suppressed_standards=suppressed,
                 edit_reasons=edit_reasons,
                 workflow_reasons=workflow_reasons,
+                relocations=relocations,
             )
         except (KeyError, TypeError, AttributeError) as exc:
             raise ValueError(f"Malformed document data: {exc}") from exc
@@ -408,6 +423,35 @@ def _validate_edit_reasons_shape(
                 raise ValueError(f"{name}[{uid!r}] must hold non-empty strings")
         result[uid] = [str(reason) for reason in reasons]
     return result
+
+
+def _validate_relocations_shape(data: Any) -> dict[str, str]:
+    """``relocations`` as saved: element uid → element uid. Absent is an
+    empty mapping; anything else malformed is refused, like a malformed
+    reason trail."""
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("relocations must map element ids to element ids")
+    result: dict[str, str] = {}
+    for old, new in data.items():
+        if not isinstance(old, str) or not old.strip():
+            raise ValueError("relocations keys must be element ids")
+        if not isinstance(new, str) or not new.strip() or new == old:
+            raise ValueError(f"relocations[{old!r}] must name another element id")
+        result[old] = new
+    return result
+
+
+def resolve_relocated(section: SpecSection, uid: str) -> str:
+    """``uid``, or where relocation took it: the end of its chain in
+    ``section.relocations``. A uid that was never relocated comes back as
+    is. Bounded by the map's size, so a malformed cycle cannot loop."""
+    seen = 0
+    while uid in section.relocations and seen <= len(section.relocations):
+        uid = section.relocations[uid]
+        seen += 1
+    return uid
 
 
 def _letters(index: int, first: str) -> str:
@@ -871,6 +915,7 @@ _ACTIONS = (
     "add_article",
     "add_paragraph",
     "move",
+    "relocate",
     "replace",
     "delete",
     "set_status",
@@ -997,6 +1042,203 @@ def _paragraph_depth(section: SpecSection, uid: str) -> int:
     ctx = _find_paragraph_context(section, uid)
     assert ctx is not None
     return ctx[2]
+
+
+def _subtree_height(paragraph: Paragraph) -> int:
+    """How many levels sit below ``paragraph`` (0 for a leaf)."""
+    if not paragraph.children:
+        return 0
+    return 1 + max(_subtree_height(child) for child in paragraph.children)
+
+
+def _subtree_locked(node: Any) -> bool:
+    paragraphs = node.paragraphs if isinstance(node, Article) else [node]
+    stack = list(paragraphs)
+    while stack:
+        paragraph = stack.pop()
+        if paragraph.locked:
+            return True
+        stack.extend(paragraph.children)
+    return False
+
+
+def _copy_paragraphs(
+    paragraphs: list[Paragraph], parent_uid: str, id_map: dict[str, str]
+) -> list[Paragraph]:
+    """Fresh copies of ``paragraphs`` under ``parent_uid``: same words,
+    status, source link and order; new ids numbered from 1."""
+    copies: list[Paragraph] = []
+    for seq, paragraph in enumerate(paragraphs, start=1):
+        uid = f"{parent_uid}.p{seq}"
+        id_map[paragraph.uid] = uid
+        copies.append(
+            Paragraph(
+                uid=uid,
+                text=paragraph.text,
+                status=paragraph.status,
+                children=_copy_paragraphs(paragraph.children, uid, id_map),
+                next_seq=len(paragraph.children) + 1,
+                source_item_id=paragraph.source_item_id,
+            )
+        )
+    return copies
+
+
+def _relocate(
+    section: SpecSection,
+    node: Any,
+    op: dict[str, Any],
+    done: Any,
+) -> dict[str, Any]:
+    """Move ``node`` and everything under it to a new parent in ONE operation.
+
+    ``move`` only reorders siblings, because an id names its parent
+    (``pt1.a2.p3``). Before this op, a relocation was an add plus a delete,
+    and a provision's subparagraphs had to be re-added in a second batch
+    under the id the first returned — so a Stop, a cut-off reply or a
+    forgotten second step between the two left the obligations under it
+    deleted (prompt-review follow-up, step 5). Here the copy is built and
+    inserted before the original is removed, inside the batch's one
+    transaction: a relocation lands whole or not at all.
+
+    The copy keeps every provision's text, status and source link and its
+    order; the ids are new (``id_map`` in the record maps each old id to its
+    new one). Each element's reason trail is copied to its new id, and the
+    relocation's reason is added on both sides, the deletion's shape: the
+    redline shows the original deleted and the copy inserted, and each says
+    why. Preserved Word content cannot be relocated: its identity is its id.
+    """
+    extra_keys = set(op) - {"action", "target_id", "parent_id", "position", "reason"}
+    if extra_keys:
+        fields = ", ".join(sorted(extra_keys))
+        raise SpecEditError(
+            f"relocate: unsupported field(s): {fields}. Only 'target_id', "
+            "'parent_id', 'position' and 'reason' are accepted; the "
+            "provision's text, status and source link travel with it."
+        )
+    parent_id = op.get("parent_id")
+    if not isinstance(parent_id, str) or not parent_id:
+        raise SpecEditError(
+            "relocate: 'parent_id' (the new parent's id) is required."
+        )
+    destination = _find(section, parent_id)
+    if destination is None:
+        raise SpecEditError(
+            f"relocate: no element with id {parent_id!r} to move into. Check "
+            "the current document outline for valid ids."
+        )
+    position = op.get("position")
+    if isinstance(node, Article):
+        if not isinstance(destination, Part):
+            raise SpecEditError(
+                "relocate: an article's new parent must be a part id (pt1, "
+                "pt2, or pt3)."
+            )
+        current_part = next(part for part in section.parts if node in part.articles)
+        if destination is current_part:
+            raise SpecEditError(
+                f"relocate: {node.uid!r} is already in {parent_id!r}; use "
+                "move to reorder it there."
+            )
+        if _subtree_locked(node):
+            raise SpecEditError(
+                f"relocate: {node.uid!r} holds preserved content, which "
+                "cannot be relocated. Move it among its siblings, or leave it "
+                "and say where it belongs."
+            )
+        id_map: dict[str, str] = {}
+        new_uid = f"{destination.uid}.a{destination.next_seq}"
+        id_map[node.uid] = new_uid
+        copy_ = Article(
+            uid=new_uid,
+            title=node.title,
+            paragraphs=_copy_paragraphs(node.paragraphs, new_uid, id_map),
+            next_seq=len(node.paragraphs) + 1,
+        )
+        destination.next_seq += 1
+        _insert(destination.articles, copy_, position)
+        current_part.articles.remove(node)
+    elif isinstance(node, Paragraph):
+        if isinstance(destination, Paragraph):
+            if destination.uid in _subtree_uids(node):
+                raise SpecEditError(
+                    f"relocate: {parent_id!r} is {node.uid!r} itself or sits "
+                    "under it; a provision cannot move inside itself."
+                )
+            if destination.locked:
+                raise SpecEditError(
+                    f"relocate: {parent_id!r} is preserved content and "
+                    "cannot hold nested provisions. "
+                    f"{lock_message(destination.locked)}"
+                )
+            new_depth = _paragraph_depth(section, destination.uid) + 1
+            siblings = destination.children
+        elif isinstance(destination, Article):
+            new_depth = 0
+            siblings = destination.paragraphs
+        else:
+            raise SpecEditError(
+                "relocate: a paragraph's new parent must be an article id (to "
+                "make it a top-level paragraph) or a paragraph id (to nest it)."
+            )
+        ctx = _find_paragraph_context(section, node.uid)
+        assert ctx is not None
+        if ctx[0] is siblings:
+            raise SpecEditError(
+                f"relocate: {node.uid!r} is already under {parent_id!r}; use "
+                "move to reorder it there."
+            )
+        if new_depth + _subtree_height(node) >= MAX_PARAGRAPH_DEPTH:
+            raise SpecEditError(
+                "relocate: the provision and its subparagraphs would go "
+                f"deeper than the maximum nesting depth ({MAX_PARAGRAPH_DEPTH} "
+                f"levels: {' / '.join(PARAGRAPH_LABEL_FORMS)})."
+            )
+        if _subtree_locked(node):
+            raise SpecEditError(
+                f"relocate: {node.uid!r} is or holds preserved content, which "
+                "cannot be relocated. Move it among its siblings, or leave it "
+                "and say where it belongs."
+            )
+        id_map = {}
+        new_uid = f"{destination.uid}.p{destination.next_seq}"
+        id_map[node.uid] = new_uid
+        copy_ = Paragraph(
+            uid=new_uid,
+            text=node.text,
+            status=node.status,
+            children=_copy_paragraphs(node.children, new_uid, id_map),
+            next_seq=len(node.children) + 1,
+            source_item_id=node.source_item_id,
+        )
+        destination.next_seq += 1
+        # The copy goes in before the original comes out: within this op as
+        # within the batch, there is no state with the obligations missing.
+        _insert(siblings, copy_, position)
+        ctx[0].remove(node)
+    else:
+        raise SpecEditError(
+            "relocate: target must be an article or paragraph id. Sections and "
+            "parts cannot be relocated."
+        )
+    section.relocations.update(id_map)
+    for old_uid, new in id_map.items():
+        if old_uid in section.edit_reasons:
+            section.edit_reasons[new] = list(section.edit_reasons[old_uid])
+        if old_uid in section.workflow_reasons:
+            section.workflow_reasons[new] = list(section.workflow_reasons[old_uid])
+    return done(
+        {
+            "action": "relocate",
+            "id": new_uid,
+            "previous_id": node.uid,
+            "parent_id": destination.uid,
+            "id_map": dict(id_map),
+        },
+        *id_map.values(),
+        *id_map.keys(),
+        resets=True,
+    )
 
 
 def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
@@ -1386,6 +1628,9 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             *_subtree_uids(node),
             resets=True,
         )
+
+    if action == "relocate":
+        return _relocate(section, node, op, done)
 
     if action == "replace":
         if isinstance(node, Article):
@@ -1902,6 +2147,30 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                         "discipline": {"type": "string"},
                         "project_type": {"type": "string"},
                         "source_item_id": {"type": "string"},
+                        # Described here, not in the top-level description:
+                        # Final QC's lenses read that description as their
+                        # op vocabulary, and QC_OP_ACTIONS has no relocate
+                        # (a QC fix that relocates nested content stays
+                        # advisory, as it was). The every-edit-carries-a-
+                        # reason precedent.
+                        "parent_id": {
+                            "type": "string",
+                            "description": (
+                                "relocate only: the new parent's id. action "
+                                "'relocate' moves an article (parent_id = a "
+                                "part) or a paragraph (parent_id = an article, "
+                                "or a paragraph to nest under) to a different "
+                                "parent in one step, with everything under it: "
+                                "text, status and source link travel "
+                                "unchanged, new ids are assigned, and "
+                                "'id_map' in the result maps each old id to "
+                                "its new one. 'position' is an optional 0-based "
+                                "index among the new siblings. Use it for "
+                                "every relocation; move only reorders "
+                                "siblings, and a delete plus re-adds can lose "
+                                "subparagraphs."
+                            ),
+                        },
                         # Required by contract (check_edit_reasons refuses a
                         # batch without one on every op), stated here rather
                         # than in 'required': saved histories carry inputs

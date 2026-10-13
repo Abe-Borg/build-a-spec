@@ -55,7 +55,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 FOLLOWUP_KINDS = ("question", "decision", "todo")
 FOLLOWUP_STATUSES = ("open", "resolved")
@@ -412,11 +412,19 @@ class FollowUpStore:
         pool = blocking or candidates
         return min(pool, key=lambda item: (item.raised_turn, _seq_of(item)))
 
-    def context_block(self, *, message_index: int = 0) -> str:
+    def context_block(
+        self,
+        *,
+        message_index: int = 0,
+        resolve_element: Callable[[str], str] | None = None,
+    ) -> str:
         """The WAITING ON THE USER block for this turn's PROJECT CONTEXT.
 
         Empty store renders ``""`` so a session with no tracked items builds
-        a byte-identical request.
+        a byte-identical request. ``resolve_element`` maps an item's
+        ``element_id`` to where the provision is now (a relocated one has a
+        new id; ``model.resolve_relocated``); the stored link is never
+        rewritten, so document undo and redo keep it right.
         """
         if not self.items:
             return ""
@@ -441,7 +449,12 @@ class FollowUpStore:
                 if item.detail:
                     lines.append(f"    Why it matters: {item.detail}")
                 if item.element_id:
-                    lines.append(f"    Relates to element {item.element_id}.")
+                    element = (
+                        resolve_element(item.element_id)
+                        if resolve_element
+                        else item.element_id
+                    )
+                    lines.append(f"    Relates to element {element}.")
             if nxt is not None:
                 lines.append(
                     "[NEXT] marks the one to surface in this turn's reply or "

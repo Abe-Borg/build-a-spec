@@ -124,7 +124,7 @@ from ..spec_doc import (
     open_questions,
     outline,
 )
-from ..spec_doc.model import apply_edits, iter_paragraphs
+from ..spec_doc.model import apply_edits, iter_paragraphs, resolve_relocated
 from ..spec_doc.project import chat_transcript
 from ..spec_doc.source_format import SourceFormatMap
 from ..spec_doc.source_mapping import (
@@ -2790,8 +2790,10 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
     # the document; the header still says WAITING ON THE USER and never
     # "open items", so the two lists are never conflated.
     try:
+        doc = session.doc.doc
         followup_block = session.followups.context_block(
-            message_index=assistant_bubble_count(session.history)
+            message_index=assistant_bubble_count(session.history),
+            resolve_element=lambda uid: resolve_relocated(doc, uid),
         )
     except Exception:  # noqa: BLE001 - context assembly must never fail a turn
         followup_block = ""

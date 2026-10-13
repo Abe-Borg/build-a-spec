@@ -13,7 +13,7 @@ import json
 import logging
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -65,6 +65,10 @@ class ValidatedProjectData:
     format_map: dict[str, Any] | None
     template_origin: dict[str, Any] | None
     project_link: dict[str, Any] | None = None
+    # The sibling sections the user has closed to the assistant's
+    # read_project_section (2026-10-13), by number. Empty = every section
+    # listed in the registry may be read, which is the default.
+    section_read_exclusions: list[str] = field(default_factory=list)
 
 
 def _sanitize_map_json(value: Any, label: str) -> dict[str, Any] | None:
@@ -232,6 +236,9 @@ def validate_project_data(data: Any) -> ValidatedProjectData:
         format_map=sanitize_format_map(data.get("format_map")),
         template_origin=sanitize_template_origin(data.get("template_origin")),
         project_link=sanitize_project_link(data.get("project_link")),
+        section_read_exclusions=sanitize_section_read_exclusions(
+            data.get("section_read_exclusions")
+        ),
     )
 
 
@@ -259,6 +266,7 @@ def save_project(
     compaction: dict[str, Any] | None = None,
     qc_fix_log: list[dict[str, Any]] | None = None,
     session_journal: dict[str, Any] | None = None,
+    section_read_exclusions: list[str] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -321,6 +329,13 @@ def save_project(
     safe_project_link = sanitize_project_link(project_link)
     if safe_project_link is not None:
         payload["project_link"] = safe_project_link
+    # Which sibling sections the user closed to the assistant's reads
+    # (2026-10-13). This section's own choice, so it rides its file and
+    # never a brief; optional the same way — omitted when empty, which is
+    # also what an absent key restores to (every section readable).
+    safe_exclusions = sanitize_section_read_exclusions(section_read_exclusions)
+    if safe_exclusions:
+        payload["section_read_exclusions"] = safe_exclusions
     # How far the last committed fact harvest read (Project workspace
     # Phase 4). Optional the same way — omitted at 0, which is also what an
     # absent key restores to — so a section never harvested writes no key.
@@ -468,6 +483,30 @@ def sanitize_project_link(value: Any) -> dict[str, Any] | None:
         "research_rounds_at_seed": _link_int(value.get("research_rounds_at_seed")),
         "sections": [record for record in records if record is not None],
     }
+
+
+MAX_SECTION_READ_EXCLUSIONS = MAX_LINK_SECTIONS
+
+
+def sanitize_section_read_exclusions(value: Any) -> list[str]:
+    """The sibling sections the user closed to ``read_project_section``, by
+    number (2026-10-13): whitespace-folded, bounded like a registry number,
+    deduplicated in order, at most :data:`MAX_SECTION_READ_EXCLUSIONS`.
+
+    The ``project_link`` posture: malformed input degrades to ``[]`` — every
+    section readable, the default — rather than failing the load. Keyed by
+    number because the registry is (a renumbered section is a new choice).
+    """
+    if not isinstance(value, list):
+        return []
+    cleaned: list[str] = []
+    for entry in value:
+        number = _link_str(entry, 40)
+        if number and number not in cleaned:
+            cleaned.append(number)
+        if len(cleaned) >= MAX_SECTION_READ_EXCLUSIONS:
+            break
+    return cleaned
 
 
 def sanitize_template_origin(value: Any) -> dict[str, Any] | None:
@@ -837,6 +876,7 @@ def load_project(data: Any, session) -> None:
     # Assigned unconditionally, like template_origin: loading over a live
     # session must not inherit the previous session's project link.
     session.project_link = staged.project_link
+    session.section_read_exclusions = list(staged.section_read_exclusions)
     # Keep the assignment conditional so format-1 compatibility callers with
     # an older/lightweight session object continue to load unchanged.
     if hasattr(session, "source_docx_map"):

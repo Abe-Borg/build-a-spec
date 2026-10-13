@@ -77,6 +77,10 @@ _STATE_PROBES = {
     # comments on a fresh session's redline for fixes it never received.
     "qc_fix_log": lambda s: list(s.qc_fix_log),
     "project_link": lambda s: s.project_link,
+    # The sibling sections closed to the assistant's reads (2026-10-13).
+    # A list that outlived its section would close a fresh session's
+    # siblings for a choice nobody made about them.
+    "section_read_exclusions": lambda s: list(s.section_read_exclusions),
     "usage": lambda s: s.usage.snapshot(),
     "last_context_tokens": lambda s: s.last_context_tokens,
     # What that turn's PROJECT CONTEXT block was made of (Project
@@ -209,6 +213,7 @@ def _dirty(session: SessionState) -> None:
             "evidence": [{"key": ["field", "pt1.a1.p1"], "value": None}],
         }
     ]
+    session.section_read_exclusions = ["21 30 00"]
     session.project_link = {
         "project_id": "a" * 32,
         "name": "The previous project",

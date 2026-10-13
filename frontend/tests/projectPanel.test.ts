@@ -162,3 +162,23 @@ test("the tour step points at the panel inside the paper chapter", () => {
   assert.ok(chapter.indexOf('id: "project-facts"') < chapter.indexOf('id: "project-panel"'));
   assert.match(tour, /TOUR_VERSION = 9;/);
 });
+
+test("each sibling row offers an 'assistant may read' box that sends the number, hidden in a tour", () => {
+  // The box is the panel's own control: by NUMBER, the new state, then a
+  // re-read of the listing the server answers from — never a path, never a
+  // local edit of the row.
+  const box = /\{row\.in_registry && !row\.is_current && !tutorialActive && \(\s*<label[\s\S]*?<\/label>\s*\)\}/.exec(
+    panel,
+  )?.[0];
+  assert.ok(box, "the assistant-may-read box must be gated on a sibling registry row outside a tour");
+  assert.match(box, /type="checkbox"/);
+  assert.match(box, /checked=\{row\.assistant_readable !== false\}/);
+  assert.match(box, /onChange=\{\(event\) => void setAccess\(row\.number, event\.target\.checked\)\}/);
+  assert.match(box, /data-capability="project\.section-access"/);
+  assert.match(panel, /await setSectionAccess\(number, readable\);\s*setAccessNonce/);
+  assert.match(api, /fetch\("\/api\/project\/section-access", \{\s*method: "POST"/);
+  assert.match(api, /body: JSON\.stringify\(\{ number, readable \}\)/);
+  // The tour step teaches it.
+  assert.match(tour, /"project\.section-access"/);
+  assert.match(tour, /assistant may read/);
+});

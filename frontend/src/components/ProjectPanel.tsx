@@ -25,10 +25,17 @@
  * **Pull project changes**, offered when a dry run of the pull says the brief
  * holds research, documents or facts this section lacks. Neither sends a
  * path; the server reads the brief in the folder it found.
+ *
+ * Since 2026-10-13 each sibling row also carries an **assistant may read**
+ * box: ticked (the default), the assistant can read that section's saved
+ * text with its read_project_section tool when it needs it; unticked, it is
+ * told the section is closed to it. The choice is this section's own, saved
+ * in its file and never in a brief; the panel sends the NUMBER and the new
+ * state, and re-reads the listing the server answers from.
  */
 import { useEffect, useRef, useState } from "react";
 
-import { projectSections } from "../lib/api";
+import { projectSections, setSectionAccess } from "../lib/api";
 import { describePullOffer } from "../lib/projectMerge";
 import type {
   ProjectHome,
@@ -106,6 +113,10 @@ export default function ProjectPanel({
   // The write-back action in flight (one at a time), and what the last one
   // said — shown until the next action or the panel's next listing.
   const [action, setAction] = useState<"refresh" | "pull" | null>(null);
+  // The row whose "assistant may read" box is being changed, and a bump
+  // that re-reads the listing once the server has recorded the choice.
+  const [accessBusy, setAccessBusy] = useState("");
+  const [accessNonce, setAccessNonce] = useState(0);
   const [outcome, setOutcome] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [desktopShell, setDesktopShell] = useState(hasDesktopShell);
   // Newest request wins: a slow listing resolving after a newer one must not
@@ -155,7 +166,7 @@ export default function ProjectPanel({
         if (request.current !== id) return;
         setError(failure instanceof Error ? failure.message : String(failure));
       });
-  }, [visible, dependsOn, refreshNonce, openNonce]);
+  }, [visible, dependsOn, refreshNonce, openNonce, accessNonce]);
 
   if (!visible) return null;
 
@@ -172,6 +183,22 @@ export default function ProjectPanel({
       });
     } finally {
       setAction(null);
+    }
+  };
+
+  const setAccess = async (number: string, readable: boolean) => {
+    setAccessBusy(number);
+    setOutcome(null);
+    try {
+      await setSectionAccess(number, readable);
+      setAccessNonce((value) => value + 1);
+    } catch (failure: unknown) {
+      setOutcome({
+        tone: "err",
+        text: failure instanceof Error ? failure.message : String(failure),
+      });
+    } finally {
+      setAccessBusy("");
     }
   };
 
@@ -307,6 +334,26 @@ export default function ProjectPanel({
                   </span>
                 </div>
                 <span className="block text-[10px] text-ink-faint">{rowDetail(row)}</span>
+                {row.in_registry && !row.is_current && !tutorialActive && (
+                  <label
+                    className="mt-0.5 flex items-center gap-1 text-[10px] text-ink-faint"
+                    title={
+                      row.assistant_readable !== false
+                        ? `The assistant may read section ${row.number}'s saved text when it needs it — to avoid duplicating it, to cross-reference it, or when you ask about it. Untick to close the section to it.`
+                        : `Section ${row.number} is closed to the assistant: it is told not to read it and works from the title and article list alone. Tick to open it.`
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      className="accent-accent"
+                      checked={row.assistant_readable !== false}
+                      disabled={accessBusy === row.number}
+                      onChange={(event) => void setAccess(row.number, event.target.checked)}
+                      data-capability="project.section-access"
+                    />
+                    assistant may read
+                  </label>
+                )}
               </li>
             ))}
             {rows.length === 0 && !error && (

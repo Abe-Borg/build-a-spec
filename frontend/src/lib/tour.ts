@@ -318,6 +318,7 @@ export const TOUR: readonly TourChunk[] = [
           "project.open-section",
           "project.brief-refresh",
           "project.pull",
+          "project.section-access",
         ],
         mode: "explanatory",
         anchor: "project-panel",
@@ -325,7 +326,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "The project's sections, one click apart",
         body:
-          "A project lives in one folder: its project brief beside one saved file per section. In the desktop app this panel lists every section the project has drafted, marks the one you are in, and opens any other in one click, offering to save first; Next section → starts a new one. Every save adds this section's research, references and facts to the brief, and Update project brief does it on demand. When other sections have added work this one lacks, Pull project changes brings it in. This practice copy lives in no folder, so its update and pull controls are hidden and no row is marked as yours.",
+          "A project lives in one folder: its project brief beside one saved file per section. In the desktop app this panel lists every section the project has drafted, marks the one you are in, and opens any other in one click, offering to save first; Next section → starts a new one. Every save adds this section's research, references and facts to the brief, and Update project brief does it on demand. When other sections have added work this one lacks, Pull project changes brings it in. Each other row's \"assistant may read\" box decides whether the assistant can read that section's saved text. This practice copy lives in no folder, so those controls are hidden and no row is marked as yours.",
       },
       {
         id: "lint",

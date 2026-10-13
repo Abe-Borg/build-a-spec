@@ -619,6 +619,15 @@ class SessionState:
     # where it was. The one path that persists is the registry's BASENAME
     # (``section_record.file_name``), which it already did.
     project_home: dict[str, str] | None = None
+    # The sibling sections the user has closed to ``read_project_section``
+    # (2026-10-13), by number — the Project panel's per-row "assistant may
+    # read" box, off. This section's own choice: persisted in its
+    # ``.baspec`` (``spec_doc.project.sanitize_section_read_exclusions``),
+    # never in a brief, cleared by a reset and replaced by a load. Read by
+    # the PROJECT SECTIONS footer at turn start and by the tool at
+    # dispatch; written only by the panel's route, never by a turn's
+    # tools, so it may render into the cached project block (C1's rule).
+    section_read_exclusions: list[str] = field(default_factory=list)
 
     def record_qc_fixes(self, entries: list[dict[str, Any]]) -> None:
         """Append applied-fix entries (``qc.fix_log.fix_log_entries``) to
@@ -1893,6 +1902,8 @@ class SessionState:
         # A project link describes the project the OUTGOING section belonged
         # to. A fresh session belongs to none until it is seeded or exported.
         self.project_link = None
+        # The sections closed to the assistant were this section's choice.
+        self.section_read_exclusions = []
         # Per-project priming text does not survive a reset (see the field
         # comment). Module and discipline are kept; this is not.
         self.project_context = ""
@@ -2601,6 +2612,7 @@ def _project_block_text(session: SessionState) -> tuple[str, dict[str, int]]:
             doc.number,
             readable=isinstance(session.project_home, dict)
             and bool(session.project_home.get("folder")),
+            excluded=session.section_read_exclusions,
         )
     except Exception:  # noqa: BLE001 - context assembly must never fail a turn
         sections_block = ""
@@ -4259,6 +4271,7 @@ def _run_read_project_section(
             link=link,
             home=home,
             resolve=sessions.resolve_section_file,
+            excluded=session.section_read_exclusions,
         )
     except SectionReadRefusal as exc:
         _trace.note(trace_handle, f"read_project_section refused: {exc}")

@@ -1919,11 +1919,28 @@ document), so the model could only ask the user to paste a section.
   names the one bounded exception, and the local-reads and brief cards say
   the chat reads a sibling's file the way the panel does. No control, so no
   capability or tour step.
+- **The user chooses which sections it may read** (owner decision,
+  2026-10-13, after the merge of PR #312). `SessionState.section_read_exclusions`
+  (a list of numbers; `spec_doc.project.sanitize_section_read_exclusions`,
+  bounded by `MAX_SECTION_READ_EXCLUSIONS`) is this section's own choice:
+  saved in its `.baspec` only when non-empty, never in a brief, cleared by a
+  reset, replaced by a load, declared in the wipe sweep. `POST
+  /api/project/section-access {number, readable}` writes it (409 in a tour,
+  400 for the open section's own number); the listing's rows carry
+  `assistant_readable`. `read_project_section` refuses a closed number
+  before resolving anything, naming the panel's box, and
+  `project_sections_block(excluded=…)` says in the footer which listed
+  sections are closed (or that all are) while still listing them for scope.
+  The panel's per-row "assistant may read" checkbox carries capability
+  `project.section-access` in the `project-panel` tour step; hidden in a
+  tour. Written only by the route, never by a turn's tools, so it may render
+  into the cached project block (a change rewrites it once).
 
 Never let a sibling's text into committed history, the project file or a
 cached block; never resolve a section by anything but the registry join and
 `section_file_path`; never return a file whose own number or project id is
-not the one asked for; never render a sibling with element ids. Tests:
+not the one asked for; never read a section the user closed; never render a
+sibling with element ids. Tests:
 `tests/test_project_sections.py`. Full record, reversion evidence and the
 release-note draft are in `docs/as-built.md` under the same heading. No
 paid API call was made.

@@ -14,7 +14,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, Callable, Iterable, Iterator, Literal
 
 from .llm.conversation import SessionState, effective_discipline
 from .session_history import SessionIdentity, register_active_session_provider
@@ -636,6 +636,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         template_origin=copy.deepcopy(session.template_origin),
         project_facts=session.facts.to_dict(),
         project_link=copy.deepcopy(session.project_link),
+        section_read_exclusions=list(session.section_read_exclusions),
         last_harvest_bubble=session.last_harvest_bubble,
         compaction=(
             session.compaction.to_dict()
@@ -1021,6 +1022,7 @@ def project_sections_listing(
     current_number: str,
     current_title: str,
     save_target: str,
+    exclusions: Iterable[str] = (),
 ) -> dict[str, Any]:
     """What the Project panel shows, from a snapshot taken under the guard.
 
@@ -1032,9 +1034,15 @@ def project_sections_listing(
     with a home: without one there is no folder to look in, and the panel
     shows the rows without an action rather than calling every file
     missing. Disk I/O: the caller holds no lock.
+
+    ``exclusions`` (``SessionState.section_read_exclusions``) marks each
+    sibling row ``assistant_readable`` — the panel's "assistant may read"
+    box — and rides the payload as ``section_read_exclusions``; the open
+    section's own row is always readable (its text is the turn's context).
     """
     records, disk, warnings = project_registry(link, home)
     current = _fold(current_number)
+    closed = {_fold(number) for number in exclusions if _fold(number)}
     own_file = ""
     if home and save_target:
         try:
@@ -1054,6 +1062,7 @@ def project_sections_listing(
                 "present": _section_present(home, str(record.get("file_name") or "")),
                 "is_current": is_current,
                 "in_registry": True,
+                "assistant_readable": is_current or _fold(record.get("number")) not in closed,
             }
         )
     if current and not any(row["is_current"] for row in rows):
@@ -1072,6 +1081,7 @@ def project_sections_listing(
                 "present": _section_present(home, own_file),
                 "is_current": True,
                 "in_registry": False,
+                "assistant_readable": True,
             }
         )
     unregistered: list[str] = []
@@ -1110,6 +1120,9 @@ def project_sections_listing(
         "brief_updated_at": disk.updated_at if disk is not None else "",
         "current_number": current,
         "sections": rows,
+        "section_read_exclusions": [
+            number for number in dict.fromkeys(_fold(n) for n in exclusions) if number
+        ],
         "unregistered": unregistered,
         "warnings": warnings,
     }

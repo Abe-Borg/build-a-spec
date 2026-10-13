@@ -1117,7 +1117,12 @@ and the specification writer can already see them.
 # so this is defused the way attached documents are — disclosed, never
 # silently deleted.
 _FACTS_TAG_PATTERN = re.compile(
-    rf"<\s*/?\s*{FACTS_TAG}\s*>", re.IGNORECASE
+    # Attributes included: "<established_project_facts x='y'>" is still the
+    # frame's tag to a reader (Codex review on PR #306). The name must end
+    # at whitespace, "/" or ">" (``(?=[\s/>])``), not at a word boundary:
+    # "<established_project_facts-note>" is another tag and passes through
+    # byte for byte (Codex review on PR #314).
+    rf"<\s*/?\s*{FACTS_TAG}(?=[\s/>])[^>]*>", re.IGNORECASE
 )
 
 

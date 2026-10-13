@@ -23330,6 +23330,140 @@ with no dialog, including a section opened from the Project panel. Save as…
 still asks for a new file. A legacy .json project is never overwritten: its
 first Save asks where the .baspec should go."
 
+## Six small wording fixes from the prompt review — implemented notes (2026-10-13)
+
+Step 6 of the prompt-review follow-up (an outside review Abraham forwarded,
+checked against the code): the review's "smaller prompt changes", each a rule
+the model could read two ways, plus the frame guards its earlier steps left.
+
+- **Statements are specification text.** Review: "Definitions, references,
+  schedules, product properties, and scope statements need not all be
+  Contractor commands." Writing policy v2's voice rule opened "Directives
+  only. Each provision tells the Contractor what to provide, install, submit,
+  test, or coordinate"; Final QC's `enforceability_language` brief opened
+  "imperative mood ('Provide', 'Install', 'Submit')" and "a provision
+  directs the Contractor and never explains"; `FULL_DRAFT_DIRECTIVE` said
+  "directives to the Contractor". Policy v3 (`WRITING_POLICY_VERSION = 3`,
+  core hash re-pinned): "Requirements, never commentary. A provision that
+  directs work tells the Contractor what to … Definitions, REFERENCES
+  entries, schedules, product properties and criteria, and scope statements
+  ("This Section includes…") are specification text too, written as plain
+  statements; none needs an imperative. State the requirement — never the
+  reason for it, the history behind it, or who decided it." The brief asks
+  for the imperative "where a provision directs work", says those forms are
+  "specification text without an imperative — never flag one for that", and
+  "a provision states a requirement and never explains". The directive names
+  them. The owner's three voice examples are unchanged.
+- **Scope qualifiers stay.** Review: "The language lens should not flag an
+  'account of where a requirement applies' when that wording defines
+  essential scope." Policy v3 adds: "A qualifier that defines where a
+  requirement applies ("in data halls", "where piping passes through rated
+  assemblies") is scope, not explanation: keep it." The brief now flags "an
+  account of why or under what adoption a requirement applies (a qualifier
+  that defines where it applies … is scope and stays)". The lint's
+  applicability phrases ("applies generally", "this requirement applies",
+  "applies to this project", "governs the/this…") are narration only and
+  were left alone. "Drop conditions the project has already settled" is
+  unchanged: a settled condition is not a scope qualifier.
+- **One question budget.** Review: "'Exactly ONE' waiting item conflicts with
+  mandatory 2–3 follow-up questions." `_HOW_YOU_WORK` step 3: "at most three
+  per turn, counting the waiting item you surface (see "Waiting on you"),
+  each with your recommended answer, and none when no useful question
+  remains". `_FOLLOWUP_POLICY`: "Surface one waiting item per turn — the one
+  marked [NEXT] … it counts as one of the turn's at most three questions"
+  (was "Every turn, surface exactly ONE"). `FULL_DRAFT_DIRECTIVE` and
+  `ADAPT_IMPORTED_DIRECTIVE`: "your highest-value follow-up questions — at
+  most three, counting the waiting item you surface" (were "2–3"/"2-3"); the
+  chips policy's "the 2-3 follow-up questions" lost its number.
+- **Chips name what they accept.** Review: "'Use your recommended default'
+  is ambiguous after several unrelated questions." The example block is now
+  `["Use your recommended pipe schedule", "Yes, ESFR at the ceiling only",
+  "I don't know the ceiling height — use your default"]`; a new rule says a
+  chip that accepts a recommendation or a default names what it accepts; the
+  "I don't know" option names its question when several are asked.
+- **Explaining is not editing.** Review: "'Each turn' should not require
+  document edits when the user asks for an explanation or review."
+  `_HOW_YOU_WORK` reads "Each turn that moves the draft:", and a new
+  paragraph: explain/review/compare/advise turns answer in the reply and
+  leave the document alone, editing only on a requested or approved change;
+  such a turn needs no edit and no new question, though it may still surface
+  the waiting item and stage chips.
+- **Frame guards** (carried from steps 2–3). `project_facts._FACTS_TAG_PATTERN`
+  and `reference_docs._BLOCK_TAG_PATTERN` matched only a bare tag
+  (`\s*>`); a tag carrying attributes still opened or closed the frame to a
+  reader. Both now take attributes. A sweep found no other frame pattern
+  without them. Text without the tag renders byte for byte. (The first push
+  used `\b[^>]*>`, the QC standards/profile frames' and the harvest's and
+  compaction's shape; see the review fix below.)
+
+Not in this step: the review's compaction-evidence item (missing-ledger
+lines keep attribution, status and a supporting quotation; a summary saying
+something was settled is not the confirmation). It changes the summary's
+format, which `tools/compaction_json_eval.py` compares, so it rides with the
+bigger items.
+
+**Bytes that changed once.** The stable prompt (every module): open
+sessions rewrite their cached prefix once. The writing policy and the
+`enforceability_language` brief are hashed in the QC input manifest, so
+every retained Final QC result reads stale once. The two directives are
+per-turn user text. The fan-out facts lines change only for a fact that
+carries an attribute-bearing frame tag.
+
+Tests: `tests/test_prompt_review_wording.py` (23): the policy bans
+commentary, not statements, and keeps the explanation ban; the scope
+qualifier rule; the lens's imperative, statements and scope wording (and
+what it still flags); the directive's statements; the question budget in
+both modules' prompts and both directives; the chip example, naming rule and
+"I don't know" rule, with "Use your recommended default" left only as the
+counter-example; the explanation turn; five facts and four reference tags
+defused with and without attributes, a facts block keeping exactly one
+frame, and look-alike tags untouched. `tests/test_writing_policy.py` pins
+the v3 hash; `tests/test_writing_policy_eval.py` the v3 label;
+`tests/test_prompt55_closing_message.py` the new chip example;
+`tests/test_relocate.py` now asks for version 2 or later. Every test file
+that reads the stable prompt, the directives, the policy, the lens briefs,
+the frame guards, chips or follow-ups passes (1,700; the 1 other, the
+`test_reference_docs` xlsx case, needs `openpyxl`, absent locally and red on
+master too).
+
+Revert matrix (`tests/test_prompt_review_wording.py` each time; each reverted
+in place and restored): the policy back to "Directives only" → 1 red; its
+statements sentence removed → 1; the scope-qualifier rule removed → 1; the
+lens asking for the imperative everywhere → 1; the lens flagging statements
+→ 1; the lens striking scope qualifiers → 1; the directive back to
+directives only → 1; "exactly ONE" restored → 2; the turn budget reverted →
+2; the full draft's "2–3" restored → 1; the adapt pass's "2-3" restored → 1;
+the chip example reverted → 2; the chip naming rule removed → 2; the
+explanation paragraph removed → 2; the facts tag pattern reverted → 4; the
+reference tag pattern reverted → 2. 16 of 16 caught.
+
+**Review fix (Codex, PR #314).** `\b` ends a word at `-`, `:` or `.`, so
+`\b[^>]*>` also rewrote `<attached_reference_document-note>` or
+`<established_project_facts:x>` — other tags, which can never open or close
+the frame — into escape markers, corrupting source text the guard promises
+to pass through byte for byte. Both patterns now require the name to end at
+whitespace, `/` or `>` (`(?=[\s/>])[^>]*>`); a bare tag, one with
+attributes, a self-closing one and one ended by a newline are still
+defused. `test_text_without_a_frame_tag_is_untouched` gains the hyphen,
+colon and dot look-alikes, and a new test covers the slash and whitespace
+endings. Probes: each pattern back to `\b[^>]*>` → 3 red. The QC standards
+and profile, harvest and compaction frames keep `\b` in this PR; the same
+change for them is a separate task.
+
+No paid API call was made; how the live model's question count and chips
+change is unmeasured until the owner runs a session.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Drafting", item "Clearer rules for the assistant": "The assistant
+asks at most three questions a reply, counting the Waiting on you item it
+brings back, and reply chips name what they accept ('Use your recommended
+pipe schedule'). Asking it to explain or review something no longer edits
+the specification. Definitions, schedules and scope statements are treated
+as ordinary specification text, and wording that defines where a
+requirement applies is kept. Retained Final QC results read stale once after
+updating."
+
 ## The user chooses which sections the assistant may read — implemented notes (2026-10-13)
 
 **Owner questions, then a decision (Abraham), after PR #312 merged.** Is the

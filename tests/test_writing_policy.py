@@ -52,6 +52,8 @@ _PINNED_CORE_SHA256 = {
     1: "212dcdedd70ee76dc12f252735416fe90fee612e80acd995a07e4fd638e20c39",
     # Relocation is one relocate operation (prompt-review follow-up, step 5).
     2: "3333716642e49570dfc30b720098779c27d2f242adefdc8e1c6ed84ab97276cc",
+    # Statements are specification text; scope qualifiers stay (step 6).
+    3: "f12ff5ace80eaccdeb62679601084797781141adbcb2c501f6376af906467882",
 }
 
 _HEADER = "# Specification writing policy"

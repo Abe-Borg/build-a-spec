@@ -80,8 +80,9 @@ def test_the_suggested_replies_ride_the_end_of_the_closing_message(module):
         "else in it, as one block on a line of its own"
     ) in prompt
     assert (
-        '<suggested_replies>["Use your recommended default", '
-        '"Yes, ESFR at the ceiling only", "I don\'t know — use your default"]'
+        '<suggested_replies>["Use your recommended pipe schedule", '
+        '"Yes, ESFR at the ceiling only", '
+        '"I don\'t know the ceiling height — use your default"]'
         "</suggested_replies>"
     ) in prompt
     assert "write nothing after it, never mention or describe it" in prompt

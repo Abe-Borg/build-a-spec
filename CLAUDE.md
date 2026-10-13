@@ -1946,6 +1946,50 @@ sibling with element ids. Tests:
 release-note draft are in `docs/as-built.md` under the same heading. No
 paid API call was made.
 
+## Six small wording fixes from the prompt review — implemented notes (2026-10-13)
+
+Step 6 of the prompt-review follow-up: rules the model could read two ways.
+
+- **Statements are specification text.** Writing policy v3
+  (`WRITING_POLICY_VERSION = 3`, hash re-pinned): "Requirements, never
+  commentary" replaces "Directives only" — definitions, REFERENCES entries,
+  schedules, product properties and criteria, and scope statements need no
+  imperative. The `enforceability_language` brief asks for the imperative
+  only "where a provision directs work" and never flags those forms;
+  `FULL_DRAFT_DIRECTIVE` names them.
+- **Scope qualifiers stay.** Policy v3 adds that a qualifier defining where
+  a requirement applies is scope; the lens flags "an account of why or under
+  what adoption a requirement applies", with the scope qualifier excepted.
+  The lint's applicability phrases were already narrow (narration only) and
+  are unchanged.
+- **One question budget.** `_HOW_YOU_WORK`: at most three per turn,
+  counting the surfaced waiting item, none when no useful one remains.
+  `_FOLLOWUP_POLICY`: "Surface one waiting item per turn … it counts as one
+  of the turn's at most three questions" (was "exactly ONE" every turn).
+  Both directives drop "2–3"/"2-3"; so does the chips policy.
+- **Chips name what they accept.** The example block and a new rule;
+  "I don't know — use your default" names its question when several are
+  asked.
+- **Explaining is not editing.** "Each turn that moves the draft:" plus a
+  paragraph: explain/review/compare/advise turns answer in chat and leave
+  the document alone unless the user asks for or approves a change.
+- **Frame guards.** `project_facts._FACTS_TAG_PATTERN` and
+  `reference_docs._BLOCK_TAG_PATTERN` take attributes (`(?=[\s/>])[^>]*>`):
+  the name must end at whitespace, `/` or `>`, so a longer tag such as
+  `<attached_reference_document-note>` passes through (Codex review on PR
+  #314; the `\b` the QC, harvest and compaction frames use treats `-`, `:`
+  and `.` as the name's end). Text without the tag renders byte for byte.
+- **Stale once.** The policy and the lens brief are in the QC manifest:
+  every retained Final QC result reads stale once. The stable prompt
+  changes once (cache rewrite).
+
+Not in this step: the review's compaction-evidence item (a summary saying
+something was settled must not become the confirmation) — it changes the
+summary's format and is left for the bigger items. Tests:
+`tests/test_prompt_review_wording.py`, `tests/test_writing_policy.py`. Full
+record, reversion evidence and the release-note draft are in
+`docs/as-built.md` under the same heading. No paid API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

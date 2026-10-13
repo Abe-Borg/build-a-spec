@@ -1310,16 +1310,19 @@ class _CloseController:
                 error="Return to your project before saving it.",
             )
         session = workspace.session
-        # Sampled beside the payload: a reset or project load while the Save
-        # dialog is up must not bind the replacement session to this file.
-        generation = session.generation
         try:
             # Captured under the session guard, rendered outside it — the
             # HTTP route's twin. This used to package the live session with
             # no guard at all, so a save landing while a turn committed could
             # mix pre- and post-commit state, on the one action meant to
-            # prevent loss.
-            payload, filename = sessions.project_package(session)
+            # prevent loss. The generation and the target are captured in
+            # the same guard: a reset or project load while the render runs
+            # or the Save dialog is up must not bind the replacement session
+            # to this file, and an open that adopts its own file meanwhile
+            # must not become where these bytes are written.
+            payload, filename, generation, current = sessions.project_save_package(
+                session
+            )
         except ProjectPackageError as exc:
             return self._save_result(False, error=str(exc))
         except Exception:
@@ -1336,10 +1339,10 @@ class _CloseController:
                 error="This project could not be packaged for saving.",
             )
 
-        # Where this session already saves itself, and whether this call is allowed
-        # to write there without asking. Kept apart: "Save as…" forces the
-        # dialog but should still OPEN in the folder the user last chose.
-        current = str(getattr(session, "save_target", "") or "")
+        # Where this session already saves itself (``current``, captured
+        # with the payload), and whether this call is allowed to write there
+        # without asking. Kept apart: "Save as…" forces the dialog but should
+        # still OPEN in the folder the user last chose.
         remembered = "" if force_dialog else current
         if remembered:
             written = self._resolved_write(remembered, payload)

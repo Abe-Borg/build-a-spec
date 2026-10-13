@@ -23057,6 +23057,19 @@ capability or project-format change.
   the target and advances the generation. Before, neither could be ruled out
   landing between the check and the write. The save path shares the helper,
   so it gains the same guarantee.
+- **A save reads its target with its payload** (Codex review on PR #313).
+  `_save_project_file` read `session.save_target` after the package render.
+  Before this change a load cleared the target in the meantime, so a save
+  that overlapped an Open fell through to the dialog. Now the Open adopts its
+  own file. A target read late is that file, and the outgoing project's bytes
+  would silently replace it. The Save button stays enabled while a file
+  loads, and Open stays enabled while a save runs, so the overlap is
+  reachable. `sessions.project_save_package` captures the package inputs,
+  the generation and the target in one guard, and `project_package` now
+  wraps it. A stale save writes its own file and binds nothing.
+  `test_a_save_overlapping_an_open_writes_its_own_file_never_the_opened_one`
+  runs the open inside the render seam. It failed before the fix (the
+  opened file's bytes changed) and passes after.
 - **Unchanged.** Save as… (always asks; opens in the target's folder; offers
   a fresh timestamped name), the fallback to the dialog for a target that can
   no longer be written, New session clearing the target, the tutorial

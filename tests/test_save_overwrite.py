@@ -541,6 +541,65 @@ def test_a_document_mutated_while_the_package_renders_does_not_reach_the_file(
     assert _articles(target) == ["SUMMARY", "LATE"]
 
 
+def test_a_save_overlapping_an_open_writes_its_own_file_never_the_opened_one(
+    tmp_path, monkeypatch
+):
+    """An open adopts its file as the target, so a save already in flight must
+    not read the target late (Codex review on PR #313).
+
+    The save captures project A, then renders it. If project B is opened and
+    adopted while A renders, a target read after the render is B's, and A's
+    bytes would silently replace B. The target is captured with the payload,
+    so the stale save writes A's own file, and the session (B's now) keeps B.
+    The open runs from inside the render seam, so the interleaving is
+    deterministic.
+    """
+    _fake_webview(monkeypatch)
+    file_a = tmp_path / "project-a.baspec"
+    file_b = tmp_path / "project-b.baspec"
+    window = _FakeWindow(dialog_path=str(file_a))
+    controller = _controller_with(window)
+    session = sessions.get_session()
+    other = SessionState()
+    other.doc.begin_turn()
+    other.doc.apply_edits(
+        [{"action": "add_article", "target_id": "pt1", "text": "PROJECT B"}]
+    )
+    other.doc.commit_turn()
+    file_b.write_bytes(sessions.project_package(other)[0])
+    b_bytes = file_b.read_bytes()
+    _draft("PROJECT A")
+    assert controller.save_project()["ok"] is True  # A's target is A
+
+    real_render = sessions.render_project_package
+    opened = {"done": False}
+
+    def open_b_then_render(inputs):
+        if not opened["done"]:
+            opened["done"] = True
+            payload = parse_project_package(b_bytes).project
+            load_project(payload, session)
+            assert sessions.adopt_opened_project_file(
+                session, str(file_b), generation=session.generation
+            )
+        return real_render(inputs)
+
+    monkeypatch.setattr(sessions, "render_project_package", open_b_then_render)
+    _draft("MORE A")
+    result = controller.save_project()
+
+    assert opened["done"], "the render seam never ran"
+    assert file_b.read_bytes() == b_bytes, "A's save overwrote the opened file"
+    assert _articles(file_a) == ["PROJECT A", "MORE A"], "A's save wrote A"
+    assert result["ok"] is True and result["target"] == "", (
+        "the replaced session is not bound to A, so no target is reported"
+    )
+    assert sessions.project_save_target(session) == {
+        "path": str(file_b),
+        "name": file_b.name,
+    }, "the opened project keeps its own file"
+
+
 def test_the_native_save_captures_under_the_guard_and_renders_outside_it(
     tmp_path, monkeypatch
 ):

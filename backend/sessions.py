@@ -747,9 +747,27 @@ def project_package(session: SessionState) -> tuple[bytes, str]:
     exact imported source is a distinct binary ZIP member; it is never
     encoded into or mixed with the semantic project JSON.
     """
+    payload, filename, _generation, _target = project_save_package(session)
+    return payload, filename
+
+
+def project_save_package(session: SessionState) -> tuple[bytes, str, int, str]:
+    """:func:`project_package` plus the session's generation and save target,
+    captured in the SAME guard as the package inputs.
+
+    The native save writes the payload to the target and binds it under the
+    generation, so all three must describe one session. Opening a ``.baspec``
+    adopts it as the target (:func:`adopt_opened_project_file`), so a target
+    read after the render could be a file opened while the render ran — and
+    the outgoing project's bytes would silently replace it (Codex review on
+    PR #313). Captured together, a save overlapping an open writes only its
+    own file, and the generation keeps it from binding the opened session.
+    """
     with session.session_state_guard():
         inputs = capture_project_package_inputs(session)
         identity = session.identity
+        generation = session.generation
+        target = str(getattr(session, "save_target", "") or "")
     # Tag this launch's log and trace runs with the session it saved, so
     # retention keeps them and a support bundle finds them (outside the
     # guard: it writes the run marker and run.json). Not a tutorial's
@@ -759,7 +777,7 @@ def project_package(session: SessionState) -> tuple[bytes, str]:
         from . import diagnostics
 
         diagnostics.note_session(identity.session_uid)
-    return render_project_package(inputs), inputs.filename
+    return render_project_package(inputs), inputs.filename, generation, target
 
 
 def project_package_bytes(session: SessionState) -> bytes:

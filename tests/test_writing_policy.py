@@ -50,6 +50,8 @@ MODULES = [get_module(module_id) for module_id in AVAILABLE_MODULES]
 # carrying it silently.
 _PINNED_CORE_SHA256 = {
     1: "212dcdedd70ee76dc12f252735416fe90fee612e80acd995a07e4fd638e20c39",
+    # Relocation is one relocate operation (prompt-review follow-up, step 5).
+    2: "3333716642e49570dfc30b720098779c27d2f242adefdc8e1c6ed84ab97276cc",
 }
 
 _HEADER = "# Specification writing policy"
@@ -183,8 +185,10 @@ _BRIEF_RULES = {
     "acceptance limit": ["A cited test method does not set an acceptance limit"],
     "not issue-ready": ["issue-ready"],
     "move semantics": ["move only reorders siblings"],
-    "relocation": ["add it at its new location and delete the original", "source_item_id"],
-    "subparagraphs": ["re-add its subparagraphs"],
+    # Version 2 (prompt-review follow-up, step 5): one relocate operation
+    # carries the subparagraphs; nothing is deleted before they exist.
+    "relocation": ["use one relocate operation", "source_item_id"],
+    "subparagraphs": ["everything under it", "every subparagraph exist"],
     "no upgrade": ["Relocation never upgrades a status"],
     "imported boundary": ["imported-document editing boundary", "Edit freely"],
 }
@@ -233,7 +237,7 @@ def test_the_stable_prompt_carries_the_policy_once_after_provenance(module):
 def test_the_protocol_blocks_point_at_the_policy_instead_of_restating_it():
     prompt = render_system_prompt(HYPERSCALE_FIRE)
     # Move semantics stay where the tool is explained, and point onward.
-    assert "follow the writing policy's relocation rule" in prompt
+    assert "see the writing policy's relocation rule" in prompt
     # The starter's layout is its convention; adapting is technical work.
     assert "The starter's article layout and titles are its template convention" in prompt
     assert "unresolved_reference findings" in prompt

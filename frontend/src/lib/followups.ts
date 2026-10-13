@@ -77,3 +77,25 @@ function seqOf(item: FollowUp): number {
   const value = Number.parseInt(tail, 10);
   return Number.isFinite(value) ? value : 0;
 }
+
+/**
+ * Where an element is now: the end of ``elementId``'s chain in the
+ * document's ``relocations`` (a relocate edit moved it and gave it a new id),
+ * or the id itself. The server never rewrites a Waiting on you item's link;
+ * the map rides the document's versions, so undo and redo keep a jump right.
+ * Bounded by the map's size, so a malformed cycle cannot loop.
+ */
+export function resolveRelocated(
+  relocations: Readonly<Record<string, string>> | undefined,
+  elementId: string,
+): string {
+  if (!relocations) return elementId;
+  let id = elementId;
+  let steps = 0;
+  const limit = Object.keys(relocations).length;
+  while (Object.prototype.hasOwnProperty.call(relocations, id) && steps <= limit) {
+    id = relocations[id];
+    steps += 1;
+  }
+  return id;
+}

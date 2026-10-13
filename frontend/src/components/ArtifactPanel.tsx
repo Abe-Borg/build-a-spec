@@ -69,6 +69,7 @@ import {
   sourceCapabilitiesPending,
 } from "../lib/sourceCapabilities";
 import { reviewCounts } from "../lib/reviewQueue";
+import { resolveRelocated } from "../lib/followups";
 import {
   effectivePanelTray,
   setPanelHidden,
@@ -890,8 +891,11 @@ export default function ArtifactPanel({
   const canCompare = versionCount > 1 || baselineIndex !== null;
 
   const scrollToElement = (elementId: string) => {
+    // A Waiting on you item names the provision by the id it was given; a
+    // relocated provision has a new one (doc.relocations).
+    const id = resolveRelocated(doc?.relocations, elementId);
     document
-      .getElementById(`el-${elementId}`)
+      .getElementById(`el-${id}`)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 

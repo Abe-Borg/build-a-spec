@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
   followupAge,
   followupCounts,
   justResolvedIds,
+  resolveRelocated,
   settledFollowups,
   waitingFollowups,
 } from "../src/lib/followups.ts";
@@ -100,4 +102,28 @@ test("age reads in replies, and never goes negative", () => {
   assert.equal(followupAge(item({ fid: "fu-1", raised_turn: 9 }), 4), "just now");
   assert.equal(followupAge(item({ fid: "fu-1", raised_turn: 3 }), 4), "1 reply ago");
   assert.equal(followupAge(item({ fid: "fu-1", raised_turn: 0 }), 4), "4 replies ago");
+});
+
+test("a relocated provision is found through the document's relocations", () => {
+  const relocations = {
+    "pt1.a1.p1": "pt3.a1.p1",
+    "pt1.a1.p1.p1": "pt3.a1.p1.p1",
+    // Relocated again later: the chain is followed to the end.
+    "pt3.a1.p1": "pt3.a2.p1",
+  };
+  assert.equal(resolveRelocated(relocations, "pt1.a1.p1"), "pt3.a2.p1");
+  assert.equal(resolveRelocated(relocations, "pt1.a1.p1.p1"), "pt3.a1.p1.p1");
+  assert.equal(resolveRelocated(relocations, "pt2.a1.p1"), "pt2.a1.p1");
+  assert.equal(resolveRelocated(undefined, "pt1.a1.p1"), "pt1.a1.p1");
+  // A malformed cycle cannot hang the panel.
+  const cycle = { a: "b", b: "a" };
+  assert.ok(["a", "b"].includes(resolveRelocated(cycle, "a")));
+});
+
+test("the panel's jump reads through the relocations", () => {
+  const source = readFileSync(
+    new URL("../src/components/ArtifactPanel.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /resolveRelocated\(doc\?\.relocations, elementId\)/);
 });

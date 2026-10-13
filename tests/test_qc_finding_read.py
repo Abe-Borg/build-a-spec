@@ -300,3 +300,55 @@ def test_a_turn_reads_a_finding_and_commits_without_its_record(monkeypatch):
     assert "call read_qc_finding again to re-read it" in history
     saved = sessions.project_package(sessions.get_session())[0]
     assert b"RATIONALE-MARKER" not in saved
+
+
+# ---------------------------------------------------------------------------
+# Codex review on PR #319
+# ---------------------------------------------------------------------------
+
+
+def test_a_changed_review_input_reads_stale_like_the_apply_path():
+    """Research re-run after the review: the document version still matches,
+    but ``apply_qc_fixes`` would refuse — so the read must not say CURRENT
+    or call the fix applyable."""
+    from backend.qc.apply import matches_current_inputs
+    from tests.test_context_sizes import _profile
+
+    client = _client()
+    session, result = _install(client)
+    block = {"id": "toolu_1", "name": "read_qc_finding", "input": {"finding_id": "qc-safe000fix1"}}
+    fresh, _events = _run_read_qc_finding(session, block)
+    assert matches_current_inputs(session, result)
+    assert "Freshness: CURRENT" in fresh["content"]
+    assert "a verified safe fix — apply via apply_qc_fixes" in fresh["content"]
+
+    session.research.profile_result = _profile(3)
+    assert result.matches_version(session.doc.index, session.doc.doc)
+    assert not matches_current_inputs(session, result)
+    moved, _events = _run_read_qc_finding(session, block)
+    assert "Freshness: STALE — the document is unchanged, but another review input" in moved["content"]
+    assert "not applyable until Final QC is re-run" in moved["content"]
+    assert "a verified safe fix — apply via apply_qc_fixes" not in moved["content"]
+    index, _events = _run_read_qc_finding(session, {**block, "input": {}})
+    assert "another review input changed" in index["content"]
+
+
+def test_an_unclosed_frame_tag_never_swallows_the_text_after_it():
+    """The attribute match is bounded and cannot cross ``<``: a malformed
+    ``<qc_finding`` in a reviewer's note leaves everything after it intact."""
+    client = _client()
+    session, _result = _install(
+        client,
+        rationale=(
+            "Starts <qc_finding but never closes, KEEP-THIS-TEXT, then a "
+            "real tag <b>bold</b> and </qc_finding> at the end."
+        ),
+    )
+    text = _read(session, "qc-safe000fix1")
+    assert "KEEP-THIS-TEXT, then a real tag <b>bold</b> and " in text
+    assert "[escaped tag: qc_finding]" in text
+    assert text.count(f"</{QC_FINDING_TAG}>") == 1
+    # An attribute run past the bound is not a tag the frame could mistake.
+    long_attr = "<qc_finding " + "x" * 80 + ">"
+    session.qc.result.findings[0].rationale = long_attr
+    assert long_attr in _read(session, "qc-safe000fix1")

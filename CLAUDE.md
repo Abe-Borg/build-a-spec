@@ -2142,10 +2142,13 @@ message and a change-history tool were declined.)
   (`finding_fix_class`, open surviving findings only), every verdict with
   its note, ops note and refutation evidence, the combined lens claims
   (`origins_for`, when more than one) and the disposition — or, with no id,
-  an index of every record by category. Freshness is judged against the
-  turn's provisional tree, so an edit earlier in the turn reads STALE, as
-  `apply_qc_fixes` would answer. Framed `<qc_finding>` with its own tag
-  (attributes included) and the reply-chip tag made inert; a header says it
+  an index of every record by category. Freshness is the apply path's own
+  answer: the turn's provisional tree (an edit earlier in the turn reads
+  STALE) and every other review input (`matches_current_inputs`, the apply
+  path's `block=False`; Codex review on PR #319), so a fix `apply_qc_fixes`
+  would refuse is never called applyable. Framed `<qc_finding>` with its own
+  tag (attributes bounded to 64 characters that never cross `<`, the
+  reply-chip matcher's shape) and the reply-chip tag made inert; a header says it
   is the review's data, its sources are not research findings, and a safe
   fix applies only through `apply_qc_fixes`. Charged to the turn's
   `TurnReferenceBudget`, elided at commit through `_ELIDED_READ_TOOL_NOTES`.

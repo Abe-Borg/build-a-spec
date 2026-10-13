@@ -152,6 +152,7 @@ from ..qc.apply import (
     capture_fix_evidence,
     finding_evidence_keys,
     fix_survives,
+    matches_current_inputs,
     ops_with_fix_reasons,
     stage_chat_apply,
 )
@@ -4367,14 +4368,21 @@ def _run_read_qc_finding(
     The retained result and the tree are the session's own attributes, read
     under the turn guard the caller holds; the tree is this turn's
     provisional one, so an edit earlier in the turn reads as STALE, the
-    same answer ``apply_qc_fixes`` would give.
+    same answer ``apply_qc_fixes`` would give. So do the other review
+    inputs: the full-input comparison is ``matches_current_inputs`` with the
+    apply path's ``block=False`` (Codex review on PR #319), so a report the
+    apply tool would refuse is never described as applyable.
     """
+    result = getattr(session.qc, "result", None)
     try:
         text = read_qc_finding(
-            getattr(session.qc, "result", None),
+            result,
             block.get("input"),
             current_version_index=session.doc.index,
             current_section=session.doc.doc,
+            inputs_current=(
+                result is not None and matches_current_inputs(session, result)
+            ),
         )
     except QCFindingReadRefusal as exc:
         _trace.note(trace_handle, f"read_qc_finding refused: {exc}")

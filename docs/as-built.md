@@ -24040,6 +24040,29 @@ bullet removed → 1; the QC block's rollup line reverted → 1 (each in
 backend files, `npm test` (573) and `npm run build` pass; the full suite
 runs in CI. No paid API call was made.
 
+### Review fixes (Codex, PR #319)
+
+- **Freshness is the apply path's answer.** The first cut judged freshness
+  by `matches_version` alone, so after research was re-run, an attachment
+  replaced or a fact superseded, the record said CURRENT and called a safe
+  fix applyable while `apply_qc_fixes` refused it. `_run_read_qc_finding`
+  now passes `inputs_current=matches_current_inputs(session, result)` (the
+  apply path's `block=False`), and `read_qc_finding` has three states:
+  CURRENT, STALE because the document changed, and STALE because another
+  review input changed or the imported-source check has not settled; in
+  either STALE state a safe fix reads "not applyable until Final QC is
+  re-run". The per-turn FINAL QC REVIEW block still judges by document
+  version (unchanged here; computing the full manifest every turn is a
+  separate decision).
+- **The frame's tag match is bounded.** `(?=[\s/>])[^>]*>` could run
+  across `<` to a later tag's `>`, folding the text between into one escape
+  marker, and rescan from every unclosed start; it is now
+  `(?=[\s/>])[^<>]{0,64}>`, the reply-chip matcher's shape.
+- Tests: a research re-run reads STALE (inputs) in both modes with the fix
+  not applyable; an unclosed `<qc_finding` leaves the text after it intact
+  and an over-long attribute run is not a tag. Reverting either fix turns
+  its test red (2 of 2).
+
 ### Release-note draft (for the release after 1.26.0)
 
 Section "Chat", items:

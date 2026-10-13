@@ -229,8 +229,13 @@ def qc_review_context_block(
 # caller reads the retained result and the tree under the turn guard.
 
 QC_FINDING_TAG = "qc_finding"
+# The attribute portion is bounded and never crosses ``<`` — the reply-chip
+# matcher's shape (``suggestions.REPLY_CHIPS_TAG_PATTERN``): an unclosed
+# ``<qc_finding`` in model-written text must not swallow everything up to the
+# next tag's ``>``, nor rescan the rest of the record from every such start
+# (Codex review on PR #319).
 _QC_FINDING_TAG_PATTERN = re.compile(
-    rf"<\s*/?\s*{QC_FINDING_TAG}(?=[\s/>])[^>]*>", re.IGNORECASE
+    rf"<\s*/?\s*{QC_FINDING_TAG}(?=[\s/>])[^<>]{{0,64}}>", re.IGNORECASE
 )
 
 #: The chat tool — appended LAST in ``conversation._chat_tools`` (the
@@ -321,21 +326,44 @@ def _version_display(result: Any) -> str:
     return f"v{result.version_index + 1} (stored index {result.version_index})"
 
 
-def _freshness(stale: bool) -> str:
-    if stale:
+# How the retained review relates to the session now. ``inputs`` is the
+# answer ``apply_qc_fixes`` would give (``apply.matches_current_inputs``)
+# when the document itself is unchanged: research, an attached document, an
+# established fact or a QC setting moved, or the imported-source check has
+# not settled (Codex review on PR #319 — the document version alone said
+# CURRENT and called fixes applyable that the apply path then refused).
+_FRESH_CURRENT = "current"
+_STALE_DOCUMENT = "document"
+_STALE_INPUTS = "inputs"
+
+
+def _freshness(state: str) -> str:
+    if state == _STALE_DOCUMENT:
         return (
             "Freshness: STALE — the document changed after this review. The "
             "record describes the document as it was then; its fixes cannot "
             "be applied until Final QC is re-run."
         )
-    return "Freshness: CURRENT — this review describes the document as it stands."
+    if state == _STALE_INPUTS:
+        return (
+            "Freshness: STALE — the document is unchanged, but another review "
+            "input changed after this review (requirements research, an "
+            "attached document, an established project fact, or a Final QC "
+            "setting), or the imported-source permission check has not "
+            "settled. Its fixes cannot be applied through apply_qc_fixes "
+            "until Final QC is re-run."
+        )
+    return (
+        "Freshness: CURRENT — this review describes the document and its "
+        "review inputs as they stand."
+    )
 
 
-def _index(result: Any, stale: bool) -> str:
+def _index(result: Any, state: str) -> str:
     lines = [
         f"Final QC report, run {result.run_id or '(unrecorded)'} · reviewed "
         f"document version {_version_display(result)}",
-        _freshness(stale),
+        _freshness(state),
     ]
     records = _records(result)
     if not records:
@@ -401,7 +429,7 @@ def _verdict_line(index: int, verdict: Any) -> str:
 
 
 def _detail(
-    result: Any, key: str, finding: Any, *, section: Any, stale: bool
+    result: Any, key: str, finding: Any, *, section: Any, state: str
 ) -> str:
     label = next(label for k, _h, label in _CATEGORIES if k == key)
     lenses = {
@@ -420,7 +448,7 @@ def _detail(
         + (f"; status: {finding.status}" if _status_mark(key, finding) else ""),
         f"Run {result.run_id or '(unrecorded)'} · reviewed document version "
         f"{_version_display(result)}",
-        _freshness(stale),
+        _freshness(state),
         "",
         f"Severity: {severity}",
         f"Lens: {lens}",
@@ -449,12 +477,18 @@ def _detail(
     lines.append("")
     if finding.proposed_ops:
         if key == "findings" and finding.status == "open":
-            fix = (
-                "a verified safe fix — apply via apply_qc_fixes on the user's "
-                "explicit approval"
-                if finding_fix_class(finding, section) == FIX_CLASS_SAFE
-                else "advisory only — not a verified safe fix"
-            )
+            if finding_fix_class(finding, section) != FIX_CLASS_SAFE:
+                fix = "advisory only — not a verified safe fix"
+            elif state != _FRESH_CURRENT:
+                fix = (
+                    "a verified safe fix on the review's inputs — not "
+                    "applyable until Final QC is re-run"
+                )
+            else:
+                fix = (
+                    "a verified safe fix — apply via apply_qc_fixes on the "
+                    "user's explicit approval"
+                )
         else:
             fix = "not applyable from this record"
         lines.append(f"Proposed operations ({len(finding.proposed_ops)}; {fix}):")
@@ -534,12 +568,16 @@ def read_qc_finding(
     *,
     current_version_index: int,
     current_section: Any,
+    inputs_current: bool = True,
 ) -> str:
     """The framed tool-result text for one ``read_qc_finding`` call.
 
     ``QCFindingReadRefusal`` when no review is retained or the id is not on
     the report — a correctable ``is_error`` for the caller, never a turn
     failure. An omitted or blank id lists every record (:func:`_index`).
+    ``inputs_current`` is the caller's full-input answer
+    (``apply.matches_current_inputs``); it only matters when the document
+    version itself still matches.
     """
     if result is None:
         raise QCFindingReadRefusal(
@@ -549,9 +587,14 @@ def read_qc_finding(
     finding_id = ""
     if isinstance(raw_input, dict):
         finding_id = " ".join(str(raw_input.get("finding_id") or "").split())
-    stale = not result.matches_version(current_version_index, current_section)
+    if not result.matches_version(current_version_index, current_section):
+        state = _STALE_DOCUMENT
+    elif not inputs_current:
+        state = _STALE_INPUTS
+    else:
+        state = _FRESH_CURRENT
     if not finding_id:
-        body = _index(result, stale)
+        body = _index(result, state)
     else:
         match = next(
             (
@@ -568,7 +611,7 @@ def read_qc_finding(
                 "record with its id. Nothing was read."
             )
         body = _detail(
-            result, match[0], match[1], section=current_section, stale=stale
+            result, match[0], match[1], section=current_section, state=state
         )
     header = (
         "Final QC's own record, from the retained review: the review's "

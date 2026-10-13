@@ -90,6 +90,7 @@ from .spec_voice import (
     REFERENCES_ARTICLE_RE,
     TEMPLATE_MARKER_PATTERNS,
     explanatory_prose_hits,
+    look_only_prose,
     reference_entry_problems,
     scan_markers as _scan_markers,
 )
@@ -106,6 +107,17 @@ RULE_STALE_DOCUMENT_IDENTIFIER = "stale_document_identifier"
 RULE_EXPLANATORY_PROSE = "explanatory_prose"
 RULE_REFERENCE_ENTRY = "reference_entry_shape"
 RULE_UNRESOLVED_REFERENCE = "unresolved_reference"
+
+
+def holds_readiness(issue: Mapping[str, Any]) -> bool:
+    """Whether a lint issue holds issue readiness (the ``lint_clean`` check).
+
+    Every issue does, except a look (``look_only``): a provision whose only
+    explanatory-prose hit is "pending", which is often a real hold point
+    (owner decision, 2026-10-13). A look stays in the report, the panel and
+    the model's LINT REPORT; it just is not a defect to clear before issue.
+    """
+    return not issue.get("look_only")
 
 #: A MasterFormat section number as it appears in running text: three or
 #: four pairs of digits, space- or dot-separated ("23 05 48", "23 05 48.13").
@@ -755,8 +767,9 @@ def lint_document(
 
     ``overrides`` defaults to the section's own recorded
     ``edition_overrides``. Issue shape: ``{id, rule, severity, element_id,
-    ref, message, match}`` — ids are stable for a given tree (rule +
-    element + occurrence index), so the frontend can key on them.
+    ref, message, match}``, plus ``look_only: True`` on a look that does not
+    hold readiness (:func:`holds_readiness`) — ids are stable for a given
+    tree (rule + element + occurrence index), so the frontend can key on them.
 
     ``unstructured_import`` suppresses :data:`RULE_MISSING_SECTION_HEADER`.
     That rule reads "you are drafting articles but have not named the
@@ -785,20 +798,23 @@ def lint_document(
         message: str,
         match: str = "",
         severity: str = "warn",
+        look_only: bool = False,
     ) -> None:
         n = counters.get((rule, element_id), 0)
         counters[(rule, element_id)] = n + 1
-        issues.append(
-            {
-                "id": f"{rule}:{element_id}:{n}",
-                "rule": rule,
-                "severity": severity,
-                "element_id": element_id,
-                "ref": ref,
-                "message": message,
-                "match": match,
-            }
-        )
+        issue = {
+            "id": f"{rule}:{element_id}:{n}",
+            "rule": rule,
+            "severity": severity,
+            "element_id": element_id,
+            "ref": ref,
+            "message": message,
+            "match": match,
+        }
+        # Present only on a look, so every other issue's shape is unchanged.
+        if look_only:
+            issue["look_only"] = True
+        issues.append(issue)
 
     # The unrecorded-edition rule exists only for an unpinned basis (the
     # generic module) — a pinned module's lint output is unchanged by
@@ -855,7 +871,21 @@ def lint_document(
             if paragraph.locked:
                 continue
             hits = explanatory_prose_hits(paragraph.text)
-            if hits:
+            if hits and look_only_prose(hits):
+                add(
+                    RULE_EXPLANATORY_PROSE,
+                    paragraph.uid,
+                    ref,
+                    "Check 'pending': leave it where it is a real condition "
+                    "of the work (a hold point such as \"pending acceptance "
+                    "of shop drawings\"); otherwise state the requirement "
+                    "without it. A look only: it does not hold issue "
+                    "readiness.",
+                    hits[0]["match"],
+                    severity="info",
+                    look_only=True,
+                )
+            elif hits:
                 found = "; ".join(
                     f"'{hit['match']}' ({hit['label']})" for hit in hits
                 )

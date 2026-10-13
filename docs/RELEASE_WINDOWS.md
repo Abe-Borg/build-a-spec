@@ -304,6 +304,13 @@ invisible to CI and expensive to the user.
 - [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
       appears in its own warn-toned group, is never auto-applied, blocks
       readiness, and can be cleared by dismissing it with a reason.
+- [ ] **A "pending" hold point no longer blocks issue (next release).**
+      Add "Do not fabricate piping pending acceptance of shop drawings." to
+      a section with nothing else flagged: the Issues list shows it with a
+      grey dot and says it is a look, and the readiness checklist's lint
+      line reads "Lint clean apart from 1 'pending' look(s) left …". Add
+      "because field changes are costly" to the same sentence: it becomes
+      an ordinary issue and the lint line goes red.
 - [ ] **The tool instructions match the new rules (next release).** Add a
       provision with "should" in it: the readiness checklist's lint line
       reads "1 lint issue(s) to fix", not "advisory". Import a starter and

@@ -23839,6 +23839,83 @@ to roughly double. Set BUILD_A_SPEC_INTERVIEW_MODEL=claude-sonnet-5-5 to go
 back. Final QC's description no longer calls itself a stronger model than
 the drafter unless it is."
 
+## A "pending" hold point is a look, not a defect — implemented notes (2026-10-13)
+
+**Owner decision (Abraham, option A of three).** Step 7 found that
+`EXPLANATORY_PROSE_PATTERNS` flags "pending" for a look only and the prompt
+says to leave it where it is a real condition of the work, but every lint
+issue gated `lint_clean` and none can be dismissed. Verified with "Do not
+fabricate piping pending acceptance of shop drawings.": one
+`explanatory_prose` issue, `lint_clean` false, so a section with a real hold
+point never read ready unless reworded. The options were (A) keep the
+finding visible but let it not hold readiness, (B) stop flagging "pending",
+(C) leave it and word hold points "until …". The owner chose A.
+
+**The rule.** `spec_voice.PENDING_LOOK_LABEL` names the "pending" pattern's
+label and is the one member of `LOOK_ONLY_PROSE_LABELS`. `look_only_prose`
+is true when a provision's hits are non-empty and every one carries a
+look-only label; two "pending"s are still a look, and "pending" beside a
+reason, a hedge or any other hit is a breach. `lint_document` reports a
+look with severity `info`, `look_only: True` and its own message: "Check
+'pending': leave it where it is a real condition of the work (a hold point
+such as "pending acceptance of shop drawings"); otherwise state the
+requirement without it. A look only: it does not hold issue readiness." The
+`look_only` key is added only to a look, so every other issue keeps the
+seven keys it had (pinned).
+
+**Readiness.** `linting.holds_readiness(issue)` is the one test, used by
+`_readiness_payload` (`lint_clean` counts `lint_blocking`) and by the LINT
+REPORT. `_lint_readiness_detail(blocking, looks)`: "Lint clean." with
+neither; "N lint issue(s) to fix." with no look (the existing wording, so
+`test_preserved_chrome_lint` is unchanged); "Lint clean apart from N
+'pending' look(s) left, which do not hold readiness." with looks only; both
+sentences with both.
+
+**What the model reads.** The LINT REPORT header: "each issue holds issue
+readiness until fixed, except any marked 'look only'" ("one" in the first push read as a single exemption; Codex review on PR #318); a look's line:
+`[explanatory_prose, look only]`. `_LINT_POLICY`: "pending" alone is a look
+(marked in the report), a real hold point such as "pending acceptance of
+shop drawings" stays, and it does not hold issue readiness; "every issue it
+reports, except a look-only one, holds the section's issue readiness".
+`tests/test_tool_text_review.py`'s lint-policy pin follows.
+
+**UI.** No control and no capability: the Issues drawer already renders
+`info` with the grey dot (`severityDot`), and the message says what the
+finding is. `LintIssue.look_only?: boolean` and a corrected doc comment in
+`types.ts`; the tour's lint sentence now says every finding must be cleared
+for issue readiness "except a 'pending' left for a look: a real hold point
+stays". `npm test` (573) and `npm run build` pass. Step order is unchanged,
+so `TOUR_VERSION` stays.
+
+**Bytes.** The stable prompt changes once (cache rewrite). Lint is not in
+the QC manifest, so retained Final QC results are unaffected. The lint
+payload and the `lint` SSE event carry the new key on a look only.
+
+Tests: `tests/test_pending_look_only.py` (8): the rule (pending alone,
+pending twice, pending with a reason, a hedge, empty), the look's severity,
+flag and message, a breach's shape and message, every other issue's key
+set, readiness and its detail with a look alone and with a real issue
+beside it (through `/api/doc/edit` and `/api/readiness`), the model's LINT
+REPORT marker and header (through a chat turn), and the lint policy in both
+modules' prompts. The 54 test files that mention lint, readiness or
+"pending" pass locally (1,578).
+
+Revert matrix (each reverted in place; `tests/test_pending_look_only.py` and
+`tests/test_tool_text_review.py` run; restored): the rule never a look → 5
+red; readiness counting looks → 1; the old readiness detail → 2; the look's
+severity → 1; the look flag → 4; the look's message → 1; the report marker
+→ 1; the report header → 1; the prompt's policy line → 1. 9 of 9 caught.
+
+No paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Drafting", item "Hold points no longer block issue": "A provision
+whose only lint finding is the word 'pending' — a hold point such as
+'pending acceptance of shop drawings' — stays in the Issues list as a
+reminder to check it, but no longer holds the section's issue readiness.
+'Pending' beside anything else the lint flags is still an issue to fix."
+
 ## The chat reads a Final QC finding in full — implemented notes (2026-10-13)
 
 Owner decisions (Abraham, 2026-10-13), after a review of what the chat is

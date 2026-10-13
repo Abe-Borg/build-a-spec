@@ -172,7 +172,7 @@ function FactForm({
             setDraft({ ...draft, status: event.target.value as ActiveStatus })
           }
           aria-label="Fact status"
-          title="Confirmed: stated by you or established by a grounded source. Assumed: a working default nobody has contested."
+          title="Confirmed: stated by you or established by a grounded source. Assumed: a working default you have not explicitly confirmed."
         >
           <option value="confirmed">confirmed</option>
           <option value="assumed">assumed</option>

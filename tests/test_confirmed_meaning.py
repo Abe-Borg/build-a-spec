@@ -31,7 +31,14 @@ from backend.llm.prompts import (
     FULL_DRAFT_DIRECTIVE,
     render_system_prompt,
 )
-from backend.project_facts import ProjectFactStore
+from backend.harvest import HARVEST_SYSTEM_PROMPT, harvest_tool
+from backend.project_facts import (
+    RECORD_PROJECT_FACTS_TOOL,
+    ProjectFactStore,
+    project_facts_block,
+    project_facts_manifest_facts,
+    validate_record_payload,
+)
 from backend.spec_doc.model import APPLY_SPEC_EDITS_TOOL
 from backend.spec_modules.generic import GENERIC
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
@@ -59,7 +66,10 @@ def test_only_the_user_confirms_a_provision(prompt):
         "from one is assumed, with that source as source_item_id, until the "
         "user approves it." in prompt
     )
-    assert "A project fact the user stated (source: user, confirmed) counts as their statement." in prompt
+    assert (
+        "A confirmed project fact that is the user's own (source: user, or "
+        "edited in the panel) counts as their statement." in prompt
+    )
 
 
 def test_a_fact_no_longer_confirms_the_provision_drafted_from_it(prompt):
@@ -69,10 +79,10 @@ def test_a_fact_no_longer_confirms_the_provision_drafted_from_it(prompt):
         "person approved it." in prompt
     )
     assert (
-        "stamp the provision confirmed only when the user stated that fact "
-        "(source: user, confirmed) or approved the provision, and assumed when "
-        "the fact rests on research, an attached document or Final QC, or is "
-        "itself assumed" in prompt
+        "stamp the provision confirmed only when the fact is confirmed and "
+        "the user's own (source: user, or edited in the panel) or the user "
+        "approved the provision, and assumed when the fact rests on research, "
+        "an attached document or Final QC, or is itself assumed" in prompt
     )
     # The research policy's citation line no longer reads as a confirmation.
     assert "when a provision follows a confirmed fact" not in prompt
@@ -92,13 +102,56 @@ def test_an_assumed_fact_is_not_settled_input(prompt):
         "An assumed fact is a working default, not a decision: draft to it, "
         "stamp what rests on it assumed, and raise it with the user once, in "
         "one line, when a provision you draft depends on it — when they "
-        "agree, supersede it with the same statement recorded as confirmed."
-        in prompt
+        "agree, supersede it with the same statement, status confirmed and "
+        "source_kind user (their agreement is now its source)." in prompt
     )
-    # A panel edit is the user's word; "treat what it shows as settled" would
-    # have settled an assumed fact the panel shows too.
+    # "treat what it shows as settled" would have settled an assumed fact the
+    # panel shows too. The panel's own changes are visible in the facts
+    # block instead (Codex review on PR #310).
     assert "treat what it shows as settled" not in prompt
-    assert "a change made there is the user's own word" in prompt
+    assert (
+        "a fact the user added there reads source: user, and one they edited "
+        "there is marked edited in the panel." in prompt
+    )
+
+
+def test_an_explicitly_agreed_default_is_confirmed_everywhere(prompt):
+    """Codex review on PR #310: "assumed = a default the user accepted"
+    contradicted "when they agree, record it confirmed" in the same request.
+    Every definition now reserves assumed for a default the user let stand."""
+    assert "your default the user accepted or did not contest" not in prompt
+    assert (
+        "assumed when it is your default the user let stand without "
+        "explicitly confirming it — a default the user explicitly agrees to "
+        "is confirmed, with source_kind user." in prompt
+    )
+    tool = _flat(RECORD_PROJECT_FACTS_TOOL["description"])
+    assert "your default the user accepted." not in tool
+    assert (
+        "assumed when it is your default the user has not explicitly "
+        "confirmed (an explicit yes makes it confirmed, with source_kind user)."
+        in tool
+    )
+    item = RECORD_PROJECT_FACTS_TOOL["input_schema"]["properties"]["record"]["items"]
+    status = _flat(item["properties"]["status"]["description"])
+    assert (
+        "assumed = your default the user has not explicitly confirmed (an "
+        "explicit yes makes it confirmed, source_kind user)." in status
+    )
+    harvest = _flat(HARVEST_SYSTEM_PROMPT)
+    assert "accepted or did not contest" not in harvest
+    assert "the assistant's default the user accepted there" not in harvest
+    assert (
+        "assumed when it is a default the user let stand without explicitly "
+        "confirming it (one the user explicitly agreed to is confirmed, "
+        "source_kind user)." in harvest
+    )
+    harvest_status = _flat(
+        harvest_tool()["input_schema"]["properties"]["proposals"]["items"][
+            "properties"
+        ]["status"]["description"]
+    )
+    assert "a default the user let stand without explicitly confirming it" in harvest_status
 
 
 def test_an_attached_document_alone_confirms_nothing(prompt):
@@ -176,13 +229,77 @@ def test_the_facts_block_tells_the_two_kinds_apart():
     assert (
         "Do not re-ask or re-derive the confirmed ones. An [assumed] fact is a "
         "working default: raise it with the user once, in one line, when a "
-        "provision you draft rests on it." in block
+        "provision you draft rests on it, and when they agree supersede it "
+        "with the same statement, status confirmed and source_kind user." in block
     )
     assert (
         "A provision drafted from a fact cites its id as source_item_id, and "
-        "is stamped confirmed only when the user stated that fact (source: "
-        "user, confirmed) or approved the provision." in block
+        "is stamped confirmed only when the fact is confirmed and the user's "
+        "own (source: user, or edited in the panel) or the user approved the "
+        "provision." in block
     )
+
+
+def test_the_users_agreement_becomes_the_facts_source():
+    """Codex review on PR #310: a replacement inherits the old fact's
+    source_kind, so "recorded as confirmed" alone would read "[confirmed]
+    source: model" and could not authorize a provision. The instruction names
+    source_kind user, and the store records what the replacement says."""
+    store = _store()
+    assumed = next(f for f in store.active() if f.status == "assumed")
+    store.apply(
+        validate_record_payload({
+            "record": [],
+            "supersede": [
+                {
+                    "id": assumed.pid,
+                    "reason": "Confirmed by the user in chat.",
+                    "statement": assumed.statement,
+                    "status": "confirmed",
+                    "source_kind": "user",
+                }
+            ],
+        }),
+        recorded_in="21 13 13",
+        recorded_at="2026-10-13",
+    )
+    block = _flat(store.context_block(current_section="21 13 13"))
+    assert "[project, confirmed] Municipal supply with a fire pump. " in block
+    line = next(x for x in block.split("- pf-") if "Municipal supply" in x)
+    assert "source: user" in line
+
+
+def test_a_panel_edit_is_marked_for_the_chat_and_nowhere_else():
+    """Codex review on PR #310: a panel edit keeps the fact's source (it may
+    still name research), so the chat could not tell the user had touched
+    it. The chat's facts block now marks it; the Final QC fan-out and its
+    hashed manifest do not, so retained reports stay current."""
+    store = _store()
+    research = next(f for f in store.active() if f.source_kind == "research")
+    before_manifest = project_facts_manifest_facts(
+        store.active(), current_section="21 13 13"
+    )
+    before_fanout = project_facts_block(
+        store.active(), audience="qc", current_section="21 13 13"
+    )
+    assert "; edited in the panel)" not in store.context_block(current_section="21 13 13")
+    assert store.update(research.pid, {"detail": "Checked with the AHJ."}) == "ok"
+
+    block = _flat(store.context_block(current_section="21 13 13"))
+    line = next(x for x in block.split("- pf-") if "hydrostatic" in x)
+    assert "source: research r-1a2b3c4d5e6f; edited in the panel)" in line
+    other = next(x for x in block.split("- pf-") if "battery room" in x)
+    assert "; edited in the panel)" not in other
+
+    fanout = project_facts_block(store.active(), audience="qc", current_section="21 13 13")
+    assert "edited in the panel" not in fanout
+    # The only change is the detail line the edit itself added.
+    assert fanout.replace("    Detail: Checked with the AHJ.\n", "") == before_fanout
+    after_manifest = project_facts_manifest_facts(
+        store.active(), current_section="21 13 13"
+    )
+    assert "edited in the panel" not in json.dumps(after_manifest)
+    assert before_manifest["count"] == after_manifest["count"]
 
 
 def _parse_sse(body: str) -> list[dict]:

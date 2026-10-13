@@ -203,7 +203,7 @@ HARVEST_SCHEMA: dict[str, Any] = {
                             "provision, an attached document or a research "
                             f"finding marked {RESEARCH_GROUNDED_LABEL} "
                             "establishes it; assumed = a default the user "
-                            "accepted or did not contest."
+                            "let stand without explicitly confirming it."
                         ),
                     },
                     "source_kind": {
@@ -588,9 +588,9 @@ Do NOT propose:
 
 For every proposal:
 - statement: one line a stranger could act on, at most {max_statement} characters.
-- status: confirmed when the user stated it, or a confirmed provision, an attached document or a research finding marked {grounded} in <available_sources> establishes it; assumed when it is a default the user accepted or did not contest.
+- status: confirmed when the user stated it, or a confirmed provision, an attached document or a research finding marked {grounded} in <available_sources> establishes it; assumed when it is a default the user let stand without explicitly confirming it (one the user explicitly agreed to is confirmed, source_kind user).
 - scope: project (every section), discipline (every section of this discipline), or section with the section number (a coordination fact about one section).
-- source_kind and source_ref: user with turn:N when the user said it in that turn; model with turn:N when it is the assistant's default the user accepted there; research, reference or qc with an id listed in <available_sources> (for research, only a finding marked {grounded}). Leave source_ref empty only when no turn or listed record applies. Never invent an id — a source that is not listed is refused.
+- source_kind and source_ref: user with turn:N when the user said it in that turn; model with turn:N when it is the assistant's default the user let stand there; research, reference or qc with an id listed in <available_sources> (for research, only a finding marked {grounded}). Leave source_ref empty only when no turn or listed record applies. Never invent an id — a source that is not listed is refused.
 - evidence: the line the fact rests on, quoted verbatim (at most {max_evidence} characters).
 
 Propose at most {max_proposals} facts, most important first. Proposing nothing is a correct answer when nothing new was settled. Call propose_project_facts exactly once, as the final step.

@@ -1747,8 +1747,16 @@ the Review drawer never lists and `no_assumed_left` never holds back.
 - **No guard, deliberately.** Approval happens in chat ("yes, add it"), which
   a batch cannot see, so refusing confirmed-plus-research-source would refuse
   the user's own approvals (the step 3 reasoning). The prompt is the control.
-- **Unchanged.** Facts' own statuses and tool, the harvest, Final QC (its
-  facts block already said a provision on an assumed fact is assumed),
+- **Review fixes (Codex, PR #310).** An upgrade names `source_kind` user (a
+  replacement inherits the old kind). Every assumed-fact definition (policy,
+  `RECORD_PROJECT_FACTS_TOOL`, the harvest prompt and tool, the panel
+  tooltip) reserves assumed for a default the user let stand; an explicit yes
+  is confirmed, source user. The chat's facts block marks a panel-edited fact
+  "edited in the panel" (`render_fact_lines(mark_panel_edits=True)`, chat
+  only: the fan-out lines are hashed into the QC manifest), and the rule
+  accepts it as the user's own.
+- **Unchanged.** Final QC (its facts block already said a provision on an
+  assumed fact is assumed; its fan-out and manifest render no marker),
   readiness, statuses already in saved documents, the specification text.
 
 Never tell the model that a source, a citation or a fact it did not hear from

@@ -22692,25 +22692,52 @@ prompt (three blocks, both directives, the tool property and the per-turn
 facts block) is the control; the Review drawer and `no_assumed_left` catch
 everything stamped assumed.
 
-**Bytes that changed once.** The stable prompt (every module) and the edit
-tool's input schema: every open session rewrites its cached prefix once. The
-per-turn facts block's last line (per-turn, not cached across turns). The two
-directives are per-turn user text. Not the QC manifest: lens briefs, the
-writing policy and the tool's top-level description are untouched, so
-retained Final QC results stay current. Not the harvest (its fact statuses
-already treat a confirmed provision as the user's word, which this makes
-true), not Final QC's facts scope (it already said a provision resting on an
-assumed fact should be assumed), not readiness, not saved documents (a
-provision already stamped confirmed stays confirmed).
+**Codex review on PR #310 (three findings, all fixed).**
+(1) Upgrading an assumed fact: `supersede` inherits the old fact's
+`source_kind`, so "the same statement recorded as confirmed" would have read
+`[confirmed] … source: model`, which the provision rule does not accept. The
+policy and the facts block now say "status confirmed and source_kind user
+(their agreement is now its source)"; the tool path (`validate_record_payload`
+→ `apply`) records what the replacement names. (2) Every definition of an
+assumed fact said "a default the user accepted", contradicting "when they
+agree, record it confirmed" in the same request. `_PROJECT_FACTS_POLICY`,
+`RECORD_PROJECT_FACTS_TOOL` (description and `status` property), the harvest
+prompt and the harvest tool's `status` property now reserve assumed for a
+default the user let stand without explicitly confirming it; an explicit yes
+is confirmed, `source_kind` user. The Project facts panel's status tooltip
+follows. (3) A panel edit keeps the fact's source (it may still name
+research), so the chat could not tell a person had touched it. The chat's
+facts block (`context_block` → `render_fact_lines(mark_panel_edits=True)` →
+`_render_one`) adds "edited in the panel" to a fact whose `edited_at` is set
+(only the panel's `update` stamps it; a brief merge carries another section's
+panel edit), and the provision rule accepts "source: user, or edited in the
+panel". The fan-out, the harvest and the hashed QC manifest render without
+the marker, so retained Final QC results stay current.
 
-Tests: `tests/test_confirmed_meaning.py` (12): the provenance rule in both
+**Bytes that changed once.** The stable prompt (every module), the edit
+tool's input schema and `record_project_facts`' description and schema:
+every open session rewrites its cached prefix once. The harvest's system
+prompt and tool schema (its cached prefix is new once). The per-turn facts
+block's last line, and its marker on a panel-edited fact (per-turn, not
+cached across turns). The two directives are per-turn user text. Not the QC
+manifest: lens briefs, the writing policy, the fan-out's fact lines and the
+edit tool's top-level description are untouched, so retained Final QC
+results stay current. Not Final QC's facts scope (it already said a
+provision resting on an assumed fact should be assumed), not readiness, not
+saved documents (a provision already stamped confirmed stays confirmed).
+
+Tests: `tests/test_confirmed_meaning.py` (16 after the review): the provenance rule in both
 modules' stable prompts; the facts policy's two meanings and provision rule;
 the assumed-fact rule and the panel line; the reference-document line; the
 research citation line; both directives; the edit tool's status property
 (and its top-level description untouched); the per-turn facts block telling
 the kinds apart with each fact's status and source still rendered; and one
 `/api/chat` turn whose request carries the rule in the system prompt, the
-tool and the newest message's facts block. `tests/test_project_facts.py`
+tool and the newest message's facts block. The review added: an explicit yes
+is confirmed in every definition (both modules' prompts, the facts tool, the
+harvest prompt and tool); an upgrade through `validate_record_payload` →
+`apply` renders `confirmed … source: user`; and a panel edit is marked in the
+chat's facts block, never in the QC fan-out or manifest. `tests/test_project_facts.py`
 pinned the old closing line and now pins the new. Every test file that reads
 the changed prompts passes (804 of 805; the other, `test_reference_docs`'
 xlsx case, needs `openpyxl`, absent from the local environment and red on
@@ -22723,7 +22750,14 @@ provision rule reverted → 4; its assumed-fact rule reverted → 2; the
 reference-document line reverted → 2; the research citation line reverted →
 2; the full-draft stamping line reverted → 1; its tag line reverted → 1; the
 adapt directive reverted → 1; the per-turn facts block reverted → 3; the
-tool's status description reverted → 2. 10 of 10 caught.
+tool's status description reverted → 2. 10 of 10 caught. For the review
+fixes (`tests/test_confirmed_meaning.py` alone): the upgrade line without
+`source_kind user` → 2; the policy's assumed definition reverted → 2; the
+facts tool's `status` property reverted → 2; its description reverted → 2;
+the harvest prompt reverted → 2; the harvest tool's `status` property
+reverted → 2; the chat block not marking panel edits → 1; the fan-out
+marking them too (`render_fact_lines` defaulting to the marker) → 1; the
+facts block's upgrade line reverted → 1. 9 of 9 caught.
 
 No paid API call was made; how many more assumed blocks a researched full
 draft now produces, and whether the model raises assumed facts at the right

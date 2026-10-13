@@ -242,9 +242,14 @@ and the readiness checklist never held back.
   grounded source. The assistant is told the two words differ.
 - **An assumed fact is no longer treated as settled.** It is still carried
   forward and drafted to, but the assistant raises it with you once, in one
-  line, when a provision it drafts rests on it, and records it as confirmed
-  when you agree. Confirmed facts stay settled: not re-asked, not
-  re-derived.
+  line, when a provision it drafts rests on it, and records it as confirmed —
+  as your word — when you agree. "Assumed" now means a default you let stand
+  without explicitly confirming it, everywhere it is defined (the assistant,
+  the Project facts panel and Harvest facts…). Confirmed facts stay settled:
+  not re-asked, not re-derived.
+- **A fact you edit in the Project facts panel counts as yours.** The
+  assistant sees it marked "edited in the panel", so a provision drawn from a
+  confirmed fact you edited there can be confirmed.
 - **The whole-section passes say the same**: "Draft full section" stamps
   research- and document-derived provisions assumed, and "Adapt imported
   draft" confirms a kept block only where you stated or approved it.

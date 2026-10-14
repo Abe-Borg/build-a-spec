@@ -65,7 +65,9 @@ Word splits text into runs — the one thing it re-does on every save anyway:
   rather than the element (Word will not load one inside
   ``w:ins``/``w:del``), so the resolution that removes those runs leaves
   exactly this behind;
-* and so are FORMATTING-FREE empty paragraphs at the very end of the body:
+* and so are FORMATTING-FREE empty paragraphs at the very end of the body —
+  before the section properties and any range markup closing after them,
+  which marks a place, not a block:
   a document's last paragraph mark cannot be tracked, so resolving a
   deletion or insertion there leaves an empty paragraph behind. Only a
   formatting-free one is invisible — an empty paragraph still prints its
@@ -619,11 +621,16 @@ def canonical_body(body, *, exclude_bookmarks=frozenset()) -> list[tuple]:
     ]
     # Word cannot track a document's last paragraph mark, so an empty last
     # paragraph is what a tracked insertion or deletion there leaves behind
-    # — tolerated only when it sets nothing (see the module docstring).
+    # — tolerated only when it sets nothing (see the module docstring). Range
+    # markup after it (a bookmark closing after the last paragraph mark)
+    # marks a place, not a block: the paragraph before it is still the last.
     tail = [children.pop()] if children and children[-1][0] == _W_SECTPR else []
+    markup: list = []
+    while children and children[-1][0] in _BETWEEN_PARAGRAPHS:
+        markup.insert(0, children.pop())
     while children and _is_formatting_free_empty(children[-1]):
         children.pop()
-    return _fold_leading_markup(children) + tail
+    return _fold_leading_markup(children + markup) + tail
 
 
 def _first_path(left, right, path: list[str]) -> list[str]:

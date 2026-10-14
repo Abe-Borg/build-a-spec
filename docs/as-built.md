@@ -25101,17 +25101,30 @@ be named.
      comment's range end belongs with its reference mark, a run inside the
      paragraph below, and a moved commented paragraph is refused by name
      anyway (`moved_annotation`).
-  3. *The last paragraph behind trailing markup.* The redline takes the
-     body's last child as its last paragraph. When the last provision's
-     bookmark end is the body's last child (no `END OF SECTION` after it)
-     and that provision is deleted, the deleted paragraph's mark is flagged
-     like any other, though Word cannot remove a document's last paragraph
-     mark; the oracle removes the emptied paragraph, so it passes. Unchanged
-     by this change (it passed the same way before). This change does fix
-     the cases where a provision moved or added at the end used to sit
-     before that trailing end: the end now goes with its own paragraph, the
-     moved or added provision is the true last paragraph, and its mark is
-     left untracked as it should be.
+- **Codex review on PR #327: the last paragraph behind a trailing end.**
+  The redline took the body's last CHILD as the document's last paragraph,
+  whose mark Word cannot track (`neutralize_last_paragraph`). In a master
+  with no `END OF SECTION`, a bookmarked provision moved to the end now
+  takes its end along, so the end was the last child and the moved
+  provision's mark was flagged like any other — the oracle passed it (its
+  join removes an emptied paragraph with nothing after it), real Word would
+  not. The same held before this change whenever the last provision's own
+  bookmark end, or a longer bookmark's, followed it (a deleted last
+  provision, a provision added at the end). `_RedlineBuilder._last_block`
+  now takes the last record that is not zero-width body markup
+  (`_ZERO_WIDTH_BODY_MARKUP`: bookmark, comment and permission range
+  markers, proofing marks), in `render()` and `_native_moves()` alike (a
+  native move whose copy is that paragraph falls back, `last_paragraph`).
+  The oracle's tolerance followed: `canonical_body` strips formatting-free
+  empty paragraphs at the end of the body from before any trailing range
+  markup, since that markup marks a place, not a block. Without it a
+  bookmark opened further up and closing after the last provision turned a
+  deleted last provision, or one added after it, into an
+  `accept_check_failed`/`reject_check_failed` refusal. A formatted empty
+  paragraph there, or one with a paragraph after it, is still a difference
+  (pinned). PR #326's end-of-body probe left a plain empty paragraph before
+  such an end, which the tolerance now admits; it is centred now, so it still
+  pins that the paragraph stays.
 - **Erratum** for the previous note: its "Found, not done" item is done
   here, and its release-note draft's last sentence ("Moving a provision
   whose own bookmark closes that way is still refused.") no longer holds;
@@ -25132,20 +25145,25 @@ be named.
   moved break holder takes its bookmark and leaves its break; a body-level
   start still leads the provision below; and an end of another bookmark at
   the head of the run stops it, so nothing is reordered.
-- `tests/test_redline_original.py` (26, every one through `_verify` with
+- `tests/test_redline_original.py` (36, every one through `_verify` with
   native moves off and on): moved down two, down one and last to top, typed
   and Word-numbered (native moves counted where pure); nothing left at the
   old place, and Reject All's leftover end holds no start; a provision
   added after it; a bookmarked break holder moved or deleted; a moved
   provision rebuilt from its first run (a symbol) still names its end; a
-  deleted bookmarked provision whose neighbour moves; and the mirror shape
-  refused by name. PR #326's moved-link case now also pins the end right
-  after A.
-- `tests/test_revisions.py` (2 new, 4 probes updated): an end with no start
+  deleted bookmarked provision whose neighbour moves; the mirror shape
+  refused by name; and, with no `END OF SECTION` (10 more), the last
+  paragraph before a closing bookmark end has its mark left untracked — a
+  bookmarked provision moved to the end (typed and numbered), a bookmarked
+  last provision deleted, and a bookmark from A closing after the last
+  provision, which is deleted or followed by a new one. PR #326's moved-link
+  case now also pins the end right after A.
+- `tests/test_revisions.py` (3 new, 5 probes updated): an end with no start
   is not compared, wherever it sits, and Reject All's moved-bookmark shape
   then equals the upload with the name excluded; an end with its start is
   still compared by name (short of the mark, stretched), and a start with no
-  end still is.
+  end still is; a plain empty last paragraph before a closing bookmark end
+  is tolerated, a numbered one or one followed by a paragraph is not.
 - `tests/test_word_judge.py` (1 new, 2 pins widened): a Word that leaves
   the moved bookmark collapsed passes, and the same file fails when no move
   carried it; the coverage test requires `bookmark_ends_moved` and lists
@@ -25165,8 +25183,12 @@ bookmark's end: 1. No end travelling in the redline: 17. A travelling end
 also left at the old place: 17. Native moves not told about travelling
 ends: 6. A travelling end's bookmark not named among the moved ones (a new
 copy rebuilt without its start): 2. An end with no start compared again: 18.
-The judge excluding only lost bookmarks: 1. Ruff and every touched test file
-pass; the full suite runs in CI. No paid API call was made.
+The judge excluding only lost bookmarks: 1. Added with the Codex fix: the
+last paragraph taken as the body's last child again, 10 red (every new
+last-paragraph case); trailing range markup hiding the empty last paragraph
+from the tolerance again, 5 (the new oracle test and the four spanning
+cases). Ruff and every touched test file pass; the full suite runs in CI.
+No paid API call was made.
 
 ### Release-note draft (for the release after 1.26.0)
 

@@ -1738,6 +1738,21 @@ _ANNOTATION_TAGS = (
     qn("w:footnoteReference"),
     qn("w:endnoteReference"),
 )
+#: Body-level markup that holds no content — it marks a place between one
+#: paragraph mark and the next — so it is never the document's last
+#: paragraph, even when it is the body's last child.
+_ZERO_WIDTH_BODY_MARKUP = frozenset(
+    qn(f"w:{name}")
+    for name in (
+        "bookmarkStart",
+        "bookmarkEnd",
+        "commentRangeStart",
+        "commentRangeEnd",
+        "permStart",
+        "permEnd",
+        "proofErr",
+    )
+)
 
 
 def _crosses_field_boundary(paragraph) -> bool:
@@ -2241,7 +2256,7 @@ class _RedlineBuilder:
                 origins[record.source] = index
             else:
                 destinations[record.source] = index
-        last = len(ordered) - 1
+        last = self._last_block(ordered)
         pairs: list[tuple[int, int]] = []
         for source, to_index in destinations.items():
             from_index = origins.get(source)
@@ -2288,6 +2303,22 @@ class _RedlineBuilder:
         self._check_trackable(element, record.source, moved=True)
         self._tracked(lambda: move_content(element, MOVE_TO, self.marks))
         return element, MOVE_TO
+
+    def _last_block(self, ordered: list[Record]) -> int:
+        """The index in ``ordered`` of the document's last paragraph (or
+        block): the last record that is not zero-width body markup. A
+        whole-paragraph bookmark's end can follow it as the body's last
+        child — a moved provision taking its end to the end of a master with
+        no ``END OF SECTION``, say — and Word still cannot track the mark of
+        the paragraph before it (Codex review on PR #327)."""
+        for index in range(len(ordered) - 1, -1, -1):
+            record = ordered[index]
+            if (
+                record.source == NO_ORIGIN
+                or self.content[record.source].tag not in _ZERO_WIDTH_BODY_MARKUP
+            ):
+                return index
+        return len(ordered) - 1
 
     def _render_travelling(self, record: Record):
         """A bookmark end that goes with its moved element (:meth:`_travelling`):
@@ -2367,7 +2398,7 @@ class _RedlineBuilder:
                     changes.append(None if moved else (CHANGE_DELETED, holder_uid))
                 else:
                     changes.append(None)
-        last = len(rendered) - 1
+        last = self._last_block(ordered)
         for index, (element, flag) in enumerate(rendered):
             if flag is None:
                 continue

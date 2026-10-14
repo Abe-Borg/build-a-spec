@@ -1915,13 +1915,18 @@ def _whole_paragraph_bookmark(paragraph, index: int) -> None:
 
 
 def _whole_paragraph_bookmark_master(
-    *marked: int, numbered: bool = False, held_break: bool = False
+    *marked: int,
+    numbered: bool = False,
+    held_break: bool = False,
+    end_of_section: bool = True,
 ) -> bytes:
     """Three provisions under 1.1 SUMMARY, the ``marked`` ones (indexes into
     :data:`BOOKMARKED_WORDS`) each wrapped in a whole-paragraph bookmark
     ``_Ref1<index>``. ``numbered`` numbers them with Word's own list (a move
     is then a pure move, not a reletter); ``held_break`` puts a section
-    break in the last provision's mark, with a second article after it."""
+    break in the last provision's mark, with a second article after it;
+    ``end_of_section=False`` leaves out the closing ``END OF SECTION`` line,
+    so the last provision is the document's last paragraph."""
     from tests.test_importer import _define_numbering, _numbered
 
     document = Document()
@@ -1951,7 +1956,8 @@ def _whole_paragraph_bookmark_master(
         _hold_break(provisions[-1], document)
         article("SCHEDULE")
         provision(0, "Provide isolators as scheduled.")
-    document.add_paragraph("END OF SECTION")
+    if end_of_section:
+        document.add_paragraph("END OF SECTION")
     return _save(document)
 
 

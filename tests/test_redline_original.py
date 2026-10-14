@@ -1392,6 +1392,94 @@ def test_a_deleted_bookmarked_provision_with_its_neighbour_moved(tmp_path, nativ
     assert layout[layout.index("end _Ref10") - 1].startswith("{_Ref10}")  # the deleted copy
 
 
+def _closing_after_the_last_provision() -> bytes:
+    """No END OF SECTION, and a bookmark opened in provision A that closes
+    at body level after the last provision: the body's last child is the
+    end, not a paragraph."""
+    document = Document(
+        io.BytesIO(_whole_paragraph_bookmark_master(numbered=True, end_of_section=False))
+    )
+    first, last = (
+        next(p for p in document.paragraphs if words in p.text)
+        for words in (BOOKMARKED_WORDS[0], BOOKMARKED_WORDS[2])
+    )
+    start = etree.SubElement(first._p, qn("w:bookmarkStart"))
+    start.set(qn("w:id"), "40")
+    start.set(qn("w:name"), "_Ref40")
+    end = etree.Element(qn("w:bookmarkEnd"))
+    end.set(qn("w:id"), "40")
+    last._p.addnext(end)
+    return _save(document)
+
+
+def _add_last(section):
+    article = section.parts[0].articles[0]
+    return {
+        "action": "add_paragraph",
+        "target_id": article.uid,
+        "position": len(article.paragraphs),
+        "text": "Comply with the seismic restraint manual.",
+    }
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    ("master", "op"),
+    [
+        # The bookmarked provision moved to the end takes its end along.
+        (
+            lambda: _whole_paragraph_bookmark_master(0, numbered=True, end_of_section=False),
+            lambda s: {"action": "move", "target_id": _provisions(s)[0].uid, "position": 2},
+        ),
+        (
+            lambda: _whole_paragraph_bookmark_master(0, end_of_section=False),
+            lambda s: {"action": "move", "target_id": _provisions(s)[0].uid, "position": 2},
+        ),
+        # The bookmarked last provision deleted: its end stays put, after it.
+        (
+            lambda: _whole_paragraph_bookmark_master(2, numbered=True, end_of_section=False),
+            lambda s: {"action": "delete", "target_id": _provisions(s)[2].uid},
+        ),
+        # A bookmark from A closes after the last provision, which is deleted,
+        # or followed by a new one.
+        (
+            _closing_after_the_last_provision,
+            lambda s: {"action": "delete", "target_id": _provisions(s)[2].uid},
+        ),
+        (_closing_after_the_last_provision, _add_last),
+    ],
+    ids=[
+        "moved-to-the-end",
+        "moved-to-the-end-typed",
+        "last-deleted",
+        "spanning-last-deleted",
+        "spanning-added-after",
+    ],
+)
+def test_the_last_paragraph_is_the_one_before_a_closing_bookmark_end(
+    tmp_path, master, op, native
+):
+    """Word cannot track a document's last paragraph mark, so the redline
+    marks that paragraph's words and leaves its mark alone. A bookmark end
+    after it, at body level, is the body's last child but not a paragraph:
+    the paragraph before it is still the last one (Codex review on PR #327 —
+    a provision moved to the end took its whole-paragraph bookmark's end
+    along, and its mark was flagged like any other). The empty paragraph
+    Word then leaves before the end is plain, and tolerated."""
+    source = master()
+    imported = _parse(tmp_path, source)
+    section = _edit(imported.section, op(imported.section))
+    redline, stats = _verify(
+        source, imported, section, allow_moved_bookmarks=True, native_moves=native
+    )
+    assert stats["redline"]["last_mark_untracked"] == 1
+    body = _body(redline)
+    last = [child for child in body if child.tag == qn("w:p")][-1]
+    assert last.getnext().tag == qn("w:bookmarkEnd")
+    mark = last.find(f"{qn('w:pPr')}/{qn('w:rPr')}")
+    assert mark is None or not [c for c in mark if c.tag in _CONTENT_WRAPPERS]
+
+
 @pytest.mark.parametrize("native", [False, True])
 def test_a_body_level_bookmark_start_moved_with_its_provision_is_still_refused(
     tmp_path, native

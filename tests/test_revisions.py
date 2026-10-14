@@ -609,7 +609,11 @@ def test_markup_then_no_paragraph_still_leaves_the_paragraph(after):
     the emptied-link-before-a-table refusal is unchanged."""
     tail = _table(["AHU-1"]) if after == "table" else ""
     end = "<w:bookmarkEnd w:id='7'/>"
-    body = _body(_OPENS_SEVEN + _linked_deletion() + end + tail)
+    # Centred, so the paragraph left behind shows even at the end of the
+    # body, where an empty one that sets nothing is tolerated (Word cannot
+    # remove a document's last paragraph mark).
+    deleted = _linked_deletion().replace("<w:pPr>", "<w:pPr><w:jc w:val='center'/>", 1)
+    body = _body(_OPENS_SEVEN + deleted + end + tail)
     accepted = accept_all(body)
     assert _texts(accepted)[:2] == ["Lead.", ""]  # the paragraph stays
     assert not _equal(accepted, _body(_OPENS_SEVEN + end + tail))
@@ -968,6 +972,31 @@ def test_trailing_empty_paragraphs_are_not_differences_but_inner_ones_are():
         "<w:sectPr/>"
     )
     assert not _equal(short, held)
+
+
+def test_a_trailing_empty_paragraph_before_closing_markup_is_still_the_last():
+    """Range markup after the last paragraph mark — a bookmark that took in
+    the paragraphs up to it, closing at body level — marks a place, not a
+    block: the empty paragraph Word leaves before it (it cannot remove a
+    document's last mark) is still the last one, and tolerated when it sets
+    nothing (Codex review on PR #327). One that sets something, or one with
+    a paragraph after it, is still a difference."""
+    opened = "<w:p><w:bookmarkStart w:id='40' w:name='_Ref40'/><w:r><w:t>x</w:t></w:r></w:p>"
+    end = "<w:bookmarkEnd w:id='40'/>"
+    short = _body(opened + end + "<w:sectPr/>")
+    padded = _body(opened + "<w:p><w:pPr/></w:p>" + end + "<w:sectPr/>")
+    assert _equal(short, padded)
+    numbered = _body(
+        opened
+        + "<w:p><w:pPr><w:numPr><w:ilvl w:val='0'/><w:numId w:val='3'/></w:numPr></w:pPr></w:p>"
+        + end
+        + "<w:sectPr/>"
+    )
+    assert not _equal(short, numbered)
+    followed = _body(
+        opened + "<w:p/>" + end + "<w:p><w:r><w:t>y</w:t></w:r></w:p><w:sectPr/>"
+    )
+    assert not _equal(_body(opened + end + "<w:p><w:r><w:t>y</w:t></w:r></w:p><w:sectPr/>"), followed)
 
 
 @pytest.mark.parametrize(

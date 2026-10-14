@@ -395,7 +395,10 @@ Both allow one thing more, which Word imposes: when the body's last paragraph
 is deleted or added, one of the two resolutions keeps an empty paragraph at
 the very end, because a document's last paragraph mark cannot be tracked. The
 export makes that paragraph plain (below), so it prints no number, breaks no
-page and draws nothing.
+page and draws nothing. The last paragraph is the last PARAGRAPH: a bookmark
+end (or other range markup) closing after it at body level can be the body's
+last child, and the paragraph before it is still the one whose mark Word
+cannot track.
 
 "Exactly" means element for element, up to how Word splits text into runs
 (Word re-splits runs on every save anyway), with `w14:paraId`/`w14:textId`
@@ -416,7 +419,8 @@ merged, empty runs and containers dropped, XML comments and processing
 instructions ignored, bookmarks compared by name (a bookmark end with no
 start in the body ends nothing — ECMA-376 Part 1 §17.13.6.1 says Word
 ignores it — so it is not compared), and a FORMATTING-FREE empty
-last paragraph tolerated. Word cannot track a document's last paragraph mark,
+last paragraph tolerated (last before the section properties and any range
+markup closing after it, which marks a place, not a block). Word cannot track a document's last paragraph mark,
 so when the last paragraph is deleted or appended, one of the two resolutions
 leaves it behind, empty. An empty paragraph still shows whatever it sets (its
 number, a page break before it, a border, its line height), so the export

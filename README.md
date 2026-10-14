@@ -2737,9 +2737,17 @@ The unreleased 1.21.0 entry in `backend/release_notes.py` announces this as "Lin
   redline on your original, which refused these moves (`untrackable_markup`
   or `reject_check_failed`), now shows them: the bookmark goes with the moved
   provision, as every moved provision's bookmarks do, and Reject All does not
-  restore it at the old place. Still refused, by name: moving a provision
-  whose bookmark opens just before its paragraph, outside it, and closes
-  inside it.
+  restore it at the old place.
+- **So does a bookmark that opens just before its provision.** The mirror
+  shape — a bookmark that opens just before a paragraph, outside it, and
+  closes inside it — already moved with its provision in *Export Word (keeps
+  your formatting)*, but the redline on your original refused the move
+  (`untrackable_markup`, tag `bookmarkStart`). It now shows it: the start goes
+  with the moved provision, right before its new copy, and Reject All does
+  not restore the bookmark at the old place. A provision with both shapes
+  takes both along. Still refused, by name: moving a provision led by a
+  bookmark that closes in a later provision, since that bookmark takes in
+  more than the provision being moved.
 - **Still rebuilt from its first run:** a hyperlink holding anything but
   runs, bookmarks and spelling marks — a field inside a link, a link inside
   a link — along with the other cases listed above.

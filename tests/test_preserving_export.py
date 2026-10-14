@@ -1914,11 +1914,23 @@ def _whole_paragraph_bookmark(paragraph, index: int) -> None:
     paragraph._p.addnext(end)
 
 
+def _opened_before_bookmark(paragraph, index: int) -> None:
+    """The mirror shape: bookmark ``_Ref2<index>`` opens at body level right
+    before ``paragraph`` and closes inside it, after its last run — it takes
+    in the paragraph's words but not its mark."""
+    start = etree.Element(qn("w:bookmarkStart"))
+    start.set(qn("w:id"), f"2{index}")
+    start.set(qn("w:name"), f"_Ref2{index}")
+    paragraph._p.addprevious(start)
+    etree.SubElement(paragraph._p, qn("w:bookmarkEnd")).set(qn("w:id"), f"2{index}")
+
+
 def _whole_paragraph_bookmark_master(
     *marked: int,
     numbered: bool = False,
     held_break: bool = False,
     end_of_section: bool = True,
+    opened_before: tuple[int, ...] = (),
 ) -> bytes:
     """Three provisions under 1.1 SUMMARY, the ``marked`` ones (indexes into
     :data:`BOOKMARKED_WORDS`) each wrapped in a whole-paragraph bookmark
@@ -1926,7 +1938,10 @@ def _whole_paragraph_bookmark_master(
     is then a pure move, not a reletter); ``held_break`` puts a section
     break in the last provision's mark, with a second article after it;
     ``end_of_section=False`` leaves out the closing ``END OF SECTION`` line,
-    so the last provision is the document's last paragraph."""
+    so the last provision is the document's last paragraph; the
+    ``opened_before`` ones each get the mirror shape too, bookmark
+    ``_Ref2<index>`` opening at body level right before the paragraph and
+    closing inside it (:func:`_opened_before_bookmark`)."""
     from tests.test_importer import _define_numbering, _numbered
 
     document = Document()
@@ -1952,6 +1967,8 @@ def _whole_paragraph_bookmark_master(
     provisions = [provision(i, words) for i, words in enumerate(BOOKMARKED_WORDS)]
     for index in marked:
         _whole_paragraph_bookmark(provisions[index], index)
+    for index in opened_before:
+        _opened_before_bookmark(provisions[index], index)
     if held_break:
         _hold_break(provisions[-1], document)
         article("SCHEDULE")
@@ -2160,6 +2177,32 @@ def test_a_body_level_bookmark_start_still_leads_the_provision_below(tmp_path):
 
     layout = _bookmark_layout(exported)
     assert layout[layout.index("start _Ref20") + 1].endswith(BOOKMARKED_WORDS[1])
+
+
+@pytest.mark.parametrize("numbered", [False, True], ids=["typed", "numbered"])
+@pytest.mark.parametrize(
+    ("opened", "position"), [(0, 2), (2, 0)], ids=["down-two", "last-to-top"]
+)
+def test_a_body_level_bookmark_start_moves_with_its_provision(
+    tmp_path, opened, position, numbered
+):
+    """Wherever the provision goes, the start opening its bookmark at body
+    level is right before it, and the end is inside it: the bookmark keeps to
+    its own paragraph."""
+    source = _whole_paragraph_bookmark_master(numbered=numbered, opened_before=(opened,))
+    imported = _parse(tmp_path, source)
+    section = _move_provision(imported.section, opened, position)
+
+    exported = _render(source, section, imported.format_map)
+
+    body = _body_children(exported)
+    (start,) = [c for c in body if c.tag == qn("w:bookmarkStart")]
+    assert start.get(qn("w:name")) == f"_Ref2{opened}"
+    paragraph = body[body.index(start) + 1]
+    assert BOOKMARKED_WORDS[opened] in "".join(t.text for t in paragraph.iter(qn("w:t")))
+    assert [e.get(qn("w:id")) for e in paragraph.iter(qn("w:bookmarkEnd"))] == [
+        f"2{opened}"
+    ]
 
 
 def test_only_the_bookmark_ends_right_after_the_paragraph_that_opened_them_trail_it(tmp_path):

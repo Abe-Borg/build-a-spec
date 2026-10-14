@@ -61,6 +61,7 @@ from tests.test_preserving_export import (
     _master_bytes,
     _not_used_master,
     _save,
+    _section_breaks,
     _typed_letter_master,
     _whole_paragraph_bookmark_master,
 )
@@ -97,6 +98,30 @@ def _members(payload: bytes) -> dict[str, bytes]:
 
 def _bookmarks(body) -> set[str]:
     return {b.get(qn("w:name")) for b in body.iter(qn("w:bookmarkStart"))}
+
+
+def _whole_bookmarks(body) -> set[str]:
+    """The bookmarks ``body`` holds whole: a start, and an end of its id
+    after it."""
+    opened: dict[str, str] = {}
+    whole = set()
+    for marker in body.iter(qn("w:bookmarkStart"), qn("w:bookmarkEnd")):
+        if marker.tag == qn("w:bookmarkStart"):
+            opened[marker.get(qn("w:id"))] = marker.get(qn("w:name"))
+        elif marker.get(qn("w:id")) in opened:
+            whole.add(opened[marker.get(qn("w:id"))])
+    return whole
+
+
+def _lost_bookmarks(upload, rejected) -> set[str]:
+    """The upload's bookmarks Reject All did not give back, by either
+    marker: a start gone, or — the upload's bookmark whole — its end gone
+    (a moved provision's bookmark that opens at body level right before it:
+    the start travelled with the new copy, untracked, and stays; the end
+    went with the inserted copy)."""
+    return (_bookmarks(upload) - _bookmarks(rejected)) | (
+        _whole_bookmarks(upload) - _whole_bookmarks(rejected)
+    )
 
 
 def _highest_id(source: bytes) -> int:
@@ -203,16 +228,24 @@ def _wrapped_custom_xml(body) -> list:
 
 def _inserted_bookmarks(body) -> set[str]:
     """Bookmarks that sit in content a ``w:ins`` or ``w:moveTo`` wraps — on
-    a moved copy."""
-    names = set()
-    for start in body.iter(qn("w:bookmarkStart")):
+    a moved copy — by either marker: a start inside the copy, or an end
+    inside it whose start, at body level right before the copy, travelled
+    with it untracked (D-6). An end is named by the start of its id."""
+    names = {
+        start.get(qn("w:id")): start.get(qn("w:name"))
+        for start in body.iter(qn("w:bookmarkStart"))
+    }
+    found = set()
+    for marker in body.iter(qn("w:bookmarkStart"), qn("w:bookmarkEnd")):
         if any(
             a.tag in (qn("w:ins"), qn("w:moveTo"))
             and a.getparent().tag != qn("w:rPr")
-            for a in start.iterancestors()
+            for a in marker.iterancestors()
         ):
-            names.add(start.get(qn("w:name")))
-    return names
+            name = names.get(marker.get(qn("w:id")))
+            if name is not None:
+                found.add(name)
+    return found
 
 
 def _verify(
@@ -230,7 +263,9 @@ def _verify(
     ``moved_bookmarks`` names the bookmarks a test expects to travel with a
     moved copy (the one Reject-All limit, D-6); ``allow_moved_bookmarks``
     instead admits whichever bookmarks the redline itself carries on an
-    inserted copy — for sweeps whose edits are not written by hand.
+    inserted copy — for sweeps whose edits are not written by hand. A
+    bookmark counts as lost on Reject All, and is then left out of its
+    comparison, by either marker (:func:`_lost_bookmarks`).
     ``native_moves`` renders Word's own "Moved" marks (Phase 2, PR B) and
     then also holds them to the structural move check; off, the redline
     must carry no move markup at all."""
@@ -257,7 +292,7 @@ def _verify(
         accept_all(r_body), c_body
     )
     rejected = reject_all(r_body)
-    lost = _bookmarks(u_body) - _bookmarks(rejected)
+    lost = _lost_bookmarks(u_body, rejected)
     assert lost <= set(moved_bookmarks), lost
     assert first_difference(rejected, u_body, exclude_bookmarks=lost) is None, (
         first_difference(rejected, u_body, exclude_bookmarks=lost)
@@ -1480,17 +1515,106 @@ def test_the_last_paragraph_is_the_one_before_a_closing_bookmark_end(
     assert mark is None or not [c for c in mark if c.tag in _CONTENT_WRAPPERS]
 
 
+def _start_leads(body, name: str):
+    """The paragraph bookmark ``name``'s start leads at body level, after
+    asserting that start is there once, between paragraphs and untracked,
+    and that the paragraph holds the bookmark's end."""
+    (start,) = [s for s in body.iter(qn("w:bookmarkStart")) if s.get(qn("w:name")) == name]
+    assert start.getparent() is body  # between paragraphs, never tracked
+    paragraph = start.getnext()
+    assert paragraph.tag == qn("w:p")
+    ends = [e.get(qn("w:id")) for e in paragraph.iter(qn("w:bookmarkEnd"))]
+    assert start.get(qn("w:id")) in ends
+    return paragraph
+
+
 @pytest.mark.parametrize("native", [False, True])
-def test_a_body_level_bookmark_start_moved_with_its_provision_is_still_refused(
-    tmp_path, native
+@pytest.mark.parametrize("numbered", [False, True], ids=["typed", "numbered"])
+@pytest.mark.parametrize(
+    ("opened", "index", "position", "travels"),
+    [
+        (0, 0, 2, 1),
+        # The diff keeps A in place and moves B up past it: the start stays
+        # with A, and nothing travels.
+        (0, 0, 1, 0),
+        (2, 2, 0, 1),
+        # C moves in between A and B: the start still leads B.
+        (1, 2, 1, 0),
+    ],
+    ids=["down-two", "down-one", "last-to-top", "neighbour-moved-in"],
+)
+def test_a_provision_moved_with_its_body_level_bookmark_start(
+    tmp_path, opened, index, position, travels, numbered, native
 ):
-    """The mirror shape — a start at body level whose end is inside the
-    paragraph below — keeps leading that paragraph (the formatted export
-    moves it along, its bookmark whole), and the redline still refuses to
-    move it, by name: a start between paragraphs cannot be a tracked change,
-    and its end, inside the moved copy, is gone on Reject All, so Reject All
-    could not give the upload back with it. Known limit, recorded in
-    docs/as-built.md."""
+    """The mirror of the whole-paragraph bookmark: a bookmark that opens at
+    body level right before a provision's paragraph and closes inside it.
+    The start leads its paragraph in the formatted export, and moving the
+    provision used to be refused (``untrackable_markup``, tag
+    ``bookmarkStart``): a start between paragraphs cannot be a tracked
+    change. It travels now, untracked, right before the new copy, which
+    holds the end (D-6), and nothing is left at the old place. Accept All is
+    the formatted export, bookmark whole; Reject All is the upload, less the
+    moved bookmark — as for any moved provision's."""
+    source = _whole_paragraph_bookmark_master(numbered=numbered, opened_before=(opened,))
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[index], position)
+    name = f"_Ref2{opened}"
+    redline, stats = _verify(
+        source, imported, section, moved_bookmarks={name}, native_moves=native
+    )
+    tracked = stats["redline"]
+    assert tracked["bookmark_starts_moved"] == travels
+    assert tracked["bookmark_ends_moved"] == 0
+    body = _body(redline)
+    assert _bookmarks(body) == {name}
+    paragraph = _start_leads(body, name)
+    assert BOOKMARKED_WORDS[opened] in "".join(t.text for t in paragraph.iter(qn("w:t")))
+    if numbered and native:
+        assert tracked["moves_native"] == 1, tracked
+        moved = _moved_texts(body, "moveTo")
+        assert len(moved) == 1, moved
+        assert (moved == [BOOKMARKED_WORDS[opened]]) == bool(travels), moved
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_a_moved_body_level_bookmark_start_leaves_nothing_where_it_was(tmp_path, native):
+    """Where the provision was, the old copy gave its end up (D-6), and no
+    start is left there either. Reject All leaves the start that went with
+    the new copy holding no end — it starts nothing (ECMA-376 Part 1
+    §17.13.6.2) — and the start carries its own name, so it is the moved
+    bookmark the self-check leaves out."""
+    source = _whole_paragraph_bookmark_master(numbered=True, opened_before=(0,))
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[0], 2)
+    redline, stats = _verify(
+        source, imported, section, moved_bookmarks={"_Ref20"}, native_moves=native
+    )
+    layout = _bookmark_layout(redline)
+    # Old copy first (its words, no bookmark), then the start, then the new copy.
+    old = next(i for i, e in enumerate(layout) if BOOKMARKED_WORDS[0] in e)
+    assert layout.count("start _Ref20") == 1 and layout.index("start _Ref20") > old
+    old_copy, new_copy = [
+        p
+        for p in _body(redline).iter(qn("w:p"))
+        if BOOKMARKED_WORDS[0]
+        in "".join(t.text or "" for t in p.iter(qn("w:t"), qn("w:delText")))
+    ]
+    assert old_copy.find(f".//{qn('w:bookmarkEnd')}") is None
+    assert new_copy.find(f".//{qn('w:bookmarkEnd')}") is not None
+    rejected = reject_all(_body(redline))
+    assert [s.get(qn("w:name")) for s in rejected.iter(qn("w:bookmarkStart"))] == ["_Ref20"]
+    assert list(rejected.iter(qn("w:bookmarkEnd"))) == []  # starts nothing
+    assert _lost_bookmarks(_body(source), rejected) == {"_Ref20"}
+    # A sweep's allowance knows it by its end, inside the new copy.
+    assert _inserted_bookmarks(_body(redline)) == {"_Ref20"}
+    _verify(source, imported, section, allow_moved_bookmarks=True, native_moves=native)
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_the_reported_body_level_bookmark_start_move_now_renders(tmp_path, native):
+    """The refusal PR #327 left in place, on the master it was pinned on:
+    provision B, led by a bookmark that opens at body level and closes
+    inside it, moved above A."""
     source = _markup_between_master("bookmark start")
     imported = _parse(tmp_path, source)
     article = imported.section.parts[0].articles[0]
@@ -1498,6 +1622,191 @@ def test_a_body_level_bookmark_start_moved_with_its_provision_is_still_refused(
         imported.section,
         {"action": "move", "target_id": article.paragraphs[1].uid, "position": 0},
     )
+    redline, stats = _verify(
+        source, imported, section, moved_bookmarks={"_Ref13"}, native_moves=native
+    )
+    assert stats["redline"]["bookmark_starts_moved"] == 1
+    paragraph = _start_leads(_body(redline), "_Ref13")
+    assert "Related requirements" in "".join(t.text for t in paragraph.iter(qn("w:t")))
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(("index", "position"), [(0, 2), (2, 0)], ids=["down", "up"])
+def test_a_provision_moved_with_both_bookmark_shapes(tmp_path, index, position, native):
+    """One provision led by a bookmark that opens before it and wrapped in
+    one that takes in its whole paragraph: both of its markers between
+    paragraphs go with it — the start before the new copy, the end after
+    it — and both bookmarks are the moved ones."""
+    source = _whole_paragraph_bookmark_master(
+        index, numbered=True, opened_before=(index,)
+    )
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[index], position)
+    names = {f"_Ref1{index}", f"_Ref2{index}"}
+    redline, stats = _verify(
+        source, imported, section, moved_bookmarks=names, native_moves=native
+    )
+    tracked = stats["redline"]
+    assert (tracked["bookmark_starts_moved"], tracked["bookmark_ends_moved"]) == (1, 1)
+    layout = _bookmark_layout(redline)
+    at = layout.index(f"start _Ref2{index}")
+    assert layout[at + 1].startswith("{" + f"_Ref1{index}" + "}")
+    assert BOOKMARKED_WORDS[index] in layout[at + 1]
+    following = layout[at + 2 :][:2]
+    assert f"end _Ref1{index}" in following  # past the move range's end, natively
+    assert _lost_bookmarks(_body(source), reject_all(_body(redline))) == names
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("edit", ["move-up", "delete"])
+def test_a_break_holder_led_by_a_body_level_bookmark_start(tmp_path, edit, native):
+    """A provision whose mark holds a section break, led by a bookmark that
+    opens before it: moved, its break stays (an emptied holder, D-3) and the
+    start goes with the new copy; deleted, the break stays and so does the
+    start, where it was."""
+    source = _whole_paragraph_bookmark_master(held_break=True, opened_before=(2,))
+    imported = _parse(tmp_path, source)
+    holder = _provisions(imported.section)[2]
+    op = (
+        {"action": "move", "target_id": holder.uid, "position": 0}
+        if edit == "move-up"
+        else {"action": "delete", "target_id": holder.uid}
+    )
+    section = _edit(imported.section, op)
+    redline, stats = _verify(
+        source, imported, section, moved_bookmarks={"_Ref22"}, native_moves=native
+    )
+    assert stats["redline"]["bookmark_starts_moved"] == (edit == "move-up")
+    assert stats["redline"]["leftovers"] == 1
+    assert len(_section_breaks(redline)) == 1
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_a_moved_provision_rebuilt_from_its_first_run_still_names_its_bookmark_start(
+    tmp_path, native
+):
+    """A moved provision the splice cannot map (a symbol in it), relettered
+    by its move, is rebuilt from its first run, which keeps no bookmark: the
+    new copy holds no end, so no marker of the bookmark is inside it. The
+    start still goes with it and names its own bookmark, so the self-check
+    still knows it is a moved one rather than refusing it."""
+    document = Document(
+        io.BytesIO(_whole_paragraph_bookmark_master(opened_before=(0,)))
+    )
+    first = next(p for p in document.paragraphs if BOOKMARKED_WORDS[0] in p.text)
+    etree.SubElement(first.add_run(" ")._r, qn("w:sym")).set(qn("w:char"), "F0B7")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[0], 2)
+    redline, stats = _verify(
+        source, imported, section, moved_bookmarks={"_Ref20"}, native_moves=native
+    )
+    assert stats["fallback"] == {"symbol": 1}
+    assert stats["redline"]["bookmark_starts_moved"] == 1
+    body = _body(redline)
+    assert _bookmarks(body) == {"_Ref20"}
+    assert _inserted_bookmarks(body) == set()
+    assert list(body.iter(qn("w:bookmarkEnd"))) == []
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_a_provision_added_before_a_body_level_bookmark_start_is_outside_it(
+    tmp_path, native
+):
+    """The added provision lands before the start, which leads the
+    provision whose bookmark it opens: nothing moves, and the bookmark keeps
+    to its own paragraph."""
+    source = _whole_paragraph_bookmark_master(numbered=True, opened_before=(1,))
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section = _edit(
+        imported.section,
+        {
+            "action": "add_paragraph",
+            "target_id": article.uid,
+            "position": 1,
+            "text": "Comply with the seismic restraint manual.",
+        },
+    )
+    redline, stats = _verify(source, imported, section, native_moves=native)
+    assert stats["redline"]["bookmark_starts_moved"] == 0
+    layout = _bookmark_layout(redline)
+    at = layout.index("start _Ref21")
+    assert "seismic restraint" in layout[at - 1]
+    assert BOOKMARKED_WORDS[1] in layout[at + 1]
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_a_deleted_provision_led_by_a_body_level_start_with_its_neighbour_moved(
+    tmp_path, native
+):
+    """Deleted, the provision takes its bookmark's end with it and the start
+    stays where it was: it is not the next provision's to carry, so moving
+    that one away moves nothing that cannot be tracked."""
+    source = _whole_paragraph_bookmark_master(numbered=True, opened_before=(1,))
+    imported = _parse(tmp_path, source)
+    provisions = _provisions(imported.section)
+    section = _edit(
+        imported.section,
+        {"action": "delete", "target_id": provisions[1].uid},
+        {"action": "move", "target_id": provisions[2].uid, "position": 0},
+    )
+    redline, stats = _verify(source, imported, section, native_moves=native)
+    assert stats["redline"]["bookmark_starts_moved"] == 0
+    layout = _bookmark_layout(redline)
+    assert BOOKMARKED_WORDS[1] in layout[layout.index("start _Ref21") + 1]  # the deleted copy
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    ("opened", "op"),
+    [
+        (0, lambda s: {"action": "move", "target_id": _provisions(s)[0].uid, "position": 2}),
+        (2, lambda s: {"action": "move", "target_id": _provisions(s)[2].uid, "position": 0}),
+        (2, lambda s: {"action": "delete", "target_id": _provisions(s)[2].uid}),
+    ],
+    ids=["moved-to-the-end", "last-moved-up", "last-deleted"],
+)
+def test_a_body_level_bookmark_start_at_the_end_of_the_body(tmp_path, opened, op, native):
+    """No END OF SECTION, so the last provision is the document's last
+    paragraph, whose mark Word cannot track: the start before it is markup,
+    not a paragraph, and changes nothing about which paragraph is last."""
+    source = _whole_paragraph_bookmark_master(
+        numbered=True, end_of_section=False, opened_before=(opened,)
+    )
+    imported = _parse(tmp_path, source)
+    section = _edit(imported.section, op(imported.section))
+    name = f"_Ref2{opened}"
+    redline, stats = _verify(
+        source, imported, section, moved_bookmarks={name}, native_moves=native
+    )
+    tracked = stats["redline"]
+    assert tracked["last_mark_untracked"] == 1
+    assert tracked["bookmark_starts_moved"] == (op(imported.section)["action"] == "move")
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_a_body_level_bookmark_start_closing_past_its_provision_is_still_refused(
+    tmp_path, native
+):
+    """Only a start whose end lies inside the provision it leads travels.
+    One that opens before provision B and closes inside C takes in more than
+    B: moving B alone would leave the bookmark's end where it was and take
+    its start along, so it is still refused by name — a start between
+    paragraphs cannot be a tracked change."""
+    document = Document(io.BytesIO(_whole_paragraph_bookmark_master(numbered=True)))
+    second, third = (
+        next(p for p in document.paragraphs if words in p.text)
+        for words in BOOKMARKED_WORDS[1:]
+    )
+    start = etree.Element(qn("w:bookmarkStart"))
+    start.set(qn("w:id"), "31")
+    start.set(qn("w:name"), "_Ref31")
+    second._p.addprevious(start)
+    etree.SubElement(third._p, qn("w:bookmarkEnd")).set(qn("w:id"), "31")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    section = _move(imported.section, _provisions(imported.section)[1], 0)
     with pytest.raises(SourceRedlineError) as refusal:
         render_preserving_redline(
             source_bytes=source,

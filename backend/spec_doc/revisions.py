@@ -52,7 +52,13 @@ Word splits text into runs — the one thing it re-does on every save anyway:
   compared. That is what Reject All leaves of a moved provision's bookmark
   that takes in its whole paragraph: the start went with the inserted copy,
   the end, between paragraphs, could not be tracked and stays. An end whose
-  start the body holds is compared where it is, before its start included;
+  start the body holds is compared where it is, before its start included.
+  A START with no end is still compared, though Word ignores it too
+  (§17.13.6.2): it carries its own name, so the one place one is expected —
+  Reject All of a moved provision whose bookmark opens at body level right
+  before it, the start having travelled with the new copy and the end gone
+  with it — is reached by excluding that name, and anywhere else comparing
+  it is stricter than Word, never more lenient;
 * range markup (bookmark, comment and permission ranges, proofing marks)
   right before a paragraph, outside it, is compared at the start of that
   paragraph: both are the paragraph's first position in the text, and

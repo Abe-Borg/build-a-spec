@@ -645,13 +645,16 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
     deleted, moves (plain, with children, with a bookmark, a table, across
     section breaks), emptied section-break holders (and their numbering
     cancel), hyperlinks (and a linked provision deleted, or moved, beside a
-    bookmark that closes at body level), a field, the fallback, the
+    bookmark that closes at body level), a bookmark taking in a whole
+    paragraph (its provision moved down or up, deleted, a provision added
+    after it, a break holder moved or deleted), a field, the fallback, the
     untrackable last paragraph, a leading page break, front matter, a
     picture, a bold mark, row properties, Track Changes already on, and
     inline custom XML (deleted, rewritten, moved, in a deleted table) — and
     Word's own "Moved" marks (Phase 2, PR B): one move, a move with
     children, a block of siblings, two named moves, a move beside an edit,
-    a move holding a link, a moved bookmark, a style-numbered master and a
+    a move holding a link, a moved bookmark (inside its paragraph, or taking
+    in the whole of it), a style-numbered master and a
     move a section break forced. With ``settings.REDLINE_COMMENTS`` on,
     every change also carries Build-a-Spec's comment (Phase 3), and one
     master already holds a reviewer's comment."""
@@ -663,6 +666,7 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
         _master_bytes,
         _not_used_master,
         _typed_letter_master,
+        _whole_paragraph_bookmark_master,
     )
 
     def upload(builder, *args, **kwargs):
@@ -889,6 +893,39 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
             (
                 ("delete-linked-provision", _edit(_delete_provision(0))),
                 ("move-link-above-end", _edit(_move_provision(2, 1))),
+            ),
+        ),
+        # A bookmark taking in a whole paragraph, mark included (its end
+        # after the paragraph, at body level): the end goes, untracked, with
+        # the moved provision's new copy, and a provision added after it
+        # lands outside it.
+        JudgeGroup(
+            "targeted/whole-paragraph-bookmark",
+            upload(_whole_paragraph_bookmark_master, 0, 2),
+            (
+                ("move-bookmarked-down", _edit(_move_provision(0, 2))),
+                ("move-last-bookmarked-up", _edit(_move_provision(2, 0))),
+                (
+                    "add-after-bookmarked",
+                    _edit(_add_provision(1, "Comply with the seismic restraint manual.")),
+                ),
+                ("delete-bookmarked", _edit(_delete_provision(0))),
+            ),
+        ),
+        JudgeGroup(
+            "targeted/native-move-whole-paragraph-bookmark",
+            upload(_whole_paragraph_bookmark_master, 0, 2, numbered=True),
+            (
+                ("move-bookmarked-down", _edit(_move_provision(0, 2))),
+                ("move-last-bookmarked-up", _edit(_move_provision(2, 0))),
+            ),
+        ),
+        JudgeGroup(
+            "targeted/bookmarked-break-holder",
+            upload(_whole_paragraph_bookmark_master, 2, held_break=True),
+            (
+                ("move-holder-up", _edit(_move_provision(2, 0))),
+                ("delete-holder", _edit(_delete_provision(2))),
             ),
         ),
         JudgeGroup(
@@ -1331,10 +1368,15 @@ def _judge_case(case: JudgeCase, upload_result, results: dict, paths: dict) -> d
         problems.append(
             f"Reject All in Word lost bookmark(s) {sorted(unexpected)} that no move carried"
         )
+    # A moved copy's bookmarks are not Reject All's to give back (D-6), lost
+    # or not: when the end closes after the copy's paragraph mark, outside
+    # the insertion, Word may delete the bookmark or leave it collapsed where
+    # the copy was. Either way it is excluded, as the app's own check does.
+    excluded = lost | case.moved_bookmarks
     reject_difference = word_difference(
         rejected_bytes,
         upload_bytes,
-        exclude_bookmarks=lost,
+        exclude_bookmarks=excluded,
         exclude_comments=ours["reject"],
     )
     if reject_difference is not None:
@@ -1342,7 +1384,7 @@ def _judge_case(case: JudgeCase, upload_result, results: dict, paths: dict) -> d
             rejected_bytes,
             upload_bytes,
             reject_difference,
-            exclude_bookmarks=lost,
+            exclude_bookmarks=excluded,
             exclude_comments=ours["reject"],
         )
         problems.append(

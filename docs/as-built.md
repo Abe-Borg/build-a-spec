@@ -24985,3 +24985,218 @@ section where you deleted a provision holding a link when a whole-paragraph
 bookmark closes right after it (the export said 'The redline failed its own
 check (accept check failed)'). Moving a provision whose own bookmark closes
 that way is still refused."
+
+## A whole-paragraph bookmark moves with its provision — implemented notes (2026-10-13)
+
+The task the previous note left under "Found, not done" (owner, as its own
+issue): a bookmark that takes in a whole paragraph, mark included, is Word's
+own shape for a `_Ref` cross-reference target — `<w:p><w:bookmarkStart
+w:name="_Ref12"/>…</w:p><w:bookmarkEnd w:id="12"/>`, the end after the
+paragraph, at body level. `_Assembler._classify_runs` made every unmodelled
+body child between two anchored elements lead the later one, that end
+included. So the appearance-preserving export moved the paragraph and its
+start and left the end at the old spot: moved down, the end sat before its
+start (ECMA-376 Part 1 §17.13.6.1: such an end is ignored and no bookmark is
+present — a REF field to it breaks); moved up, or with a provision added
+right after it, the bookmark stretched over the provisions in between. The
+redline on the original refused those moves instead: `untrackable_markup`
+(tag `bookmarkEnd`, from `_check_trackable`) when the end itself had to
+move, `reject_check_failed` when the moved bookmark's orphaned end could not
+be named.
+
+- **The end trails its paragraph** (`_Assembler._closes_above`). The body
+  children right after an anchored element that are bookmark ends closing a
+  bookmark opened inside it (its own starts, at any depth) are that
+  element's: `self._trails[origin]`, emitted right after the element's
+  record as `Record(RECORD_CARRIED, owner=uid, trails=True)` — so after the
+  element wherever it goes, and before anything added after it. Only an
+  unbroken run counts: the first child that is anything else (another
+  bookmark's end included) stops it, so no two markers at one place in the
+  text are ever reordered and a no-edit export is still the upload, child
+  for child. The trail is taken before the section-break and "(Not used.)"
+  passes, from the raw run. It also applies after the last anchored
+  element, ahead of `END OF SECTION`.
+- **A deleted element's end stays put.** Its start goes with it; the end
+  becomes a positional `_Group` at `origin + 0.5`, appended after that
+  origin's section-break holder group, so a deleted holder leaves its break
+  and then the end, in upload order. (Left to lead the element below, the
+  end would have had to move whenever that element moved — a refusal.)
+- **The mirror case is unchanged:** a body-level START whose end is inside
+  the paragraph below keeps leading that paragraph.
+- **The redline** (`_RedlineBuilder._travelling`): a trailing record that
+  is not shared, whose owner's record is not shared either (it moved), is a
+  travelling end. It renders as the upload's own element, untracked, right
+  after the new copy (`_render_travelling`), adds the bookmark's name — read
+  from the upload's start by id, so a new copy the fallback rebuilt without
+  its start still names it — to the moved names, and leaves nothing at the
+  old place (no `u_only` record; `_native_moves` skips it). That is D-6
+  exactly: the new copy holds the start, the old copy gave it up, and the
+  end goes along. Accept All is the formatted export, bookmark whole; Reject
+  All leaves the end with no start (it went with the inserted copy), and the
+  self-check excludes the name like any moved bookmark. An end whose owner
+  did not move cannot travel and still refuses by name.
+  `redline.bookmark_ends_moved` counts them in the `export` event. Under
+  native moves such an end sits between the paragraphs of a moved run, not
+  inside any move range, so a run of moved siblings it separates is shown as
+  separate named moves (the move-range check passes; one name across it
+  would put an untracked marker inside a move range, a shape no Word sample
+  here shows).
+- **The oracle: an end with no start ends nothing.** `revisions._Canon`
+  named a bookmark end only from starts in the same body, and compared an
+  unnamed one as a `bookmarkEnd` named `""`, so Reject All's leftover end was
+  an extra element. Now an end whose id has no start anywhere in the body is
+  not compared — ECMA-376 Part 1 §17.13.6.1 says Word ignores it and no
+  bookmark is present. An end whose start the body holds is compared by name
+  where it is, before its start included (stricter than Word, never more
+  lenient), and starts are unchanged. Missing starts are still caught by the
+  starts themselves. Considered instead: naming the resolved body's ends
+  from the redline file (ids are the file's). Rejected: the clean export's
+  orphan end (a deleted provision's) would then compare unnamed against
+  Accept All's named one.
+- **PR #326's oracle tests probed with an orphan end** (`<w:bookmarkEnd
+  w:id='7'/>` and no start), which the new rule reads as nothing: four failed
+  and two became vacuous. Each now opens bookmark 7 first (`_OPENS_SEVEN`, or
+  in "One." — the realistic Word shape), so each still pins a position; the
+  join and same-position assertions are otherwise unchanged.
+- **The real-Word judge** gains three groups:
+  `targeted/whole-paragraph-bookmark` (typed letters; the bookmarked
+  provision moved down, the last one moved to the top, a provision added
+  after one, one deleted), `targeted/native-move-whole-paragraph-bookmark`
+  (Word-numbered, so the moves are pure and native) and
+  `targeted/bookmarked-break-holder` (moved up, deleted). Its Reject All
+  comparison now excludes `lost | moved_bookmarks` rather than `lost` only:
+  with the end outside the insertion, Word may delete the moved bookmark or
+  leave it collapsed where the copy was, and D-6 promises neither — the
+  app's own check already excluded the moved names, lost or not. A
+  bookmark lost or displaced that no move carried is still a failure
+  (pinned). Real Word has not judged any of it yet; it runs on the owner's
+  next `BUILD_A_SPEC_WORD_JUDGE=1` run.
+- **Sweep** (local, not committed): 200 seeded masters (typed and
+  Word-numbered, three to six provisions, some holding links) with
+  whole-paragraph bookmarks and body-level bookmark starts around
+  provisions, under move, delete, rewrite and add edits, each rendered with
+  native moves off and on (400 redlines). Before: 226 ok, 72
+  `reject_check_failed`, 80 `untrackable_markup` (`bookmarkEnd`), 22
+  `untrackable_markup` (`bookmarkStart`) — every refusal a move — and 150
+  broken whole-paragraph bookmarks in the clean exports (48 ending before
+  they began, 90 stretched over other provisions by a move, 12 by an added
+  provision). After: 370 ok, 30 `untrackable_markup` (`bookmarkStart`, the
+  mirror shape, next bullet), 0 broken bookmarks. Case by case: none went
+  from ok to refused; 144 went from refused to ok; 8 of the 30 had stopped
+  at an end first, masking the start. Every ok redline also passed the
+  test harness's `_verify`.
+- **Found, not done.**
+  1. *The mirror shape.* Moving a provision whose bookmark opens at body
+     level just before it (its end inside the paragraph) is still refused
+     (`untrackable_markup`, tag `bookmarkStart`): the start could travel
+     untracked the same way, but Reject All would then keep it, end-less, at
+     the new place, and the test harness and the judge recognise a moved
+     bookmark by a start inside a new copy. Pinned as a refusal by name.
+  2. *Permission and comment range ends* (`permEnd`, `commentRangeEnd`) at
+     body level after the paragraph that opened them keep leading the
+     element below. A permission range's end has the bookmark's shape, but
+     D-6 covers bookmarks only: trailing it would make Reject All need to
+     exclude permission ranges too, and today such a move passes with the
+     end left in place, so trailing it would turn those into refusals. A
+     comment's range end belongs with its reference mark, a run inside the
+     paragraph below, and a moved commented paragraph is refused by name
+     anyway (`moved_annotation`).
+- **Codex review on PR #327: the last paragraph behind a trailing end.**
+  The redline took the body's last CHILD as the document's last paragraph,
+  whose mark Word cannot track (`neutralize_last_paragraph`). In a master
+  with no `END OF SECTION`, a bookmarked provision moved to the end now
+  takes its end along, so the end was the last child and the moved
+  provision's mark was flagged like any other — the oracle passed it (its
+  join removes an emptied paragraph with nothing after it), real Word would
+  not. The same held before this change whenever the last provision's own
+  bookmark end, or a longer bookmark's, followed it (a deleted last
+  provision, a provision added at the end). `_RedlineBuilder._last_block`
+  now takes the last record that is not zero-width body markup
+  (`_ZERO_WIDTH_BODY_MARKUP`: bookmark, comment and permission range
+  markers, proofing marks), in `render()` and `_native_moves()` alike (a
+  native move whose copy is that paragraph falls back, `last_paragraph`).
+  The oracle's tolerance followed: `canonical_body` strips formatting-free
+  empty paragraphs at the end of the body from before any trailing range
+  markup, since that markup marks a place, not a block. Without it a
+  bookmark opened further up and closing after the last provision turned a
+  deleted last provision, or one added after it, into an
+  `accept_check_failed`/`reject_check_failed` refusal. A formatted empty
+  paragraph there, or one with a paragraph after it, is still a difference
+  (pinned). PR #326's end-of-body probe left a plain empty paragraph before
+  such an end, which the tolerance now admits; it is centred now, so it still
+  pins that the paragraph stays.
+- **Erratum** for the previous note: its "Found, not done" item is done
+  here, and its release-note draft's last sentence ("Moving a provision
+  whose own bookmark closes that way is still refused.") no longer holds;
+  the draft below replaces it if both ship in one release.
+- **Unchanged.** Every refusal reason and message, the writer's markup for
+  everything but a travelling end, the comment pass, the package audit, the
+  judge's Word-save tolerances, the SSE and REST surfaces, and every model
+  request byte.
+
+### Tests
+
+- `tests/test_preserving_export.py` (15): `_whole_paragraph_bookmark_master`
+  (typed or Word-numbered, optional break holder) and `_bookmark_layout`;
+  the bookmark stays whole when its provision moves down two, down one, from
+  last to top, or another moves in above it (both label kinds); a no-edit
+  export is the upload child for child; a provision added after it lands
+  outside it; a deleted one leaves its end after the break its mark held; a
+  moved break holder takes its bookmark and leaves its break; a body-level
+  start still leads the provision below; and an end of another bookmark at
+  the head of the run stops it, so nothing is reordered.
+- `tests/test_redline_original.py` (36, every one through `_verify` with
+  native moves off and on): moved down two, down one and last to top, typed
+  and Word-numbered (native moves counted where pure); nothing left at the
+  old place, and Reject All's leftover end holds no start; a provision
+  added after it; a bookmarked break holder moved or deleted; a moved
+  provision rebuilt from its first run (a symbol) still names its end; a
+  deleted bookmarked provision whose neighbour moves; the mirror shape
+  refused by name; and, with no `END OF SECTION` (10 more), the last
+  paragraph before a closing bookmark end has its mark left untracked — a
+  bookmarked provision moved to the end (typed and numbered), a bookmarked
+  last provision deleted, and a bookmark from A closing after the last
+  provision, which is deleted or followed by a new one. PR #326's moved-link
+  case now also pins the end right after A.
+- `tests/test_revisions.py` (3 new, 5 probes updated): an end with no start
+  is not compared, wherever it sits, and Reject All's moved-bookmark shape
+  then equals the upload with the name excluded; an end with its start is
+  still compared by name (short of the mark, stretched), and a start with no
+  end still is; a plain empty last paragraph before a closing bookmark end
+  is tolerated, a numbered one or one followed by a paragraph is not.
+- `tests/test_word_judge.py` (1 new, 2 pins widened): a Word that leaves
+  the moved bookmark collapsed passes, and the same file fails when no move
+  carried it; the coverage test requires `bookmark_ends_moved` and lists
+  `_Ref10`/`_Ref12` among the moved bookmarks; the faithful-Word test runs
+  the three new groups, with Word-save noise and comments on.
+
+**Revert matrix** (each in place, restored after each, over the new and
+changed tests: `tests/test_preserving_export.py` and
+`tests/test_redline_original.py` filtered to bookmark, body-level, markup
+and link tests, plus all of `tests/test_revisions.py` and
+`tests/test_word_judge.py` — 172 tests, 175 once two tests the filter missed
+were renamed to say "bookmark"; the two reverts they pin were rerun over
+175). No end trails its element: 32 red. A deleted element's end leading the
+next element again: 2. A deleted holder's end placed before its break: 6.
+Trails emitted ahead of their element: 33. The run not stopping at another
+bookmark's end: 1. No end travelling in the redline: 17. A travelling end
+also left at the old place: 17. Native moves not told about travelling
+ends: 6. A travelling end's bookmark not named among the moved ones (a new
+copy rebuilt without its start): 2. An end with no start compared again: 18.
+The judge excluding only lost bookmarks: 1. Added with the Codex fix: the
+last paragraph taken as the body's last child again, 10 red (every new
+last-paragraph case); trailing range markup hiding the empty last paragraph
+from the tolerance again, 5 (the new oracle test and the four spanning
+cases). Ruff and every touched test file pass; the full suite runs in CI.
+No paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Word export", item "Whole-paragraph bookmarks move with their
+provision": "When a bookmark takes in a whole paragraph (a cross-reference
+target in Word), moving that provision no longer leaves the bookmark's end
+behind: Export Word (keeps your formatting) keeps the bookmark on the
+provision wherever it goes, and a provision added after it no longer lands
+inside it. Export Word - Tracked Changes ON and the redline on your original,
+which refused such moves, now show them; as with every moved provision, Reject
+All does not put the bookmark back at the old place."

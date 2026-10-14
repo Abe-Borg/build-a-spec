@@ -25387,3 +25387,35 @@ longer refuse to move that provision: the bookmark goes with it, and as with
 every moved provision, Reject All does not put the bookmark back at the old
 place." If both ship in one release, it can join the previous note's
 "Whole-paragraph bookmarks move with their provision" item instead.
+
+## Release 1.27.0 — 2026-10-13
+
+Release preparation covers all merged work after the published `v1.26.0`
+through `c0f3f00` (PRs #301–#328). The bundled notes describe research source
+passages and applicability, Final QC research coverage and cannot-verify
+outcomes, the Opus 5.5 chat default, approval and standards-edition rules,
+blocking questions, 500-character facts, sibling-section reading controls,
+Save write-back, spreadsheet references, session diagnostics, atomic
+relocations, bookmark fidelity and redline comment cleanup.
+
+The backend version, frontend package and lockfile, and README headline
+advance together to `1.27.0`. The existing renderer supplies the same notes
+to the What's-new modal, update manifest and release page. Notes explicitly
+name Opus 5.5's doubled per-token price, the need to re-run saved Final QC
+reviews, and the risk of older builds shortening facts beyond 240 characters.
+README's newly shipped status entries now name this release; its old 5.5
+prompting-upgrade introduction correctly names the already-published 1.21.0.
+
+Local validation: version/tag consistency, Ruff, release-note rendering
+since `v1.26.0`, frontend tests (591), the production build and all 18 DOCX
+corpus cases passed. Node 24's `--test-isolation=none` was used to report
+individual frontend cases in this sandbox. The workspace initially lacked
+the new spreadsheet dependencies; installing `requirements.txt` supplied
+them. Complete Python 3.11/3.12 backend validation runs in the PR's CI,
+following the owner's preference to leave the full suite to CI.
+
+The tag-triggered Windows workflow runs the backend suite, builds and
+smoke-tests the frozen app, compiles the installer and publishes
+`BuildASpecSetup.exe` with its SHA-256 `latest.json`. No paid model call,
+interactive Windows install or Word/LibreOffice renderer check was performed
+locally; package checks do not claim visual validation or a live update test.

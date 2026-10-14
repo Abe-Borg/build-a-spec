@@ -1,6 +1,14 @@
 # Build-a-Spec
 
-**v1.26.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.27.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+
+This release includes the merged work since v1.26.0: checked source passages
+and applicability conditions in research, explicit research coverage and
+unverifiable findings in Final QC, project-section reading controls, spreadsheet
+references, and Word bookmark fixes. Chat now defaults to Claude Opus 5.5,
+whose per-token price is twice Sonnet 5.5's. Re-run saved Final QC reviews
+before applying their fixes. Keep every section on v1.27.0 or later once you
+record a project fact longer than 240 characters; older builds shorten it.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -31,7 +39,7 @@ The export choices have different contracts:
 | **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
 | **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
 | **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
-| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. Every change the assistant made carries a Word comment under your export author name: the reason it gave for the edit, plus the research text and source links behind it when it has them. Export → *Redline on your original (tracked changes)* (the unreleased 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the docs/as-built.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
+| **Redline on your original** | A copy of the Word file you imported with every change since the import as a native Word tracked change. Accept All gives exactly the formatted export, Reject All gives your original back, and the file checks both before it is handed over. Every change the assistant made carries a Word comment under your export author name: the reason it gave for the edit, plus the research text and source links behind it when it has them. Export → *Redline on your original (tracked changes)* (the 1.21.0 entry in `backend/release_notes.py` announces it as "Redline on your original" and the comments as "The redline on your original says why"; the records are the docs/as-built.md sections "Redline on your original — implemented notes (Phase 1, UI PR)" and "Comments on the changes — implemented notes (redline Phase 3)"). |
 | **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
 | **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
 
@@ -155,10 +163,10 @@ ending. Cleaning the file in Word first avoids it.
 `frontend/tests/wordFileGuidance.test.ts` pins every label and message the
 guide quotes to the file that shows it.
 
-## The 5.5 prompting upgrade (in the next release)
+## The 5.5 prompting upgrade (shipped in v1.21.0)
 
-No release entry of its own: every user-visible item rides the newest
-unreleased entry (1.21.0) in `backend/release_notes.py`. On 2026-09-29 the app
+No release entry of its own: every user-visible item shipped in the
+1.21.0 entry in `backend/release_notes.py`. On 2026-09-29 the app
 was reviewed against Anthropic's prompting guides for Claude Sonnet 5.5 (the
 chat, research, the fact harvest and the condensing summary) and Claude Opus
 5.5 (Final QC). Eight sessions implemented every recommendation; the plan
@@ -221,7 +229,7 @@ on it.
 
 (2026-10-13, the prompt-review follow-up, item 7. docs/as-built.md's
 "Research findings quote their source and say when they apply" is the
-record; in the next release.)
+record; shipped in v1.27.0.)
 
 A research finding used to state a requirement in the research agent's own
 words, and "grounded" meant only that a page it cited was really retrieved —
@@ -274,7 +282,7 @@ unmeasured until research runs.
 ## Current Status — a project fact can run to 500 characters
 
 (2026-10-13, owner decision. docs/as-built.md's "A project fact's statement
-runs to 500 characters" is the record; in the next release.)
+runs to 500 characters" is the record; shipped in v1.27.0.)
 
 - **Room to say it whole.** A project fact's statement was capped at 240
   characters, too short for a fact that needs its conditions or its
@@ -347,7 +355,7 @@ their cached prompt once. No paid API call was made.
 ## Current Status — the chat's Final QC summary knows when the review went stale
 
 (2026-10-13, owner decision. docs/as-built.md's "The chat's Final QC
-summary checks every review input" is the record; in the next release.)
+summary checks every review input" is the record; shipped in v1.27.0.)
 
 - **Stale means stale.** The Final QC summary the chat reads with every
   message said a review was current as long as the document hadn't changed.
@@ -367,7 +375,7 @@ No paid API call was made.
 ## Current Status — the prompt review's small leftovers
 
 (2026-10-13, the prompt-review follow-up. docs/as-built.md's "The prompt
-review's small leftovers" is the record; in the next release.)
+review's small leftovers" is the record; shipped in v1.27.0.)
 
 Five small items from the outside review:
 
@@ -406,7 +414,7 @@ made.
 ## Current Status — the chat reads Final QC findings in full, fetches more, and knows when research was trimmed
 
 (2026-10-13, owner decisions. docs/as-built.md's "The chat reads a Final QC
-finding in full" is the record; in the next release.)
+finding in full" is the record; shipped in v1.27.0.)
 
 - **The chat can open any Final QC finding.** Its per-message summary of the
   review still gives each open finding one line. A new read-only tool,
@@ -441,7 +449,7 @@ current. No paid API call was made.
 
 (2026-10-13, owner decision after step 7 of the prompt-review follow-up.
 docs/as-built.md's "A pending hold point is a look, not a defect" is the
-record; in the next release.)
+record; shipped in v1.27.0.)
 
 The lint flags "pending" so someone checks it, and the assistant is told to
 leave it where it is a real condition of the work — a hold point such as
@@ -466,7 +474,7 @@ made.
 ## Current Status — the chat runs on Claude Opus 5.5
 
 (2026-10-13, owner decision, a trial. docs/as-built.md's "The chat runs on
-Claude Opus 5.5" is the record; in the next release.)
+Claude Opus 5.5" is the record; shipped in v1.27.0.)
 
 - **What moved.** The interview and both whole-section passes ("Draft full
   section", "Adapt imported draft") run on Claude Opus 5.5 instead of Claude
@@ -510,8 +518,7 @@ what the trial is for.
 ## Current Status — the tool instructions match the new rules
 
 (2026-10-13, step 7 of the prompt-review follow-up. docs/as-built.md's "The
-tool instructions and per-turn notes match the new rules" is the record; in
-the next release.)
+tool instructions and per-turn notes match the new rules" is the record; shipped in v1.27.0.)
 
 The outside review covered the assistant's main instructions. This step
 read the rest of what it follows: each tool's instructions, the notes in
@@ -553,7 +560,7 @@ API call was made.
 ## Current Status — you choose which sections the assistant may read
 
 (2026-10-13, owner request. docs/as-built.md's "The user chooses which
-sections the assistant may read" is the record; in the next release.)
+sections the assistant may read" is the record; shipped in v1.27.0.)
 
 The assistant reads the project's other sections on demand (the entry
 below). Which ones is now your call, per section.
@@ -616,7 +623,7 @@ made.
 ## Current Status — Save writes back to the project you opened
 
 (2026-10-13, owner request. docs/as-built.md's "Save writes back to the file
-you opened" is the record; in the next release.)
+you opened" is the record; shipped in v1.27.0.)
 
 Opening an existing `.baspec` and pressing Save opened the Save dialog again,
 offering a new timestamped name, as if the project had never been saved. That
@@ -648,7 +655,7 @@ No paid API call was made.
 ## Current Status — the assistant reads the project's other sections
 
 (2026-10-13, owner request. docs/as-built.md's "The assistant reads the
-project's other sections on demand" is the record; in the next release.)
+project's other sections on demand" is the record; shipped in v1.27.0.)
 
 When a project is drafted section by section, the assistant used to see only
 the other sections' titles and article names — enough to know fire pumps are
@@ -693,7 +700,7 @@ unchanged. No paid API call was made.
 ## Current Status — a moved provision keeps its subparagraphs
 
 (2026-10-13, step 5 of the prompt-review follow-up. docs/as-built.md's "A
-relocation lands whole or not at all" is the record; in the next release.)
+relocation lands whole or not at all" is the record; shipped in v1.27.0.)
 
 When the assistant moved a provision to a different PART, article or parent
 paragraph, it had to delete the original — taking its subparagraphs with it
@@ -723,7 +730,7 @@ sessions rewrite their cached prompt once. No paid API call was made.
 
 (2026-10-13, step 4 of the prompt-review follow-up; owner decision. docs/as-
 built.md's "A provision is confirmed only when a person approved it" is the
-record; in the next release.)
+record; shipped in v1.27.0.)
 
 "Confirmed" meant two things. On a provision it meant you stated it or
 approved it. On a project fact it means you stated it *or* a source
@@ -766,7 +773,7 @@ cached prompt once. No paid API call was made.
 ## Current Status — Final QC's verifier seats think at medium
 
 (2026-10-12, owner decision, for cost. docs/as-built.md's "Final QC's
-verifier seats run at medium" is the record; in the next release.)
+verifier seats run at medium" is the record; shipped in v1.27.0.)
 
 Each Final QC finding is checked by a panel of two or three verifier seats
 on Claude Sonnet 5.5. Since they moved to Sonnet 5.5 on 2026-10-08 they had
@@ -795,7 +802,7 @@ No paid API call was made.
 
 (2026-10-12, step 3 of the prompt-review follow-up; owner decision. docs/as-
 built.md's "An edition comes from the user or the research, never a guess"
-is the record; in the next release.)
+is the record; shipped in v1.27.0.)
 
 The general (any-discipline) module pins no standard editions, so every
 edition is recorded per project with a stated basis. Until now the
@@ -838,8 +845,7 @@ rewrite their cached prompt once. No paid API call was made.
 ## Current Status — Final QC's reviewers read the research too
 
 (2026-10-12, step 2 of the prompt-review follow-up. docs/as-built.md's
-"Final QC's verifier seats read the requirements research" is the record; in
-the next release.)
+"Final QC's verifier seats read the requirements research" is the record; shipped in v1.27.0.)
 
 Each Final QC finding is checked by a panel of reviewers who try to knock it
 down, and who are told to knock it down when unsure. They could read the
@@ -910,7 +916,7 @@ reports stay current. No paid API call was made.
 ## Current Status — a section's diagnostics follow it across launches
 
 (2026-10-09, owner request. docs/as-built.md's "A section's diagnostics
-follow it across launches" is the record; in the next release.)
+follow it across launches" is the record; shipped in v1.27.0.)
 
 A section is often worked on for days or weeks, reopened every morning, and
 every app launch keeps its own log folder and trace run. Until now the
@@ -975,7 +981,7 @@ changed, so no cache was touched. No paid API call was made.
 ## Current Status — the redline's comments carry no bookkeeping
 
 (2026-10-08, owner request. docs/as-built.md's "The redline's comments say
-nothing of the app's bookkeeping" is the record; in the next release.)
+nothing of the app's bookkeeping" is the record; shipped in v1.27.0.)
 
 The comments in the redline on your original are for whoever reads the Word
 file, and that file may go to a client. Two kinds of line in them were the

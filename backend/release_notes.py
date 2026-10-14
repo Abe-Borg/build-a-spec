@@ -89,6 +89,220 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.27.0",
+        date="2026-10-13",
+        headline="Research shows its evidence, and Final QC says what it checked",
+        summary=(
+            "Research quotes its sources and says when a requirement applies. "
+            "Final QC accounts for research requirements and keeps findings "
+            "its reviewers could not check. Choose which project sections "
+            "the chat may read, attach spreadsheets, and save back to the "
+            "file you opened. Chat now uses Opus 5.5 at twice Sonnet 5.5's "
+            "per-token price; re-run saved Final QC reviews after updating."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Research and Final QC",
+                items=(
+                    ReleaseItem(
+                        title="Research quotes the source and says when it applies",
+                        body=(
+                            "Findings show the source's own words, whether "
+                            "the passage was found on a page the agent read, "
+                            "and any condition that limits the requirement. "
+                            "The assistant and Final QC check those conditions "
+                            "against your project; older findings stay readable."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="See which research requirements the section covers",
+                        body=(
+                            "Final QC lists each controlling research "
+                            "requirement as covered, missing, not applicable, "
+                            "not assessed or not shown to the reviewers. Its "
+                            "specialists and reviewers also read your open "
+                            "Waiting on you questions."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A finding nobody could check stays open",
+                        body=(
+                            "A reviewer can say could not verify and name "
+                            "the evidence it needs instead of refuting an "
+                            "uncheckable finding. Unsettled findings come to "
+                            "you as disputed and hold issue readiness until "
+                            "you address or dismiss them with a reason."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Ask the chat about a whole Final QC finding",
+                        body=(
+                            "The assistant can read a finding's full "
+                            "rationale, evidence, proposed fix and reviewer "
+                            "votes. It also recognizes when a review went "
+                            "stale after research, facts, attachments or "
+                            "review settings changed."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Reviewers read the research and think at medium",
+                        body=(
+                            "Final QC's Sonnet 5.5 reviewers now read the "
+                            "requirements research as well as the section "
+                            "and think at medium effort. Research adds input "
+                            "cost and medium effort may reduce thinking "
+                            "cost; total savings have not been measured."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Run saved Final QC reviews again after updating",
+                        body=(
+                            "Earlier reports still open and export, but "
+                            "read out of date after this update. Settle open "
+                            "questions and run Final QC again before applying "
+                            "its fixes."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Drafting and decisions",
+                items=(
+                    ReleaseItem(
+                        title="Chat drafts with Claude Opus 5.5",
+                        body=(
+                            "Chat, whole-section drafting, conversation "
+                            "summaries and AI template generalization now "
+                            "use Opus 5.5. Its per-token price is twice "
+                            "Sonnet 5.5's; an existing interview-model "
+                            "override keeps your chosen model."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Only your approval confirms a provision",
+                        body=(
+                            "Provisions drawn from research or documents "
+                            "wait as assumed until you approve them. Standards "
+                            "editions come from you or the research, and long "
+                            "conversation summaries preserve who made each "
+                            "decision instead of treating every default as "
+                            "your confirmation."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Blocking questions hold back issue readiness",
+                        body=(
+                            "A missing answer the section cannot be right "
+                            "without now blocks readiness until you answer "
+                            "or clear its Waiting on you item. Asking the "
+                            "assistant to explain or review leaves the "
+                            "document alone, and a pending construction "
+                            "hold point no longer reads as a placeholder."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A project fact has room for its conditions",
+                        body=(
+                            "Fact statements can now run to 500 characters "
+                            "in chat, Project facts and Harvest facts. Keep "
+                            "every section on this version or later once you "
+                            "record a fact longer than 240 characters: "
+                            "older builds shorten it when opening the file."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Chat can check more pages and recognizes missing context",
+                        body=(
+                            "A request can fetch up to eight pages instead "
+                            "of four, which can increase a turn's cost. When "
+                            "the research list is too long to show in full, "
+                            "chat and Final QC are told how many findings "
+                            "were left out. Harvest facts no longer treats "
+                            "an unverified research lead as an established fact."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Project files and references",
+                items=(
+                    ReleaseItem(
+                        title="Choose which other sections the assistant may read",
+                        body=(
+                            "In the desktop Project panel, allow or refuse "
+                            "each saved section as a read-only reference. "
+                            "The assistant can look up allowed sections in "
+                            "the same project folder to coordinate the "
+                            "section you are working on."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Save writes back to the file you opened",
+                        body=(
+                            "Opening a .baspec now gives Save its original "
+                            "filename, so you can save back without another "
+                            "dialog. Save As still makes a separate copy, "
+                            "and an overlapping save cannot overwrite the "
+                            "file you just opened."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Attach Excel workbooks as reference documents",
+                        body=(
+                            "Attach .xlsx and .xlsm workbooks so chat and "
+                            "Final QC can read their sheet values alongside "
+                            "your other references. Macros are never run."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A section's diagnostics follow it across launches",
+                        body=(
+                            "Saved sections keep a visit history with "
+                            "turns, tokens and estimated cost. Developer "
+                            "tools can collect that section's earlier logs "
+                            "and traces; including earlier full prompt "
+                            "text is a separate choice."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Editing and Word exports",
+                items=(
+                    ReleaseItem(
+                        title="Moved provisions keep their subparagraphs",
+                        body=(
+                            "Relocating a provision carries its whole "
+                            "subtree and its related question links in one "
+                            "change. Undo restores them together."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Word bookmarks stay with their provisions",
+                        body=(
+                            "Tracked exports keep bookmark boundaries in "
+                            "order when paragraphs merge or move, including "
+                            "a bookmark before or after a body paragraph. "
+                            "Those bookmarks no longer cause the redline's "
+                            "Accept All and Reject All checks to refuse an "
+                            "otherwise valid export."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Redline comments describe the edits without bookkeeping",
+                        body=(
+                            "Comments on your original omit status-only "
+                            "reasons, internal ids and research dates. "
+                            "They keep the reasons for visible changes "
+                            "and include a research condition and source "
+                            "passage when that passage was found."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.26.0",
         date="2026-10-08",
         headline="Sections stay with their project, and research keeps going",

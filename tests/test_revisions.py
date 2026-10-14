@@ -958,6 +958,29 @@ def test_a_bookmark_end_with_its_start_is_still_compared_by_name():
     ))
 
 
+def test_a_bookmark_start_with_no_end_is_compared_and_excluded_by_its_own_name():
+    """The mirror of the start-less end, which is not compared because it
+    cannot be named: Reject All of a moved provision whose bookmark opens at
+    body level right before it keeps the start (it travelled with the new
+    copy, untracked) and loses the end (it went with the inserted copy).
+    ECMA-376 Part 1 §17.13.6.2 says Word ignores such a start, but it carries
+    its own name, so the moved bookmark's name reaches it — and anywhere
+    else it is still compared where it is: stricter than Word, never more
+    lenient."""
+    a = "<w:p><w:r><w:t>A.</w:t></w:r></w:p>"
+    b = "<w:p><w:r><w:t>B.</w:t></w:r></w:p>"
+    start = "<w:bookmarkStart w:id='20' w:name='_Ref20'/>"
+    upload = _body(
+        start + "<w:p><w:r><w:t>A.</w:t></w:r><w:bookmarkEnd w:id='20'/></w:p>" + b
+    )
+    rejected = _body(a + b + start)  # the old copy gave its end up
+    assert not _equal(rejected, upload)
+    assert _equal(rejected, upload, exclude_bookmarks={"_Ref20"})
+    # Not excluded, an end-less start is still a difference wherever it sits.
+    assert not _equal(_body(a + start + b), _body(a + b))
+    assert not _equal(_body(a + start + b), _body(start + a + b))
+
+
 def test_trailing_empty_paragraphs_are_not_differences_but_inner_ones_are():
     """Word cannot track a document's last paragraph mark, so a tracked
     insertion or deletion there leaves an empty paragraph behind."""

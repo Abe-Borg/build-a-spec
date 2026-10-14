@@ -278,6 +278,7 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
         "last_mark_untracked",
         "moves_native",
         "bookmark_ends_moved",  # a whole-paragraph bookmark's end, moved along
+        "bookmark_starts_moved",  # a start opening before its provision, moved along
     ):
         assert totals.get(kind, 0) > 0, kind
     assert {
@@ -311,8 +312,9 @@ def test_the_targeted_cases_cover_every_shape_the_writer_emits(targeted):
         "commentRangeStart@p",
         "commentRangeEnd@p",
     } <= markup, markup
-    # Inside its paragraph (77, 44), or taking in the whole of it (10, 12).
-    assert moved == {"_Ref77", "_Ref44", "_Ref10", "_Ref12"}
+    # Inside its paragraph (77, 44), taking in the whole of it (10, 12), or
+    # opening at body level before it (20, 22) — that one by its end alone.
+    assert moved == {"_Ref77", "_Ref44", "_Ref10", "_Ref12", "_Ref20", "_Ref22"}
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +474,7 @@ def batches(tmp_path_factory):
                 "targeted/last-numbered",
                 "targeted/break-holder",
                 "targeted/whole-paragraph-bookmark",
+                "targeted/body-level-bookmark-start",
             )
         }
 
@@ -666,18 +669,25 @@ def test_what_word_read_and_left_is_judged_too(batches, tmp_path, fake, message)
 
 
 def _reject_leaving_moved_bookmarks_collapsed(body):
-    """A Word whose Reject All keeps a bookmark whose start went with a
-    rejected insertion, collapsed where the insertion was: the end that closed
-    it after the paragraph mark, at body level, gets its start back, right
-    before it."""
+    """A Word whose Reject All keeps a bookmark one of whose markers went
+    with a rejected insertion, collapsed where the insertion was: an end
+    that closed it after the paragraph mark, at body level, gets its start
+    back right before it, and a start that opened it at body level before
+    the paragraph gets its end back right after it."""
     rejected = reject_all(body)
     started = {s.get(qn("w:id")) for s in rejected.iter(qn("w:bookmarkStart"))}
+    ended = {e.get(qn("w:id")) for e in rejected.iter(qn("w:bookmarkEnd"))}
     for end in list(rejected.iter(qn("w:bookmarkEnd"))):
         if end.get(qn("w:id")) not in started:
             start = etree.Element(qn("w:bookmarkStart"))
             start.set(qn("w:id"), end.get(qn("w:id")))
             start.set(qn("w:name"), f"_Ref{end.get(qn('w:id'))}")
             end.addprevious(start)
+    for start in list(rejected.iter(qn("w:bookmarkStart"))):
+        if start.get(qn("w:id")) not in ended:
+            end = etree.Element(qn("w:bookmarkEnd"))
+            end.set(qn("w:id"), start.get(qn("w:id")))
+            start.addnext(end)
     return rejected
 
 
@@ -711,6 +721,62 @@ def test_a_moved_bookmark_word_leaves_collapsed_is_still_the_moved_one(
     )
     verdict = judge.judge_batch(unmoved, tmp_path / "unmoved", resolve=fake)
     assert any("Reject All in Word differs" in f for f in verdict.failures), verdict.failures
+
+
+def _reject_dropping_endless_starts(body):
+    """A Word whose Reject All deletes a bookmark whose end went with a
+    rejected insertion: the start left before where the copy was goes."""
+    rejected = reject_all(body)
+    ended = {e.get(qn("w:id")) for e in rejected.iter(qn("w:bookmarkEnd"))}
+    for start in list(rejected.iter(qn("w:bookmarkStart"))):
+        if start.get(qn("w:id")) not in ended:
+            start.getparent().remove(start)
+    return rejected
+
+
+@pytest.mark.parametrize("word", ["collapsed", "dropped"])
+def test_a_moved_bookmark_opening_before_its_provision_is_the_moved_one(
+    batches, tmp_path, word
+):
+    """A provision moved with a bookmark that opens at body level right
+    before it: the start is before the inserted copy, untracked, and the end
+    inside it — so the judge knows the bookmark by its end. Word may leave
+    that bookmark collapsed where the copy was or delete it on Reject All;
+    D-6 promises neither, so neither is a difference — and the same file IS
+    one when no move carried the bookmark."""
+    batch = batches["targeted/body-level-bookmark-start"]
+    reject = (
+        _reject_leaving_moved_bookmarks_collapsed
+        if word == "collapsed"
+        else _reject_dropping_endless_starts
+    )
+    verdict = judge.judge_batch(batch, tmp_path / word, resolve=_fake_word(reject=reject))
+    by_case = {case["case"]: case for case in verdict.cases}
+    moved = by_case["move-opened-down"]
+    assert moved["status"] == "pass", moved
+    assert moved["moved_bookmarks"] == ["_Ref20"]
+    assert moved["lost_bookmarks"] == ([] if word == "collapsed" else ["_Ref20"])
+    assert by_case["move-last-opened-up"]["status"] == "pass"
+    assert by_case["move-last-opened-up"]["moved_bookmarks"] == ["_Ref22"]
+
+    unmoved = judge.JudgeBatch(
+        batch.group,
+        batch.upload,
+        tuple(
+            judge.JudgeCase(
+                c.name, c.redline, c.clean, frozenset(), c.stats, comments=c.comments
+            )
+            for c in batch.rendered
+            if c.name == "move-opened-down"
+        ),
+    )
+    verdict = judge.judge_batch(unmoved, tmp_path / f"unmoved-{word}", resolve=_fake_word(reject=reject))
+    expected = (
+        "Reject All in Word differs"
+        if word == "collapsed"
+        else "lost bookmark(s) ['_Ref20'] that no move carried"
+    )
+    assert any(expected in f for f in verdict.failures), verdict.failures
 
 
 def test_a_bookmark_lost_by_no_move_is_a_failure(batches, tmp_path):

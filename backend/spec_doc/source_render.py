@@ -1937,8 +1937,8 @@ class _RedlineBuilder:
         #: Aligned with the body :meth:`render` returns: ``(change, uid)``
         #: for an element the redline marks as changed, else None.
         self.changes: list[tuple[str, str] | None] = []
-        #: Upload indexes of the bookmark ends that trail a MOVED element
-        #: (:meth:`_travelling`), set by :meth:`plan`.
+        #: Upload indexes of the bookmark ends that trail a MOVED element and
+        #: the starts that lead one (:meth:`_travelling`), set by :meth:`plan`.
         self.travelling: set[int] = set()
         self.stats: dict = {
             "kept": 0,
@@ -1957,8 +1957,10 @@ class _RedlineBuilder:
             "moves_native": 0,
             "moves_fallback": {},
             # Bookmark ends that went, untracked, with a moved element whose
-            # bookmark they close (D-6).
+            # bookmark they close (D-6) — and starts, with a moved element
+            # whose bookmark they open.
             "bookmark_ends_moved": 0,
+            "bookmark_starts_moved": 0,
         }
 
     # -- helpers -------------------------------------------------------------
@@ -2037,7 +2039,7 @@ class _RedlineBuilder:
         return shared
 
     def _travelling(self, records: list[Record], shared: set[int]) -> set[int]:
-        """The bookmark ends that go with a moved element, untracked.
+        """The bookmark markers that go with a moved element, untracked.
 
         A body-level bookmark end that closes a bookmark opened inside the
         element above it trails that element (``Record.trails``), so when
@@ -2048,10 +2050,20 @@ class _RedlineBuilder:
         right after the new copy, and nothing is left at the old place.
         Reject All then leaves it with no start (the start went with the
         inserted copy), which ends nothing, and the self-check excludes the
-        bookmark by name like every other moved one. An end whose owner did
-        not move is left to the ordinary path, which refuses it by name."""
+        bookmark by name like every other moved one.
+
+        The mirror shape travels the same way: a body-level bookmark START
+        leading a moved element (``Record.owner``) whose end is inside that
+        element (:meth:`_opens_inside`). It goes, as it is, right before the
+        new copy, which holds the end; the old copy gives its end up. Reject
+        All then leaves the start with no end (the end went with the
+        inserted copy), which starts nothing (ECMA-376 Part 1 §17.13.6.2),
+        and it carries its own name, so the self-check excludes it by name.
+        A marker whose owner did not move, or a start whose end lies
+        anywhere but inside its owner, is left to the ordinary path, which
+        refuses it by name."""
         moved_owners = {
-            records[index].item.uid
+            records[index].item.uid: records[index].source
             for index in range(len(records))
             if index not in shared
             and records[index].item is not None
@@ -2060,8 +2072,25 @@ class _RedlineBuilder:
         return {
             record.source
             for index, record in enumerate(records)
-            if record.trails and index not in shared and record.owner in moved_owners
+            if index not in shared
+            and record.owner in moved_owners
+            and (
+                record.trails
+                or self._opens_inside(record.source, moved_owners[record.owner])
+            )
         }
+
+    def _opens_inside(self, source: int, owner: int) -> bool:
+        """Is upload child ``source`` a body-level bookmark start whose end
+        lies inside upload element ``owner``?"""
+        start = self.content[source]
+        if start.tag != _W_BOOKMARK_START or start.get(_W_ID) is None:
+            return False
+        identifier = start.get(_W_ID)
+        return any(
+            end.get(_W_ID) == identifier
+            for end in self.content[owner].iter(_W_BOOKMARK_END)
+        )
 
     def plan(self, records: list[Record], removed: list[Record]) -> list[Record]:
         """The redline's records in output order."""
@@ -2321,11 +2350,14 @@ class _RedlineBuilder:
         return len(ordered) - 1
 
     def _render_travelling(self, record: Record):
-        """A bookmark end that goes with its moved element (:meth:`_travelling`):
-        the upload's own element, untracked, and the name of the bookmark it
-        closes — a moved one (D-6)."""
-        self.stats["bookmark_ends_moved"] += 1
+        """A bookmark marker that goes with its moved element
+        (:meth:`_travelling`): the upload's own element, untracked, and the
+        name of the bookmark it opens or closes — a moved one (D-6)."""
         element = copy.deepcopy(self.content[record.source])
+        if element.tag == _W_BOOKMARK_START:
+            self.stats["bookmark_starts_moved"] += 1
+            return element, element.get(_W_NAME, "")
+        self.stats["bookmark_ends_moved"] += 1
         identifier = element.get(_W_ID)
         name = next(
             (

@@ -25200,3 +25200,190 @@ provision wherever it goes, and a provision added after it no longer lands
 inside it. Export Word - Tracked Changes ON and the redline on your original,
 which refused such moves, now show them; as with every moved provision, Reject
 All does not put the bookmark back at the old place."
+
+## A body-level bookmark start moves with its provision — implemented notes (2026-10-14)
+
+The previous note's "Found, not done" item 1 (owner, as its own task). Its
+mirror shape — `<w:bookmarkStart w:id="13" w:name="_Ref13"/><w:p>…<w:bookmarkEnd
+w:id="13"/></w:p>`, a bookmark opening at body level right before a
+provision's paragraph and closing inside it — already moved with its
+provision in the appearance-preserving export (the start is unmodelled body
+content, so it leads the element below). The redline on the original refused
+the move: the start had to move too, so `_RedlineBuilder.plan` rendered it as
+a moved copy, inserted at the new place and deleted at the old, and
+`_check_trackable` refused markup between paragraphs (`untrackable_markup`,
+detail tag `bookmarkStart`). In the previous note's 200-master sweep it was
+all 30 of the remaining move refusals, pinned by
+`test_a_body_level_bookmark_start_moved_with_its_provision_is_still_refused`.
+
+- **The start travels** (`_RedlineBuilder._travelling`, `_opens_inside`).
+  A leading carried record (`Record.owner`) that is not shared, whose
+  owner's record is not shared either (it moved), whose upload element is a
+  `w:bookmarkStart`, and whose id has an end inside the owner's upload
+  element, travels the way a trailing end does: no `u_only` record (nothing
+  at the old place), skipped by `_native_moves`, rendered by
+  `_render_travelling` as the upload's own element, untracked, right before
+  the new copy (it is the record before its owner in the clean order), with
+  its own name added to the moved names, counted in
+  `redline.bookmark_starts_moved` beside `bookmark_ends_moved`. The old copy
+  gives its end up (`_give_up_identity`, unchanged). That is D-6 exactly:
+  the new copy holds the end, the start goes along. Accept All is the
+  formatted export, bookmark whole; Reject All leaves the start with no end
+  (it went with the inserted copy), which starts nothing (ECMA-376 Part 1
+  §17.13.6.2), and the self-check excludes the name like any moved
+  bookmark's.
+- **Only an end inside the owner.** A start whose bookmark closes in a
+  later provision takes in more than the moved one. Travelling it would take
+  the start along and leave the end, and because the moved name is
+  excluded, the self-check would pass a Reject All whose bookmark now
+  stretched over the provisions in between. It is still refused by name
+  (pinned). A start whose owner did not move stays shared, untouched.
+- **Shared with its owner, or not at all.** A leading start is the record
+  right before its owner in the clean order and the child right before it in
+  the upload, so any increasing chain that holds one can hold the other at
+  no cost: `_keep_in_place` keeps both or neither. The `index not in shared`
+  test is there anyway.
+- **A copy rebuilt from its first run** (the splice cannot map it: a symbol,
+  relettered by the move) keeps no bookmark, so the formatted export already
+  holds an end-less start there (unchanged). The start still travels and
+  names itself, so the self-check still knows the bookmark moved.
+- **Native moves.** The start sits before its paragraph, and so before the
+  `w:moveTo` range that opens inside it: a run of moved siblings it
+  separates is shown as separate named moves, as a trailing end's is. The
+  move-range check passes.
+- **The oracle is unchanged, on purpose.** The task asked whether
+  `revisions._Canon` should also ignore a start with no end after it
+  (§17.13.6.2), as it now ignores an end with no start. No. The end rule
+  exists because a start-less end cannot be named, so excluding the moved
+  name could not reach it. A start names itself, so the moved name already
+  excludes Reject All's leftover start. Ignoring end-less starts would only
+  stop comparing a misplaced one anywhere else — more lenient, where the
+  oracle's posture is stricter than Word, never more lenient — and the
+  previous note pinned "a start with no end is still compared". The module
+  docstring now says why; a new oracle test pins Reject All's mirror shape
+  equal to the upload with the name excluded, and a difference without it.
+- **The test harness** (`tests/test_redline_original.py`). `_verify`
+  counted a bookmark lost only when Reject All lost its START, and excluded
+  only those; the travelling start survives Reject All, so the comparison
+  found it at the new place. `_lost_bookmarks` now counts either marker: a
+  start gone, or a bookmark the upload holds whole (`_whole_bookmarks`: a
+  start, and an end of its id after it) that Reject All does not. A lost
+  bookmark must still be one the test allows (`moved_bookmarks`), so a
+  bookmark broken by no move still fails (checked: the travelling case
+  without its allowance fails). `_inserted_bookmarks` — the sweeps'
+  `allow_moved_bookmarks` allowance, and `test_redline_comments`' own Reject
+  All exclusion — now counts a bookmark by a start OR an end inside a
+  `w:ins`/`w:moveTo` copy, an end named by its id's start. Before writing any
+  new test, the widened harness ran over the existing redline tests
+  (`test_redline_original.py`, `test_fifth_paragraph_level.py`) with every
+  `_verify` call logged: 324 calls, all passing, none in which a bookmark
+  counted as moved only by its end.
+- **The real-Word judge** (`tests/word_judge.py`). `_moved_bookmarks` counts
+  either marker the same way, so a Reject All that drops the moved bookmark
+  (lost) or leaves it collapsed where the copy was (not lost, still
+  excluded) passes, and the same file fails when no move carried it
+  (pinned, both ways). Three groups: `targeted/body-level-bookmark-start`
+  (typed letters; A moved down, C moved to the top, a provision added before
+  C's start, A deleted), `targeted/native-move-body-level-bookmark-start`
+  (Word-numbered, so the moves are pure and native; A carries both shapes,
+  its start before it and a whole-paragraph end after it) and
+  `targeted/opened-before-break-holder` (moved up, deleted). Real Word has
+  not judged any of it yet; it runs on the owner's next
+  `BUILD_A_SPEC_WORD_JUDGE=1` run.
+- **Sweep** (local, not committed; the previous note's sweep was not
+  committed either, so this one is rebuilt): 200 seeded masters, typed and
+  Word-numbered, three to six provisions, a quarter of them holding links,
+  each provision given a whole-paragraph bookmark, a body-level start
+  bookmark, both or neither; END OF SECTION on four in five; one or two
+  edits each from move (weighted three times), delete, rewrite and add; each
+  rendered with native moves off and on through `_verify` with
+  `allow_moved_bookmarks` (400 redlines). Before (master at `c001842`): 330
+  ok, 70 `untrackable_markup` (`bookmarkStart`). After: 400 ok. Case by
+  case: 70 went from refused to ok, none from ok to refused or to a harness
+  failure, and no clean export held a bookmark that ended before it began or
+  took in another provision's words, before or after.
+- **Found, not done.**
+  1. *The judge cannot see a moved bookmark whose new copy holds neither
+     marker.* A moved provision rebuilt from its first run loses every
+     bookmark marker inside it, for either shape — the previous note's
+     trailing end and this start alike. The app's self-check knows the
+     bookmark moved (it names the travelling marker) and so does the
+     harness (by what Reject All lost, within the test's allowance), but
+     `_moved_bookmarks` reads only the redline's structure, so a corpus
+     master holding such a provision would report Word dropping that
+     bookmark as lost with no move carrying it. No targeted group builds
+     one, and a structural rule for it (a marker beside an inserted copy)
+     would also catch an ordinary end that a new provision lands before.
+  2. *A body-level start whose bookmark closes in a later provision*
+     moves with its provision in the appearance-preserving export, as
+     every leading start does, so moving that provision stretches the
+     bookmark over whatever it now passes, and the redline refuses the
+     move (above). Unchanged here.
+- **Erratum** for the previous note: its "Found, not done" item 1 is done
+  here, and its README bullet's last sentence ("Still refused, by name:
+  moving a provision whose bookmark opens just before its paragraph…") is
+  replaced by a bullet of its own.
+- **Unchanged.** Every refusal reason and message, the appearance-preserving
+  export, the writer's markup for everything but a travelling start, the
+  comment pass, the package audit, the oracle's behaviour, the judge's
+  Word-save tolerances, the SSE and REST surfaces, and every model request
+  byte.
+
+### Tests
+
+- `tests/test_redline_original.py` (42 new, replacing the 2-case refusal
+  pin; every one through `_verify` with native moves off and on): the start
+  moved down two, down one (the diff moves B instead, nothing travels), from
+  last to top, and with another provision moved in above it, typed and
+  Word-numbered (native moves counted where pure); nothing left at the old
+  place, Reject All's leftover start holding no end, and the sweeps'
+  allowance knowing it by its end; PR #327's pinned master, now rendered;
+  one provision with both shapes, moved down and up; a break holder led by
+  a start, moved up or deleted; a copy rebuilt from its first run; a
+  provision added before the start; a deleted provision led by a start
+  while its neighbour moves; with no END OF SECTION, moved to the end, the
+  last moved up, the last deleted; and a start whose bookmark closes in a
+  later provision, still refused by name. The harness gains
+  `_whole_bookmarks` and `_lost_bookmarks`; `_inserted_bookmarks` counts
+  either marker.
+- `tests/test_preserving_export.py` (4 new): `_whole_paragraph_bookmark_master`
+  gains `opened_before` (`_opened_before_bookmark`, `_Ref2<index>`), and the
+  formatted export keeps the start right before the provision holding its
+  end, moved down or to the top, both label kinds.
+- `tests/test_revisions.py` (1 new): an end-less start is excluded by its
+  own name, and compared wherever it sits otherwise.
+- `tests/test_word_judge.py` (2 new, 2 pins widened, a fixture group
+  added): Word leaving the moved bookmark collapsed or dropping it passes,
+  and fails when no move carried it; the coverage test requires
+  `bookmark_starts_moved` and lists `_Ref20`/`_Ref22` among the moved
+  bookmarks; the faithful-Word test runs the three new groups, with
+  Word-save noise and comments on. `_reject_leaving_moved_bookmarks_collapsed`
+  now collapses an end-less start too.
+
+**Revert matrix** (each in place, restored after each, over
+`tests/test_redline_original.py` and `tests/test_preserving_export.py`
+filtered to bookmark, body-level, markup and link tests, plus all of
+`tests/test_revisions.py` and `tests/test_word_judge.py`). No start
+travels: 30 red. A travelling start also left at the old place: 30. Native
+moves not told about travelling starts: 12. A travelling start's name not
+among the moved ones: 30. Any start leading a moved owner travels, wherever
+its end: 2 (the narrower refusal). Starts counted as ends: 23. The harness
+counting a bookmark lost by its start only: 24. The sweeps' allowance by
+starts only: 2. The judge's moved bookmarks by starts only: 5. The oracle
+ignoring an end-less start: 3 (the new oracle test, the previous note's
+"a start with no end is still compared" pin, and a markup-position test
+whose start has no end). Ruff and every touched test file pass, plus the
+files that read the changed helpers (`test_redline_comments.py`,
+`test_fifth_paragraph_level.py`, `test_tracked_word_export.py`): 536
+passed, 59 skipped (the real-Word judge). The full suite runs in CI. No
+paid API call was made.
+
+### Release-note draft (for the release after 1.26.0)
+
+Section "Word export", item "Bookmarks that open before their provision move
+with it": "When a bookmark opens just before a provision and closes inside
+it, Export Word - Tracked Changes ON and the redline on your original no
+longer refuse to move that provision: the bookmark goes with it, and as with
+every moved provision, Reject All does not put the bookmark back at the old
+place." If both ship in one release, it can join the previous note's
+"Whole-paragraph bookmarks move with their provision" item instead.

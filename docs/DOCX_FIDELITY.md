@@ -534,10 +534,17 @@ paragraphs, where no tracked change can hold it, so it goes as it is right
 after the new copy (the copy holds the start) and nothing is left at the old
 place (`redline.bookmark_ends_moved` counts these). Reject All leaves that
 end without its start, which went with the inserted copy, and it ends
-nothing. The self-check excludes exactly those names. A bookmark START at
-body level that must move with the provision below it is still refused
-(`untrackable_markup`): its end, inside the moved copy, would be gone on
-Reject All while the start stayed.
+nothing. So is its mirror, a bookmark that opens at body level right before
+the moved provision's paragraph and closes inside it: the start, between
+paragraphs, goes as it is right before the new copy (the copy holds the end)
+and nothing is left at the old place (`redline.bookmark_starts_moved`).
+Reject All leaves that start without its end, which went with the inserted
+copy, and it starts nothing (ECMA-376 Part 1 §17.13.6.2). The self-check
+excludes exactly those names. Only a start whose end lies inside the
+provision it leads travels: one whose bookmark closes in a later provision
+takes in more than the moved one, and moving it is still refused
+(`untrackable_markup`, tag `bookmarkStart`) — the start would go and the end
+would stay.
 
 **A pure move is Word's own "Moved" marks** (Phase 2, PR B; the
 `BUILD_A_SPEC_REDLINE_NATIVE_MOVES` switch, on by default — the export route
@@ -567,7 +574,9 @@ written:
   run of siblings moved together — consecutive moves whose old copies are
   consecutive too, in the same order — is ONE named move, so Word shows one.
   A whole-paragraph bookmark's end between two of them (above) is not inside
-  any move, so it splits the run: each side is a named move of its own;
+  any move, so it splits the run: each side is a named move of its own; so
+  does a start opening a bookmark right before one of them (it sits before
+  that paragraph, and so before the range that opens inside it);
 * every id comes from the export's one counter, above everything already in
   the package: Word itself numbers bookmarks, revisions and move ranges from
   one counter, and a name is `move` and digits, unique in the file (Word
@@ -862,7 +871,10 @@ across section breaks and carrying a bookmark, emptied break holders,
 hyperlinks (a linked provision deleted, or moved, beside a bookmark that
 closes at body level included), a bookmark taking in a whole paragraph (its
 provision moved down or up, natively too, or deleted, a provision added after
-it, a break holder moved or deleted), a field, the fallback, the untrackable last
+it, a break holder moved or deleted), its mirror opening at body level before
+a provision (moved down or up, natively too and beside the whole-paragraph
+shape, or deleted, a provision added before it, a break holder moved or
+deleted), a field, the fallback, the untrackable last
 paragraph, a picture, a leading page break, front matter, inline custom XML
 deleted, rewritten, moved and in a deleted table), and every corpus master
 under the corpus sweep's own scripted edit mixes, exactly as the app does. A
@@ -875,11 +887,13 @@ saves the result as a new DOCX. The judge requires that:
 * Word read every change as `Build-a-Spec`'s (each `Revision.Author`, the name
   the Reviewing Pane shows), and none was left after Accept All or Reject All;
 * after Accept All the body is the formatted export's, and after Reject All
-  the upload's — losing only the bookmarks a moved copy carried. Those are
-  left out of the comparison whether Word deletes them or keeps them,
-  collapsed, where the copy was (a bookmark taking in the copy's whole
-  paragraph ends outside the insertion, so either is possible), as the app's
-  own check leaves them out.
+  the upload's — losing only the bookmarks a moved copy carried, known by
+  either marker inside the copy: a start, or an end whose start opens before
+  the copy. Those are left out of the comparison whether Word deletes them or
+  keeps them, collapsed, where the copy was (a bookmark taking in the copy's
+  whole paragraph ends outside the insertion, and one opening before it
+  starts outside it, so either is possible), as the app's own check leaves
+  them out.
 
 **The comparison is symmetric.** A Word save rewrites more than it resolves
 (formatting spelled its own way, table-look flags, a hyperlink's history

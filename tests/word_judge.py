@@ -83,6 +83,7 @@ _W_P = f"{{{_W}}}p"
 _W_T = f"{{{_W}}}t"
 _W_DEL_TEXT = f"{{{_W}}}delText"
 _W_BOOKMARK_START = f"{{{_W}}}bookmarkStart"
+_W_BOOKMARK_END = f"{{{_W}}}bookmarkEnd"
 _W_NAME = f"{{{_W}}}name"
 _W_PPR = f"{{{_W}}}pPr"
 _W_RPR = f"{{{_W}}}rPr"
@@ -452,19 +453,27 @@ class JudgeBatch:
 
 
 def _moved_bookmarks(redline: bytes) -> frozenset[str]:
-    """Bookmarks inside content a ``w:ins`` or ``w:moveTo`` wraps: on a
-    moved copy."""
-    names = set()
-    for start in word_body(redline).iter(_W_BOOKMARK_START):
-        for ancestor in start.iterancestors():
+    """Bookmarks inside content a ``w:ins`` or ``w:moveTo`` wraps — on a
+    moved copy — by either marker: a start inside the copy, or an end inside
+    it whose start, at body level right before the copy, travelled with it
+    untracked (D-6). An end is named by the start of its id."""
+    body = word_body(redline)
+    names = {
+        start.get(_W_ID): start.get(_W_NAME, "")
+        for start in body.iter(_W_BOOKMARK_START)
+    }
+    moved = set()
+    for marker in body.iter(_W_BOOKMARK_START, _W_BOOKMARK_END):
+        for ancestor in marker.iterancestors():
             if (
                 ancestor.tag in (f"{{{_W}}}ins", f"{{{_W}}}moveTo")
                 and ancestor.getparent() is not None
                 and ancestor.getparent().tag != _W_RPR
             ):
-                names.add(start.get(_W_NAME, ""))
+                if marker.get(_W_ID) in names:
+                    moved.add(names[marker.get(_W_ID)])
                 break
-    return frozenset(names)
+    return frozenset(moved)
 
 
 def _element_uids(section) -> list[str]:
@@ -647,14 +656,18 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
     cancel), hyperlinks (and a linked provision deleted, or moved, beside a
     bookmark that closes at body level), a bookmark taking in a whole
     paragraph (its provision moved down or up, deleted, a provision added
-    after it, a break holder moved or deleted), a field, the fallback, the
+    after it, a break holder moved or deleted), its mirror — a bookmark
+    opening at body level before a provision and closing inside it (moved
+    down or up, natively too and beside the whole-paragraph shape, deleted,
+    a provision added before it, a break holder moved or deleted) — a
+    field, the fallback, the
     untrackable last paragraph, a leading page break, front matter, a
     picture, a bold mark, row properties, Track Changes already on, and
     inline custom XML (deleted, rewritten, moved, in a deleted table) — and
     Word's own "Moved" marks (Phase 2, PR B): one move, a move with
     children, a block of siblings, two named moves, a move beside an edit,
-    a move holding a link, a moved bookmark (inside its paragraph, or taking
-    in the whole of it), a style-numbered master and a
+    a move holding a link, a moved bookmark (inside its paragraph, taking
+    in the whole of it, or opening before it), a style-numbered master and a
     move a section break forced. With ``settings.REDLINE_COMMENTS`` on,
     every change also carries Build-a-Spec's comment (Phase 3), and one
     master already holds a reviewer's comment."""
@@ -923,6 +936,43 @@ def _targeted_groups() -> tuple[JudgeGroup, ...]:
         JudgeGroup(
             "targeted/bookmarked-break-holder",
             upload(_whole_paragraph_bookmark_master, 2, held_break=True),
+            (
+                ("move-holder-up", _edit(_move_provision(2, 0))),
+                ("delete-holder", _edit(_delete_provision(2))),
+            ),
+        ),
+        # The mirror shape: a bookmark opening at body level right before a
+        # provision and closing inside it. The start goes, untracked, right
+        # before the moved provision's new copy, which holds the end; a
+        # provision added before it lands outside it.
+        JudgeGroup(
+            "targeted/body-level-bookmark-start",
+            upload(_whole_paragraph_bookmark_master, opened_before=(0, 2)),
+            (
+                ("move-opened-down", _edit(_move_provision(0, 2))),
+                ("move-last-opened-up", _edit(_move_provision(2, 0))),
+                (
+                    "add-before-opened",
+                    _edit(_add_provision(2, "Comply with the seismic restraint manual.")),
+                ),
+                ("delete-opened", _edit(_delete_provision(0))),
+            ),
+        ),
+        # Word-numbered, so the moves are pure and native — and A carries
+        # both shapes, its start before it and its whole-paragraph end after.
+        JudgeGroup(
+            "targeted/native-move-body-level-bookmark-start",
+            upload(
+                _whole_paragraph_bookmark_master, 0, numbered=True, opened_before=(0, 2)
+            ),
+            (
+                ("move-both-shapes-down", _edit(_move_provision(0, 2))),
+                ("move-last-opened-up", _edit(_move_provision(2, 0))),
+            ),
+        ),
+        JudgeGroup(
+            "targeted/opened-before-break-holder",
+            upload(_whole_paragraph_bookmark_master, held_break=True, opened_before=(2,)),
             (
                 ("move-holder-up", _edit(_move_provision(2, 0))),
                 ("delete-holder", _edit(_delete_provision(2))),

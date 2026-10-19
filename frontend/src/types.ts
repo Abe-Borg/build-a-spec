@@ -1045,6 +1045,11 @@ export interface PreservedRedlineReason {
   message: string;
 }
 
+/** How far the assistant may change a section on its own
+ *  (backend/edit_scope.py): Extensive is the default; Essentials only keeps
+ *  the client's text except for an essential reason. */
+export type EditScope = "extensive" | "essentials";
+
 export interface DocPayload {
   /** Authoritative active-workspace lease after this snapshot/mutation. */
   workspace_id: number;
@@ -1059,6 +1064,10 @@ export interface DocPayload {
   /** This session's project link; null when it neither exported a brief
    *  nor was seeded from one. */
   project_link: ProjectLink | null;
+  /** How far the assistant may change this section on its own — the
+   *  composer's Edits switch (2026-10-19, backend/edit_scope.py). Older
+   *  servers omit it (then Extensive). */
+  edit_scope?: EditScope;
   /** Replies since the last committed fact harvest (Project workspace
    *  Phase 4) — the hint the Project facts panel, Next section and the
    *  brief export show. */

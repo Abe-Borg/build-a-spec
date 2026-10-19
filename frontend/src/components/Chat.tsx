@@ -7,6 +7,7 @@ import { CondensedDivider, CondensedSummaryModal } from "./CondensedDivider";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SuggestedPrompts from "./SuggestedPrompts";
+import type { EditScope } from "../lib/editScope";
 
 interface Props {
   messages: ChatMessage[];
@@ -46,6 +47,9 @@ interface Props {
    *  plan Phase 3), or null. Draws a divider; the transcript itself is never
    *  condensed. */
   compaction?: CompactionInfo | null;
+  /** The section's edit scope, forwarded to the composer's Edits switch. */
+  editScope: EditScope;
+  onChangeEditScope: (scope: EditScope) => Promise<void>;
 }
 
 export default function Chat({
@@ -63,6 +67,8 @@ export default function Chat({
   onDeleteFigure,
   tourCompleted = null,
   compaction = null,
+  editScope,
+  onChangeEditScope,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -234,6 +240,9 @@ export default function Chat({
         onStop={onStop}
         uploading={uploading}
         prefill={prefill}
+        editScope={editScope}
+        onChangeEditScope={onChangeEditScope}
+        editScopeLocked={tourActive}
       />
     </section>
   );

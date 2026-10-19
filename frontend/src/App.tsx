@@ -100,6 +100,7 @@ import {
   downloadProjectBrief,
   pullProject,
   refreshProjectBrief,
+  setEditScope as saveEditScope,
   startResearch,
   stopChat,
   stopQc,
@@ -153,6 +154,7 @@ import {
 } from "./lib/projectMerge";
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
+import { DEFAULT_EDIT_SCOPE, parseEditScope, type EditScope } from "./lib/editScope";
 import { buildQcApplicationDigest } from "./lib/qcRemediation";
 import {
   QC_MILESTONE_TYPES,
@@ -321,6 +323,10 @@ export default function App() {
   // Composer prefill for the review queue's "Ask model" (WI2). The nonce
   // fires the composer's effect even when the same ref is asked twice.
   const [prefill, setPrefill] = useState({ text: "", nonce: 0 });
+  // How far the assistant may change this section on its own (2026-10-19,
+  // lib/editScope.ts). The server owns it: every doc payload resyncs it, and
+  // the composer's switch writes it through changeEditScope.
+  const [editScope, setEditScope] = useState<EditScope>(DEFAULT_EDIT_SCOPE);
   // Guided-tour drawer-open nonces (Batch 6) — a bump expands that drawer.
   const [drawerNonces, setDrawerNonces] = useState({
     review: 0,
@@ -662,6 +668,7 @@ export default function App() {
         setCompactionPending(payload.compaction_pending ?? false);
         setProjectFacts(payload.project_facts ?? []);
         setProjectLink(payload.project_link ?? null);
+        setEditScope(parseEditScope(payload.edit_scope));
         setHarvestStatus(payload.harvest ?? null);
         setProjectHome(payload.project_home ?? null);
         setLintIssues(payload.lint);
@@ -1894,6 +1901,22 @@ export default function App() {
   };
 
   /**
+   * The composer's Edits switch (2026-10-19). Optimistic: the switch moves at
+   * once, and moves back when the server refuses (inside a tour, or an older
+   * server without the route), rethrowing so the composer can say why.
+   */
+  const changeEditScope = async (next: EditScope) => {
+    const previous = editScope;
+    setEditScope(next);
+    try {
+      setEditScope(await saveEditScope(next));
+    } catch (failure) {
+      setEditScope(previous);
+      throw failure;
+    }
+  };
+
+  /**
    * Stop the in-flight turn (Claude.ai-style). No confirmation — whatever
    * text/edits already landed stay; the turn ends through its own normal
    * `turn_complete`, same as if the model had finished on its own.
@@ -2158,6 +2181,7 @@ export default function App() {
     setCompactionPending(false);
     setProjectFacts([]);
     setProjectLink(null);
+    setEditScope(DEFAULT_EDIT_SCOPE);
     setHarvestStatus(null);
     setLintIssues([]);
     setStandards([]);
@@ -2234,6 +2258,7 @@ export default function App() {
     compaction_pending?: boolean;
     project_facts?: ProjectFact[];
     project_link?: ProjectLink | null;
+    edit_scope?: EditScope;
     harvest?: HarvestStatus;
     lint: LintIssue[];
     standards: StandardInfo[];
@@ -2265,6 +2290,7 @@ export default function App() {
     setCompactionPending(payload.compaction_pending ?? false);
     setProjectFacts(payload.project_facts ?? []);
     setProjectLink(payload.project_link ?? null);
+    setEditScope(parseEditScope(payload.edit_scope));
     setHarvestStatus(payload.harvest ?? null);
     setLintIssues(payload.lint);
     setStandards(payload.standards);
@@ -2316,6 +2342,9 @@ export default function App() {
         compaction_pending: merged.compaction_pending ?? false,
         project_facts: merged.project_facts ?? [],
         project_link: merged.project_link ?? null,
+        // A next section carries the outgoing section's scope; a tutorial's
+        // practice copy carries the user's.
+        edit_scope: merged.edit_scope,
         // The seeded section's own (zero) reply count: without it, a
         // next-section or template start kept the outgoing section's hint.
         harvest: merged.harvest,
@@ -3513,10 +3542,13 @@ export default function App() {
           figuresById={figuresById}
           onDeleteFigure={onDeleteFigure}
           compaction={compaction}
+          editScope={editScope}
+          onChangeEditScope={changeEditScope}
         />
         <ArtifactPanel
           key={`panel-${sessionNonce}`}
           doc={doc}
+          editScope={editScope}
           openItems={openItems}
           followups={followups}
           followupTurn={assistantBubbleCount}

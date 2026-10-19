@@ -25,6 +25,7 @@ export const END_USER_CAPABILITIES = [
   "chat.thinking",
   "chat.full-draft",
   "chat.adapt-imported",
+  "chat.edit-scope",
   "chat.web-verify",
   "chat.condensed",
   "document.structure",

@@ -78,6 +78,7 @@ import {
   type PanelTrayPrefs,
 } from "../lib/panelTray";
 import Tip from "./Tip";
+import { editScopeOption, type EditScope } from "../lib/editScope";
 
 /** The Export menu's downloads, keyed for the busy state. */
 type ExportKey =
@@ -105,6 +106,10 @@ const REDLINE_REASON_MISSING =
 
 interface Props {
   doc: SpecDoc | null;
+  /** The section's edit scope (lib/editScope.ts): badged in the action bar
+   *  under Essentials and named on the adapt pass, so a reviewer sees the
+   *  mode the work runs in. */
+  editScope: EditScope;
   openItems: OpenItem[];
   followups: FollowUp[];
   /** Assistant-bubble count, for the follow-up age line. */
@@ -436,6 +441,7 @@ const kindDot: Record<OpenItem["kind"], string> = {
 
 export default function ArtifactPanel({
   doc,
+  editScope,
   openItems,
   followups,
   followupTurn,
@@ -786,7 +792,10 @@ export default function ArtifactPanel({
     ? "Finish the current turn first."
     : draftNeeds.length > 0
       ? `Needs ${draftNeedsPhrase} first — adapting ${importedOutstanding} imported block(s) to this project inherits ${draftNeedsPronoun}. Clicking asks you about ${draftNeedsPronoun}; then the pass runs.`
-      : `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo.`;
+      : editScope === "essentials"
+        ? `Walk all ${importedOutstanding} imported block(s) against this project in one pass, essential edits only — keep, delete, or adapt a block only for an essential reason (a code conflict, a scope gap, inapplicable content, explanatory prose…), leaving the client's wording and structure as they are. One click to undo.`
+        : `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo.`;
+  const scopeOption = editScopeOption(editScope);
 
   // --- Compare (diff) mode (Batch 5) ---
   const curIndex = version.index;
@@ -973,6 +982,14 @@ export default function ArtifactPanel({
               title="Advisory lint issues — see the Issues drawer below"
             >
               ⚠ {lintIssues.length}
+            </span>
+          )}
+          {editScope === "essentials" && (
+            <span
+              className="whitespace-nowrap rounded-full border border-accent/50 bg-accent/15 px-2 py-px text-[10px] font-semibold text-accent"
+              title={`${scopeOption.short}. ${scopeOption.detail} Change it beside the chat's Send button.`}
+            >
+              🔒 {scopeOption.short}
             </span>
           )}
           {importedOutstanding > 0 ? (

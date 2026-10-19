@@ -25419,3 +25419,105 @@ smoke-tests the frozen app, compiles the installer and publishes
 `BuildASpecSetup.exe` with its SHA-256 `latest.json`. No paid model call,
 interactive Windows install or Word/LibreOffice renderer check was performed
 locally; package checks do not claim visual validation or a live update test.
+
+## Edit scope: Extensive or Essentials only — implemented notes (2026-10-19)
+
+Owner request (Abraham): a client (Microsoft) wants its own specifications
+changed as little as possible. PR #330 began as a UI-only preview of a
+two-way switch; the owner then asked for the definition of "essential" and
+ruled on its gray areas, and the same PR carries the working feature.
+
+### The owner's rulings (2026-10-19)
+
+- Scope gaps are essential, in both modes: work the project needs that the
+  section does not cover is added.
+- Removing content that cannot apply to this project is essential. Content
+  that only seems unnecessary is asked about, never deleted.
+- Removing explanatory prose and notes is essential: the specification
+  carries specification text only (the 2026-10-06 rule), the client's
+  included. The requirement keeps the client's words; only the explanation
+  goes.
+- A questionable but compliant choice is raised with `track_followups` (not
+  blocking), never edited.
+
+### What was built
+
+- `backend/edit_scope.py`, a stdlib leaf modelled on `writing_policy.py`:
+  nine `ESSENTIAL_CATEGORIES` (code compliance, standards reference, scope
+  gap, inapplicable content, project value, conflict, technical error,
+  explanatory prose, unissuable text), `NOT_ESSENTIAL`, the "how" rules and
+  five renderings (`drafting_block`, `turn_line`, `directive_line`,
+  `review_block(scope, verifier=)`, `manifest_facts`). Version 1, core hash
+  pinned.
+- Chat: `render_system_prompt` renders `drafting_block()` after the writing
+  policy (module-stable, both modes); `_turn_context_text` adds
+  `turn_line(session.edit_scope)` after the profile status, so a switch moves
+  no cache; `_GAP_AND_ADAPT` gains a bullet. `adapt_imported_directive(
+  prereqs, scope)` appends `directive_line(scope)` after the constant and the
+  anchor, so `turn_effort` still recognizes the pass (pinned) and the
+  transcript records the scope it ran under.
+- Section state: `SessionState.edit_scope`; saved only when Essentials;
+  sanitized on load; reset by New session; carried by Next section
+  (`project_next_section_start`, beside `carried_home`). Not in the project
+  brief: a section seeded from a brief file in a new launch starts
+  Extensive. `POST /api/session/edit-scope`; the doc payload's `edit_scope`.
+- Final QC: lens and verifier system prompts carry `review_block` after
+  `<writing_policy>` under Essentials only (the verifier copy adds "refute a
+  non-essential finding; ops_adequate false when the operations change more
+  than the defect needs"); threaded through every seat path (batched specs,
+  streamed lineage specs, `_verify_one`), the manifest (optional key),
+  `matches_inputs`, the apply gate, the export's current-state block, the
+  runner and the start route.
+- Frontend: the preview switch became real (server-saved, optimistic, inline
+  error, locked in a tour, capability `chat.edit-scope` in the `interview`
+  tour step, whose body stays under the 700-character card limit), the
+  panel's badge lost "preview", the Adapt tooltip is essentials-aware, Help's
+  office-master recipe and the trust explainer describe it.
+
+### Decisions worth keeping
+
+- Rules in the cached system prompt, the mode in the per-turn context: the
+  mode is session-varying, so it may not enter the module block, and putting
+  the whole list in the per-turn block would re-bill it every turn.
+- Extensive adds nothing to Final QC — no prompt bytes, no manifest key — so
+  every review made before the mode existed (all Extensive) stays current.
+- No lint or readiness change: under the rulings every lint rule is an
+  essential defect (`explanatory_prose` and `reference_entry_shape` are the
+  explanatory-prose ruling; `duplicate_provision` and the empty/duplicate
+  article rules are listed under conflict and unissuable text).
+- No guard. Whether an edit is essential is a judgement a batch cannot
+  check, and the user's own requests are exempt; the reason trail (each
+  Essentials reason opens with its category) is the audit, and the trust
+  explainer says so.
+- The interview's effort and the whole-section pass's effort are unchanged.
+
+### Reversion evidence
+
+Eleven probes, each applied alone and restored, run against
+`tests/test_edit_scope.py`: dropping the PROJECT CONTEXT line, the batched
+seat's scope, the streamed worker's scope, the lens pieces' scope,
+`matches_inputs`' scope, the apply gate's scope, the Next section carry, the
+load assignment, the save argument, the adapt route's scope, and the stable
+prompt's block. All eleven went red. Ruff passes; `tests/test_edit_scope.py`
+(33, an Essentials review's round trip through the saved report included) and the touched files (`test_session_wipe`, `test_writing_policy`,
+`test_adapt_draft`, the `test_prompt55_*` and prompt-review files,
+`test_app`, `test_qc*` files that thread inputs, `test_project_*`,
+`test_chat_compaction`, `test_context_sizes`) pass locally; the full suite
+runs in CI. Frontend `npm test` (595) and the build pass. No paid API call
+was made: how closely the model keeps to the list on a real client master is
+unmeasured.
+
+### Release-note draft (for the release after 1.27.0)
+
+Section "Drafting", item "Essentials only: keep the client's specification":
+"The message box has a new Edits switch. Extensive works as before.
+Essentials only keeps a client's own specification as written and changes
+it only for an essential reason — a code or standard conflict, an outdated
+edition, a scope gap, content that cannot apply to the project, a wrong
+project value, a conflict or broken reference, a technical error,
+explanatory prose or notes, or unissuable leftovers such as brackets and
+TBDs. Each such edit's reason names its category, compliant choices the
+assistant would make differently are asked about instead of edited, and
+Final QC reviews under the same rule. Anything you ask for in chat is still
+done. The section saves the setting and Next section carries it. Open
+sessions rewrite their cached prompt once after upgrading."

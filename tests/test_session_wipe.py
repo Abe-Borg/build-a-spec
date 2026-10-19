@@ -81,6 +81,9 @@ _STATE_PROBES = {
     # A list that outlived its section would close a fresh session's
     # siblings for a choice nobody made about them.
     "section_read_exclusions": lambda s: list(s.section_read_exclusions),
+    # The edit scope (2026-10-19). A scope that outlived its section would
+    # hold a fresh section to a client's wish nobody stated for it.
+    "edit_scope": lambda s: s.edit_scope,
     "usage": lambda s: s.usage.snapshot(),
     "last_context_tokens": lambda s: s.last_context_tokens,
     # What that turn's PROJECT CONTEXT block was made of (Project
@@ -214,6 +217,7 @@ def _dirty(session: SessionState) -> None:
         }
     ]
     session.section_read_exclusions = ["21 30 00"]
+    session.edit_scope = "essentials"
     session.project_link = {
         "project_id": "a" * 32,
         "name": "The previous project",

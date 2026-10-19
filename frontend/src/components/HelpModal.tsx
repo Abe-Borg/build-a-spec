@@ -544,6 +544,7 @@ function Workflows() {
         tagline="Adapt body content inside a deliberately narrow preservation boundary."
         steps={[
           "Import the master .docx after reviewing the preservation boundary — every extracted block lands imported.",
+          "If the client wants their own text kept, set the Edits switch under the message box to Essentials only. The assistant then changes the master only for an essential reason — a code or standard conflict, an outdated edition, a scope gap, content that cannot apply to this project, a wrong project value, a conflict or broken reference, a technical error, explanatory prose or a note, an unissuable leftover — opens each edit's reason with that category, and asks about a compliant choice it would make differently instead of editing it. Final QC reviews under the same scope. Anything you ask for in chat is still done; the section saves the choice and Next section carries it.",
           "Save a native .baspec project; it carries the exact source DOCX with the semantic document and conversation.",
           "Tell Claude the project; it walks the extracted content article by article, adapting each block.",
           "Source-preserving controls are enabled per block and operation. Verified simple text edits and bounded numbered-island structure can remain available while headings, tables, fields, hyperlinks, content controls, and complex runs stay read-only; hover a disabled action for the server's reason.",

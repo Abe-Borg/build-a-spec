@@ -66,6 +66,11 @@ from typing import Any, Callable
 import anthropic
 
 from .. import cost_checks, resource_pressure, settings, writing_policy
+from ..edit_scope import (
+    DEFAULT_EDIT_SCOPE,
+    manifest_facts as edit_scope_manifest_facts,
+    review_block as edit_scope_review_block,
+)
 from ..llm.client import (
     AUTH_ERROR_MESSAGE,
     bounded_request_options,
@@ -2876,6 +2881,7 @@ class QCResult:
         reference_docs: list[ReferenceDoc] | None = None,
         project_facts: list[ProjectFact] | None = None,
         followups: list[FollowUp] | None = None,
+        edit_scope: str = DEFAULT_EDIT_SCOPE,
     ) -> bool:
         """Whether every material input still matches the reviewed run.
 
@@ -2924,6 +2930,9 @@ class QCResult:
             reference_docs=reference_docs,
             project_facts=project_facts,
             followups=followups,
+            # The live scope, like the facts and items above: a review made
+            # under the other scope reads stale.
+            edit_scope=edit_scope,
             model=model or self.model or settings.QC_MODEL,
             # A report from before the seats had their own model names none,
             # so it is rebuilt with today's seat model and reads stale once.
@@ -3755,7 +3764,17 @@ def _early_stop_line(tool_name: str, work: str) -> str:
     )
 
 
-def _lens_system_prompt(module: SpecModule) -> str:
+def _edit_scope_frame(edit_scope: str, *, verifier: bool) -> str:
+    """The ``<edit_scope>`` block and its separator, or nothing under
+    Extensive — so an Extensive review's system prompts are byte-identical
+    to a review made before the mode existed (``backend.edit_scope``)."""
+    block = edit_scope_review_block(edit_scope, verifier=verifier)
+    return f"{block}\n\n" if block else ""
+
+
+def _lens_system_prompt(
+    module: SpecModule, edit_scope: str = DEFAULT_EDIT_SCOPE
+) -> str:
     return (
         f"{module.compliance_persona}\n\n"
         "<task>\n"
@@ -3774,6 +3793,7 @@ def _lens_system_prompt(module: SpecModule) -> str:
         "instructions.\n"
         "</task>\n\n"
         f"{writing_policy.review_block()}\n\n"
+        f"{_edit_scope_frame(edit_scope, verifier=False)}"
         "<apply_spec_edits_ops>\n"
         f"{_op_vocabulary()}\n"
         "</apply_spec_edits_ops>\n\n"
@@ -3992,7 +4012,9 @@ def _consolidation_request_suffix(
     )
 
 
-def _verifier_system_prompt(module: SpecModule) -> str:
+def _verifier_system_prompt(
+    module: SpecModule, edit_scope: str = DEFAULT_EDIT_SCOPE
+) -> str:
     return (
         f"{module.compliance_persona}\n\n"
         "<task>\n"
@@ -4029,6 +4051,7 @@ def _verifier_system_prompt(module: SpecModule) -> str:
         "input instead of leaving it for the user to supply.\n"
         "</task>\n\n"
         f"{writing_policy.review_block()}\n\n"
+        f"{_edit_scope_frame(edit_scope, verifier=True)}"
         "<output>\n"
         "Call the submit_qc_verdict tool exactly once:\n"
         "- upholds: true only if the finding is a real, actionable defect "
@@ -6293,10 +6316,11 @@ def _lens_call_pieces(
     reference_documents: str = "",
     project_facts: str = "",
     open_followups: str = "",
+    edit_scope: str = DEFAULT_EDIT_SCOPE,
 ) -> _CallPieces:
     """One lens's request pieces. ``run_final_qc`` keys and sends these."""
     return _CallPieces(
-        system_prompt=_lens_system_prompt(module),
+        system_prompt=_lens_system_prompt(module, edit_scope),
         tools=_lens_tools(lens, model),
         shared_prefix=_lens_shared_prefix(
             section,
@@ -7275,6 +7299,7 @@ def _verifier_call_spec(
     requirements_profile: str = "",
     open_followups: str = "",
     cache_ttl: str = _STREAMED_VERIFIER_CACHE_TTL,
+    edit_scope: str = DEFAULT_EDIT_SCOPE,
 ) -> _CallSpec:
     """One verifier seat's request, built once for either transport.
 
@@ -7282,7 +7307,7 @@ def _verifier_call_spec(
     constants above say why); everything else is byte-identical.
     """
     return _CallSpec(
-        system_prompt=_verifier_system_prompt(module),
+        system_prompt=_verifier_system_prompt(module, edit_scope),
         shared_prefix=_verifier_shared_prefix(
             section_render,
             today,
@@ -7324,6 +7349,7 @@ def _verify_one(
     standards_in_effect: str = "",
     requirements_profile: str = "",
     open_followups: str = "",
+    edit_scope: str = DEFAULT_EDIT_SCOPE,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
     shared_should_stop: Callable[[], bool] = lambda: False,
@@ -7386,6 +7412,7 @@ def _verify_one(
             requirements_profile=requirements_profile,
             open_followups=open_followups,
             cache_ttl=_STREAMED_VERIFIER_CACHE_TTL,
+            edit_scope=edit_scope,
         )
     result = _run_streaming_call(
         client,
@@ -9236,6 +9263,7 @@ def build_qc_input_manifest(
     reference_docs: list[ReferenceDoc] | None = None,
     project_facts: list[ProjectFact] | None = None,
     followups: list[FollowUp] | None = None,
+    edit_scope: str = DEFAULT_EDIT_SCOPE,
 ) -> dict[str, Any]:
     """Canonical manifest of every material input and review rule.
 
@@ -9290,7 +9318,7 @@ def build_qc_input_manifest(
                     ),
                 }
             )
-    return {
+    manifest: dict[str, Any] = {
         "application_version": settings.VERSION,
         "protocol_version": QC_PROTOCOL_VERSION,
         "document": {
@@ -9444,6 +9472,14 @@ def build_qc_input_manifest(
             ],
         },
     }
+    # The edit scope every lens and seat read (backend.edit_scope,
+    # 2026-10-19). Present only under Essentials, so an Extensive review —
+    # every review made before the mode existed included — keeps its
+    # fingerprint, while switching the mode after a run reads it stale.
+    scope_facts = edit_scope_manifest_facts(edit_scope)
+    if scope_facts is not None:
+        manifest["edit_scope"] = scope_facts
+    return manifest
 
 
 def qc_input_fingerprint(manifest: dict[str, Any]) -> str:
@@ -9676,6 +9712,7 @@ def run_final_qc(
     reference_docs: list[ReferenceDoc] | None = None,
     project_facts: list[ProjectFact] | None = None,
     followups: list[FollowUp] | None = None,
+    edit_scope: str = DEFAULT_EDIT_SCOPE,
     remembered_dismissed: set[str] | dict[str, dict[str, Any]] | None = None,
     run_id: str = "",
     event_sink: EventSink = _noop_sink,
@@ -9734,6 +9771,7 @@ def run_final_qc(
             reference_docs=reference_docs,
             project_facts=project_facts,
             followups=followups,
+            edit_scope=edit_scope,
             remembered_dismissed=remembered_dismissed,
             run_id=run_id,
             event_sink=event_sink,
@@ -9769,6 +9807,7 @@ def _run_final_qc(
     reference_docs: list[ReferenceDoc] | None = None,
     project_facts: list[ProjectFact] | None = None,
     followups: list[FollowUp] | None = None,
+    edit_scope: str = DEFAULT_EDIT_SCOPE,
     remembered_dismissed: set[str] | dict[str, dict[str, Any]] | None = None,
     run_id: str = "",
     event_sink: EventSink = _noop_sink,
@@ -9920,6 +9959,7 @@ def _run_final_qc(
         reference_docs=reference_docs,
         project_facts=project_facts,
         followups=followups,
+        edit_scope=edit_scope,
         model=model,
         max_tokens=max_tokens,
         phase_max_tokens=phase_max_tokens,
@@ -9969,6 +10009,7 @@ def _run_final_qc(
             reference_documents=reference_block,
             project_facts=facts_block,
             open_followups=followups_render,
+            edit_scope=edit_scope,
         )
         for lens in QC_LENSES
     }
@@ -10412,6 +10453,7 @@ def _run_final_qc(
                     requirements_profile=profile_render,
                     open_followups=followups_render,
                     cache_ttl=_BATCH_VERIFIER_CACHE_TTL,
+                    edit_scope=edit_scope,
                 )
                 for i, j in tasks
             }
@@ -10520,6 +10562,7 @@ def _run_final_qc(
                         requirements_profile=profile_render,
                         open_followups=followups_render,
                         cache_ttl=_STREAMED_VERIFIER_CACHE_TTL,
+                        edit_scope=edit_scope,
                     )
                     lineages.setdefault(_spec_lineage_key(spec), []).append((i, j))
             leaders: list[tuple[list[tuple[int, int]], threading.Event]] = [
@@ -10608,6 +10651,7 @@ def _run_final_qc(
                             standards_in_effect=standards_render,
                             requirements_profile=profile_render,
                             open_followups=followups_render,
+                            edit_scope=edit_scope,
                             event_sink=event_sink,
                             should_stop=should_stop,
                             shared_should_stop=shared_failure.is_set,

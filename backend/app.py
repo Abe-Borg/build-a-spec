@@ -113,6 +113,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from . import diagnostics, onboarding_state, qc_preferences, settings, sessions, ui_preferences
+from .edit_scope import EDIT_SCOPES
 from .api_key_store import (
     delete_api_key,
     key_status,
@@ -764,6 +765,14 @@ class SectionAccessRequest(BaseModel):
 
     number: str = ""
     readable: bool = True
+
+
+class EditScopeRequest(BaseModel):
+    """Body of ``POST /api/session/edit-scope`` (2026-10-19): the composer's
+    Edits switch. ``scope`` is "extensive" or "essentials"
+    (``backend.edit_scope.EDIT_SCOPES``)."""
+
+    scope: str = ""
 
 
 class OpenSectionRequest(BaseModel):
@@ -1468,6 +1477,7 @@ def _qc_export_current_state(
         reference_docs=list(session.references.docs),
         project_facts=list(session.facts.active()),
         followups=session.followups.open_items(),
+        edit_scope=session.edit_scope,
     )
     matches = _qc_matches_current_inputs(
         session, result, source_guard=source_guard
@@ -1863,6 +1873,11 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # rewritten; ``facts_payload`` is the one place that annotates.
         "project_facts": session.facts_payload(),
         "project_link": session.project_link,
+        # How far the assistant may change this section on its own
+        # (backend.edit_scope): "extensive" or "essentials". Rides the payload
+        # so boot, project load and New session resync the composer's
+        # switch one way, like the lists above.
+        "edit_scope": session.edit_scope,
         # Replies since facts were last harvested (Project workspace
         # Phase 4) — the Project facts panel's hint, and the one the
         # Next-section dialog and the Export menu repeat. Never a trigger:
@@ -4796,7 +4811,7 @@ def create_app(
                 "missing": list(prereqs.missing),
                 "imported_count": imported,
                 "message": (
-                    adapt_imported_directive(prereqs)
+                    adapt_imported_directive(prereqs, session.edit_scope)
                     if prereqs.ready
                     else adapt_prerequisites_directive(prereqs)
                 ),
@@ -7193,6 +7208,9 @@ def create_app(
                     dataclass_replace(item)
                     for item in session.followups.open_items()
                 ],
+                # The scope the lenses and seats review under, and the
+                # manifest records (backend.edit_scope).
+                edit_scope=session.edit_scope,
                 remembered_dismissed=remembered,
                 usage_sink=lambda cat, u, g=run_generation: (
                     session.add_usage_if_current(g, cat, u)
@@ -8718,6 +8736,49 @@ def create_app(
             }
         )
 
+    @app.post("/api/session/edit-scope")
+    def session_edit_scope(body: EditScopeRequest) -> JSONResponse:
+        """Set how far the assistant may change this section on its own —
+        the composer's Edits switch (2026-10-19, ``backend.edit_scope``).
+
+        Records the choice on THIS section (``SessionState.edit_scope``,
+        saved in its ``.baspec`` when Essentials). The next turn's PROJECT
+        CONTEXT names it, so a turn already streaming keeps the scope it
+        started with; a Final QC review made under the other scope reads
+        stale, because its manifest records the scope. Refused inside a tour
+        (409 ``tutorial_active``: the practice copy is not the user's
+        section); an unknown scope is 400. Writes nothing to disk; the next
+        Save carries it.
+        """
+        if sessions.get_workspace().scope != "original":
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": (
+                        "A tutorial workspace is active. End the tour to return "
+                        "to your project before changing the edit scope."
+                    ),
+                },
+                status_code=409,
+            )
+        scope = (body.scope or "").strip()
+        if scope not in EDIT_SCOPES:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "The edit scope is either extensive or essentials.",
+                },
+                status_code=400,
+            )
+        session = sessions.get_session()
+        with session.session_state_guard():
+            changed = session.edit_scope != scope
+            session.edit_scope = scope
+        if changed:
+            _trace_capture.app_event("edit_scope", scope=scope)
+        return JSONResponse({"ok": True, "edit_scope": scope})
+
     @app.post("/api/project/next-section")
     async def project_next_section_start(
         body: NextSectionRequest | None = None,
@@ -8801,6 +8862,10 @@ def create_app(
                         if isinstance(session.project_home, dict)
                         else None
                     )
+                    # The edit scope is the client's wish for the project,
+                    # so the next section starts where this one is (the
+                    # seed's reset sets it back to Extensive).
+                    carried_scope = session.edit_scope
                     # A number the project already drafted is refused, and
                     # refused HERE rather than only greyed in the dialog: the
                     # typed-header path and a direct caller bypass the
@@ -8884,6 +8949,7 @@ def create_app(
                         "project_id"
                     ) == carried_home.get("project_id"):
                         session.project_home = carried_home
+                    session.edit_scope = carried_scope
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
         seed["warnings"] = list(brief.warnings) + extra_warnings + list(seed["warnings"])

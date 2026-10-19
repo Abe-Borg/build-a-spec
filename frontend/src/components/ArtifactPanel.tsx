@@ -78,7 +78,11 @@ import {
   type PanelTrayPrefs,
 } from "../lib/panelTray";
 import Tip from "./Tip";
-import { editScopeOption, type EditScope } from "../lib/editScope";
+import {
+  EDIT_SCOPE_PREVIEW_NOTE,
+  editScopeOption,
+  type EditScope,
+} from "../lib/editScope";
 
 /** The Export menu's downloads, keyed for the busy state. */
 type ExportKey =
@@ -792,7 +796,7 @@ export default function ArtifactPanel({
     : draftNeeds.length > 0
       ? `Needs ${draftNeedsPhrase} first — adapting ${importedOutstanding} imported block(s) to this project inherits ${draftNeedsPronoun}. Clicking asks you about ${draftNeedsPronoun}; then the pass runs.`
       : editScope === "essentials"
-        ? `Walk all ${importedOutstanding} imported block(s) against this project in one pass, essential edits only — keep the client's wording and structure, change only what this project requires. One click to undo.`
+        ? `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo. Essentials only is selected. ${EDIT_SCOPE_PREVIEW_NOTE}`
         : `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo.`;
   const scopeOption = editScopeOption(editScope);
 
@@ -986,9 +990,9 @@ export default function ArtifactPanel({
           {editScope === "essentials" && (
             <span
               className="whitespace-nowrap rounded-full border border-accent/50 bg-accent/15 px-2 py-px text-[10px] font-semibold text-accent"
-              title={`${scopeOption.short}. ${scopeOption.detail} Change it beside the chat's Send button.`}
+              title={`${scopeOption.short}. ${scopeOption.detail} Change it beside the chat's Send button. ${EDIT_SCOPE_PREVIEW_NOTE}`}
             >
-              🔒 {scopeOption.short}
+              🔒 {scopeOption.short} · preview
             </span>
           )}
           {importedOutstanding > 0 ? (

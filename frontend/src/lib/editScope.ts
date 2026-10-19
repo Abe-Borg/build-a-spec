@@ -16,6 +16,11 @@ export type EditScope = "extensive" | "essentials";
 
 export const DEFAULT_EDIT_SCOPE: EditScope = "extensive";
 
+/** Said wherever the mode is shown, until the assistant actually reads it:
+ *  a control that promises restraint it does not deliver is worse than none. */
+export const EDIT_SCOPE_PREVIEW_NOTE =
+  "Preview: the assistant does not read this setting yet, so every pass still edits as it does today.";
+
 export interface EditScopeOption {
   id: EditScope;
   label: string;

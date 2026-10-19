@@ -8,7 +8,11 @@ import {
   type PastedRange,
   type PendingPaste,
 } from "../lib/pastedContent";
-import { EDIT_SCOPE_OPTIONS, type EditScope } from "../lib/editScope";
+import {
+  EDIT_SCOPE_OPTIONS,
+  EDIT_SCOPE_PREVIEW_NOTE,
+  type EditScope,
+} from "../lib/editScope";
 
 interface Props {
   disabled: boolean;
@@ -143,7 +147,7 @@ export default function Composer({
             title={
               disabled
                 ? "The edit scope applies from the next message — finish or stop this turn first."
-                : "How much the assistant may change the specification."
+                : `How much the assistant may change the specification. ${EDIT_SCOPE_PREVIEW_NOTE}`
             }
           >
             <span className="pl-2 pr-1 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
@@ -159,7 +163,7 @@ export default function Composer({
                   aria-checked={active}
                   disabled={disabled}
                   onClick={() => onChangeEditScope(option.id)}
-                  title={option.detail}
+                  title={`${option.detail} ${EDIT_SCOPE_PREVIEW_NOTE}`}
                   className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
                     active
                       ? option.id === "essentials"
@@ -173,6 +177,9 @@ export default function Composer({
                 </button>
               );
             })}
+            <span className="pl-1 pr-2 text-[9px] font-medium uppercase tracking-wide text-ink-faint">
+              preview
+            </span>
           </div>
           {disabled ? (
             <button

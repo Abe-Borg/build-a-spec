@@ -78,11 +78,7 @@ import {
   type PanelTrayPrefs,
 } from "../lib/panelTray";
 import Tip from "./Tip";
-import {
-  EDIT_SCOPE_PREVIEW_NOTE,
-  editScopeOption,
-  type EditScope,
-} from "../lib/editScope";
+import { editScopeOption, type EditScope } from "../lib/editScope";
 
 /** The Export menu's downloads, keyed for the busy state. */
 type ExportKey =
@@ -110,8 +106,9 @@ const REDLINE_REASON_MISSING =
 
 interface Props {
   doc: SpecDoc | null;
-  /** Edit scope (UI preview, lib/editScope.ts): badged in the action bar and
-   *  named on the adapt pass so a reviewer sees the mode the work runs in. */
+  /** The section's edit scope (lib/editScope.ts): badged in the action bar
+   *  under Essentials and named on the adapt pass, so a reviewer sees the
+   *  mode the work runs in. */
   editScope: EditScope;
   openItems: OpenItem[];
   followups: FollowUp[];
@@ -796,7 +793,7 @@ export default function ArtifactPanel({
     : draftNeeds.length > 0
       ? `Needs ${draftNeedsPhrase} first — adapting ${importedOutstanding} imported block(s) to this project inherits ${draftNeedsPronoun}. Clicking asks you about ${draftNeedsPronoun}; then the pass runs.`
       : editScope === "essentials"
-        ? `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo. Essentials only is selected. ${EDIT_SCOPE_PREVIEW_NOTE}`
+        ? `Walk all ${importedOutstanding} imported block(s) against this project in one pass, essential edits only — keep, delete, or adapt a block only for an essential reason (a code conflict, a scope gap, inapplicable content, explanatory prose…), leaving the client's wording and structure as they are. One click to undo.`
         : `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo.`;
   const scopeOption = editScopeOption(editScope);
 
@@ -990,9 +987,9 @@ export default function ArtifactPanel({
           {editScope === "essentials" && (
             <span
               className="whitespace-nowrap rounded-full border border-accent/50 bg-accent/15 px-2 py-px text-[10px] font-semibold text-accent"
-              title={`${scopeOption.short}. ${scopeOption.detail} Change it beside the chat's Send button. ${EDIT_SCOPE_PREVIEW_NOTE}`}
+              title={`${scopeOption.short}. ${scopeOption.detail} Change it beside the chat's Send button.`}
             >
-              🔒 {scopeOption.short} · preview
+              🔒 {scopeOption.short}
             </span>
           )}
           {importedOutstanding > 0 ? (

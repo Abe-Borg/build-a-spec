@@ -85,6 +85,13 @@ file is the working reference for AI-assisted development sessions.
   Editing a rule bumps `WRITING_POLICY_VERSION` and re-pins the hash in
   `tests/test_writing_policy.py`. See "The specification writing policy"
   below and docs/writing-policy.md.
+- What counts as an essential edit — the Edits switch's Essentials only
+  mode (owner, 2026-10-19) — lives in ONE versioned source,
+  `backend/edit_scope.py`, rendered into the stable prompt, the turn's
+  PROJECT CONTEXT, the adapt directive and Final QC. Never restate the list
+  elsewhere; editing it bumps `EDIT_SCOPE_VERSION` and re-pins the hash in
+  `tests/test_edit_scope.py`. See "Edit scope: Extensive or Essentials only"
+  below.
 - Keep `README.md`, `requirements.txt`, and this file current when the
   implementation, dependencies, or conventions change.
 - New as-built notes are appended to `docs/as-built.md`, not to CLAUDE.md.
@@ -143,6 +150,10 @@ baseline_index}`; 400 out-of-range or base==cur), and `GET
 rule, 2026-10-06); the schedules and QC/audit closing that used to follow it
 are `GET /api/export/review-report` (`<section> - REVIEW REPORT.docx`, REST
 only, no SSE event).
+
+The edit scope (2026-10-19) adds NO SSE event: `POST /api/session/edit-scope`
+(`{scope: "extensive"|"essentials"}`; 400 unknown, 409 `tutorial_active`)
+writes it, and every doc payload carries `edit_scope`.
 
 Onboarding is frontend-only and adds no REST or SSE surface. It is a passive
 overlay over the current project and never sends chat, edit, research, or QC
@@ -2392,6 +2403,62 @@ the source's words, and never serialize an empty field. Tests:
 `tests/test_research_quotes.py`, `frontend/tests/researchQuote.test.ts`.
 Full record, reversion evidence and the release-note draft are in
 `docs/as-built.md` under the same heading. No paid API call was made.
+
+## Edit scope: Extensive or Essentials only — implemented notes (2026-10-19)
+
+Owner request (Abraham): some clients (Microsoft first) want their own
+specification changed as little as possible. The composer's Edits switch
+picks Extensive (the default, today's behavior) or Essentials only. Owner
+rulings: scope gaps, content that cannot apply, and explanatory prose and
+notes are essential; a compliant choice the model would make differently is
+asked about (track_followups, not blocking), never edited.
+
+- **One definition.** `backend/edit_scope.py` (a stdlib leaf):
+  `ESSENTIAL_CATEGORIES` (nine, each with the `label` an Essentials edit's
+  reason opens with), `NOT_ESSENTIAL`, `core_text()`; renderings
+  `drafting_block()` (stable prompt "# Edit scope", both modes, after the
+  writing policy), `turn_line(scope)` (one PROJECT CONTEXT line),
+  `directive_line(scope)` (appended to the adapt directive AFTER the
+  constant, so `turn_effort` still matches), `review_block(scope,
+  verifier=)` (Final QC; "" under Extensive) and `manifest_facts(scope)`
+  (None under Extensive). `EDIT_SCOPE_VERSION` 1; `CORE_SHA256` pinned in
+  `tests/test_edit_scope.py` — bump the version with the hash. The writing
+  policy is untouched: it says how text reads, this says whether existing
+  text changes. The scope limits the model's own initiative, never a user
+  request.
+- **The section's own choice.** `SessionState.edit_scope` ("extensive" |
+  "essentials"), the `section_read_exclusions` posture: saved in the
+  `.baspec` only when Essentials (`sanitize_edit_scope`; bad → Extensive),
+  replaced by a load, reset by New session (wipe probe), carried by Next
+  section (`carried_scope`, beside `carried_home`), never in a brief.
+  `POST /api/session/edit-scope {scope}` writes it (400 unknown, 409
+  `tutorial_active`); the doc payload carries `edit_scope`.
+- **Chat.** Rules in the cached module block; the mode is one per-turn line,
+  so switching moves no cache. `_GAP_AND_ADAPT` gains one bullet. The stable
+  prompt changed once (cache rewrite after upgrade).
+- **Final QC.** `edit_scope` is threaded like `followups`: `run_final_qc` →
+  lens pieces, all three seat builders and `_verify_one` (system prompts,
+  after `<writing_policy>`), `build_qc_input_manifest` (key `edit_scope`
+  only under Essentials), `matches_inputs`, `apply.matches_current_inputs`,
+  `_qc_export_current_state`, `QCRunner.start`, the start route. Extensive
+  requests and fingerprints are byte-identical to before; a review made
+  under one scope reads stale under the other. No protocol bump.
+- **Lint and readiness unchanged:** every lint rule is an essential defect
+  under the rulings (explanatory prose and REFERENCES shape included).
+- **Frontend.** `lib/editScope.ts` (copy + `parseEditScope`), the composer's
+  switch (capability `chat.edit-scope`, in the `interview` tour step; locked
+  in a tour; optimistic with an inline error), the panel's 🔒 badge and an
+  essentials-aware Adapt tooltip; Help's office-master recipe and the trust
+  explainer say it is an instruction, not a lock.
+
+Never render the mode into a cached block, never let Extensive change a
+Final QC request or fingerprint, and never restate the essentials list
+outside `backend/edit_scope.py` (the frontend hover is pinned to its
+categories by `frontend/tests/editScope.test.ts`). Tests:
+`tests/test_edit_scope.py`, `tests/test_session_wipe.py`,
+`frontend/tests/editScope.test.ts`. Full record, reversion evidence and the
+release-note draft are in `docs/as-built.md` under the same heading. No paid
+API call was made.
 
 ## As-built history
 

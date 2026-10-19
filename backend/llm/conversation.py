@@ -106,6 +106,7 @@ from typing import Any, Iterator
 import anthropic
 
 from .. import resource_pressure, settings
+from ..edit_scope import turn_line as edit_scope_turn_line
 from ..session_history import SessionIdentity
 from ..figures import CREATE_FIGURE_TOOL, FigureError, FigureStore
 from ..reference_docs import (
@@ -638,6 +639,16 @@ class SessionState:
     # dispatch; written only by the panel's route, never by a turn's
     # tools, so it may render into the cached project block (C1's rule).
     section_read_exclusions: list[str] = field(default_factory=list)
+    # How far the assistant may change this section on its own
+    # (``backend.edit_scope``, 2026-10-19): "extensive" (the default, the
+    # behavior before the mode existed) or "essentials". This section's own
+    # choice, the ``section_read_exclusions`` posture: persisted in its
+    # ``.baspec`` only when Essentials, cleared by a reset, replaced by a
+    # load, carried by Next section. Written only by
+    # ``POST /api/session/edit-scope``, never by a turn's tools; read at
+    # turn start into the PROJECT CONTEXT (one line, so switching moves no
+    # cache) and by Final QC, whose manifest records it.
+    edit_scope: str = "extensive"
 
     def record_qc_fixes(self, entries: list[dict[str, Any]]) -> None:
         """Append applied-fix entries (``qc.fix_log.fix_log_entries``) to
@@ -1914,6 +1925,8 @@ class SessionState:
         self.project_link = None
         # The sections closed to the assistant were this section's choice.
         self.section_read_exclusions = []
+        # So was the edit scope: a fresh section starts Extensive.
+        self.edit_scope = "extensive"
         # Per-project priming text does not survive a reset (see the field
         # comment). Module and discipline are kept; this is not.
         self.project_context = ""
@@ -2741,6 +2754,11 @@ def _turn_context_text(session: SessionState) -> tuple[str, dict[str, int]]:
             doc.suppressed_standards,
         ),
         _profile_status_block(doc.project_profile),
+        # How far the model may change the section on its own
+        # (backend.edit_scope). One line per turn rather than the cached
+        # blocks, so switching modes moves no cache; the rules it points at
+        # ride the stable prompt's "# Edit scope".
+        edit_scope_turn_line(session.edit_scope),
     ]
     source_boundary = _source_editing_boundary_block(session)
     if source_boundary is not None:

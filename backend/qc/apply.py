@@ -189,6 +189,8 @@ def matches_current_inputs(
             # And the open "Waiting on you" items (final-qc/5): settling or
             # raising one changes what the reviewers were told is still open.
             followups=session.followups.open_items(),
+            # And the edit scope: Essentials review rules are not Extensive's.
+            edit_scope=session.edit_scope,
         )
     )
 

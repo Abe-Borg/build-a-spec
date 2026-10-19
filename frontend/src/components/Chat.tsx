@@ -47,9 +47,9 @@ interface Props {
    *  plan Phase 3), or null. Draws a divider; the transcript itself is never
    *  condensed. */
   compaction?: CompactionInfo | null;
-  /** Edit scope (UI preview), forwarded to the composer. */
+  /** The section's edit scope, forwarded to the composer's Edits switch. */
   editScope: EditScope;
-  onChangeEditScope: (scope: EditScope) => void;
+  onChangeEditScope: (scope: EditScope) => Promise<void>;
 }
 
 export default function Chat({
@@ -242,6 +242,7 @@ export default function Chat({
         prefill={prefill}
         editScope={editScope}
         onChangeEditScope={onChangeEditScope}
+        editScopeLocked={tourActive}
       />
     </section>
   );

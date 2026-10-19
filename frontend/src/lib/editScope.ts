@@ -1,30 +1,34 @@
 /**
- * Edit scope — how much latitude the assistant has to change a specification.
+ * Edit scope — how far the assistant may change a section on its own
+ * (2026-10-19). The definition the assistant and Final QC work from is
+ * `backend/edit_scope.py`; this file holds only what the composer's Edits
+ * switch and the document panel's badge say about it, and must not
+ * contradict that list (frontend/tests/editScope.test.ts reads both).
  *
- * UI PREVIEW ONLY. Nothing here reaches the backend yet: the choice lives in
- * App state, is not saved in the project file, and does not change the
- * prompt, the edit tool, Final QC or the adapt pass. It exists so the owner
- * can judge the controls before the behavior is built.
+ * - `extensive` (the default): everything essential plus full latitude —
+ *   rewording for clarity, reorganizing, the writing policy throughout.
+ * - `essentials`: for a client who wants their own specification changed as
+ *   little as possible — existing text changes only for an essential
+ *   reason, scope gaps included.
  *
- * - `extensive`: today's behavior — the assistant may rewrite, reorganize and
- *   tighten the whole section under the writing policy.
- * - `essentials`: for a client who wants their own specification touched as
- *   little as possible — only what must change for this project to be
- *   correct; their wording, structure and order are kept.
+ * The choice is the section's own: the server keeps it, the project file
+ * saves it, and Next section carries it (`POST /api/session/edit-scope`).
  */
-export type EditScope = "extensive" | "essentials";
+import type { EditScope } from "../types";
+
+export type { EditScope };
 
 export const DEFAULT_EDIT_SCOPE: EditScope = "extensive";
 
-/** Said wherever the mode is shown, until the assistant actually reads it:
- *  a control that promises restraint it does not deliver is worse than none. */
-export const EDIT_SCOPE_PREVIEW_NOTE =
-  "Preview: the assistant does not read this setting yet, so every pass still edits as it does today.";
+/** The server's value, or the default for an older server or a bad value. */
+export function parseEditScope(value: unknown): EditScope {
+  return value === "essentials" ? "essentials" : DEFAULT_EDIT_SCOPE;
+}
 
 export interface EditScopeOption {
   id: EditScope;
   label: string;
-  /** One line for the chip and the panel badge. */
+  /** One line for the panel badge. */
   short: string;
   /** Hover text: what the assistant will and will not do in this mode. */
   detail: string;
@@ -38,10 +42,13 @@ export const EDIT_SCOPE_OPTIONS: readonly EditScopeOption[] = [
     detail:
       "Change only what must change for this project: code and standard " +
       "conflicts, outdated editions, scope gaps (work the project needs " +
-      "that the section does not cover), project-specific values, " +
-      "conflicts and broken references, and outright errors. The client's " +
-      "wording, structure, article order and style are kept — no rewording " +
-      "for clarity, no reorganizing, no tightening.",
+      "that the section does not cover), content that cannot apply to this " +
+      "project, wrong project values, conflicts and broken references, " +
+      "technical errors, explanatory prose and notes, and unissuable " +
+      "leftovers. The client's wording, structure, article order and style " +
+      "are kept — no rewording for clarity, no reorganizing, no tightening. " +
+      "A compliant choice the assistant would make differently is asked " +
+      "about, never edited. Anything you ask for in chat is still done.",
   },
   {
     id: "extensive",

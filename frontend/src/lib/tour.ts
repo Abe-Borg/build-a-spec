@@ -159,13 +159,13 @@ export const TOUR: readonly TourChunk[] = [
     steps: [
       {
         id: "interview",
-        capabilities: ["chat.interview"],
+        capabilities: ["chat.interview", "chat.edit-scope"],
         mode: "explanatory",
         anchor: "composer",
         placement: "top",
         title: "A practical interview",
         body:
-          "Questions include a recommended default. “I don't know” is a valid answer: the model applies a defensible default and marks the resulting content assumed. Asking it to guide you turns an open question into concrete options with tradeoffs, and a typed correction is recorded the same way a direct answer is.",
+          "Questions include a recommended default. “I don't know” is a valid answer: the model applies a defensible default and marks the resulting content assumed. Asking it to guide you turns an open question into concrete options with tradeoffs, and a typed correction is recorded the same way a direct answer is. The Edits switch below the box sets how far it changes the section on its own: Extensive gives full latitude; Essentials only keeps a client's own text except for an essential reason, such as a code conflict or a scope gap.",
       },
       {
         id: "suggestions",

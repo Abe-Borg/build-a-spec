@@ -225,6 +225,98 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — Essentials only: keep the client's specification, change only what must change
+
+(2026-10-19, owner request. docs/as-built.md's "Edit scope: Extensive or
+Essentials only" is the record; not yet in a release.)
+
+Some clients want their own specification changed as little as possible.
+The message box now has an **Edits** switch with two settings:
+
+- **Extensive** (the default, and how the app has always worked): the
+  assistant fixes what must be fixed and also rewrites for clarity,
+  reorganizes articles under the writing policy, and applies it throughout.
+- **Essentials only**: the section's existing text — an imported client
+  master, a template, earlier drafting — changes only for an essential
+  reason. Everything else stays exactly as the client wrote it, even where
+  the writing policy would word or place it differently.
+
+The essential reasons, made under both settings (`backend/edit_scope.py`
+is the one list the assistant and Final QC work from):
+
+1. **Code compliance** — a conflict with the code or standard edition in
+   effect as the jurisdiction adopted it (with its amendments and the AHJ's
+   written requirements), a missing listing or approval requirement, a
+   conflict with the insurer's or the client's own standards.
+2. **Standards reference** — an outdated, superseded or withdrawn edition
+   or designation; a standard cited that does not govern the project.
+3. **Scope gap** — a system, component or work the project needs that the
+   section does not cover; a code-required deliverable that is missing
+   (working plans, calculations, certificates, acceptance testing);
+   delegated design with no criteria; an interface the section must own.
+4. **Inapplicable content** — a provision that cannot apply to this project
+   is deleted (or its inapplicable part removed). Content that only *seems*
+   unnecessary is asked about, never deleted.
+5. **Project value** — a classification, design criterion, supply or site
+   value, system type, rating, material or seismic category that is wrong
+   for this project; the project name, section number, title or location.
+6. **Conflict** — two provisions that contradict each other, a conflict with
+   a related section, a cross-reference to something that does not exist, a
+   provision duplicated within its article.
+7. **Technical error** — a wrong value, unit or conversion; an incompatible
+   material or method; a discontinued product; a requirement that cannot
+   be met.
+8. **Explanatory prose** — explanation, adoption narration and notes to the
+   specifier or design team are removed, keeping the requirement in the
+   client's own words; a REFERENCES entry is cut to designation, title and
+   edition.
+9. **Unissuable text** — template brackets, unresolved options,
+   placeholders and TBDs; empty articles and repeated article titles;
+   wording that cannot be enforced ("should", "as required" with no
+   criteria), changing only those words.
+
+Not essential, so left alone under Essentials only: rewording for clarity,
+tone or concision; reordering, merging, splitting or relocating; renumbering,
+retitling or changing the client's terms; converting to imperative mood;
+removing redundancy that contradicts nothing; swapping compliant products;
+adding good-practice requirements the project does not need; formatting.
+
+How it behaves under Essentials only:
+
+- Each change touches only the words the defect needs. New text for a scope
+  gap goes into the article where the client's structure already puts that
+  subject, in the client's voice.
+- Each edit's reason opens with its category ("Scope gap: …", "Code
+  compliance: …"), so the "why" chips and the redline's comments read as a
+  change log you can hand the client.
+- A compliant choice the assistant would make differently is put on
+  **Waiting on you** as a question (not blocking) and never edited unless you
+  say so.
+- **Anything you ask for in chat is still done** — the setting limits what
+  the assistant does on its own initiative, never your requests.
+- **Adapt imported draft** runs under the setting, and its message says so.
+- **Final QC** reviews under it: its reviewers report only essential
+  defects and refute the rest, and a proposed fix that rewrites more than
+  the defect needs is not offered as a safe fix. A review made under one
+  setting reads out of date under the other.
+- The document panel shows a 🔒 **Essential edits only** badge.
+
+The setting is the section's own: it is saved in its `.baspec` (only when
+Essentials, so older files are unchanged), New session starts Extensive, and
+**Next section →** carries it to the next section of the project. A section
+started from a project brief file in a new session starts Extensive. It
+cannot be changed inside the guided tour. Essentials only is an instruction
+the assistant and Final QC follow, not a lock: every edit still carries its
+reason, so the trail shows whether each one was essential.
+
+Costs: the stable prompt grows by the edit-scope rules (about 1,400 tokens,
+cached), so every open session rewrites its cached prompt once after
+upgrade. Switching the setting moves no cache: it is one line of each turn's
+context. Under Essentials, Final QC's prompts carry the list too (cached
+within a run). Under Extensive, Final QC's requests and a saved review's
+fingerprint are unchanged. No paid API call was made: how closely the model
+keeps to the list on a real client master is unmeasured.
+
 ## Current Status — research findings quote their source and say when they apply
 
 (2026-10-13, the prompt-review follow-up, item 7. docs/as-built.md's

@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .. import writing_policy
+from .. import edit_scope, writing_policy
 from ..project_profile import COUNTRY_DISPLAY, normalize_country
 from ..spec_modules import SpecModule
 
@@ -185,6 +185,7 @@ When the document contains imported blocks, the user started from external start
 - Starter edition citations are data, not truth: check them against the standards editions in effect, and fix stale ones (the lint flags them). If the boundary refuses such a fix, say so in one line and record the correct edition via set_standard_edition instead of retrying the blocked text edit.
 - Starters can carry generic placeholders or another project's remnants — wrong-jurisdiction references and inapplicable scope. Hunt them; the lint helps. A placeholder, a bracketed option, or a note to the specifier never survives adaptation: rewrite it as a complete provision (asking for the missing value with track_followups) or delete it.
 - The starter's article layout and titles are its template convention: keep them unless the user asks to restructure. Adapting changes technical content only where this project needs it, and each such change is named in chat; correcting placement or language alone stays editorial (see the writing policy).
+- The EDIT SCOPE in the PROJECT CONTEXT governs how far adaptation goes. Under Essentials only, a block is adapted only for an essential reason (see Edit scope), changing only the words the defect needs, and an editorial correction is not made at all.
 - Still run the interview: the playbook topics apply, but ask them against what the starter already says ("the starter specifies Schedule 10 roll-grooved for 2-1/2 in. and larger — keep that here?").
 - The review report schedules every block still stamped imported, and issue readiness holds while one remains, so a block you never visited stays visible to the reviewer. Do not mass-upgrade statuses without actually reviewing content."""
 
@@ -572,13 +573,16 @@ Walk the ENTIRE imported starter against THIS project now — the full gap-and-a
 - When the last edit is in, close with a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus your highest-value follow-up questions — at most three, counting the waiting item you surface — with suggested replies that answer them. {_REPLY_AFTER_TOOL_CALLS}"""
 
 
-def adapt_imported_directive(prereqs: DraftPrerequisites) -> str:
+def adapt_imported_directive(
+    prereqs: DraftPrerequisites, scope: str = edit_scope.DEFAULT_EDIT_SCOPE
+) -> str:
     """The adapt-pass user message, anchored on the established facts.
 
     Same shape as :func:`full_draft_directive`, and for the same reason:
     the constant carries the obligations and is appended to, never
     rewritten, and the anchor leaves an honest record in the transcript of
-    exactly what the pass was told the project is.
+    exactly what the pass was told the project is — and, since 2026-10-19,
+    the edit scope it ran under (:func:`backend.edit_scope.directive_line`).
     """
     return "\n\n".join(
         [
@@ -590,6 +594,7 @@ def adapt_imported_directive(prereqs: DraftPrerequisites) -> str:
                     *_established_lines(prereqs),
                 ]
             ),
+            edit_scope.directive_line(scope),
         ]
     )
 
@@ -942,6 +947,7 @@ def render_system_prompt(module: SpecModule) -> str:
             _TOOL_GUIDE,
             _PROVENANCE,
             writing_policy.drafting_block(),
+            edit_scope.drafting_block(),
             _INTERVIEW_POLICY,
             _STANDARDS_POLICY,
             _WEB_LOOKUP_POLICY,

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .. import settings
+from ..edit_scope import ESSENTIALS, sanitize_edit_scope
 from ..llm.history_hygiene import (
     count_fetched_page_texts,
     count_stale_outlines,
@@ -69,6 +70,9 @@ class ValidatedProjectData:
     # read_project_section (2026-10-13), by number. Empty = every section
     # listed in the registry may be read, which is the default.
     section_read_exclusions: list[str] = field(default_factory=list)
+    # How far the assistant may change this section on its own
+    # (backend.edit_scope, 2026-10-19). Absent = "extensive", the default.
+    edit_scope: str = "extensive"
 
 
 def _sanitize_map_json(value: Any, label: str) -> dict[str, Any] | None:
@@ -239,6 +243,7 @@ def validate_project_data(data: Any) -> ValidatedProjectData:
         section_read_exclusions=sanitize_section_read_exclusions(
             data.get("section_read_exclusions")
         ),
+        edit_scope=sanitize_edit_scope(data.get("edit_scope")),
     )
 
 
@@ -267,6 +272,7 @@ def save_project(
     qc_fix_log: list[dict[str, Any]] | None = None,
     session_journal: dict[str, Any] | None = None,
     section_read_exclusions: list[str] | None = None,
+    edit_scope: str = "extensive",
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -336,6 +342,12 @@ def save_project(
     safe_exclusions = sanitize_section_read_exclusions(section_read_exclusions)
     if safe_exclusions:
         payload["section_read_exclusions"] = safe_exclusions
+    # The edit scope (2026-10-19), this section's own choice like the list
+    # above: written only when Essentials, so an Extensive section — every
+    # file saved before the mode existed included — keeps its bytes, and an
+    # absent key restores to Extensive.
+    if sanitize_edit_scope(edit_scope) == ESSENTIALS:
+        payload["edit_scope"] = ESSENTIALS
     # How far the last committed fact harvest read (Project workspace
     # Phase 4). Optional the same way — omitted at 0, which is also what an
     # absent key restores to — so a section never harvested writes no key.
@@ -880,6 +892,7 @@ def load_project(data: Any, session) -> None:
     # session must not inherit the previous session's project link.
     session.project_link = staged.project_link
     session.section_read_exclusions = list(staged.section_read_exclusions)
+    session.edit_scope = staged.edit_scope
     # Keep the assignment conditional so format-1 compatibility callers with
     # an older/lightweight session object continue to load unchanged.
     if hasattr(session, "source_docx_map"):

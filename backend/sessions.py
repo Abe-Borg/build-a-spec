@@ -641,6 +641,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         project_facts=session.facts.to_dict(),
         project_link=copy.deepcopy(session.project_link),
         section_read_exclusions=list(session.section_read_exclusions),
+        edit_scope=session.edit_scope,
         last_harvest_bubble=session.last_harvest_bubble,
         compaction=(
             session.compaction.to_dict()

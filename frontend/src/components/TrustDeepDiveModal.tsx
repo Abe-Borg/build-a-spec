@@ -1799,6 +1799,7 @@ function Dossier() {
             "Proposing, drafting, and revising specification text.",
             "Recording an edition — but only with a stated basis it must supply.",
             "Asking you questions and defaulting visibly when you defer.",
+            "Keeping to the edit scope you set. Essentials only is an instruction the assistant and Final QC both follow, not a lock: every edit still carries its reason, so the trail shows whether each one was essential.",
             "Applying Final QC’s verified safe fixes when you approve them in the conversation — only the operations the review’s panel approved.",
             "Looking something up on the public web through the two server-side tools.",
           ]}

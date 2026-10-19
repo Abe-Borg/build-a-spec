@@ -1,4 +1,5 @@
 import type {
+  EditScope,
   BriefRefreshResult,
   CompactionInfo,
   CompactionStatus,
@@ -661,6 +662,26 @@ export async function projectSections(): Promise<ProjectSectionsPayload> {
     throw new Error(data.error ?? `project sections failed (${resp.status})`);
   }
   return data as ProjectSectionsPayload;
+}
+
+/**
+ * Set how far the assistant may change this section on its own — the
+ * composer's Edits switch (2026-10-19). The server records it on the section
+ * (it rides its saved file and is carried by Next section); the next turn and
+ * the next Final QC read it. Refused inside a tour; the server's message is
+ * thrown as is.
+ */
+export async function setEditScope(scope: EditScope): Promise<EditScope> {
+  const resp = await fetch("/api/session/edit-scope", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `changing the edit scope failed (${resp.status})`);
+  }
+  return data.edit_scope === "essentials" ? "essentials" : "extensive";
 }
 
 /**

@@ -153,6 +153,7 @@ import {
 } from "./lib/projectMerge";
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
+import { DEFAULT_EDIT_SCOPE, type EditScope } from "./lib/editScope";
 import { buildQcApplicationDigest } from "./lib/qcRemediation";
 import {
   QC_MILESTONE_TYPES,
@@ -321,6 +322,9 @@ export default function App() {
   // Composer prefill for the review queue's "Ask model" (WI2). The nonce
   // fires the composer's effect even when the same ref is asked twice.
   const [prefill, setPrefill] = useState({ text: "", nonce: 0 });
+  // Edit scope (UI preview, lib/editScope.ts): local only — not sent with a
+  // turn, not saved in the project file, not yet read by the backend.
+  const [editScope, setEditScope] = useState<EditScope>(DEFAULT_EDIT_SCOPE);
   // Guided-tour drawer-open nonces (Batch 6) — a bump expands that drawer.
   const [drawerNonces, setDrawerNonces] = useState({
     review: 0,
@@ -3513,10 +3517,13 @@ export default function App() {
           figuresById={figuresById}
           onDeleteFigure={onDeleteFigure}
           compaction={compaction}
+          editScope={editScope}
+          onChangeEditScope={setEditScope}
         />
         <ArtifactPanel
           key={`panel-${sessionNonce}`}
           doc={doc}
+          editScope={editScope}
           openItems={openItems}
           followups={followups}
           followupTurn={assistantBubbleCount}

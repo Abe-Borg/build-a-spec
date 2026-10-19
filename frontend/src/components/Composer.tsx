@@ -8,6 +8,7 @@ import {
   type PastedRange,
   type PendingPaste,
 } from "../lib/pastedContent";
+import { EDIT_SCOPE_OPTIONS, type EditScope } from "../lib/editScope";
 
 interface Props {
   disabled: boolean;
@@ -22,6 +23,11 @@ interface Props {
    *  is held — say so rather than swallowing the click. Distinct from
    *  `disabled`, which means a turn is streaming and offers Stop. */
   uploading?: boolean;
+  /** Edit scope (UI preview, lib/editScope.ts): how far the assistant may
+   *  change the specification. Shown in the composer because it governs
+   *  every turn sent from here. */
+  editScope: EditScope;
+  onChangeEditScope: (scope: EditScope) => void;
 }
 
 export default function Composer({
@@ -30,6 +36,8 @@ export default function Composer({
   onStop,
   prefill,
   uploading = false,
+  editScope,
+  onChangeEditScope,
 }: Props) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -91,7 +99,7 @@ export default function Composer({
       data-tour="composer"
       data-capability="chat.interview"
     >
-      <div className="flex items-end gap-2 rounded-2xl border border-edge bg-bg p-2 focus-within:border-accent/70">
+      <div className="flex flex-col gap-1.5 rounded-2xl border border-edge bg-bg p-2 focus-within:border-accent/70">
         <textarea
           data-capability="chat.web-verify"
           ref={ref}
@@ -125,41 +133,81 @@ export default function Composer({
               ? "Reading the file… sending is held until it finishes."
               : "Describe the project, or answer the last question… (Enter to send)"
           }
-          className="max-h-[220px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[0.925rem] leading-relaxed outline-none placeholder:text-ink-faint disabled:opacity-60"
+          className="max-h-[220px] w-full resize-none bg-transparent px-2 py-1.5 text-[0.925rem] leading-relaxed outline-none placeholder:text-ink-faint disabled:opacity-60"
         />
-        {disabled ? (
-          <button
-            onClick={onStop}
-            data-capability="chat.stop"
-            title="Stop generating"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white transition-colors hover:bg-accent-hover"
+        <div className="flex items-center justify-between gap-2">
+          <div
+            role="radiogroup"
+            aria-label="Edit scope"
+            className="flex items-center gap-0.5 rounded-full border border-edge bg-surface p-0.5"
+            title={
+              disabled
+                ? "The edit scope applies from the next message — finish or stop this turn first."
+                : "How much the assistant may change the specification."
+            }
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="5" y="5" width="14" height="14" rx="2.5" />
-            </svg>
-          </button>
-        ) : (
-          <button
-            onClick={send}
-            disabled={!value.trim() || uploading}
-            title={uploading ? "Waiting for the file to finish loading" : "Send"}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-30"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+            <span className="pl-2 pr-1 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
+              Edits
+            </span>
+            {EDIT_SCOPE_OPTIONS.map((option) => {
+              const active = option.id === editScope;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  disabled={disabled}
+                  onClick={() => onChangeEditScope(option.id)}
+                  title={option.detail}
+                  className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
+                    active
+                      ? option.id === "essentials"
+                        ? "bg-accent/20 font-medium text-accent"
+                        : "bg-raised font-medium text-ink"
+                      : "text-ink-dim hover:text-ink"
+                  }`}
+                >
+                  {option.id === "essentials" ? "🔒 " : ""}
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+          {disabled ? (
+            <button
+              onClick={onStop}
+              data-capability="chat.stop"
+              title="Stop generating"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white transition-colors hover:bg-accent-hover"
             >
-              <path d="M12 19V5" />
-              <path d="m5 12 7-7 7 7" />
-            </svg>
-          </button>
-        )}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="5" y="5" width="14" height="14" rx="2.5" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              onClick={send}
+              disabled={!value.trim() || uploading}
+              title={uploading ? "Waiting for the file to finish loading" : "Send"}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-30"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 19V5" />
+                <path d="m5 12 7-7 7 7" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
       <p className="mt-2 text-center text-[11px] text-ink-faint">
         Build-a-Spec drafts are advisory and require review by a licensed

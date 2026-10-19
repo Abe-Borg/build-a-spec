@@ -89,6 +89,65 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.28.0",
+        date="2026-10-19",
+        headline="Choose how much the assistant changes your specification",
+        summary=(
+            "Choose Essentials only to keep a client's specification as "
+            "written while correcting defects and filling scope gaps. "
+            "Chat, Adapt imported draft and Final QC follow your choice; "
+            "Extensive remains the default for broader improvements. "
+            "Your choice saves with the project and carries to the next section."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Drafting and review",
+                items=(
+                    ReleaseItem(
+                        title="Essentials only: keep the client's specification",
+                        body=(
+                            "Use the composer's Edits switch to preserve "
+                            "existing wording, structure and order. The "
+                            "assistant still corrects code conflicts, wrong "
+                            "project values, broken references and technical "
+                            "errors, fills scope gaps, and removes inapplicable "
+                            "content, explanatory notes and unissuable leftovers."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Compliant choices stay yours",
+                        body=(
+                            "Under Essentials only, a compliant choice the "
+                            "assistant would make differently becomes a "
+                            "Waiting on you question instead of an edit. "
+                            "Changes you request in chat are made in either "
+                            "mode; choose Extensive for broader rewriting "
+                            "and reorganization."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Adaptation and Final QC respect the same scope",
+                        body=(
+                            "Adapt imported draft and Final QC follow the "
+                            "section's selected scope too. Changing it after "
+                            "a review makes that review stale; run Final QC "
+                            "again before applying its fixes."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Your edit scope travels with the section",
+                        body=(
+                            "The choice saves in your project file and "
+                            "carries into Next section. A new session starts "
+                            "with Extensive, and older projects open in "
+                            "Extensive until you choose otherwise."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.27.0",
         date="2026-10-13",
         headline="Research shows its evidence, and Final QC says what it checked",

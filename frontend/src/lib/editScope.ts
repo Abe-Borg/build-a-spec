@@ -37,17 +37,20 @@ export const EDIT_SCOPE_OPTIONS: readonly EditScopeOption[] = [
     short: "Essential edits only",
     detail:
       "Change only what must change for this project: code and standard " +
-      "conflicts, outdated editions, project-specific values, and outright " +
-      "errors. The client's wording, structure, article order and style are " +
-      "kept — no rewording for clarity, no reorganizing, no tightening.",
+      "conflicts, outdated editions, scope gaps (work the project needs " +
+      "that the section does not cover), project-specific values, " +
+      "conflicts and broken references, and outright errors. The client's " +
+      "wording, structure, article order and style are kept — no rewording " +
+      "for clarity, no reorganizing, no tightening.",
   },
   {
     id: "extensive",
     label: "Extensive",
     short: "Extensive edits allowed",
     detail:
-      "Full latitude: rewrite for clarity and enforceability, reorganize " +
-      "articles, apply the writing policy throughout, and fill gaps.",
+      "Everything Essentials covers, scope gaps included, plus full " +
+      "latitude: rewrite for clarity and enforceability, reorganize " +
+      "articles, and apply the writing policy throughout.",
   },
 ] as const;
 

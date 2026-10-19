@@ -1,13 +1,15 @@
 # Build-a-Spec
 
-**v1.27.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.28.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
-This release includes the merged work since v1.26.0: checked source passages
-and applicability conditions in research, explicit research coverage and
-unverifiable findings in Final QC, project-section reading controls, spreadsheet
-references, and Word bookmark fixes. Chat now defaults to Claude Opus 5.5,
-whose per-token price is twice Sonnet 5.5's. Re-run saved Final QC reviews
-before applying their fixes. Keep every section on v1.27.0 or later once you
+Choose **Essentials only** in the composer's Edits switch to keep a client's
+specification as written and change only what needs correcting or completing.
+Chat, Adapt imported draft and Final QC follow the section's chosen scope;
+**Extensive** remains the default for broader improvements. The choice saves
+with the project and carries to the next section. Switching scope makes a
+saved Final QC review stale, so re-run it before applying fixes.
+
+Keep every section on v1.27.0 or later once you
 record a project fact longer than 240 characters; older builds shorten it.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.

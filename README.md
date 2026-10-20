@@ -1,6 +1,11 @@
 # Build-a-Spec
 
-**v1.28.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.28.1** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+
+The document toolbar now makes better use of its width in Essentials only
+mode: the scope badge shortens or steps aside when that saves a row of
+buttons. Hovering a visible badge still shows the full description; the
+Edits switch beside Send always shows the selected mode.
 
 Choose **Essentials only** in the composer's Edits switch to keep a client's
 specification as written and change only what needs correcting or completing.

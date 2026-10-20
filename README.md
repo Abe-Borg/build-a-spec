@@ -302,11 +302,11 @@ How it behaves under Essentials only:
   the defect needs is not offered as a safe fix. A review made under one
   setting reads out of date under the other.
 - The document panel shows a 🔒 **Essential edits only** badge. When the
-  panel is too narrow to keep its buttons on one row, the badge shortens to
-  🔒 **Essentials**, then to the lock alone, and as a last step steps aside
-  (the Edits switch beside the chat still shows the mode), so the buttons
-  are not pushed onto a second row. Hovering the badge shows the full
-  description.
+  panel is short of room, the badge shortens to 🔒 **Essentials**, then to
+  the lock alone, and as a last step steps aside (the Edits switch beside
+  the chat still shows the mode) — but only when that keeps the buttons
+  from wrapping onto another row; otherwise it keeps its full wording.
+  Hovering the badge shows the full description.
 
 The setting is the section's own: it is saved in its `.baspec` (only when
 Essentials, so older files are unchanged), New session starts Extensive, and

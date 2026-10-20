@@ -150,13 +150,23 @@ test("the badge says as much as one row has room for, in order", () => {
   }
 });
 
-test("where the bar wraps anyway, the badge keeps every word", () => {
+test("where saying less saves no line, the badge keeps every word", () => {
   // The 1440 and 1100 windows: two lines at every level, so nothing is
   // gained by saying less.
   for (const pane of [778, 594]) {
     for (const shown of SCOPE_BADGE_LEVELS) {
       assert.equal(pickScopeBadgeLevel(atPane(pane, shown)), "full", `${pane} from ${shown}`);
     }
+  }
+});
+
+test("a shorter badge that saves a third line is taken, though the bar still wraps", () => {
+  // A 520px pane (a browser below the desktop window's 1,100px minimum):
+  // the full badge takes three lines, Essentials two (Codex review on PR
+  // #332). Two rows is the better bar; the rule is fewest lines, not one
+  // row or nothing.
+  for (const shown of SCOPE_BADGE_LEVELS) {
+    assert.equal(pickScopeBadgeLevel(atPane(520, shown)), "compact", `from ${shown}`);
   }
 });
 

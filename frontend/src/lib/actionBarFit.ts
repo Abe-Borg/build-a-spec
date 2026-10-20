@@ -14,8 +14,12 @@
  * screen-reader text keep the words), then `hidden` — the composer's Edits
  * switch, always on screen beside the panel, still shows the mode, and a
  * bar that wraps for a transient label ("Saved ✓") would jump the whole
- * document down and back. Where nothing the badge can do holds one row,
- * the bar wraps anyway and the badge says everything again.
+ * document down and back. The badge shortens only when that saves the bar
+ * a line, so where it saves none — the 1440 and 1100 windows, two rows at
+ * every level — it keeps every word. Almost always the line saved is the
+ * second; in a pane too narrow even for two rows (below the desktop
+ * window's 1,100px minimum, so a browser only) a shorter badge can save
+ * the third, and is taken.
  *
  * Pure functions over measured widths, so the rule is testable without a
  * DOM; `useScopeBadgeLevel` (useScopeBadgeLevel.ts) does the measuring.

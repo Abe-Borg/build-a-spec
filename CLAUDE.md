@@ -2448,7 +2448,7 @@ asked about (track_followups, not blocking), never edited.
 - **Frontend.** `lib/editScope.ts` (copy + `parseEditScope`), the composer's
   switch (capability `chat.edit-scope`, in the `interview` tour step; locked
   in a tour; optimistic with an inline error), the panel's 🔒 badge (it
-  shortens, then steps aside, rather than wrap a one-row action bar —
+  shortens, then steps aside, only when that saves the action bar a row —
   `lib/actionBarFit.ts`, 2026-10-20) and an essentials-aware Adapt tooltip; Help's office-master recipe and the trust
   explainer say it is an instruction, not a lock.
 

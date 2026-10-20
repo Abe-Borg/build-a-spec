@@ -798,7 +798,7 @@ export default function ArtifactPanel({
         ? `Walk all ${importedOutstanding} imported block(s) against this project in one pass, essential edits only — keep, delete, or adapt a block only for an essential reason (a code conflict, a scope gap, inapplicable content, explanatory prose…), leaving the client's wording and structure as they are. One click to undo.`
         : `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo.`;
   const scopeOption = editScopeOption(editScope);
-  // The 🔒 badge says as much as the bar has room for without wrapping
+  // The 🔒 badge says as much as it can without costing the bar a row
   // (lib/actionBarFit.ts): v1.28.0's full wording pushed windows that had
   // held the bar on one row onto two. Hidden is the last step before a
   // wrap; the composer's Edits switch still shows the mode.

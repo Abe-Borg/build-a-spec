@@ -25547,10 +25547,16 @@ change or VERSION bump.
   for one row); `pickScopeBadgeLevel` takes the most descriptive of `full`
   ("🔒 Essential edits only"), `compact` ("🔒 Essentials",
   `EditScopeOption.compact`), `icon` (the lock alone) and `hidden` whose
-  bar takes no more lines than the most compact one. Where the bar wraps at
-  every level (the 1440 and 1100 windows), that is `full` again. Unmeasured
-  input (a zero-width bar, no badge group, a level that measured 0) keeps
-  `full`.
+  bar takes no more lines than the most compact one. Where every level
+  takes as many lines (the 1440 and 1100 windows: two), that is `full`
+  again. In a pane too narrow even for two rows at the full wording — a
+  browser below the desktop window's 1,100px minimum, e.g. a 520px pane,
+  three lines full and two at *Essentials* — the shorter badge saves the
+  third row and is taken: the rule is fewest lines, not one row or nothing
+  (Codex review on PR #332 read the first draft's "wraps anyway and says
+  everything again" against the code; the wording was wrong, the rule
+  stays). Unmeasured input (a zero-width bar, no badge group, a level that
+  measured 0) keeps `full`.
 - **Hidden is the last step before a wrap**, not instead of the lock: the
   Edits switch beside the composer is always on screen and shows the mode,
   and at the owner's width the lock alone leaves ~20px spare, which the
@@ -25587,14 +25593,15 @@ change or VERSION bump.
 
 ### Reversion evidence
 
-Ten probes, each applied alone and restored, against
+Eleven probes, each applied alone and restored, against
 `frontend/tests/actionBar.test.ts` and `editScope.test.ts`: picking the most
 compact level instead of the most descriptive, dropping the slack, assuming
 the full badge is the one shown, hiding when unmeasured, a first item that
 never starts a line, measuring inside the observer callback, never applying
 `hidden`, the measuring copies in the accessibility tree, no screen-reader
-text, and a different compact wording. All ten went red. `npm test` (602)
-and the build pass; Ruff passes. No paid API call was made.
+text, a different compact wording, and shortening only for one row (full
+otherwise). All eleven went red. `npm test` (603) and the build pass; Ruff
+passes. No paid API call was made.
 
 ### Release-note draft (for the release after 1.28.0)
 

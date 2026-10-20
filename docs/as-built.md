@@ -25521,3 +25521,94 @@ assistant would make differently are asked about instead of edited, and
 Final QC reviews under the same rule. Anything you ask for in chat is still
 done. The section saves the setting and Next section carries it. Open
 sessions rewrite their cached prompt once after upgrading."
+
+## The edit-scope badge gives way before the action bar wraps — implemented notes (2026-10-20)
+
+Owner report (Abraham, with a screenshot of v1.28.0): the document panel's
+action bar was "bunched up". The file buttons (Save, Open, Import Spec,
+Attach Document) had wrapped onto a second row in the bar's right corner,
+with the room they needed left empty beside *✨ Adapt imported draft*.
+Frontend only: no route, SSE event, dependency, env knob, project-format
+change or VERSION bump.
+
+- **Measured before anything changed**, in Chromium against the built app
+  (backend `create_app()` with an imported master under Essentials; Inter
+  stands in for Segoe UI). The bar's four groups need about 1,016px of pane
+  for one row; the 🔒 *Essential edits only* badge v1.28.0 added is 126px of
+  that plus its 10px gap, so before it the bar needed ~880px. The
+  screenshot's header (57 CSS px drawn 66px tall) puts the owner's window at
+  about 1,707 CSS px (a 2560-wide display at 150%), a pane of ~922px: one
+  row before the release, two after it. Segoe UI measured about 4% narrower
+  than Inter in the screenshot's group widths.
+- **The badge gives way; nothing else changes.** `lib/actionBarFit.ts`
+  (pure): `flexLineCount` is the browser's greedy line breaking for items
+  that never shrink (an item joins a line only with `FIT_SLACK_PX`, 1px, to
+  spare, so a width that rounds differently never wraps the level picked
+  for one row); `pickScopeBadgeLevel` takes the most descriptive of `full`
+  ("🔒 Essential edits only"), `compact` ("🔒 Essentials",
+  `EditScopeOption.compact`), `icon` (the lock alone) and `hidden` whose
+  bar takes no more lines than the most compact one. Where every level
+  takes as many lines (the 1440 and 1100 windows: two), that is `full`
+  again. In a pane too narrow even for two rows at the full wording — a
+  browser below the desktop window's 1,100px minimum, e.g. a 520px pane,
+  three lines full and two at *Essentials* — the shorter badge saves the
+  third row and is taken: the rule is fewest lines, not one row or nothing
+  (Codex review on PR #332 read the first draft's "wraps anyway and says
+  everything again" against the code; the wording was wrong, the rule
+  stays). Unmeasured input (a zero-width bar, no badge group, a level that
+  measured 0) keeps `full`.
+- **Hidden is the last step before a wrap**, not instead of the lock: the
+  Edits switch beside the composer is always on screen and shows the mode,
+  and at the owner's width the lock alone leaves ~20px spare, which the
+  Save caret (a save target, ~17px) and "Saved ✓" eat. Without the step,
+  every save would wrap the bar for 2.2 seconds and jump the document down
+  and back.
+- **Measuring** (`lib/useScopeBadgeLevel.ts`): one copy of the badge per
+  shown level sits in an invisible, `aria-hidden`, absolutely positioned
+  `w-max` span inside the (now `relative`) bar, so absolute children take
+  no part in the flex layout and every level is measured without being
+  shown. The visible badge stays mounted while hidden (`hidden` class), so
+  its group can still be found. Each level's cost is its width plus the
+  group's gap beside it; the pick subtracts what the badge adds now, so it
+  never depends on the level shown and a re-measure lands on the same one.
+  It measures once in a layout effect (before paint), then on a
+  `ResizeObserver` over the bar and each group (a window resize, a lint
+  count, "Saving…", Exit compare), deferred to the next animation frame:
+  setting the level inside the callback would raise the browser's
+  "ResizeObserver loop" error, which `clientLog` reports as an app error.
+  Not per render: `ArtifactPanel` is not memoized and renders through a
+  streaming turn.
+- **Words are never lost.** The hover (`title`) keeps the full wording and
+  the mode's description at every level; short of `full`, the visible text
+  is `aria-hidden` and an `sr-only` span reads *Essential edits only*.
+- **After**, same harness, resized live (no console error, no
+  `ResizeObserver` loop): 1920 → one row, full; 1860 → one row,
+  *Essentials*; 1760 and 1707 → one row, lock alone; 1640–1700 → one row,
+  badge hidden; 1600 and below → two rows as before, full wording. Back up
+  the same steps in reverse.
+- **Not changed:** the wrap between four unshrinkable groups, every label,
+  the lint badge, every `data-tour` and `data-capability` (the badge carries
+  none; it is not a control), `TOUR_VERSION`. At the default 1440 window the
+  bar still takes two rows, as it has since "The action bar fits the pane".
+
+### Reversion evidence
+
+Eleven probes, each applied alone and restored, against
+`frontend/tests/actionBar.test.ts` and `editScope.test.ts`: picking the most
+compact level instead of the most descriptive, dropping the slack, assuming
+the full badge is the one shown, hiding when unmeasured, a first item that
+never starts a line, measuring inside the observer callback, never applying
+`hidden`, the measuring copies in the accessibility tree, no screen-reader
+text, a different compact wording, and shortening only for one row (full
+otherwise). All eleven went red. `npm test` (603) and the build pass; Ruff
+passes. No paid API call was made.
+
+### Release-note draft (for the release after 1.28.0)
+
+Section "Interface", item "The document panel's buttons fit on one row
+again": "1.28.0's 🔒 Essential edits only badge pushed the document panel's
+Save, Open, Import Spec and Attach Document buttons onto a second row on
+windows where they had fit on one. The badge now shortens to 🔒 Essentials,
+then to the lock alone, and as a last step steps aside — the Edits switch
+beside the chat still shows the mode — before the buttons wrap. Hover it for
+the full description."

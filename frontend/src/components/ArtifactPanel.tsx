@@ -79,6 +79,8 @@ import {
 } from "../lib/panelTray";
 import Tip from "./Tip";
 import { editScopeOption, type EditScope } from "../lib/editScope";
+import { SHOWN_SCOPE_BADGE_LEVELS, type ScopeBadgeLevel } from "../lib/actionBarFit";
+import { useScopeBadgeLevel } from "../lib/useScopeBadgeLevel";
 
 /** The Export menu's downloads, keyed for the busy state. */
 type ExportKey =
@@ -796,6 +798,19 @@ export default function ArtifactPanel({
         ? `Walk all ${importedOutstanding} imported block(s) against this project in one pass, essential edits only — keep, delete, or adapt a block only for an essential reason (a code conflict, a scope gap, inapplicable content, explanatory prose…), leaving the client's wording and structure as they are. One click to undo.`
         : `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo.`;
   const scopeOption = editScopeOption(editScope);
+  // The 🔒 badge says as much as the bar has room for without wrapping
+  // (lib/actionBarFit.ts): v1.28.0's full wording pushed windows that had
+  // held the bar on one row onto two. Hidden is the last step before a
+  // wrap; the composer's Edits switch still shows the mode.
+  const scopeBadge = useScopeBadgeLevel(editScope === "essentials");
+  const scopeBadgeClass =
+    "whitespace-nowrap rounded-full border border-accent/50 bg-accent/15 px-2 py-px text-[10px] font-semibold text-accent";
+  const scopeBadgeText = (level: ScopeBadgeLevel) =>
+    level === "full"
+      ? `🔒 ${scopeOption.short}`
+      : level === "compact"
+        ? `🔒 ${scopeOption.compact}`
+        : "🔒";
 
   // --- Compare (diff) mode (Batch 5) ---
   const curIndex = version.index;
@@ -970,9 +985,12 @@ export default function ArtifactPanel({
           stepper. `mr-auto` keeps the draft action at the left and the
           groups beside it at the right; `justify-end` right-aligns a
           wrapped line. Every data-tour / data-capability stays on the
-          control it names. */}
+          control it names. The 🔒 badge is the one piece that shortens
+          rather than wrap the bar (useScopeBadgeLevel); its off-screen
+          copies sit in the last, absolutely positioned span. */}
       <div
-        className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-b border-edge px-5 py-2.5"
+        ref={scopeBadge.barRef}
+        className="relative flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-b border-edge px-5 py-2.5"
         data-testid="doc-action-bar"
       >
         <div className="mr-auto flex shrink-0 items-center gap-2.5">
@@ -986,10 +1004,20 @@ export default function ArtifactPanel({
           )}
           {editScope === "essentials" && (
             <span
-              className="whitespace-nowrap rounded-full border border-accent/50 bg-accent/15 px-2 py-px text-[10px] font-semibold text-accent"
+              ref={scopeBadge.badgeRef}
+              className={
+                scopeBadgeClass + (scopeBadge.level === "hidden" ? " hidden" : "")
+              }
               title={`${scopeOption.short}. ${scopeOption.detail} Change it beside the chat's Send button.`}
             >
-              🔒 {scopeOption.short}
+              {scopeBadge.level === "full" ? (
+                scopeBadgeText("full")
+              ) : (
+                <>
+                  <span aria-hidden="true">{scopeBadgeText(scopeBadge.level)}</span>
+                  <span className="sr-only">{scopeOption.short}</span>
+                </>
+              )}
             </span>
           )}
           {importedOutstanding > 0 ? (
@@ -1560,6 +1588,19 @@ export default function ArtifactPanel({
             }}
           />
         </div>
+        {editScope === "essentials" && (
+          <span
+            ref={scopeBadge.measureRef}
+            aria-hidden="true"
+            className="pointer-events-none invisible absolute left-0 top-0 flex w-max"
+          >
+            {SHOWN_SCOPE_BADGE_LEVELS.map((level) => (
+              <span key={level} data-level={level} className={scopeBadgeClass}>
+                {scopeBadgeText(level)}
+              </span>
+            ))}
+          </span>
+        )}
       </div>
 
       {fileLoading && (

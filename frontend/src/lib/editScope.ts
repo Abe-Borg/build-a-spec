@@ -30,6 +30,9 @@ export interface EditScopeOption {
   label: string;
   /** One line for the panel badge. */
   short: string;
+  /** The badge's wording when the action bar is short of room
+   *  (lib/actionBarFit.ts); the hover keeps `short`. */
+  compact: string;
   /** Hover text: what the assistant will and will not do in this mode. */
   detail: string;
 }
@@ -39,6 +42,7 @@ export const EDIT_SCOPE_OPTIONS: readonly EditScopeOption[] = [
     id: "essentials",
     label: "Essentials only",
     short: "Essential edits only",
+    compact: "Essentials",
     detail:
       "Change only what must change for this project: code and standard " +
       "conflicts, outdated editions, scope gaps (work the project needs " +
@@ -54,6 +58,7 @@ export const EDIT_SCOPE_OPTIONS: readonly EditScopeOption[] = [
     id: "extensive",
     label: "Extensive",
     short: "Extensive edits allowed",
+    compact: "Extensive",
     detail:
       "Everything Essentials covers, scope gaps included, plus full " +
       "latitude: rewrite for clarity and enforceability, reorganize " +

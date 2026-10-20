@@ -89,6 +89,43 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.28.1",
+        date="2026-10-20",
+        headline="More room for your document toolbar",
+        summary=(
+            "In Essentials only mode, the document panel's scope badge "
+            "now shortens or steps aside when that saves a row of buttons. "
+            "Save, Open, Import Spec and Attach Document have more room "
+            "as you resize the panel."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Document panel",
+                items=(
+                    ReleaseItem(
+                        title="The scope badge fits around your actions",
+                        body=(
+                            "The Essential edits only badge shortens to "
+                            "Essentials, then to the lock alone, and finally "
+                            "steps aside when that reduces toolbar wrapping. "
+                            "It keeps its full wording when shortening it "
+                            "would not save a row."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Your edit scope stays clear",
+                        body=(
+                            "Hovering a visible badge shows its full "
+                            "description, and screen readers retain its "
+                            "full label when it shortens. The Edits switch "
+                            "beside Send always shows the selected mode."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.28.0",
         date="2026-10-19",
         headline="Choose how much the assistant changes your specification",

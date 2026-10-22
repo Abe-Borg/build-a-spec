@@ -447,9 +447,12 @@ def test_the_reader_fails_closed_without_its_xml_guard(monkeypatch):
 def test_the_reader_and_its_guard_are_dependencies():
     """The guard is not optional, so it is a declared dependency, not an
     accident of whatever else is installed."""
-    requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
-    assert re.search(r"^openpyxl>=", requirements, re.MULTILINE)
-    assert re.search(r"^defusedxml>=", requirements, re.MULTILINE)
+    intent = (REPO_ROOT / "requirements.in").read_text(encoding="utf-8")
+    assert re.search(r"^openpyxl>=", intent, re.MULTILINE)
+    assert re.search(r"^defusedxml>=", intent, re.MULTILINE)
+    lock = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert re.search(r"^openpyxl==", lock, re.MULTILINE)
+    assert re.search(r"^defusedxml==", lock, re.MULTILINE)
     assert openpyxl.DEFUSEDXML is True
     spec = (REPO_ROOT / "packaging" / "windows" / "build-a-spec.spec").read_text(
         encoding="utf-8"

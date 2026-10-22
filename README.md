@@ -4966,6 +4966,12 @@ frontend/                Vite + React + TypeScript + Tailwind v4
 packaging/windows/       build-a-spec.spec (PyInstaller), installer.iss (Inno),
                          app_entry.py (--version/--selfcheck), make_manifest.py,
                          check_release_version.py       [cloned from Spec Critic]
+                         third_party_notices.py (writes THIRD-PARTY-NOTICES.txt;
+                         fails the build on a missing license text),
+                         third_party_licenses/ (texts a package's wheel omits),
+                         build-requirements.in/.txt (pinned PyInstaller)
+requirements.in          dependency intent (names + accepted ranges)
+requirements.txt         the exact lock every install uses (uv-generated)
 docs/
   DOCX_FIDELITY.md         export/API/blocker/compatibility contract
   DOCX_FIDELITY_CORPUS.md  fixture provenance and evidence boundary
@@ -4981,7 +4987,8 @@ The backend serves the built frontend from `frontend/dist` in normal use; in dev
 ## Requirements
 
 - Windows 10/11 (WebView2 — preinstalled on current Windows), macOS, or Linux
-- Python 3.11+
+- Python 3.11+ (dependencies install from `requirements.txt`, an exact lock;
+  see "Dependencies" under Install & Run)
 - Node 22+ (only to build or develop the frontend — `npm test` runs `node --test` over the `.ts` sources and needs type stripping, which Node 20 cannot do; CI pins 22)
 - An Anthropic API key
 
@@ -4995,7 +5002,12 @@ installer adds the Edge WebView2 runtime if your machine doesn't already
 have it. The installer shows the license (the PolyForm Shield License 1.0.0;
 see [License](#license)) and does not install until you choose **I accept
 the agreement**. It asks again on every update, since each version is
-installed on the terms it ships with.
+installed on the terms it ships with. A silent install (`/SILENT`,
+`/VERYSILENT`, as IT deployment tools run it) skips every wizard page, the
+license page included, so the terms also install beside the app as
+`LICENSE.txt`, with `THIRD-PARTY-NOTICES.txt` (the license text of every
+component the app bundles); whoever deploys silently is responsible for
+passing the terms on to the people who use it.
 
 The app is not code-signed, so on first run Windows SmartScreen shows
 "Windows protected your PC" → **More info → Run anyway**. Updates are
@@ -5016,6 +5028,26 @@ between the two is shown for each. Run them from the repo root.
    .\.venv\Scripts\activate
    pip install -r requirements.txt
    ```
+
+   `requirements.txt` is an exact lock — every package, transitive ones
+   included, pinned to one version, with platform-only packages behind
+   markers (`pythonnet`, which loads pywebview's WebView2 backend, installs
+   only on Windows). CI, the Windows release build and a source checkout
+   all install the same versions, so what CI tested is what ships. The
+   intent — which packages the app needs and which versions it accepts —
+   is `requirements.in`. To change a dependency, edit `requirements.in`,
+   then regenerate the lock with [uv](https://docs.astral.sh/uv/) from the
+   repo root and commit both files:
+
+   ```
+   uv pip compile requirements.in --universal --python-version 3.11 -o requirements.txt
+   ```
+
+   Add `--upgrade` (or `--upgrade-package NAME`) to move pins without
+   changing the intent. `tests/test_requirements_lock.py` fails when a
+   declared dependency is missing from the lock, and
+   `tests/test_third_party_notices.py` fails when a pinned package ships no
+   license text the Windows build can find.
 
    Keep the leading `.\` on every command that runs something from
    `.venv`: without it, PowerShell reads `.venv` as the name of a
@@ -5424,8 +5456,25 @@ only after you accept them.
 This is a *source-available* license rather than an OSI-approved open-source one:
 the Open Source Definition forbids restricting a field of endeavour, and the
 noncompete term does exactly that. Every runtime dependency is permissively
-licensed (MIT, BSD, Apache-2.0, MPL-2.0, PSF-2.0), and PyInstaller's bootloader exception
-permits packaging under any license, so nothing here is imposed by a dependency.
+licensed (MIT, MIT-0, BSD, Apache-2.0, ISC, 0BSD, Unlicense, MPL-2.0, PSF-2.0,
+and Microsoft's BSD-style terms for the WebView2 SDK DLLs pywebview carries),
+and PyInstaller's bootloader exception permits packaging under any license, so
+nothing here is imposed by a dependency.
+
+Those licenses do ask for one thing: their copyright and license text must
+travel with a binary distribution. The Windows build collects them into
+`THIRD-PARTY-NOTICES.txt`, which the installer puts beside the app: the Python
+interpreter's license (which on python.org's Windows build also carries the
+terms of the libraries it ships), every Python package the PyInstaller
+analysis bundled, PyInstaller itself (its bootloader is the exe), the WebView2
+SDK terms, and every production npm package the user interface is built from.
+`packaging/windows/third_party_notices.py` writes it and **fails the build**
+when any of those texts cannot be found, so an installer missing a license
+cannot ship. Two texts are supplied from upstream source because the
+published package omits them (`packaging/windows/third_party_licenses/`):
+`proxy_tools` 0.1.0 (a pywebview dependency whose wheel and source package
+carry no license file; the text is its repository's `LICENSE.txt`) and the
+WebView2 SDK terms (in pywebview's source package, not its wheel).
 
 For a commercial or competing-use license, contact the copyright holder.
 

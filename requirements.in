@@ -1,0 +1,35 @@
+# Build-a-Spec dependency INTENT (Python 3.11+). This file says what the app
+# needs and which versions it accepts; requirements.txt is the exact lock that
+# every install uses (CI, the Windows release build, a source checkout).
+#
+# After changing anything here, regenerate the lock from the repo root:
+#   uv pip compile requirements.in --universal --python-version 3.11 -o requirements.txt
+# then review the diff and commit both files. A lock upgrade without an intent
+# change is the same command with --upgrade (or --upgrade-package NAME).
+# tests/test_requirements_lock.py checks that every name here is pinned there.
+
+anthropic>=1.0,<2
+fastapi>=0.115
+uvicorn>=0.32
+pydantic>=2.10
+platformdirs>=4.3
+pywebview>=6.0
+python-docx>=1.1
+lxml>=5
+pypdf>=4
+# Excel workbooks attached as reference documents (.xlsx / .xlsm). defusedxml
+# is not optional: with it installed openpyxl refuses entity declarations in a
+# workbook's XML, and the reader fails closed without it.
+openpyxl>=3.1
+defusedxml>=0.7
+python-multipart>=0.0.9
+
+# Optional (recommended): OS credential-manager storage for the API key
+keyring>=25
+
+# Development / tests
+pytest>=8
+httpx>=0.28
+# The lint gate (ruff.toml). Pinned exactly: a ruff minor can add rules to
+# the selected families and turn CI red on an unrelated PR.
+ruff==0.15.8

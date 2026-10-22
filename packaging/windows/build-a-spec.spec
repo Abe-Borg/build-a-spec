@@ -14,7 +14,7 @@ script:
     python -m venv .venv
     .\\.venv\\Scripts\\activate
     pip install -r requirements.txt
-    pip install pythonnet pyinstaller
+    pip install -r packaging/windows/build-requirements.txt
     cd frontend
     npm ci
     npm run build
@@ -22,7 +22,10 @@ script:
     pyinstaller packaging/windows/build-a-spec.spec --noconfirm --clean
 
 Output: ``dist/BuildASpec/`` (folder with ``BuildASpec.exe`` + bundled
-interpreter and deps). ``packaging/windows/installer.iss`` wraps it into
+interpreter and deps) and ``dist/THIRD-PARTY-NOTICES.txt`` (the license text
+of every bundled component; see ``third_party_notices.py`` — the build fails
+when one is missing, and it reads ``frontend/node_modules``, so ``npm ci``
+must run first). ``packaging/windows/installer.iss`` wraps both into
 ``BuildASpecSetup.exe``.
 
 One-folder (not one-file) is deliberate: starts faster, updates more
@@ -30,8 +33,15 @@ reliably, and trips antivirus far less than a self-extracting one-file exe
 — the Inno Setup installer makes it a normal double-click install anyway.
 """
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks.tcl_tk import tcltk_info
+
+# packaging/windows helper (importable + unit-tested: tests/test_third_party_notices.py).
+if SPECPATH not in sys.path:
+    sys.path.insert(0, SPECPATH)
+from third_party_notices import NOTICES_FILENAME, write_third_party_notices  # noqa: E402
 
 datas = []
 binaries = []
@@ -106,12 +116,14 @@ datas += [(
     os.path.join("backend", "templates", "curated"),
 )]
 
-# The PolyForm Shield license text — the installed copy must carry it (the
-# Notices section requires that anyone receiving any part of the software also
+# The PolyForm Shield license text — every copy must carry it (the Notices
+# section requires that anyone receiving any part of the software also
 # receives these terms and the `Required Notice:` line, and the Noncompete term
-# only binds a recipient who has them). Lands at the top level
-# of dist/BuildASpec, which installer.iss bundles wholesale via its
-# `Source: "..\..\dist\BuildASpec\*"` entry.
+# only binds a recipient who has them). PyInstaller 6 puts data files in the
+# contents directory, so this copy lands at dist/BuildASpec/_internal/LICENSE;
+# it keeps the terms inside the one-folder build if that folder is passed on
+# by itself. installer.iss also installs LICENSE as {app}\LICENSE.txt, beside
+# the exe, where a user finds it.
 datas += [(os.path.join(_repo_root, "LICENSE"), ".")]
 
 a = Analysis(
@@ -125,6 +137,24 @@ a = Analysis(
     runtime_hooks=[],
     excludes=["pytest", "_pytest", "playwright"],
     noarchive=False,
+)
+
+# Third-party license notices. A bundled binary must carry the license text of
+# everything it bundles, and copy_metadata above reaches only a few packages.
+# This writes dist/THIRD-PARTY-NOTICES.txt — beside the one-folder build, not
+# inside it — and installer.iss installs it next to BuildASpec.exe. It lists
+# every distribution that owns a file the analysis collected (plus
+# PyInstaller, whose bootloader is the exe), the interpreter's LICENSE.txt,
+# Microsoft's WebView2 SDK terms (vendored by pywebview), and every production
+# npm package the frontend is built from. It FAILS THE BUILD when any of those
+# texts cannot be found, so an installer missing a license can never ship
+# silently. Placed before PYZ/EXE/COLLECT so a gap stops the build early.
+# Tcl/Tk terms are required only if the analysis ever collects tkinter.
+write_third_party_notices(
+    os.path.join(DISTPATH, NOTICES_FILENAME),
+    [a.pure, a.scripts, a.binaries, a.datas],
+    tcl_data_dir=tcltk_info.tcl_data_dir,
+    tk_data_dir=tcltk_info.tk_data_dir,
 )
 
 pyz = PYZ(a.pure)

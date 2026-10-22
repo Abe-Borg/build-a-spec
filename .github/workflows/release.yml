@@ -12,7 +12,9 @@ name: Release (Windows)
 #                    pushed tag does — the publish step is tag-gated).
 #
 # Everything users need is bundled — the PyInstaller build carries its own
-# Python interpreter and dependencies, and the installer pulls in the Edge
+# Python interpreter and dependencies (installed from the exact lock in
+# requirements.txt, with every bundled component's license text collected
+# into THIRD-PARTY-NOTICES.txt), and the installer pulls in the Edge
 # WebView2 runtime if it's missing — so an end user installs a single .exe
 # with no Python, Node, or other tooling on their machine.
 
@@ -95,13 +97,12 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
+          # The exact lock. On Windows it also installs pythonnet (pywebview
+          # requires it there, behind a sys_platform marker), which loads
+          # pywebview's Edge WebView2 backend, so PyInstaller bundles it.
           pip install -r requirements.txt
-          # pywebview's Edge WebView2 backend loads through pythonnet/clr on
-          # Windows. It's kept out of requirements.txt (it needs .NET and
-          # breaks a plain Linux `pip install`), so install it here on the
-          # Windows runner to guarantee PyInstaller bundles the native backend.
-          pip install pythonnet
-          pip install pyinstaller
+          # Build tooling, pinned: PyInstaller's bootloader is BuildASpec.exe.
+          pip install -r packaging/windows/build-requirements.txt
 
       - name: Version consistency gate
         shell: pwsh
@@ -122,6 +123,16 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - name: Check interpreter and npm license texts
+        # The spec writes dist/THIRD-PARTY-NOTICES.txt (installed beside the
+        # app) and fails the build when any bundled component's license text
+        # is missing. The interpreter's LICENSE.txt depends on this runner's
+        # Python install and the npm texts on the tree `npm ci` just
+        # installed, so check them here, before the PyInstaller run; the
+        # bundled Python packages' texts can only be checked after the
+        # analysis, inside the spec.
+        run: python packaging/windows/third_party_notices.py
 
       - name: Freeze with PyInstaller
         run: pyinstaller packaging/windows/build-a-spec.spec --noconfirm --clean
@@ -239,6 +250,17 @@ jobs:
           path: |
             dist/installer/BuildASpecSetup.exe
             dist/installer/latest.json
+          if-no-files-found: error
+
+      - name: Upload third-party notices (for review)
+        # The installer already carries THIRD-PARTY-NOTICES.txt; this copy lets
+        # a build's notices be read without installing. A separate artifact on
+        # purpose: adding the file to the artifact above would move its root up
+        # to dist/ (upload-artifact roots at the paths' common parent).
+        uses: actions/upload-artifact@v4
+        with:
+          name: third-party-notices-${{ steps.ver.outputs.version }}
+          path: dist/THIRD-PARTY-NOTICES.txt
           if-no-files-found: error
 
       - name: Publish GitHub Release

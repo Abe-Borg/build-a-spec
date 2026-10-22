@@ -77,6 +77,14 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      # The Windows build fails when a bundled npm package ships no license
+      # text (packaging/windows/third_party_notices.py). Check the tree npm ci
+      # just installed here, so a dependency bump finds out on its PR rather
+      # than at release time. The runner's system Python is enough: the
+      # module uses only the standard library.
+      - name: Check npm license texts
+        run: python3 packaging/windows/third_party_notices.py --frontend-only
+
       - name: Build
         working-directory: frontend
         run: npm run build

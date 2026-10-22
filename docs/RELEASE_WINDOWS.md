@@ -215,6 +215,14 @@ invisible to CI and expensive to the user.
       that page installs nothing. The page reads `LICENSE` directly
       (`LicenseFile` in `installer.iss`), so a compile that cannot find it
       fails the build; this row checks it displays.
+- [ ] **The terms and notices are installed beside the app** (after v1.28.1).
+      After that install, the install folder (`%LOCALAPPDATA%\Programs\Build-a-Spec`
+      for a per-user install) holds `LICENSE.txt` and
+      `THIRD-PARTY-NOTICES.txt` next to `BuildASpec.exe`. The notices open in
+      Notepad with no garbled characters, list the Python interpreter, the
+      Python packages, and the JavaScript packages, and carry Microsoft's
+      WebView2 SDK text under pywebview. The workflow also uploads the notices
+      as their own run artifact, so they can be read without installing.
 - [ ] **Launch the packaged build and do one of each.** A chat turn, an
       import, an export. `--selfcheck` proves the modules import; it does not
       prove the window works.
@@ -1168,12 +1176,14 @@ terminal) and in Command Prompt. Run them from the repo root.
 - Python 3.11+ and Node 22+ installed (`npm test` needs Node's type stripping; 20 cannot parse the `.ts` tests).
 - [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed (`ISCC.exe`
   on PATH, or use its full path).
-- `pip install pyinstaller` in the build venv (build-time only — it is
-  deliberately NOT in `requirements.txt`).
-- On Windows, `pip install pythonnet` too if a plain
-  `pip install -r requirements.txt` didn't pull it — it is what loads
-  pywebview's Edge WebView2 backend, and PyInstaller can only bundle what
-  is installed.
+- `pip install -r packaging\windows\build-requirements.txt` in the build
+  venv: PyInstaller and its hooks, pinned exactly (build-time only — they
+  are deliberately NOT in `requirements.txt`, but PyInstaller's bootloader
+  is `BuildASpec.exe`, so its version is part of what ships).
+- `requirements.txt` is an exact lock generated from `requirements.in`. On
+  Windows it also installs `pythonnet` (pywebview requires it there, behind
+  a `sys_platform` marker) — it is what loads pywebview's Edge WebView2
+  backend, and PyInstaller can only bundle what is installed.
 - In PowerShell, `.\.venv\Scripts\activate` runs `Activate.ps1`. If
   PowerShell refuses because running scripts is disabled on this system,
   allow local scripts for your account once with
@@ -1197,17 +1207,33 @@ terminal) and in Command Prompt. Run them from the repo root.
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
-pip install pythonnet pyinstaller
+pip install -r packaging\windows\build-requirements.txt
 
 cd frontend
 npm ci
 npm run build
 cd ..
 
+python packaging\windows\third_party_notices.py
 pyinstaller packaging\windows\build-a-spec.spec --noconfirm --clean
 ```
 
-Output: `dist\BuildASpec\` (one-folder app).
+Output: `dist\BuildASpec\` (one-folder app) and `dist\THIRD-PARTY-NOTICES.txt`.
+
+The `third_party_notices.py` line is a fast pre-check: it confirms the
+interpreter's `LICENSE.txt` and every production npm package's license file
+can be found before the long freeze. The spec then writes
+`dist\THIRD-PARTY-NOTICES.txt` — the license text of every Python
+distribution the analysis collected (plus PyInstaller, whose bootloader is
+the exe), the interpreter, Microsoft's WebView2 SDK DLLs that pywebview
+vendors, and every production npm package the UI is built from — and
+**fails the build** naming each component whose text it cannot find. The
+fix for a package that ships no license file is to save the text, taken from
+that project's source at exactly that version, in
+`packaging\windows\third_party_licenses\` (the file-name rules are in the
+module docstring); the version in the file name makes an upgrade fail again
+until someone checks the new text. `npm ci` must run first: the npm texts are
+read from `frontend\node_modules`.
 
 ### 3. Smoke-test the frozen app
 

@@ -1,0 +1,10 @@
+# Windows release build tooling, installed after requirements.txt (see
+# docs/RELEASE_WINDOWS.md and .github/workflows/release.yml). Kept out of
+# requirements.txt: it is needed only to freeze the app, never to run or test
+# it. Pinned exactly because PyInstaller's bootloader IS BuildASpec.exe, so its
+# version is part of what ships.
+#
+# Regenerate the lock from the repo root after changing a pin here:
+#   uv pip compile packaging/windows/build-requirements.in -c requirements.txt --universal --python-version 3.11 -o packaging/windows/build-requirements.txt
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9

@@ -76,6 +76,76 @@ def test_pyinstaller_spec_bundles_the_license():
 
 
 
+def _iss_files_entries() -> list[dict[str, str]]:
+    """Each ``[Files]`` line of installer.iss as ``{param: value}`` (lower-case
+    keys, quotes stripped)."""
+    entries = []
+    for line in _iss_section("Files"):
+        params = {}
+        for part in line.split(";"):
+            if ":" in part:
+                key, value = part.split(":", 1)
+                params[key.strip().lower()] = value.strip().strip('"')
+        entries.append(params)
+    return entries
+
+
+def _installed(source: Path) -> list[dict[str, str]]:
+    return [
+        e for e in _iss_files_entries()
+        if "source" in e
+        and (PKG / e["source"].replace("\\", "/")).resolve() == source.resolve()
+    ]
+
+
+def test_installer_puts_the_license_and_notices_beside_the_exe():
+    """PyInstaller 6 puts data files in the contents directory, so the
+    spec's LICENSE copy installs as {app}\\_internal\\LICENSE, where nobody
+    looks, and a silent install never shows the license page. The installer
+    therefore installs LICENSE.txt and THIRD-PARTY-NOTICES.txt at the top of
+    {app} itself. Neither may be skipped when missing: ISCC must stop."""
+    license_entries = _installed(REPO_ROOT / "LICENSE")
+    assert len(license_entries) == 1, "installer.iss does not install LICENSE beside the app"
+    assert license_entries[0]["destdir"] == "{app}"
+    assert license_entries[0].get("destname") == "LICENSE.txt"
+
+    notices_entries = _installed(REPO_ROOT / "dist" / "THIRD-PARTY-NOTICES.txt")
+    assert len(notices_entries) == 1, "THIRD-PARTY-NOTICES.txt is not installed with the app"
+    assert notices_entries[0]["destdir"] == "{app}"
+    assert "destname" not in notices_entries[0]
+    for entry in (*license_entries, *notices_entries):
+        assert "skipifsourcedoesntexist" not in entry.get("flags", "").lower()
+
+
+def test_the_spec_writes_the_notices_before_it_builds():
+    """The notices are written right after the analysis and before PYZ, so a
+    missing license stops the build before anything is packaged, from every
+    table the analysis collected."""
+    spec = (PKG / "build-a-spec.spec").read_text(encoding="utf-8")
+    call = spec.find("write_third_party_notices(\n")
+    assert call >= 0, "build-a-spec.spec no longer writes the third-party notices"
+    assert spec.find("a = Analysis(") < call < spec.find("pyz = PYZ(")
+    assert "[a.pure, a.scripts, a.binaries, a.datas]" in spec[call:]
+    assert "os.path.join(DISTPATH, NOTICES_FILENAME)" in spec[call:]
+
+
+def test_release_checks_notices_after_npm_ci_and_before_the_freeze():
+    """The pre-check reads frontend/node_modules, so it must follow npm ci;
+    it exists to fail before the long PyInstaller run, so it must precede
+    it. CI's frontend job runs the npm half on every PR."""
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    check = release.find("python packaging/windows/third_party_notices.py")
+    assert check >= 0, "release.yml does not check the license texts"
+    assert release.find("npm ci") < check < release.find("pyinstaller packaging/windows/")
+    assert "path: dist/THIRD-PARTY-NOTICES.txt" in release
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    frontend_check = ci.find("third_party_notices.py --frontend-only")
+    assert frontend_check >= 0, "ci.yml does not check the npm license texts"
+    assert ci.find("npm ci") < frontend_check
+
+
 def _iss_section(name: str) -> list[str]:
     """The directive lines of one ``[Section]`` of installer.iss: comments,
     preprocessor lines and blanks dropped, surrounding whitespace stripped."""

@@ -25612,3 +25612,96 @@ windows where they had fit on one. The badge now shortens to 🔒 Essentials,
 then to the lock alone, and as a last step steps aside — the Edits switch
 beside the chat still shows the mode — before the buttons wrap. Hover it for
 the full description."
+
+## Third-party notices and a locked dependency set — implemented notes (2026-10-22)
+
+Owner request (Abraham): act on a licensing review of the shipped app. It found the license
+itself right for the business: PolyForm Shield permits commercial use and forbids only a
+competing product (already the license since 2026-08-28; no change). It also found the
+installer license page and the copyright and contact lines in place. It named two gaps:
+no third-party-notice collection comparable to Spec Critic's, and floating backend
+dependencies. It also noted that silent installs bypass the license page.
+
+### Third-party notices
+
+- **The module.** `packaging/windows/third_party_notices.py` was copied from Claude-Spec-Critic's
+  file of the same name and adapted. A Python distribution is listed when it owns (`RECORD`) a
+  file the PyInstaller analysis collected; PyInstaller is always listed, because its
+  bootloader is the exe. Its texts are the declared `License-File`s, any other license-named
+  file in `.dist-info`, and vendored license files elsewhere in `RECORD`. Failing those, a
+  multi-line `License` field, then a version-named override. The interpreter contributes its
+  whole `LICENSE.txt`.
+- **Adapted for Build-a-Spec.** Tcl/Tk are required only when the analysis collects
+  `_tkinter`: nothing here imports tkinter, while Spec Critic's UI is Tk. Every production npm
+  package in `frontend/package-lock.json` (not `dev`/`devOptional`) contributes the
+  license-named files at its package root under `frontend/node_modules`. This is a superset
+  of what Vite keeps, on purpose. An absent `optional` package is skipped.
+  `REQUIRED_SUPPLEMENTS` names pywebview: its wheel ships Microsoft's WebView2 SDK DLLs
+  (`Microsoft.Web.WebView2.Core.dll`, `...WinForms.dll`, `WebView2Loader.dll`; 1.0.3856.49
+  in 6.2.1) without their license. The sdist has the license as
+  `webview/lib/Microsoft.Web.WebView2.LICENSE.md`; the text was taken from there and the DLL
+  bytes were checked identical to the wheel's. A missing supplement fails the build, and the
+  version in its file name makes a pywebview bump fail until the new text is checked.
+- **A real gap it caught.** On the first test freeze the build stopped: `proxy_tools` 0.1.0 (a
+  pywebview dependency) ships no license text in its wheel or sdist. Its metadata says MIT,
+  but its source header says BSD (extracted from Werkzeug). The upstream repository
+  (github.com/jtushman/proxy_tools) has `LICENSE.txt`, a BSD text with the Ronacher and
+  Tushman copyrights. Its `proxy_tools/__init__.py` is byte-identical to the 0.1.0 sdist's
+  (CRLF aside). That text is saved verbatim as `third_party_licenses/proxy-tools-0.1.0.txt`.
+- **The document.** Written as UTF-8 with a BOM and CRLF line endings. Components are grouped
+  Runtime / Python packages / JavaScript packages, each with its full text. A header line says
+  the WebView2 Runtime, when Setup installs it, comes from Microsoft under Microsoft's own
+  terms and is not covered by the file. Nothing is written on any gap, and a stale file from
+  an earlier build is deleted first.
+- **Wiring.** `build-a-spec.spec` calls `write_third_party_notices` between `Analysis` and
+  `PYZ`, writing `dist/THIRD-PARTY-NOTICES.txt`. `installer.iss` installs it and the root
+  `LICENSE` (as `LICENSE.txt`) at the top of `{app}`. A test freeze confirmed the existing
+  LICENSE datas entry lands in `dist/BuildASpec/_internal/LICENSE`, contrary to the spec's
+  comment (corrected). A silent install shows no license page, so that buried copy was all a
+  silently installed machine had. `release.yml` runs the module's pre-check after `npm ci`
+  and before the freeze, then uploads the notices as a separate run artifact. `ci.yml`'s
+  frontend job runs `--frontend-only` after `npm ci`, so an npm bump that drops a license
+  fails on its PR.
+- **Silent installs.** Inno Setup skips every page under `/SILENT`/`/VERYSILENT`, and that is
+  unchanged: forcing the page would break managed deployment. The installed `LICENSE.txt`
+  carries the Notices clause's terms and Required Notice line on every install, and README
+  says a silent deployer passes the terms on.
+
+### The locked dependency set
+
+- `requirements.in` holds the previous `requirements.txt` content (ranges and comments).
+  `requirements.txt` is now `uv pip compile requirements.in --universal --python-version 3.11`:
+  66 exact pins, platform packages behind markers (pythonnet, clr-loader, cffi, pycparser,
+  pywin32-ctypes on win32; SecretStorage, jeepney and cryptography on linux; pyobjc on darwin)
+  and Python < 3.12 backports behind theirs. The resolution was taken on 2026-10-22: the
+  newest versions in range, which is what CI's floating install was already getting.
+- `release.yml` installed `pythonnet` and `pyinstaller` unpinned. pythonnet now comes from the
+  lock (pywebview requires it on win32). The build tooling is
+  `packaging/windows/build-requirements.in` -> `.txt` (PyInstaller 6.22.3, hooks-contrib
+  2026.9, compiled with `-c requirements.txt`), installed by the workflow, the spec docstring
+  and the runbook.
+- `tests/test_requirements_lock.py`: every lock line is an exact pin; every declared name is
+  pinned; an exact intent pin (ruff) equals its lock pin; the lock names its command and pins
+  pythonnet behind its marker; the build lock agrees with the app lock; the workflows install
+  the locks and never `pip install pyinstaller`/`pythonnet` floating.
+  `tests/test_reference_workbooks.py` now reads the intent for `>=` and the lock for `==`.
+
+### Evidence
+
+- A Linux PyInstaller 6.22.3 freeze of the real spec (Python 3.12, the lock installed,
+  frontend built). The first run stopped on `proxy_tools`. After the override: "1 runtime, 48
+  Python and 224 npm components", a 647 KB file, and the module's pre-check passed for 224 npm
+  texts. The Windows freeze (python.org interpreter, Windows-only wheels) is the release
+  workflow's; the Windows wheels' RECORDs (pythonnet, clr-loader, cffi, pycparser,
+  pywin32-ctypes) were inspected and each ships its license.
+- Reversion probes, each restored: dropping the notices `[Files]` line, the WebView2
+  supplement, or the proxy_tools override, and floating `fastapi` in the lock. Each turned
+  its test red.
+- `tests/test_third_party_notices.py` (34), `test_requirements_lock.py`, `test_packaging.py`
+  and `test_reference_workbooks.py` pass locally, and Ruff is clean. No paid API call was made.
+
+### Release-note draft (for the release after 1.28.1)
+
+Section "Installing", item "License texts install with the app": "The install folder now
+holds LICENSE.txt and THIRD-PARTY-NOTICES.txt beside Build-a-Spec, the latter carrying the
+license of every component the app bundles. Nothing else about installing changes."

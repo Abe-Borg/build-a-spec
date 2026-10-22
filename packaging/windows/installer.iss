@@ -3,7 +3,8 @@
 ;
 ; Compile with:
 ;   ISCC /DMyAppVersion=X.Y.Z packaging\windows\installer.iss
-; and expects the PyInstaller one-folder output at dist\BuildASpec\.
+; and expects the PyInstaller one-folder output at dist\BuildASpec\ plus the
+; third-party notices the spec writes beside it, dist\THIRD-PARTY-NOTICES.txt.
 ;
 ; Produces dist\installer\BuildASpecSetup.exe — a normal double-click
 ; installer with a license agreement page, a Start-menu shortcut, optional
@@ -67,10 +68,11 @@ SetupIconFile=assets\BuildASpec.ico
 ; (/SILENT, /VERYSILENT) skip every wizard page, this one included.
 ;
 ; It reads the repository's own LICENSE file, not a copy, so the terms on
-; the page can never drift from the terms that govern (and that the
-; PyInstaller output already ships into {app}). Inno Setup loads a text
-; license file as ANSI or UTF-8; LICENSE is plain ASCII, which reads the
-; same either way, and tests/test_packaging.py keeps it that way.
+; the page can never drift from the terms that govern (and that [Files]
+; installs as {app}\LICENSE.txt, which a silent install still gets). Inno
+; Setup loads a text license file as ANSI or UTF-8; LICENSE is plain ASCII,
+; which reads the same either way, and tests/test_packaging.py keeps it that
+; way.
 LicenseFile=..\..\LICENSE
 Compression=lzma2
 SolidCompression=yes
@@ -100,6 +102,20 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; The entire PyInstaller one-folder output.
 Source: "..\..\dist\BuildASpec\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; The license terms, installed beside the app. The PyInstaller output carries
+; a copy too, but PyInstaller 6 puts data files in {app}\_internal, where
+; nobody looks. The license's Notices clause requires that anyone who gets a
+; copy of the software also gets these terms and the Required Notice line,
+; and a silent install (/SILENT, /VERYSILENT) skips the license page, so this
+; copy is how such a recipient gets them. Named .txt so a double-click opens
+; it in Notepad.
+Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+; The license texts of everything the app bundles (the Python interpreter,
+; every Python package, Microsoft's WebView2 SDK binaries, and the npm
+; packages the UI is built from), written by build-a-spec.spec through
+; third_party_notices.py, which fails the build when a text is missing. If
+; the file is absent, ISCC stops with "Source file does not exist".
+Source: "..\..\dist\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef HaveWebView2
 ; Edge WebView2 Evergreen bootstrapper — extracted to {tmp} only when the
 ; runtime is missing, then removed after the install.

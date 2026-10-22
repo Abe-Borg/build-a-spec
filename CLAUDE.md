@@ -94,6 +94,27 @@ file is the working reference for AI-assisted development sessions.
   below.
 - Keep `README.md`, `requirements.txt`, and this file current when the
   implementation, dependencies, or conventions change.
+- Dependencies (2026-10-22): `requirements.in` is the intent (names +
+  accepted ranges); `requirements.txt` is an exact, universal lock generated
+  from it (`uv pip compile requirements.in --universal --python-version 3.11
+  -o requirements.txt`) and is what every install uses. A dependency change
+  edits the intent and regenerates the lock, both committed; never hand-edit
+  the lock or add a floating `pip install` to a workflow. The release build's
+  tooling is locked the same way (`packaging/windows/build-requirements.in`
+  -> `.txt`, compiled with `-c requirements.txt`). Pinned by
+  `tests/test_requirements_lock.py`.
+- Third-party notices (2026-10-22): the Windows build writes
+  `dist/THIRD-PARTY-NOTICES.txt` (`packaging/windows/third_party_notices.py`,
+  copied from Spec Critic and adapted) and the installer puts it, and
+  `LICENSE.txt`, beside the exe. It FAILS THE BUILD when a bundled Python
+  distribution, required supplement or production npm package has no license
+  text. Never silence that: supply the text from the project's source at
+  exactly that version in `packaging/windows/third_party_licenses/`
+  (`<name>-<version>.txt`, `npm-<name>-<version>.txt`, or a supplement
+  `<name>-<version>-<suffix>.txt` for `REQUIRED_SUPPLEMENTS`). Bumping
+  pywebview needs a new WebView2 SDK supplement from that version's sdist.
+  Tests: `tests/test_third_party_notices.py`; CI's frontend job runs the npm
+  half (`--frontend-only`).
 - New as-built notes are appended to `docs/as-built.md`, not to CLAUDE.md.
 - Commit style is a standing owner preference (Abraham): commit messages are
   sassy, spicy, and funny where warranted — especially when something fought

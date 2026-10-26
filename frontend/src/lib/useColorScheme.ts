@@ -12,15 +12,19 @@ import { applyTheme, currentTheme, resolveTheme } from "./theme";
  * hand-opened address carries no `?theme=`.
  *
  * `pick` recolours at once and keeps the choice on disk. A scheme the server
- * did not keep is taken back, with its reason in `error`. Saves go out one at
- * a time in click order, so the file ends up holding the last choice, and
- * only the latest pick's answer is acted on.
+ * did not keep is taken back to the last one it did keep, with its reason in
+ * `error` — never to an earlier pick that may be unsaved itself. Saves go out
+ * one at a time in click order, so the file ends up holding the last choice,
+ * and only the latest pick's answer is acted on.
  */
 export function useColorScheme() {
   const [theme, setTheme] = useState<string>(() => currentTheme());
   const [error, setError] = useState("");
   const turn = useRef(0);
   const saves = useRef<Promise<unknown>>(Promise.resolve());
+  // The scheme the file holds, as far as this page knows: main.py opened the
+  // page in it, and the mount read and every kept save confirm it.
+  const persisted = useRef<string>(currentTheme());
 
   useEffect(() => {
     let cancelled = false;
@@ -30,6 +34,7 @@ export function useColorScheme() {
         // A pick made since this read started is newer than the file was.
         if (cancelled || turn.current !== startTurn) return;
         const id = resolveTheme(saved.theme);
+        persisted.current = id;
         if (id !== currentTheme()) applyTheme(id);
         setTheme(id);
       })
@@ -45,20 +50,25 @@ export function useColorScheme() {
 
   const pick = useCallback((id: string) => {
     const next = resolveTheme(id);
-    const previous = currentTheme();
-    if (next === previous) return;
+    if (next === currentTheme()) return;
     const mine = ++turn.current;
     applyTheme(next);
     setTheme(next);
     setError("");
     const save = saves.current.then(() => saveAppearance(next));
     saves.current = save.catch(() => undefined);
-    save.catch((failure: unknown) => {
-      if (mine !== turn.current) return;
-      applyTheme(previous);
-      setTheme(previous);
-      setError(failure instanceof Error ? failure.message : String(failure));
-    });
+    save.then(
+      (kept) => {
+        persisted.current = resolveTheme(kept.theme);
+      },
+      (failure: unknown) => {
+        if (mine !== turn.current) return;
+        const back = persisted.current;
+        applyTheme(back);
+        setTheme(back);
+        setError(failure instanceof Error ? failure.message : String(failure));
+      },
+    );
   }, []);
 
   return { theme, pick, error };

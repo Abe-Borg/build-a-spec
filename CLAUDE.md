@@ -2561,7 +2561,8 @@ Carbon & Hi-Vis and Linen (the one light chrome) are
   stays alone in the fragment) with `background_color`; `index.html`'s inline
   script sets `data-theme` before the first paint; `lib/useColorScheme.ts`
   (App-owned) re-syncs after mount and picks optimistically, taking a refused
-  pick back. Not session state: New session, Open project and the tour leave
+  pick back to the last scheme the server kept (never the previous pick,
+  which may be unsaved too; Codex review on PR #336). Not session state: New session, Open project and the tour leave
   it alone. Capability `session.appearance`, in the `developer-tools` step.
 
 Full record, reversion evidence and the release-note draft are in

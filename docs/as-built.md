@@ -25897,7 +25897,11 @@ pywebview the scheme's background.
   applies it if the page disagrees (a dev page or a hand-opened address has no `?theme=`);
   `pick` applies at once, saves through an ordered chain (the panel tray's pattern, so the
   file holds the last click), and takes a refused pick back with its reason, acting only
-  on the latest pick's answer. `SettingsPanel` has an Appearance section after the Final
+  on the latest pick's answer. It goes back to the last scheme the server kept
+  (`persisted`: the mount read and every kept save), never to the pick before it, which
+  can be unsaved too: two quick picks both refused would otherwise leave the window on
+  the first while the file still held the original (Codex review on PR #336;
+  reproduced in Chromium with a refused, delayed `PUT`, then fixed). `SettingsPanel` has an Appearance section after the Final
   QC transport: Spec Surgeon's five swatch cards in a `radiogroup` (capability
   `session.appearance`), names wrapping in the narrower panel, the blurb as the hover.
   `applyTheme` keeps the address's `?theme=` current, so a reload opens the scheme just

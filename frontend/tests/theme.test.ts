@@ -196,8 +196,13 @@ test("Settings → Appearance is a radio group of every scheme, wired to App's p
   const app = read("../src/App.tsx");
   assert.match(app, /const colorScheme = useColorScheme\(\);/);
   assert.match(app, /onPickTheme=\{colorScheme\.pick\}/);
-  // A pick the server did not keep is taken back, with its reason.
+  // A pick the server did not keep is taken back, with its reason, to the
+  // last scheme the server DID keep — never to an earlier pick, which may be
+  // unsaved too (two quick picks, both refused).
   const hook = read("../src/lib/useColorScheme.ts");
-  assert.match(hook, /applyTheme\(previous\);\s*setTheme\(previous\);\s*setError\(/);
   assert.match(hook, /if \(mine !== turn\.current\) return;/);
+  assert.match(hook, /const back = persisted\.current;\s*applyTheme\(back\);\s*setTheme\(back\);\s*setError\(/);
+  assert.match(hook, /\(kept\) => \{\s*persisted\.current = resolveTheme\(kept\.theme\);/);
+  assert.match(hook, /persisted\.current = id;/);
+  assert.doesNotMatch(hook, /applyTheme\(previous\)/);
 });

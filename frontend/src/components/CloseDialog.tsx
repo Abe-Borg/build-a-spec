@@ -91,7 +91,7 @@ export default function CloseDialog({
           <button
             ref={saveRef}
             onClick={onSave}
-            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
+            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-hover"
           >
             {saveLabel}
           </button>

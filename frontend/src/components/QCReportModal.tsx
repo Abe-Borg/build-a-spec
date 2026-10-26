@@ -1170,7 +1170,7 @@ export default function QCReportModal({
               onClick={() => void download("docx", report.run_id)}
               disabled={downloadBusy !== null}
               title={`Download the backend-selected Word report; snapshot target is run ${report.run_id || "ID not recorded"}`}
-              className="rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent-hover disabled:cursor-default disabled:opacity-60"
+              className="rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-on-accent transition-colors hover:bg-accent-hover disabled:cursor-default disabled:opacity-60"
             >
               {downloadBusy === "docx" ? "Preparing…" : "Download Word report"}
             </button>
@@ -1665,7 +1665,7 @@ export default function QCReportModal({
           </p>
           <button
             onClick={onClose}
-            className="rounded-lg bg-accent px-4 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-accent-hover"
+            className="rounded-lg bg-accent px-4 py-1.5 text-[12px] font-semibold text-on-accent transition-colors hover:bg-accent-hover"
           >
             Done
           </button>

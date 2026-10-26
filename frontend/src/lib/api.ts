@@ -50,6 +50,7 @@ import type {
   TutorialStatusPayload,
   ReleaseNotesPayload,
   UiPreferencesPayload,
+  AppearancePayload,
   UpdateCheckPayload,
   UsageSummary,
 } from "../types";
@@ -1749,6 +1750,34 @@ export async function saveOnboardingCompletion(
     body: JSON.stringify({ completed_version: completedVersion }),
   });
   if (!resp.ok) throw new Error(`onboarding completion save ${resp.status}`);
+}
+
+/**
+ * The colour scheme kept for the next launch (lib/theme.ts). On disk for the
+ * panel tray's reason, in a file of its own for the tour completion's.
+ */
+export async function getAppearance(): Promise<AppearancePayload> {
+  const resp = await fetch("/api/ui/appearance");
+  if (!resp.ok) throw new Error(`appearance ${resp.status}`);
+  return resp.json();
+}
+
+/** Keep a colour scheme for every later launch; the server's reason on a refusal. */
+export async function saveAppearance(theme: string): Promise<AppearancePayload> {
+  const resp = await fetch("/api/ui/appearance", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ theme }),
+  });
+  const data = (await resp.json().catch(() => ({}))) as Partial<AppearancePayload> & {
+    error?: unknown;
+  };
+  if (!resp.ok) {
+    throw new Error(
+      typeof data.error === "string" ? data.error : "The color scheme could not be saved.",
+    );
+  }
+  return { theme: String(data.theme) };
 }
 
 export interface QcTransportPreference {

@@ -593,13 +593,13 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "developer-tools",
-        capabilities: ["session.developer-tools"],
+        capabilities: ["session.appearance", "session.developer-tools"],
         mode: "explanatory",
         anchor: "settings",
         placement: "bottom",
-        title: "Developer tools when something misbehaves",
+        title: "Appearance, and developer tools when something misbehaves",
         body:
-          "Settings also opens Developer tools: environment and session state, the live activity log, this run's trace events, the trace-file viewer, and a one-click diagnostics bundle you can save when reporting a problem. Everything it shows is recorded on your machine only — the app keeps a detailed local record of every run, not just failures.",
+          "Settings → Appearance picks one of five color schemes; the window changes at once and opens in it from then on. Settings also opens Developer tools: environment and session state, the live activity log, this run's trace events, the trace-file viewer, and a one-click diagnostics bundle you can save when reporting a problem. Everything it shows is recorded on your machine only — the app keeps a detailed local record of every run, not just failures.",
       },
       {
         id: "help-updates",

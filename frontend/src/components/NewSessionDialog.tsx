@@ -650,7 +650,7 @@ export default function NewSessionDialog({
               </p>
             ) : (
               <>
-                <div className="max-h-[46vh] overflow-y-auto rounded-lg border border-paper-edge bg-paper p-5 text-paper-ink">
+                <div className="max-h-[46vh] overflow-y-auto rounded-lg border border-paper-edge bg-paper scheme-light p-5 text-paper-ink">
                   <p className="text-center text-xs tracking-wide">
                     SECTION {preview.document.section.number}
                   </p>

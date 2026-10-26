@@ -155,6 +155,7 @@ import {
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
 import { DEFAULT_EDIT_SCOPE, parseEditScope, type EditScope } from "./lib/editScope";
+import { useColorScheme } from "./lib/useColorScheme";
 import { buildQcApplicationDigest } from "./lib/qcRemediation";
 import {
   QC_MILESTONE_TYPES,
@@ -336,6 +337,9 @@ export default function App() {
     projectFacts: 0,
     projectPanel: 0,
   });
+  // The window's colour scheme (Settings -> Appearance, lib/useColorScheme.ts):
+  // the install's, not the session's, so it lives here beside the layout.
+  const colorScheme = useColorScheme();
   // The document panel's panel tray layout: folded away, and which panels
   // are left out (lib/panelTray.ts). App owns it for the same reason as the
   // notice below — the panel remounts on every new session, and a layout is
@@ -3331,6 +3335,9 @@ export default function App() {
         usage={usage}
         onKeyChange={refreshHealth}
         onShowReleaseNotes={openReleaseNotes}
+        theme={colorScheme.theme}
+        onPickTheme={colorScheme.pick}
+        themeError={colorScheme.error}
       />
       <WhatsNewModal
         open={whatsNew.length > 0}

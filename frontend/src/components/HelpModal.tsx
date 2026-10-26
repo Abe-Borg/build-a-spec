@@ -437,6 +437,17 @@ function HowToUse({
             ),
           },
           {
+            t: "Pick a color scheme",
+            d: (
+              <>
+                Settings → <Tag>Appearance</Tag> offers five: Warm Clay,
+                Blueprint, Graphite &amp; Teal, Carbon &amp; Hi-Vis and Linen.
+                The window changes at once and opens in your choice from then
+                on.
+              </>
+            ),
+          },
+          {
             t: "Walk the Review queue",
             d: (
               <>
@@ -491,7 +502,7 @@ function HowToUse({
         </p>
         <button
           onClick={() => onStartTutorialAtChapter(TOUR[0].id)}
-          className="mt-3 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
+          className="mt-3 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-on-accent hover:bg-accent-hover"
         >
           Restart full tutorial
         </button>

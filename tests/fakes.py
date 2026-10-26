@@ -828,21 +828,15 @@ def request_shape_problems(request: dict) -> list[str]:
     documented 400s for the named model, so an unknown model id (an env
     override) passes everything except the rules that hold everywhere.
     """
-    problems: list[str] = []
+    problems: list[str] = _api_version_problems(request)
     model = request.get("model")
     if model == "claude-haiku-5-5":
         # Haiku's migration guide defines these independently of the app's
-        # capability tables. Omit sampling knobs. A trailing assistant turn
-        # can be the documented pause_turn replay, so request shape alone
-        # cannot distinguish a prohibited prefill from a valid continuation.
-        if "temperature" in request and request["temperature"] != 1:
-            problems.append("Haiku 5.5 requires default temperature")
-        if "top_p" in request and request["top_p"] != 0.99:
-            problems.append("Haiku 5.5 requires default top_p")
-        if "top_k" in request:
-            problems.append("Haiku 5.5 does not support top_k")
-        if "temperature" in request and "top_p" in request:
-            problems.append("Haiku 5.5 cannot combine temperature and top_p")
+        # capability tables. Its sampling rules are subsumed by API version
+        # 2026-10-21's, which refuses the knobs on every model. A trailing
+        # assistant turn can be the documented pause_turn replay, so request
+        # shape alone cannot distinguish a prohibited prefill from a valid
+        # continuation.
         if any(
             tool.get("type") == "computer_20250124"
             for tool in request.get("tools") or []
@@ -915,6 +909,81 @@ def request_shape_problems(request: dict) -> list[str]:
         )
     problems.extend(_per_message_effort_problems(request, model, thinking))
     problems.extend(_cache_breakpoint_problems(request))
+    return problems
+
+
+# API version 2026-10-21, which every request has carried since the app moved
+# to anthropic 2.x (Anthropic's "Migrating to API version 2026-10-21",
+# https://platform.claude.com/docs/en/api/migration-2026-10-21, and the
+# claude-api skill's api-version-migration guide). These hold on every model,
+# for token counting and for each request in a Message Batch too:
+# - ``temperature``, ``top_p`` and ``top_k`` are a 400 even at their
+#   defaults, and an ``extra_body`` entry still puts them in the JSON;
+# - a ``document`` block directly in an ``assistant`` message is a 400 (one
+#   nested in another block, such as a web fetch result, is accepted);
+# - a ``text`` block with non-empty ``citations`` in a ``user`` message is a
+#   400, directly or inside a ``search_result`` block, including one in a
+#   ``tool_result``. Citations on an assistant's text are accepted.
+_SAMPLING_PARAMETERS = ("temperature", "top_p", "top_k")
+
+
+def _node_field(node: Any, name: str) -> Any:
+    """``name`` of a dict, SDK block or ``SimpleNamespace`` (None when absent)."""
+    if isinstance(node, dict):
+        return node.get(name)
+    return getattr(node, name, None)
+
+
+def _cited_user_text_paths(block: Any, path: str) -> list[str]:
+    """Paths of the cited ``text`` blocks a user message's ``block`` carries."""
+    kind = _node_field(block, "type")
+    if kind == "text":
+        return [path] if _node_field(block, "citations") else []
+    if kind not in ("search_result", "tool_result"):
+        return []
+    content = _node_field(block, "content")
+    if not isinstance(content, list):
+        return []
+    paths: list[str] = []
+    for index, inner in enumerate(content):
+        inner_kind = _node_field(inner, "type")
+        inner_path = f"{path}.content.{index}"
+        if kind == "search_result" and inner_kind == "text":
+            if _node_field(inner, "citations"):
+                paths.append(inner_path)
+        elif kind == "tool_result" and inner_kind == "search_result":
+            paths.extend(_cited_user_text_paths(inner, inner_path))
+    return paths
+
+
+def _api_version_problems(request: dict) -> list[str]:
+    problems: list[str] = []
+    extra_body = request.get("extra_body")
+    extra_body = extra_body if isinstance(extra_body, dict) else {}
+    for name in _SAMPLING_PARAMETERS:
+        if name in request or name in extra_body:
+            problems.append(
+                f"{name}: sampling parameters are not supported in API "
+                "version 2026-10-21"
+            )
+    for index, message in enumerate(request.get("messages") or ()):
+        role = _node_field(message, "role")
+        content = _node_field(message, "content")
+        if not isinstance(content, list):
+            continue
+        for block_index, block in enumerate(content):
+            path = f"messages.{index}.content.{block_index}"
+            if role == "assistant" and _node_field(block, "type") == "document":
+                problems.append(
+                    f"{path}: a document block cannot be placed directly in "
+                    "an assistant message; send it in a user message"
+                )
+            if role == "user":
+                problems.extend(
+                    f"{cited}: a text block in a user message cannot carry "
+                    "citations"
+                    for cited in _cited_user_text_paths(block, path)
+                )
     return problems
 
 

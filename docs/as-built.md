@@ -25705,3 +25705,135 @@ dependencies. It also noted that silent installs bypass the license page.
 Section "Installing", item "License texts install with the app": "The install folder now
 holds LICENSE.txt and THIRD-PARTY-NOTICES.txt beside Build-a-Spec, the latter carrying the
 license of every component the app bundles. Nothing else about installing changes."
+
+## The SDK is anthropic 2.x, on API version 2026-10-21 — implemented notes (2026-10-26)
+
+The SDK-upgrade review's first recommendation, "Anthropic SDK 1.17.0 → 2.x … do it as a
+dedicated PR: regenerate the lock, check the notices, and run the full CI suite, including
+the tests that pin the SDK logger". Owner: "handle it". The review's second item, cache
+diagnostics, is observability only and was worth adding only if the owner wants to measure
+cache behavior; it is not in this change.
+
+Anthropic's guide for the version is
+<https://platform.claude.com/docs/en/api/migration-2026-10-21>. The Python 2.0.0 release
+(2026-10-21) is the first that sends `anthropic-version: 2026-10-21`; 2.1.0–2.3.0 followed
+within two days. The lock takes 2.3.0, the newest in range.
+
+### The change
+
+- `requirements.in`: `anthropic>=1.0,<2` → `anthropic>=2.0,<3`. The lock, regenerated with
+  the documented `uv pip compile` command (no `--upgrade`, so every other pin held), changed
+  one line: `anthropic==1.17.0` → `anthropic==2.3.0`. 2.3.0's `Requires-Dist` list is
+  1.17.0's exactly (anyio, docstring-parser, httpx2, jiter, opentelemetry-api, pydantic,
+  sniffio, typing-extensions), so nothing else moved. The build lock is compiled against
+  this one and pins no anthropic, so it is unchanged.
+- No production code changed. Two comments now record the re-check: `settings.py`'s SDK
+  defaults (two retries and the 5 s connect timeout: 2.3.0's `_constants.py` differs from
+  1.17.0's only in `ANTHROPIC_API_VERSION`) and `resource_pressure.py`'s retry line.
+
+### The inventory (the guide's searches, run over the repo)
+
+1. **Sampling parameters.** `temperature|top_p|top_k` hit only a spec module's prose
+   ("intermediate-temperature"), test fixture prose, and the fake oracle's Haiku checks. No
+   request sets one; 1.x had already removed them from the SDK's own parameters.
+2. **A document directly in an assistant message.** Every `document` block the app handles
+   is nested in Claude's own `web_fetch_tool_result` (`citations.py`, `history_hygiene.py`'s
+   fetched-page trim, `resend_sanitizer.py`'s PDF elision, research grounding and quotes).
+   The elisions edit the nested source in place and never lift the document out.
+3. **Cited text in a user message.** Every user-role message the app builds was read: the
+   chat turn (context block + the user's text), compaction's instruction and preface
+   (`_with_leading_text` on the first kept user message), recall and every client tool
+   result (strings), research and QC openings, reminders, resends and submissions (app
+   text), the harvest and template calls (app text), the reference-document counter (the
+   document's extracted text), and research's token counter, whose counting view serializes
+   replayed content — citations included — into one JSON text block and lifts only
+   documents and images out as native media. None carries a `citations` field.
+4. **Admin and Analytics API fields.** Not called.
+5. **The SDK's own changes** (the guide's "SDK and CLI changes", Python tab, read in full):
+   - *`MessageParam` is a union.* Nothing calls or subclasses `MessageParam`; every message
+     is a dict literal.
+   - *`betas` left the non-beta Models methods.* The key probe calls
+     `models.list(limit=1)` with no betas.
+   - *The key goes out as `Authorization: Bearer`.* The app sets no auth header, base URL,
+     proxy or custom transport. The tests' only `X-Api-Key` text is the scripted 401's error
+     message. Trace and diagnostics redaction already match `authorization`.
+   - *A client holds one credential.* `backend/llm/client.py` passes exactly one `api_key`
+     (the stored key) to both the live client and the probe, and `with_options` in the
+     settlement window passes none.
+   - *The license is Apache 2.0* (below).
+   - Not applicable to Python: one-value enums, tool-runner compaction, Text Completions,
+     and the per-SDK changes the guide lists for the CLI, C#, Go, Java, PHP and Ruby.
+   - The fetched page asked for nothing outside the guide's list.
+
+### The SDK internals the app relies on (1.17.0 against 2.3.0 wheels, diffed)
+
+- `anthropic/_base_client.py`: `log.info("Retrying request to %s in %f seconds", …)` is
+  unchanged at both call sites, and the logger is still `anthropic._base_client`. The diff
+  is one new class attribute, one error message's wording and an internal `qualifiers`
+  option. `tests/test_resource_pressure.py` reads the line from the installed source and
+  passes.
+- `anthropic/lib/streaming/_messages.py` is byte-identical: `current_message_snapshot`, the
+  event accumulation and `get_final_message` are as before. `_exceptions.py` is identical.
+- `resources/messages/messages.py` changed only in a docstring (the "no system role" line,
+  now that mid-conversation system messages exist). `Message.to_param` returns an
+  `AssistantMessageParam`; the app never calls it.
+
+### License
+
+anthropic 2.0.0 and later are Apache-2.0 (2.3.0's metadata: `License: Apache-2.0`). The
+wheel's `.dist-info/licenses/` holds `LICENSE` (Apache 2.0) and `LICENSE-MIT`, which states
+the change and keeps the MIT text for earlier versions and older contributions.
+`third_party_notices.distribution_license_texts` returns both plus the vendored
+`httpx_aiohttp` LICENSE and NOTICE, and `license_identifier` reads `Apache-2.0`, so the
+notices need no override. The 2026-08-28 PolyForm Shield audit listed anthropic among the
+MIT dependencies; Apache-2.0 was already on its list and the conclusion (no copyleft,
+nothing constrains the license) is unchanged.
+
+### The oracle and the wire
+
+- `tests/fakes.request_shape_problems` starts from `_api_version_problems`, which holds on
+  every model and every fake path (stream, count, batch, subclass override): a sampling
+  parameter at the top level or in `extra_body`, a `document` block directly in an
+  `assistant` message, and a `text` block with non-empty `citations` in a `user` message,
+  directly, in a `search_result`, or in a `search_result` inside a `tool_result`. Fields are
+  read from dicts, SDK objects and `SimpleNamespace` alike, since research and Final QC
+  re-send `response.content` objects. Haiku 5.5's four sampling checks are gone: the
+  version rule refuses everything they refused, and more.
+- `tests/test_api_version.py` sends one token count through the live client
+  (`get_client`, with the key loader monkeypatched), the key probe (`build_probe_client`)
+  and the live client narrowed by `bounded_request_options`, each copied onto a
+  `MockTransport` with `with_options(http_client=…)`. It pins `anthropic-version:
+  2026-10-21`, `authorization: Bearer <key>`, no `x-api-key`, and a body that is the
+  request as given.
+
+### Evidence
+
+- `tests/test_fake_request_validator.py` (128, of which 25 are new), `tests/test_api_version.py`
+  (3), every test file that imports the SDK (17 files), the notices, lock, settings,
+  resource-pressure and docs-consistency tests, a 24-file subset covering chat compaction,
+  streaming, citation repair, fetched-page and PDF elision, research, Final QC (streamed and
+  batched) and the harvest (839 passed under the stricter oracle), and `test_app.py`,
+  `test_tutorial.py`, `test_project_sections.py` and `test_key_management.py` (108 passed).
+  Ruff is clean. CI runs the full suite on 3.11 and 3.12.
+- Reversion probes, each restored: reinstalling anthropic 1.17.0 fails all three wire tests
+  (`2023-06-01`, and the key in `x-api-key`); disabling the oracle's sampling rule fails 17
+  tests, its assistant-document rule 2, and its user-citation rule 3.
+- No paid API call was made. The guide's live check — one minimal Messages request on the
+  new version through the app's own client — is the owner's to run; the chat's next turn
+  after upgrading is that request.
+
+### Not known
+
+- Whether a prompt-cache entry written under `2023-06-01` is read under `2026-10-21` is not
+  documented. At worst every open session writes its cached prefix once after upgrading.
+- A Message Batch keeps the version of the request that created it. The app's batches live
+  inside one Final QC run, so only a run in flight across the upgrade (impossible: the app
+  restarts) could straddle it.
+
+### Release-note draft (for the release after 1.28.1)
+
+Section "Smaller things", item "Anthropic's Python SDK 2": "Build-a-Spec now talks to the
+Claude API through version 2 of Anthropic's Python SDK, on API version 2026-10-21. Nothing
+about how you use the app changes. Your API key now travels in the standard Authorization
+header; a corporate gateway that inspects the X-Api-Key header on traffic to
+api.anthropic.com needs to read Authorization instead."

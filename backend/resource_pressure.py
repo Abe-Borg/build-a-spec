@@ -215,7 +215,9 @@ QUEUE_PRESSURE_MIN_MS = 1000
 
 # The SDK logs each retry it makes on its own at INFO, from this logger and
 # with this message prefix (``anthropic/_base_client.py``, ``log.info(
-# "Retrying request to %s in %f seconds", ...)``). An observer attached to
+# "Retrying request to %s in %f seconds", ...)``; unchanged from SDK 1.11.0
+# through 2.3.0, and ``tests/test_resource_pressure.py`` reads it from the
+# installed SDK's source). An observer attached to
 # that logger counts them against the agent whose request is in flight on
 # the logging thread — the sync SDK retries synchronously, so it is the same
 # thread. A changed message or logger name blinds the observer silently;

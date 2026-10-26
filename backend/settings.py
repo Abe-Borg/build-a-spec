@@ -248,7 +248,8 @@ INTERVIEW_MAX_TOKENS = _int_env("BUILD_A_SPEC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKE
 
 # The Anthropic SDK's own request retries and timeout, made explicit (they
 # were the SDK's silent defaults until Batch 9 of the 2026-09-02 program
-# diagnosis; both defaults are the SDK's, VERIFIED against anthropic 1.4.0).
+# diagnosis; both defaults are the SDK's, VERIFIED against anthropic 1.4.0
+# and unchanged in 2.3.0's ``_constants.py``).
 # The SDK retries a request on 429 / 5xx / connection errors BEFORE the app
 # ever sees an exception, honoring the provider's retry-after header — which
 # the fan-outs' own retry policy (research/retry_policy.py: 3 attempts,

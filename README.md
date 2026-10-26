@@ -232,6 +232,32 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — the app runs on Anthropic's Python SDK 2.x (API version 2026-10-21)
+
+(2026-10-26. docs/as-built.md's "The SDK is anthropic 2.x, on API version
+2026-10-21" is the record; not yet in a release.)
+
+The `anthropic` package moved from 1.17.0 to 2.3.0 (`requirements.in`
+accepts `>=2.0,<3`). SDK 2.x talks to the Claude API on API version
+`2026-10-21`, and nothing about how you use the app changes:
+
+- **No request changed.** The new version refuses `temperature`, `top_p`
+  and `top_k`, a document placed directly in one of Claude's own messages,
+  and cited text sent back as your message. The app sends none of these, and
+  the test suite's fake API now refuses all three, so a change that started
+  sending one would fail its tests rather than reach you.
+- **Your key travels in a different header.** The SDK now sends the API key
+  as `Authorization: Bearer …` instead of `X-Api-Key`. The Claude API
+  accepts either. The app never sees the difference, but a corporate gateway
+  that inspects `X-Api-Key` on traffic to `api.anthropic.com` would have to
+  read `Authorization` instead.
+- **The SDK's license is Apache 2.0** from 2.0.0 (MIT before). It is still a
+  permissive license, and the Windows build's `THIRD-PARTY-NOTICES.txt`
+  carries its new text automatically.
+
+No paid API call was made. A one-request live check on the new version is
+the owner's to run before release.
+
 ## Current Status — Essentials only: keep the client's specification, change only what must change
 
 (2026-10-19, owner request. docs/as-built.md's "Edit scope: Extensive or

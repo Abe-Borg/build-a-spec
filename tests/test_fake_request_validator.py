@@ -10,6 +10,8 @@ and production's lowest-thinking table against it.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import anthropic
 import pytest
 
@@ -172,6 +174,123 @@ def test_the_beta_is_found_in_betas_or_in_any_header_spelling():
         assert request_shape_problems(
             _request("claude-opus-5-5", thinking=binding, **extra)
         ) == []
+
+
+# ---------------------------------------------------------------------------
+# API version 2026-10-21 (anthropic 2.x): rules that hold on every model
+# ---------------------------------------------------------------------------
+
+_EVERY_MODEL = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "some-future-model")
+_CITATION = {
+    "type": "web_search_result_location",
+    "cited_text": "Sprinklers shall be listed.",
+    "url": "https://example.com/standard",
+    "title": "Example standard",
+    "encrypted_index": "enc-1",
+}
+_PAGE = {
+    "type": "document",
+    "source": {"type": "text", "media_type": "text/plain", "data": "Page text."},
+    "title": "Fetched page",
+}
+
+
+def _conversation(*messages):
+    return _request("claude-opus-5-5", messages=list(messages))
+
+
+@pytest.mark.parametrize("model", _EVERY_MODEL)
+@pytest.mark.parametrize(("name", "value"), [
+    ("temperature", 1), ("temperature", 0.2), ("top_p", 0.99), ("top_k", 5),
+])
+def test_sampling_parameters_are_refused_on_every_model_even_at_their_defaults(
+    model, name, value
+):
+    problems = request_shape_problems(_request(model, **{name: value}))
+    assert any(
+        f"{name}: sampling parameters are not supported" in p for p in problems
+    ), problems
+
+
+def test_a_sampling_parameter_in_extra_body_still_reaches_the_json():
+    problems = request_shape_problems(
+        _request("claude-opus-5-5", extra_body={"top_k": 5, "fallbacks": "default"})
+    )
+    assert problems == [
+        "top_k: sampling parameters are not supported in API version 2026-10-21"
+    ]
+
+
+@pytest.mark.parametrize("request_", [
+    # Claude's own web fetch result, replayed unchanged: the document is
+    # nested inside another block, as a dict and as an SDK-shaped object.
+    _conversation(
+        {"role": "user", "content": "Read the page."},
+        {"role": "assistant", "content": [
+            {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_fetch",
+             "input": {"url": "https://example.com"}},
+            {"type": "web_fetch_tool_result", "tool_use_id": "srvtoolu_1",
+             "content": {"type": "web_fetch_result", "url": "https://example.com",
+                         "content": _PAGE}},
+            {"type": "text", "text": "It says so.", "citations": [_CITATION]},
+        ]},
+        {"role": "user", "content": "Thanks."},
+    ),
+    _conversation(
+        {"role": "user", "content": "Read the page."},
+        {"role": "assistant", "content": [SimpleNamespace(
+            type="web_fetch_tool_result", tool_use_id="srvtoolu_1",
+            content=SimpleNamespace(type="web_fetch_result", content=_PAGE),
+        )]},
+        {"role": "user", "content": "Thanks."},
+    ),
+    # A document the user sends, and the enable switch on a search result.
+    _conversation({"role": "user", "content": [
+        _PAGE,
+        {"type": "search_result", "source": "https://example.com", "title": "Example",
+         "citations": {"enabled": True},
+         "content": [{"type": "text", "text": "Sprinklers shall be listed."}]},
+        {"type": "text", "text": "Summarize both.", "citations": []},
+    ]}),
+], ids=["nested-dict", "nested-sdk-object", "user-side"])
+def test_documents_and_citations_where_the_api_accepts_them_pass(request_):
+    assert request_shape_problems(request_) == []
+
+
+@pytest.mark.parametrize(("request_", "reason"), [
+    (_conversation(
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": [_PAGE]},
+        {"role": "user", "content": "Go on."},
+    ), "messages.1.content.0: a document block cannot be placed directly in an assistant"),
+    (_conversation(
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": [SimpleNamespace(**_PAGE)]},
+        {"role": "user", "content": "Go on."},
+    ), "messages.1.content.0: a document block cannot be placed directly in an assistant"),
+    (_conversation({"role": "user", "content": [
+        {"type": "text", "text": "Another agent found this.", "citations": [_CITATION]},
+    ]}), "messages.0.content.0: a text block in a user message cannot carry citations"),
+    (_conversation({"role": "user", "content": [
+        {"type": "search_result", "source": "https://example.com", "title": "Example",
+         "content": [{"type": "text", "text": "Quoted.", "citations": [_CITATION]}]},
+    ]}), "messages.0.content.0.content.0: a text block in a user message cannot carry"),
+    (_conversation(
+        {"role": "user", "content": "Search."},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+        ]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1",
+            "content": [{"type": "search_result", "source": "https://example.com",
+                         "title": "Example", "content": [
+                             {"type": "text", "text": "Quoted.", "citations": [_CITATION]},
+                         ]}]}]},
+    ), "messages.2.content.0.content.0.content.0: a text block in a user message"),
+], ids=["assistant-document", "assistant-document-sdk-object", "user-text",
+        "user-search-result", "tool-result-search-result"])
+def test_documents_and_citations_where_the_api_refuses_them_are_named(request_, reason):
+    problems = request_shape_problems(request_)
+    assert any(reason in problem for problem in problems), problems
 
 
 # ---------------------------------------------------------------------------

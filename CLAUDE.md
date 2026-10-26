@@ -13,9 +13,10 @@ file is the working reference for AI-assisted development sessions.
   `backend.llm.conversation.get_client` with a fake streaming client.
   Every request a fake in `tests/fakes.py` receives (streamed, counted,
   batched, or through a subclass override) is checked by
-  `request_shape_problems` against the documented per-model 400s; a refused
-  shape raises the API's `BadRequestError` and `conftest.py` fails the test
-  even if the code under test swallowed it. When a model's request rules
+  `request_shape_problems` against the documented per-model 400s and API
+  version 2026-10-21's rules for every model (the version anthropic 2.x
+  sends); a refused shape raises the API's `BadRequestError` and
+  `conftest.py` fails the test even if the code under test swallowed it. When a model's request rules
   change, extend that oracle from Anthropic's documentation with literal
   model ids — never from the app's own capability tables.
   Four canaries and the compaction evaluator below are the only explicit
@@ -1063,12 +1064,12 @@ invisible everywhere. Now they can.
 - **The SDK's own retries are counted.** `SDK_MAX_RETRIES` retries happen
   inside the SDK before the app sees a failure. An observer handler on the
   `anthropic._base_client` logger counts its INFO line ("Retrying request
-  to %s in %f seconds", unchanged in SDK 1.11.0) against the thread's agent
-  in flight (`started()` on a worker thread, `requesting()` around the
-  chat's stream open, since a generator's frames hop threads) or as
-  unattributed. The snapshot discloses `attached` and `listening`
-  (`BUILD_A_SPEC_LOG_LEVEL` above INFO mutes it); the ledger never lowers a
-  logger level.
+  to %s in %f seconds", unchanged from SDK 1.11.0 through 2.3.0) against
+  the thread's agent in flight (`started()` on a worker thread,
+  `requesting()` around the chat's stream open, since a generator's frames
+  hop threads) or as unattributed. The snapshot discloses `attached` and
+  `listening` (`BUILD_A_SPEC_LOG_LEVEL` above INFO mutes it); the ledger
+  never lowers a logger level.
 - **Where it shows.** `diagnostics.snapshot()["resource_pressure"]`
   (top level beside `cost_checks`; in the bundle through the snapshot),
   shaped for the scrub's six-level bound (an agent's `pressure_counts` sit
@@ -2481,6 +2482,56 @@ categories by `frontend/tests/editScope.test.ts`). Tests:
 `frontend/tests/editScope.test.ts`. Full record, reversion evidence and the
 release-note draft are in `docs/as-built.md` under the same heading. No paid
 API call was made.
+
+## The SDK is anthropic 2.x, on API version 2026-10-21 — implemented notes (2026-10-26)
+
+The SDK-upgrade review's recommendation (owner: "handle it"), as its own PR.
+`requirements.in` accepts `anthropic>=2.0,<3`; the regenerated lock pins
+2.3.0, and that is the only line that moved (2.x adds no dependency). 2.0.0
+is the first Python SDK release that sends `anthropic-version: 2026-10-21`;
+the app sets no version of its own.
+
+- **What the new version refuses.** `temperature`, `top_p` and `top_k`, on
+  every model, even at their defaults; a `document` block directly in an
+  `assistant` message; a `text` block with non-empty `citations` in a `user`
+  message, directly or in a `search_result` (including one in a
+  `tool_result`). The app sends none of them: no request sets a sampling
+  parameter, a document reaches the API only nested in Claude's own
+  `web_fetch_tool_result` (the PDF and fetched-page elisions edit it there),
+  every user-role message the app builds is its own text, and the research
+  token counter serializes replayed citations as plain text. It reads no
+  Admin or Analytics API field.
+- **What the new SDK changes.** The key goes out as `Authorization: Bearer`
+  (1.x sent `X-Api-Key`), a client holds one credential, `MessageParam` is a
+  per-role union, and the non-beta Models methods take no `betas`. The app
+  passes one `api_key` and sets no auth header, base URL or proxy; the key
+  probe's `models.list(limit=1)` passes no betas; nothing calls or subclasses
+  `MessageParam`. Trace and diagnostics redaction already cover
+  `authorization`. Still there, unchanged: the `anthropic._base_client`
+  retry line the pressure ledger counts, `current_message_snapshot`, the
+  exception classes, `extra_headers`/`extra_body`, two SDK retries and the
+  5 s connect timeout.
+- **License.** anthropic is Apache-2.0 from 2.0.0 (MIT before). The wheel
+  ships `LICENSE`, `LICENSE-MIT` and its vendored httpx_aiohttp texts;
+  `third_party_notices.py` collects all of them with no override.
+- **The oracle.** `tests/fakes.request_shape_problems` checks the three
+  version rules on every model (`_api_version_problems`, an `extra_body`
+  entry included); they replace Haiku 5.5's sampling checks, which they
+  subsume. `tests/test_api_version.py` sends one request through the live
+  client, the key probe and the bounded override into a `MockTransport` and
+  pins the version header, the bearer key and the absence of `x-api-key`.
+- **Not known.** Whether a cache entry written under `2023-06-01` is read
+  under `2026-10-21` is not documented; at worst each open session's prefix
+  is written once after the upgrade. A Message Batch keeps the version it
+  was created with, and the app's batches live inside one Final QC run.
+
+Never send a sampling parameter, place a document directly in an assistant
+message, put cited text in a user message, or give a client a second
+credential or an `X-Api-Key` header. Tests: `tests/test_api_version.py`,
+`tests/test_fake_request_validator.py`. Full record, reversion evidence and
+the release-note draft are in `docs/as-built.md` under the same heading. No
+paid API call was made; the one-request live check on the new version is the
+owner's to run.
 
 ## As-built history
 

@@ -10,6 +10,8 @@ import DeveloperToolsModal from "./DeveloperToolsModal";
 import QcTransportChoice from "./QcTransportChoice";
 import { useQcTransportPreference } from "../lib/useQcTransportPreference";
 import { useDialogFocus } from "../lib/dialogFocus";
+import { THEMES } from "../lib/theme";
+import Tip from "./Tip";
 
 interface Props {
   open: boolean;
@@ -20,6 +22,12 @@ interface Props {
   usage?: UsageSummary | null;
   /** Reopen this version's release notes (App owns the modal). */
   onShowReleaseNotes: () => void;
+  /** The window's colour scheme (lib/theme.ts); App owns it (lib/useColorScheme.ts). */
+  theme: string;
+  /** Recolour at once and keep the choice for the next launch. */
+  onPickTheme: (id: string) => void;
+  /** Why the last pick was taken back; empty when it was kept. */
+  themeError: string;
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -211,6 +219,9 @@ export default function SettingsPanel({
   onKeyChange,
   usage,
   onShowReleaseNotes,
+  theme,
+  onPickTheme,
+  themeError,
 }: Props) {
   const [status, setStatus] = useState<KeyStatus | null>(null);
   const qcTransport = useQcTransportPreference(open);
@@ -449,6 +460,67 @@ export default function SettingsPanel({
 
           {/* --- Final QC transport --- */}
           <section><QcTransportChoice {...qcTransport} /></section>
+
+          {/* --- Appearance: the colour scheme (lib/theme.ts) --- */}
+          <section data-capability="session.appearance">
+            <p className={label}>Appearance</p>
+            <p className="mt-2 text-xs text-ink-faint">
+              The color scheme changes at once and is remembered on this
+              computer.
+            </p>
+            <div
+              role="radiogroup"
+              aria-label="Color scheme"
+              className="mt-2 grid grid-cols-5 gap-2"
+            >
+              {THEMES.map((t) => {
+                const chosen = theme === t.id;
+                return (
+                  <Tip key={t.id} tip={t.blurb} className="min-w-0">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={chosen}
+                      aria-label={t.name}
+                      onClick={() => onPickTheme(t.id)}
+                      className={`w-full rounded-lg border p-1.5 text-left transition-colors ${
+                        chosen
+                          ? "border-accent bg-accent/10"
+                          : "border-edge bg-raised hover:border-accent/60"
+                      }`}
+                    >
+                      <span
+                        aria-hidden
+                        className="relative block h-11 overflow-hidden rounded-md"
+                        style={{ background: t.swatch.bg }}
+                      >
+                        <span
+                          className="absolute top-2 right-2 bottom-0 left-2 rounded-t-[4px]"
+                          style={{ background: t.swatch.paper }}
+                        />
+                        <span
+                          className="absolute top-3.5 left-4 h-1.5 w-7 rounded-full"
+                          style={{ background: t.swatch.accent }}
+                        />
+                      </span>
+                      <span
+                        className={`mt-1.5 block text-[11px] leading-tight ${
+                          chosen ? "text-accent" : "text-ink-dim"
+                        }`}
+                      >
+                        {t.name}
+                      </span>
+                    </button>
+                  </Tip>
+                );
+              })}
+            </div>
+            {themeError && (
+              <p className="mt-2 text-xs text-err" role="alert">
+                {themeError}
+              </p>
+            )}
+          </section>
 
           {/* --- Usage (WI4) --- */}
           <section data-capability="usage.details">

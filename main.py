@@ -31,7 +31,7 @@ from typing import Any
 
 import uvicorn
 
-from backend import diagnostics, settings
+from backend import appearance, diagnostics, settings
 
 
 # Native file-dialog filters. pywebview's ``parse_file_type`` validates every
@@ -277,6 +277,26 @@ def _wait_for_health(runtime: _BackendRuntime, timeout_s: float = 15.0) -> bool:
         except Exception:
             time.sleep(0.2)
     return False
+
+
+def _url_with_theme(base_url: str, theme: str) -> str:
+    """``base_url`` with ``?theme=<id>``: the colour scheme to open in.
+
+    The inline script in ``frontend/index.html`` sets ``<html data-theme>``
+    from it before the first paint (``backend/appearance.py``). It rides the
+    query, not the fragment: the fragment carries the boot nonce, and a theme
+    id is no secret. Any other query parameter is kept.
+    """
+    parsed = urllib.parse.urlsplit(base_url)
+    params = [
+        (key, value)
+        for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if key != "theme"
+    ]
+    params.append(("theme", appearance.resolve_theme(theme)))
+    return urllib.parse.urlunsplit(
+        parsed._replace(query=urllib.parse.urlencode(params))
+    )
 
 
 def _url_with_boot_fragment(base_url: str, boot_nonce: str) -> str:
@@ -1521,7 +1541,14 @@ def main() -> None:
                 "or run in dev mode (BUILD_A_SPEC_DEV=1 with `npm run dev`)."
             )
     # Fragments never reach HTTP request lines, logs, traces, or Referer.
-    url = _url_with_boot_fragment(frontend_base_url, runtime.boot_nonce)
+    # The colour scheme chosen in Settings -> Appearance, read once: the page
+    # opens in it and the native window's background matches it, so a light
+    # scheme never opens on a dark frame (backend/appearance.py). A file that
+    # cannot be read is the default, never a failed launch.
+    theme = appearance.load_appearance().theme
+    url = _url_with_boot_fragment(
+        _url_with_theme(frontend_base_url, theme), runtime.boot_nonce
+    )
 
     try:
         import webview  # pywebview
@@ -1554,6 +1581,7 @@ def main() -> None:
             min_size=(1100, 700),
             text_select=True,
             js_api=close_controller,
+            background_color=appearance.BACKGROUNDS[theme],
         )
         close_controller._bind(window)
         # debug=True adds the WebView2/WebKit inspector — dev mode only.

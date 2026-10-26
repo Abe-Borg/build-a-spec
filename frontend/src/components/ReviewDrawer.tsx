@@ -87,7 +87,7 @@ function capabilityReason(
 
 const badgeStyle: Record<string, string> = {
   assumed: "border-warn/50 bg-warn/15 text-warn",
-  imported: "border-[#5b7db8]/60 bg-[#5b7db8]/15 text-[#7a90b8]",
+  imported: "border-[#5b7db8]/60 bg-[#5b7db8]/15 text-imported",
 };
 
 const modeLabel: Record<ReviewMode, string> = {
@@ -616,7 +616,7 @@ export default function ReviewDrawer({
                 </span>
                 {current.sourceItemId && (
                   <span
-                    className="shrink-0 cursor-help text-[11px] text-[#7a90b8]"
+                    className="shrink-0 cursor-help text-[11px] text-imported"
                     title={sourceChipTitle(
                       current.sourceItemId,
                       sourceLookup,

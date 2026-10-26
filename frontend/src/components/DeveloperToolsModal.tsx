@@ -707,7 +707,7 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                         </span>
                       )}
                       {!run.current && run.owner_process_alive && (
-                        <span className="flex-none rounded-full bg-amber-500/15 px-2 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                        <span className="flex-none rounded-full bg-warn/15 px-2 text-[10px] font-medium text-warn">
                           live process {run.owner_pid ?? "?"}
                         </span>
                       )}
@@ -768,7 +768,7 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
             <a
               href={diagnosticsBundleUrl(includePrompts)}
               download
-              className="mt-2 inline-block rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
+              className="mt-2 inline-block rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-opacity hover:opacity-90"
             >
               Download diagnostics bundle
             </a>

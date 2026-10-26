@@ -391,7 +391,7 @@ export default function ResearchReportModal({ open, profile, onClose }: Props) {
           </p>
           <button
             onClick={onClose}
-            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
+            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-hover"
           >
             Done
           </button>

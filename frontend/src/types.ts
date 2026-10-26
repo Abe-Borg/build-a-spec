@@ -2275,6 +2275,15 @@ export interface UiPreferencesPayload {
 }
 
 /**
+ * The window's colour scheme (`GET` / `PUT /api/ui/appearance`,
+ * backend/appearance.py): one of lib/theme.ts's ids. Its own file on disk,
+ * never a key of the panel layout's, which a layout save replaces whole.
+ */
+export interface AppearancePayload {
+  theme: string;
+}
+
+/**
  * The guided tour's remembered completion (`GET` / `PUT /api/ui/onboarding`,
  * backend/onboarding_state.py): the tour version this install last finished,
  * null when it never has. lib/onboardingCompletion.ts owns what a version

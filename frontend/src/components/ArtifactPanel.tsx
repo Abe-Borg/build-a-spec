@@ -307,7 +307,7 @@ function LoadingState({ fileLoading }: { fileLoading: NonNullable<FileLoading> }
   const importing = fileLoading.kind === "import";
   return (
     <div
-      className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]"
+      className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper scheme-light px-10 py-12 text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]"
       role="status"
       aria-live="polite"
     >
@@ -374,7 +374,7 @@ function EmptyState({
   );
 
   return (
-    <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
+    <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper scheme-light px-10 py-12 text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
       {/* A blank document renders here, not in SpecDocument — so the header
           editor has to live in both places, or naming the section would be
           impossible on the one page where you most want to do it. An
@@ -1023,7 +1023,7 @@ export default function ArtifactPanel({
           {importedOutstanding > 0 ? (
             <Tip tip={adaptTip} className="shrink-0">
               <button
-                className="whitespace-nowrap rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
+                className="whitespace-nowrap rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-on-accent transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
                 onClick={onDraftAdapt}
                 disabled={busy}
                 data-tour="draft-full"
@@ -1035,7 +1035,7 @@ export default function ArtifactPanel({
           ) : (
             <Tip tip={draftTip} className="shrink-0">
               <button
-                className={`whitespace-nowrap rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
+                className={`whitespace-nowrap rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-on-accent transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
                   draftPulse ? "draft-pulse" : ""
                 }`}
                 onClick={onDraftFull}

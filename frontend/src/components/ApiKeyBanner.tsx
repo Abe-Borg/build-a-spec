@@ -46,7 +46,7 @@ export default function ApiKeyBanner({ onSaved }: Props) {
         <button
           onClick={submit}
           disabled={busy || !value.trim()}
-          className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+          className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-hover disabled:opacity-40"
         >
           {busy ? "Saving…" : "Save key"}
         </button>

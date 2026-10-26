@@ -2533,6 +2533,40 @@ the release-note draft are in `docs/as-built.md` under the same heading. No
 paid API call was made; the one-request live check on the new version is the
 owner's to run.
 
+## Color schemes in Settings → Appearance — implemented notes (2026-10-26)
+
+Owner request (Abraham): Spec Surgeon's five colour schemes, colour for
+colour (copied, not imported). Warm Clay (`clay`, the default) is the
+`@theme` block, i.e. the app's original look; Blueprint, Graphite & Teal,
+Carbon & Hi-Vis and Linen (the one light chrome) are
+`:root[data-theme="…"]` blocks in `frontend/src/index.css`.
+
+- **Adding or changing a scheme touches four places**, kept in step by
+  `tests/test_appearance.py` and `frontend/tests/theme.test.ts`: its block
+  in `index.css` (every colour token of `@theme`, plus `color-scheme`), its
+  entry in `frontend/src/lib/theme.ts` (swatch = its bg/paper/accent),
+  `backend/appearance.THEMES`, and `backend/appearance.BACKGROUNDS` (its
+  `--color-bg`). A new colour token goes into `@theme` AND every block.
+- **The chrome takes its colours from tokens only.** No Warm Clay chrome
+  colour as a literal outside the scheme blocks or in a component (use a
+  token, or `color-mix(in srgb, var(--color-…) N%, transparent)` for an
+  alpha); text on `bg-accent` is `text-on-accent`, never `text-white` (dark
+  on the bright accents); no Tailwind `dark:` (it follows the OS, not the
+  app). The paper is near-white in every scheme, so its status literals
+  (diff marks, badges) stay, and its sheets carry `scheme-light`.
+- **The choice is the install's.** `appearance.json` in the config dir —
+  its own file, because `PUT /api/ui/preferences` replaces the layout's
+  whole. `GET`/`PUT /api/ui/appearance` (strict `Literal`, 422 on an unknown
+  id). `main.py` reads it once and opens `?theme=<id>` (query; the boot nonce
+  stays alone in the fragment) with `background_color`; `index.html`'s inline
+  script sets `data-theme` before the first paint; `lib/useColorScheme.ts`
+  (App-owned) re-syncs after mount and picks optimistically, taking a refused
+  pick back. Not session state: New session, Open project and the tour leave
+  it alone. Capability `session.appearance`, in the `developer-tools` step.
+
+Full record, reversion evidence and the release-note draft are in
+`docs/as-built.md` under the same heading. No paid API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

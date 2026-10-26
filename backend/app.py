@@ -112,7 +112,15 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, StringConstraints
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from . import diagnostics, onboarding_state, qc_preferences, settings, sessions, ui_preferences
+from . import (
+    appearance,
+    diagnostics,
+    onboarding_state,
+    qc_preferences,
+    settings,
+    sessions,
+    ui_preferences,
+)
 from .edit_scope import EDIT_SCOPES
 from .api_key_store import (
     delete_api_key,
@@ -737,6 +745,19 @@ class OnboardingCompletionRequest(BaseModel):
     completed_version: Annotated[
         StrictInt, Field(ge=1, le=onboarding_state.MAX_COMPLETION_VERSION)
     ]
+
+
+class AppearanceRequest(BaseModel):
+    """Body of ``PUT /api/ui/appearance``: the colour scheme just picked.
+
+    Strict where the file reader is lenient, for the reason the panel
+    layout's body is: it only ever comes from the app's own frontend
+    (``frontend/src/lib/theme.ts``), so an id this build does not know is a
+    bug to refuse rather than a value to fall back from.
+    """
+
+    # ``Literal`` over the tuple: one list of schemes, ``appearance.THEMES``.
+    theme: Literal[appearance.THEMES]  # type: ignore[valid-type]
 
 
 class NextSectionRequest(BaseModel):
@@ -9714,6 +9735,51 @@ def create_app(
             "onboarding_completed", completed_version=body.completed_version
         )
         return {"ok": True, **state.to_dict()}
+
+    # --- Appearance (Settings -> Appearance: the colour scheme) ----------
+
+    @app.get("/api/ui/appearance")
+    def ui_appearance_get() -> dict:
+        """The saved colour scheme; the default when none is saved.
+
+        On disk for the panel tray's reason: the packaged app's WebView
+        forgets its browser storage between launches (see
+        ``backend/appearance.py``). ``main.py`` reads the same file at launch
+        to open the window in the scheme; the page asks here once it is up,
+        so a page opened without ``?theme=`` still lands on the saved one.
+        """
+        saved = appearance.load_appearance()
+        return {"ok": True, **saved.to_dict()}
+
+    @app.put("/api/ui/appearance")
+    def ui_appearance_put(body: AppearanceRequest) -> Any:
+        """Remember the colour scheme for every later launch.
+
+        Not session state: New session and Open project leave it alone, it
+        needs no workspace lease, and it is answered whatever a turn is
+        doing. A write that fails says so, and the page takes the scheme back.
+        """
+        chosen = appearance.Appearance(theme=body.theme)
+        try:
+            appearance.save_appearance(chosen)
+        except OSError:
+            _api_log.warning(
+                "Could not write the appearance file", exc_info=True
+            )
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "error": (
+                        "The color scheme could not be saved on this "
+                        "computer, so the app will open in its previous "
+                        "scheme next time."
+                    ),
+                    "code": "write_failed",
+                },
+                status_code=500,
+            )
+        _trace_capture.app_event("appearance", theme=chosen.theme)
+        return {"ok": True, **chosen.to_dict()}
 
     @app.get("/api/ui/qc-preferences")
     def ui_qc_preferences_get() -> dict:

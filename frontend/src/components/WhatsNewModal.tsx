@@ -120,7 +120,7 @@ export function WhatsNewModal({
           </p>
           <button
             onClick={onClose}
-            className="rounded-lg bg-accent px-4 py-1.5 text-sm text-white transition-colors hover:bg-accent-hover"
+            className="rounded-lg bg-accent px-4 py-1.5 text-sm text-on-accent transition-colors hover:bg-accent-hover"
           >
             Got it
           </button>

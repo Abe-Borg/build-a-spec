@@ -80,10 +80,10 @@ export default function ConfirmDialog({
             ref={confirmDisabled ? undefined : initialRef}
             onClick={onConfirm}
             disabled={confirmDisabled}
-            className={`rounded-lg px-3 py-1.5 text-sm font-medium text-white transition-colors ${
+            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
               danger
-                ? "bg-err hover:bg-err/85"
-                : "bg-accent hover:bg-accent-hover"
+                ? "bg-err text-white hover:bg-err/85"
+                : "bg-accent text-on-accent hover:bg-accent-hover"
             } disabled:pointer-events-none disabled:opacity-40`}
           >
             {confirmLabel}

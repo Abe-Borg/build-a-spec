@@ -2176,7 +2176,7 @@ function DismissQCModal({
             Cancel
           </button>
           <button
-            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
+            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
             disabled={!canConfirm}
             onClick={() => void onConfirm()}
           >
@@ -2409,7 +2409,7 @@ function ConfirmQCModal({
             Cancel
           </button>
           <button
-            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
+            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
             onClick={() => onConfirm(scopeMismatch && scopeMismatchAcknowledged, qcTransport.preference!.batch_verification)}
             disabled={!canConfirm}
             title={

@@ -1,7 +1,12 @@
 @import "tailwindcss";
 
-/* Warm, Claude-desktop-adjacent palette. Dark chrome + chat, paper-toned
-   document panel. */
+/* The window's colour schemes (Settings -> Appearance), copied with their
+   colours from Spec Surgeon. Warm Clay is this @theme block: the warm,
+   Claude-desktop-adjacent palette, dark chrome + chat, paper-toned document
+   panel. The others follow it as :root[data-theme] blocks. The list is
+   src/lib/theme.ts and backend/appearance.py (tests/test_appearance.py and
+   tests/theme.test.ts keep them in step). Chrome colours come from these
+   tokens only, so every scheme recolours them. */
 @theme {
   --color-bg: #262624;
   --color-surface: #2f2f2d;
@@ -12,6 +17,8 @@
   --color-ink-faint: #7d7a72;
   --color-accent: #d97757;
   --color-accent-hover: #e08b6d;
+  /* Text and marks on an accent fill (a primary button). */
+  --color-on-accent: #ffffff;
   --color-paper: #faf9f5;
   --color-paper-edge: #e6e2d8;
   --color-paper-ink: #2c2b27;
@@ -19,10 +26,107 @@
   --color-ok: #7fa650;
   --color-warn: #d4a04c;
   --color-err: #c65b4e;
+  /* An imported provision's mark on the chrome (the paper has its own). */
+  --color-imported: #7a90b8;
 
   --font-display: "Georgia", "Cambria", serif;
   --font-body: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "Consolas", monospace;
+}
+
+/* The other colour schemes: every colour token of @theme, redefined. Their
+   text reads at 4.5:1 on its surface and their marks at 3:1 on the paper.
+   (Warm Clay takes `color-scheme: dark` from index.html's meta.) */
+/* Blueprint */
+:root[data-theme="blueprint"] {
+  color-scheme: dark;
+  --color-bg: #121a26;
+  --color-surface: #18212f;
+  --color-raised: #212c3d;
+  --color-edge: #2f3d53;
+  --color-ink: #e3e9f2;
+  --color-ink-dim: #9aa8bc;
+  --color-ink-faint: #6e7d93;
+  --color-accent: #2e8aee;
+  --color-accent-hover: #4da0f5;
+  --color-on-accent: #08111d;
+  --color-paper: #f8fafc;
+  --color-paper-edge: #dbe2ec;
+  --color-paper-ink: #1b2433;
+  --color-paper-dim: #66748a;
+  --color-ok: #428a5e;
+  --color-warn: #e2ad4f;
+  --color-err: #dc4739;
+  --color-imported: #7a90b8;
+}
+
+/* Graphite & Teal */
+:root[data-theme="graphite"] {
+  color-scheme: dark;
+  --color-bg: #1b1d1f;
+  --color-surface: #222528;
+  --color-raised: #2b2f33;
+  --color-edge: #3a3f45;
+  --color-ink: #e7e9eb;
+  --color-ink-dim: #a3a9b0;
+  --color-ink-faint: #767d85;
+  --color-accent: #269c9b;
+  --color-accent-hover: #37acaa;
+  --color-on-accent: #061b1b;
+  --color-paper: #fbfbfa;
+  --color-paper-edge: #e1e4e6;
+  --color-paper-ink: #1f2326;
+  --color-paper-dim: #6c747c;
+  --color-ok: #5f8f3a;
+  --color-warn: #e0a54a;
+  --color-err: #d94b3c;
+  --color-imported: #7a90b8;
+}
+
+/* Carbon & Hi-Vis */
+:root[data-theme="carbon"] {
+  color-scheme: dark;
+  --color-bg: #0b0b0c;
+  --color-surface: #121214;
+  --color-raised: #1b1b1e;
+  --color-edge: #2c2c31;
+  --color-ink: #f4f4f5;
+  --color-ink-dim: #a9a9b0;
+  --color-ink-faint: #7a7a82;
+  --color-accent: #f55b00;
+  --color-accent-hover: #ff7d30;
+  --color-on-accent: #140700;
+  --color-paper: #ffffff;
+  --color-paper-edge: #e2e2e4;
+  --color-paper-ink: #141416;
+  --color-paper-dim: #66666d;
+  --color-ok: #318c52;
+  --color-warn: #e8b230;
+  --color-err: #e12c31;
+  --color-imported: #7a90b8;
+}
+
+/* Linen: the one light chrome. */
+:root[data-theme="linen"] {
+  color-scheme: light;
+  --color-bg: #f5f1ea;
+  --color-surface: #ece6dc;
+  --color-raised: #fffdf9;
+  --color-edge: #dcd3c5;
+  --color-ink: #2a2620;
+  --color-ink-dim: #5f564b;
+  --color-ink-faint: #877e72;
+  --color-accent: #a64b29;
+  --color-accent-hover: #8d3f22;
+  --color-on-accent: #ffffff;
+  --color-paper: #fffdf9;
+  --color-paper-edge: #e6dfd3;
+  --color-paper-ink: #2a2620;
+  --color-paper-dim: #6c6459;
+  --color-ok: #3c7e39;
+  --color-warn: #9d671b;
+  --color-err: #b33d2c;
+  --color-imported: #3a5a94;
 }
 
 html,
@@ -213,10 +317,10 @@ body {
 @keyframes draft-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(217, 119, 87, 0);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 0%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 4px rgba(217, 119, 87, 0.35);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 35%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -362,11 +466,11 @@ body {
 }
 @keyframes agent-ring {
   0% {
-    box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.45);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 45%, transparent);
   }
   70%,
   100% {
-    box-shadow: 0 0 0 5px rgba(217, 119, 87, 0);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-accent) 0%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -402,7 +506,7 @@ body {
   border: 1px solid color-mix(in srgb, var(--color-accent) 28%, var(--color-edge));
   border-radius: 0.75rem;
   background:
-    radial-gradient(circle at 88% 0%, rgba(217, 119, 87, 0.11), transparent 38%),
+    radial-gradient(circle at 88% 0%, color-mix(in srgb, var(--color-accent) 11%, transparent), transparent 38%),
     color-mix(in srgb, var(--color-surface) 82%, var(--color-bg));
   padding: 0.7rem;
   container-type: inline-size;
@@ -416,7 +520,7 @@ body {
 .qc-run-recap.is-retained {
   border-color: color-mix(in srgb, var(--color-edge) 88%, var(--color-accent));
   background:
-    radial-gradient(circle at 88% 0%, rgba(217, 119, 87, 0.055), transparent 38%),
+    radial-gradient(circle at 88% 0%, color-mix(in srgb, var(--color-accent) 5.5%, transparent), transparent 38%),
     color-mix(in srgb, var(--color-surface) 78%, var(--color-bg));
 }
 .qc-stage {
@@ -426,7 +530,7 @@ body {
   gap: 0.4rem;
   border: 1px solid color-mix(in srgb, var(--color-edge) 82%, transparent);
   border-radius: 0.5rem;
-  background: rgba(38, 38, 36, 0.34);
+  background: color-mix(in srgb, var(--color-bg) 34%, transparent);
   padding: 0.35rem 0.4rem;
   transition:
     border-color 0.2s ease,
@@ -448,17 +552,17 @@ body {
 }
 .qc-stage.is-active {
   border-color: color-mix(in srgb, var(--color-accent) 58%, var(--color-edge));
-  background: rgba(217, 119, 87, 0.08);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
 }
 .qc-stage.is-active .qc-stage-index {
   border-color: var(--color-accent);
-  background: rgba(217, 119, 87, 0.16);
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
   color: var(--color-accent);
   animation: agent-ring 1.6s ease-out infinite;
 }
 .qc-stage.is-complete .qc-stage-index {
   border-color: color-mix(in srgb, var(--color-ok) 65%, var(--color-edge));
-  background: rgba(127, 166, 80, 0.13);
+  background: color-mix(in srgb, var(--color-ok) 13%, transparent);
   color: var(--color-ok);
 }
 .qc-stage.is-failed .qc-stage-index {
@@ -475,13 +579,13 @@ body {
   min-width: 0;
   border: 1px solid color-mix(in srgb, var(--color-edge) 80%, transparent);
   border-radius: 0.55rem;
-  background: rgba(38, 38, 36, 0.38);
+  background: color-mix(in srgb, var(--color-bg) 38%, transparent);
   padding: 0.5rem;
   animation: qc-card-in 0.2s ease-out both;
 }
 .qc-lens-card.is-active {
   border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-edge));
-  background: rgba(217, 119, 87, 0.045);
+  background: color-mix(in srgb, var(--color-accent) 4.5%, transparent);
 }
 .qc-room-section {
   border-top: 1px solid color-mix(in srgb, var(--color-edge) 70%, transparent);
@@ -539,10 +643,10 @@ body {
 @keyframes qc-seat-glow {
   0%,
   100% {
-    box-shadow: 0 0 0 rgba(217, 119, 87, 0);
+    box-shadow: 0 0 0 color-mix(in srgb, var(--color-accent) 0%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.14);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 14%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {

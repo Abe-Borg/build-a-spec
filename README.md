@@ -232,6 +232,42 @@ stay out of the reply: one real interview turn, sent by
 `tools\prompt55_progress_update_canary.py --run` (see Testing). Nothing waits
 on it.
 
+## Current Status — five color schemes (Settings → Appearance)
+
+(2026-10-26. docs/as-built.md's "Color schemes in Settings → Appearance" is
+the record; not yet in a release.)
+
+Settings now has an **Appearance** section with the same five color schemes
+as Spec Surgeon, color for color:
+
+| Scheme | Chrome | Paper | Accent |
+|---|---|---|---|
+| **Warm Clay** (default) | warm charcoal | cream | terracotta |
+| **Blueprint** | deep navy | cool white | drafting blue |
+| **Graphite & Teal** | neutral charcoal | white | teal |
+| **Carbon & Hi-Vis** | true black | pure white | safety orange |
+| **Linen** | light, warm linen | off-white | terracotta |
+
+- **Warm Clay is the app you already know.** Its colors are exactly the ones
+  the app has always used, so nothing changes until you pick another.
+- **A pick takes effect at once** and is remembered on this computer. The app
+  opens in it from then on, and the window's own frame starts in the
+  scheme's background, so Linen (the one light scheme) never flashes dark
+  while the app loads.
+- **The document stays a document.** Every scheme keeps a near-white sheet
+  of paper, so the provision badges, change marks and figures read the same
+  in all five. On the brighter accents (Blueprint, Graphite, Carbon) the
+  text on accent buttons is dark, for contrast.
+- **Where it is kept.** `appearance.json` in the app config folder, beside
+  `ui_preferences.json`: one scheme name, nothing about any project. It is
+  its own file because a panel-layout save replaces `ui_preferences.json`
+  whole. A missing or damaged file opens Warm Clay. `GET` and
+  `PUT /api/ui/appearance` read and write it. New session and Open project
+  leave it alone.
+
+No paid API call was made. How each scheme looks in the installed WebView2
+window on Windows is the owner's to check.
+
 ## Current Status — the app runs on Anthropic's Python SDK 2.x (API version 2026-10-21)
 
 (2026-10-26. docs/as-built.md's "The SDK is anthropic 2.x, on API version
@@ -4683,7 +4719,7 @@ Shipped in v0.3.0 (Phase 3) and still current:
 
 What worked before (Phase 2) and still does:
 
-- Claude-desktop-style UI: streaming chat pane on the left, the **live specification document** on the right, warm dark theme.
+- Claude-desktop-style UI: streaming chat pane on the left, the **live specification document** on the right, warm dark theme by default (Settings → Appearance offers four more color schemes).
 - The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, positional display labels `1.1` / `A.` / `1.` / `a.` / `1)` / `a)`, stable element ids). Those semantic labels are not themselves Word numbering definitions; clean normalized export renders them with genuine Word automatic numbering. Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
 - Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export. (After v1.23.0 nothing writes either — not the assistant, and not a hand edit marking a provision *needs input*. The ones an older document carries are listed under the panel as **Leftover placeholders** and in the review report, and a *needs input* badge clears in one click.)
 - Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
@@ -4804,6 +4840,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   onboarding_state.py    the finished tour's version on disk
                          (onboarding_state.json, its own file): lenient read,
                          strict atomic write
+  appearance.py          the color scheme on disk (appearance.json, its own
+                         file): lenient read, strict atomic write; main.py
+                         opens the window in it   [schemes from Spec Surgeon]
   cost_checks.py         the cost self-checks (Tier 1 finish): in-memory,
                          per-process latches that can only switch the
                          continuation tail (per engine) or the warm lead

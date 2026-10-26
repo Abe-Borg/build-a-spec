@@ -1807,7 +1807,7 @@ function DiffDocument({ diff }: { diff: SectionDiff }) {
   const sectionNumber = section?.number_cur ?? "";
   return (
     <div
-      className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]"
+      className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper scheme-light px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]"
       data-capability="document.structure"
     >
       {diff.elements.map((e, i) => (
@@ -2027,7 +2027,7 @@ export default function SpecDocument({
   return (
     <EditReasonsContext.Provider value={doc.edit_reasons ?? NO_REASONS}>
     <TemplateSeedContext.Provider value={templateSeed}>
-    <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
+    <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper scheme-light px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
       {/* `el-sec` stays on whichever block renders — it is the tour's section
           anchor and the target of a header edit. */}
       {bareImport ? (

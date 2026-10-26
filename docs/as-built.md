@@ -25837,3 +25837,105 @@ Claude API through version 2 of Anthropic's Python SDK, on API version 2026-10-2
 about how you use the app changes. Your API key now travels in the standard Authorization
 header; a corporate gateway that inspects the X-Api-Key header on traffic to
 api.anthropic.com needs to read Authorization instead."
+
+## Color schemes in Settings → Appearance — implemented notes (2026-10-26)
+
+Owner request (Abraham): Build-a-Spec gets Spec Surgeon's colour-scheme option, with the
+same schemes. Spec Surgeon was read for reference only; nothing there changed.
+
+### What was there
+
+Build-a-Spec had one look. Its chrome was already drawn from sixteen `@theme` colour
+tokens in `frontend/src/index.css` (about 2,300 token utilities in the TSX, three raw
+palette classes), and those sixteen are exactly Spec Surgeon's Warm Clay values. Spec
+Surgeon (v1.8.0) keeps the choice in `settings.json`, opens its page with `?theme=<id>`,
+sets `<html data-theme>` from it in an inline script before the first paint, and gives
+pywebview the scheme's background.
+
+### What changed
+
+- **The schemes.** `index.css` keeps Warm Clay as the `@theme` block and adds four
+  `:root[data-theme="…"]` blocks (Blueprint, Graphite & Teal, Carbon & Hi-Vis, Linen),
+  each redefining every colour token and declaring `color-scheme` (`light` for Linen
+  only). The seventeen tokens Build-a-Spec shares with Spec Surgeon were copied verbatim
+  and checked value by value against Spec Surgeon's file. Two tokens are new in
+  `@theme`: `--color-on-accent` (Spec Surgeon's: `#ffffff` in Clay and Linen, a near-black
+  on the bright Blueprint, Graphite and Carbon accents) and `--color-imported`, the
+  Build-a-Spec-only chrome mark for an imported provision (`#7a90b8` as before; `#3a5a94`
+  in Linen, about 5.5:1 on its surface). `index.html` gains
+  `<meta name="color-scheme" content="dark">` and Spec Surgeon's inline `?theme=` script.
+- **Chrome literals became token mixes.** Fourteen `rgba()` literals of the accent
+  (`217, 119, 87`), the background (`38, 38, 36`) and ok (`127, 166, 80`) in the draft
+  pulse, the agent ring and the Final QC room are now
+  `color-mix(in srgb, var(--color-…) N%, transparent)`, which renders the same colour and
+  alpha in Warm Clay. Seventeen accent-filled buttons say `text-on-accent` instead of
+  `text-white` (ConfirmDialog's danger branch keeps white on `bg-err`). The Review drawer's
+  two `text-[#7a90b8]` read `text-imported`. Developer tools' "live process" chip used
+  `text-amber-700 dark:text-amber-300`; Tailwind's `dark:` follows the operating system,
+  not the app, so it was amber-700 on dark chrome on a light-mode PC. It is now
+  `bg-warn/15 text-warn`.
+- **The paper keeps its literals.** Diff marks, provision badges, the changed-block
+  highlight and figures' white stay as they were: the paper is near-white in every scheme,
+  so they keep their meaning and contrast. The five paper sheets carry `scheme-light`, so
+  native controls on the paper stay light under a dark scheme.
+- **Persistence.** `backend/appearance.py` (new, modelled on `onboarding_state.py`):
+  `THEMES`, `DEFAULT_THEME`, `BACKGROUNDS`, `resolve_theme`, `load_appearance` (missing,
+  malformed, oversized or unknown → `clay`, never an error; utf-8-sig), `save_appearance`
+  (atomic, refuses an unknown id). `appearance.json` is its own file: `PUT
+  /api/ui/preferences` replaces `ui_preferences.json` whole. `GET /api/ui/appearance` →
+  `{ok, theme}`; `PUT` takes `AppearanceRequest` (`Literal` over `THEMES`, 422 on anything
+  else), writes, records an `appearance` app event, and answers 500 `write_failed` when the
+  write fails. Not session state, no lease, behind the launch token.
+- **Launch.** `main.py` reads the file once, opens
+  `_url_with_boot_fragment(_url_with_theme(base, theme), nonce)` (the theme in the query,
+  the nonce still alone in the fragment) and passes
+  `background_color=appearance.BACKGROUNDS[theme]` to `create_window` (pywebview 6.2.1
+  takes it). The browser fallback opens the same URL.
+- **The page.** `lib/theme.ts` is Spec Surgeon's (`THEMES` with swatches, `resolveTheme`,
+  `themeFromSearch`, `searchWithTheme`, `applyTheme`) plus `currentTheme`.
+  `lib/useColorScheme.ts`, owned by App: after mount it reads the saved scheme once and
+  applies it if the page disagrees (a dev page or a hand-opened address has no `?theme=`);
+  `pick` applies at once, saves through an ordered chain (the panel tray's pattern, so the
+  file holds the last click), and takes a refused pick back with its reason, acting only
+  on the latest pick's answer. `SettingsPanel` has an Appearance section after the Final
+  QC transport: Spec Surgeon's five swatch cards in a `radiogroup` (capability
+  `session.appearance`), names wrapping in the narrower panel, the blurb as the hover.
+  `applyTheme` keeps the address's `?theme=` current, so a reload opens the scheme just
+  chosen.
+- **Tour and Help.** `session.appearance` joins the registry and the settings-anchored
+  `developer-tools` step, retitled "Appearance, and developer tools when something
+  misbehaves" (450 characters; order unchanged, so `TOUR_VERSION` stays 9). Help's first
+  pass gains "Pick a color scheme" after "Give the paper room". UI copy says "color"; code
+  comments keep the repo's "colour".
+
+### Evidence
+
+- `tests/test_appearance.py` (31): the file's place and independence from the panel
+  layout, defaults, a round trip per scheme, every unreadable shape, BOM, oversize, 422
+  bodies leaving the file alone, the failed write, atomicity, the launch token, `THEMES`
+  equal to `theme.ts`'s ids, `BACKGROUNDS` equal to each block's `--color-bg`, and the
+  launch URL. `frontend/tests/theme.test.ts` (9, registered in `npm test`): unique ids
+  with Clay first, every block redefining exactly `@theme`'s colour tokens with a
+  `color-scheme`, swatches equal to tokens, the URL helpers, the inline script before the
+  bundle, no Warm Clay chrome colour as a literal outside the scheme blocks or in any
+  component, no `dark:`, no `text-white` on `bg-accent`, and the Settings and App wiring.
+  `npm test` (612) and `npm run build` pass; Ruff is clean; the ui-preferences,
+  onboarding, QC-preference, desktop-security and docs-consistency files pass (97).
+- Reversion probes, each restored: dropping a token from Linen, `text-white` back on the
+  send button, an accent `rgba()` back in the QC room, removing the inline script, a
+  swatch one digit off, a `BACKGROUNDS` value one digit off, renaming a `THEMES` id, and
+  letting `save_appearance` accept any id each turned a test red.
+- In Chromium against the built page served by the backend: `/?theme=linen` paints
+  `rgb(245, 241, 234)` before the bundle runs; with nothing saved the app settles on Clay;
+  each card switches `data-theme`, the background and the saved file; a reload keeps the
+  last pick; a `PUT` of `dark` answers 422. The accent button's text measures white in
+  Clay and Linen, `rgb(20, 7, 0)` in Carbon and `rgb(8, 17, 29)` in Blueprint. Screenshots
+  of every scheme were read; Linen's chrome, chat, paper and picker are legible.
+- No paid API call was made. The native WebView2 frame on Windows is the owner's to see.
+
+### Release-note draft (for the release after 1.28.1)
+
+Section "New", item "Five color schemes": "Settings → Appearance offers the same five
+color schemes as Spec Surgeon: Warm Clay (the look you know), Blueprint, Graphite & Teal,
+Carbon & Hi-Vis and Linen, a light scheme. The window changes at once and opens in your
+choice from then on; the document stays a white sheet of paper in all five."

@@ -89,6 +89,30 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.29.0",
+        date="2026-11-04",
+        headline="Choose your color scheme",
+        summary=(
+            "Make Build-a-Spec your own with five color schemes in "
+            "Settings → Appearance. Your choice is saved for next time."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Appearance",
+                items=(
+                    ReleaseItem(
+                        title="Choose a look that suits you",
+                        body=(
+                            "Select a color scheme in Settings → Appearance "
+                            "and see it throughout the app. Your selection "
+                            "persists when you reopen Build-a-Spec."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.28.1",
         date="2026-10-20",
         headline="More room for your document toolbar",

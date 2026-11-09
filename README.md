@@ -270,12 +270,16 @@ window on Windows is the owner's to check.
 
 ## Current Status — the app runs on Anthropic's Python SDK 2.x (API version 2026-10-21)
 
-(2026-10-26. docs/as-built.md's "The SDK is anthropic 2.x, on API version
-2026-10-21" is the record; not yet in a release.)
+(2026-10-26, shipped in 1.29.0. docs/as-built.md's "The SDK is anthropic
+2.x, on API version 2026-10-21" is the record.)
 
 The `anthropic` package moved from 1.17.0 to 2.3.0 (`requirements.in`
-accepts `>=2.0,<3`). SDK 2.x talks to the Claude API on API version
-`2026-10-21`, and nothing about how you use the app changes:
+accepts `>=2.0,<3`), and on 2026-11-09 the lock moved on to 2.6.0 (same
+dependencies, same API version; it adds thread-safety fixes for the parallel
+research and Final QC calls and its own class for the spend-cap error — see
+"The SDK lock moves to 2.6.0" in docs/as-built.md). SDK 2.x talks to the
+Claude API on API version `2026-10-21`, and nothing about how you use the
+app changes:
 
 - **No request changed.** The new version refuses `temperature`, `top_p`
   and `top_k`, a document placed directly in one of Claude's own messages,

@@ -1064,7 +1064,7 @@ invisible everywhere. Now they can.
 - **The SDK's own retries are counted.** `SDK_MAX_RETRIES` retries happen
   inside the SDK before the app sees a failure. An observer handler on the
   `anthropic._base_client` logger counts its INFO line ("Retrying request
-  to %s in %f seconds", unchanged from SDK 1.11.0 through 2.3.0) against
+  to %s in %f seconds", unchanged from SDK 1.11.0 through 2.6.0) against
   the thread's agent in flight (`started()` on a worker thread,
   `requesting()` around the chat's stream open, since a generator's frames
   hop threads) or as unattributed. The snapshot discloses `attached` and
@@ -2486,8 +2486,9 @@ API call was made.
 ## The SDK is anthropic 2.x, on API version 2026-10-21 — implemented notes (2026-10-26)
 
 The SDK-upgrade review's recommendation (owner: "handle it"), as its own PR.
-`requirements.in` accepts `anthropic>=2.0,<3`; the regenerated lock pins
-2.3.0, and that is the only line that moved (2.x adds no dependency). 2.0.0
+`requirements.in` accepts `anthropic>=2.0,<3`; the regenerated lock pinned
+2.3.0, and that is the only line that moved (2.x adds no dependency); it
+pins 2.6.0 since 2026-11-09 (see "The SDK lock moves to 2.6.0"). 2.0.0
 is the first Python SDK release that sends `anthropic-version: 2026-10-21`;
 the app sets no version of its own.
 
@@ -2612,6 +2613,34 @@ Never retry a spend limit, and never show its raw SDK text. Tests:
 `own_spend_limit_error` and `rate_limit_error_with_body`. Full record,
 reversion evidence and the release-note draft are in `docs/as-built.md` under
 the same heading. No paid API call was made.
+
+## The SDK lock moves to 2.6.0 — implemented notes (2026-11-09)
+
+Owner: "do 1-3". `requirements.txt` pins `anthropic==2.6.0` (was 2.3.0),
+regenerated with `uv pip compile ... --upgrade-package anthropic`; the intent
+(`>=2.0,<3`) and every other line are unchanged, and 2.6.0 declares the same
+dependencies as 2.3.0. Read from the two wheels before the bump:
+
+- **Unchanged where the app leans on it:** `ANTHROPIC_API_VERSION` is still
+  `2026-10-21` and `_constants.py` is byte-identical (the retry and timeout
+  defaults); `_should_retry` still retries 408/409/429/5xx; the "Retrying
+  request to %s in %f seconds" line the pressure ledger counts;
+  `current_message_snapshot`; `lib/streaming/_messages.py` (a comment);
+  every exception class the app or its tests name; the license files.
+- **New, and why it matters here:** status errors are built by
+  `_error_classes.make_status_error`, which raises a subclass per documented
+  `(status, error_code)` — the spend cap is `EnforcedSpendLimitReachedError`,
+  a `RateLimitError` — and every `APIStatusError` gains `api_message`,
+  `error_code` and `details`. The app keeps reading the body
+  (`retry_policy.spend_limit_kind`), so it classifies the same on either
+  release; `tests/test_spend_limit.py` drives a real client over a
+  `MockTransport` to pin that. `_models.py` serializes the build of lazily
+  built models under a lock (pydantic before 2.14), which the parallel
+  research and Final QC threads benefit from.
+- **Unused here:** the message-thread helper and the Admin API additions.
+
+No request byte, setting, route or event changed. Full record in
+`docs/as-built.md` under the same heading. No paid API call was made.
 
 ## As-built history
 

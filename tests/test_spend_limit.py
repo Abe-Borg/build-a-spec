@@ -177,6 +177,55 @@ def test_final_qcs_batch_errors_carry_the_class_and_the_words():
     assert message == "slow down"
 
 
+@pytest.mark.parametrize(
+    ("status", "error", "kind"),
+    [
+        (
+            429,
+            {
+                "type": "rate_limit_error",
+                "message": SPEND_CAP_PROVIDER_MESSAGE,
+                "details": {"error_code": "enforced_spend_limit_reached"},
+            },
+            SPEND_LIMIT_CAP,
+        ),
+        (
+            400,
+            {"type": "invalid_request_error", "message": OWN_SPEND_LIMIT_PROVIDER_MESSAGE},
+            SPEND_LIMIT_OWN,
+        ),
+    ],
+)
+def test_the_error_the_installed_sdk_raises_is_recognized(status, error, kind):
+    """Not a hand-built exception: the installed SDK parses a real response
+    (2.6.0 raises its own ``EnforcedSpendLimitReachedError``, a
+    ``RateLimitError``, for the cap) and the app still reads it from the
+    body, so either SDK release classifies it the same way."""
+    import anthropic
+    import httpx2
+
+    def transport(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            status, json={"type": "error", "error": error, "request_id": "req_x"}
+        )
+
+    client = anthropic.Anthropic(
+        api_key="test-key-hermetic-wire",
+        max_retries=0,
+        http_client=anthropic.DefaultHttpxClient(
+            transport=httpx2.MockTransport(transport)
+        ),
+    )
+    with pytest.raises(anthropic.APIStatusError) as exc_info:
+        client.messages.count_tokens(
+            model="claude-opus-5-5", messages=[{"role": "user", "content": "Hi"}]
+        )
+    exc = exc_info.value
+    assert spend_limit_kind(exc) == kind
+    assert classify_exception(exc) is FailureClass.SPEND_LIMIT
+    assert spend_limit_message(exc) == spend_limit_text(kind, error["message"])
+
+
 # ---------------------------------------------------------------------------
 # The words
 # ---------------------------------------------------------------------------

@@ -26029,3 +26029,66 @@ reaches its monthly spend cap or a spend limit you set, the app now stops at
 once and tells you so, with Anthropic's own words about when access resumes
 and where to raise the limit. Research and Final QC used to retry the cap as
 if it were a passing rate limit and then show a raw error."
+
+## The SDK lock moves to 2.6.0 — implemented notes (2026-11-09)
+
+Owner request (Abraham), the second of the three changes from the review of
+Anthropic's current documentation. PyPI's newest `anthropic` is 2.6.0; the
+lock pinned 2.3.0.
+
+### What changed
+
+`requirements.txt`: `anthropic==2.3.0` → `2.6.0`, from
+`uv pip compile requirements.in --universal --python-version 3.11 -o
+requirements.txt --upgrade-package anthropic`. No other line moved: 2.6.0's
+required dependencies (`anyio`, `docstring-parser`, `httpx2`, `jiter`,
+`opentelemetry-api`, `pydantic`, `sniffio`, `typing-extensions`, with the same
+ranges) are 2.3.0's. `requirements.in`, the build lock and the third-party
+license overrides needed nothing (the wheel ships the same `LICENSE` and
+`LICENSE-MIT`). Comments that named 2.3.0 in `settings.py`,
+`resource_pressure.py` and CLAUDE.md now name 2.6.0.
+
+### What was read before the bump
+
+The two wheels, file by file where the app depends on them:
+
+- `_constants.py` (API version `2026-10-21`, default retries and timeouts):
+  identical. `_streaming.py`, `lib/streaming/_types.py`: identical.
+  `lib/streaming/_messages.py`: one comment removed.
+- `_base_client.py`: `_should_retry` unchanged (408, 409, 429, 5xx, and
+  `x-should-retry`), the "Retrying request to %s in %f seconds" log line
+  unchanged; status errors now come from `_error_classes.make_status_error`,
+  and OpenTelemetry spans get two more arguments.
+- `_error_classes.py` (new): a subclass per documented `(status,
+  error_code)`. The spend cap raises `EnforcedSpendLimitReachedError(
+  RateLimitError)`; thread errors, compaction errors and organization errors
+  have their own. `APIStatusError` gains `api_message`, `error_code` and
+  `details`. Every exception name the app and its tests use is still
+  exported.
+- `_models.py`: building a lazily built model is serialized under a lock for
+  pydantic before 2.14, and `RootModel[...]` is cached per type; both are
+  thread-safety fixes, which the parallel research and Final QC threads use.
+- New, unused here: the message-thread helper, Admin API analytics, RBAC and
+  spend-limit endpoints.
+
+### Evidence
+
+- On 2.6.0: the requirements-lock, API-version, resource-pressure (which
+  reads the retry line from the installed SDK), third-party-notices (the npm
+  half skips without `node_modules`), spend-limit, auth-error and
+  fake-validator files pass (232), and so do the app, research-engine, QC,
+  batch-verification, retry-resume, compaction-effort, harvest,
+  streamed-stagger, live-reasoning, templates and compliance files (333).
+- `tests/test_spend_limit.py::test_the_error_the_installed_sdk_raises_is_recognized`
+  sends a count-tokens request through a real client over a `MockTransport`
+  that answers with the documented spend-cap and own-limit bodies: on 2.6.0
+  the cap arrives as `EnforcedSpendLimitReachedError` and is still
+  `SPEND_LIMIT`, with the same words.
+- No paid API call was made. The Windows build was not run in this session;
+  CI and the release build check the notices.
+
+### Release-note draft (for the release after 1.29.0)
+
+Not user-visible; no entry needed. If one is wanted, under "Under the hood":
+"Updated the Anthropic SDK to 2.6.0, which adds thread-safety fixes for the
+app's parallel research and review calls."

@@ -3449,6 +3449,39 @@ failing.
   failure cannot be staged on demand; the value is in removing the worst
   case.
 
+### A reached spend limit stops at once and says so
+
+Anthropic stops an organization's requests when its spending reaches a
+limit, and lets them through again only on a date: the first of next month
+for the usage tier's monthly cap, or whenever a limit you set yourself in the
+Claude Console resets. The app used to read the monthly cap as an ordinary
+rate limit, so research and Final QC waited and retried it (three attempts,
+each with the SDK's own two retries) before failing with the SDK's raw
+`Error code: 429 - {...}` text. A limit you set yourself was not retried, but
+its message was just as raw.
+
+Now both are recognized from what Anthropic's rate-limits page documents (the
+cap's `enforced_spend_limit_reached` error code, or its message on a 429 with
+no `retry-after`; the "You have reached your specified … API usage limits"
+message on a 400) and never retried by the app. The chat, research, Final QC,
+the compliance check, the fact harvest, the AI template pass, the key test
+and the document token count all show one message instead: what was reached,
+Anthropic's own words (which say when access resumes), and where to change
+it (the Console's Limits page for the cap, its Billing page for your own
+limit).
+
+- **Research:** each area stops after its first refused request; when every
+  area stopped on the limit, the round's error says it once.
+- **Final QC:** each lens stops after its first refused request, and the
+  first reviewer that meets the limit stops the review phase, as a refused
+  request already did — the rest are recorded, never sent.
+- **Not changed:** the SDK still retries the cap twice on its own before the
+  app sees it (it cannot tell the cap from a rate limit); those requests are
+  refused and cost nothing. An ordinary rate limit is retried exactly as
+  before, and so is a 429 that carries `retry-after`.
+- **Developer tools:** a failure stopped by the limit reads `spend_limit`,
+  never `rate_limit`, and is not counted as provider pressure.
+
 ### The cost self-checks watch both savings (Tier 1 finish)
 
 Chunks 3 and 4 are on by default without the measured run they were waiting

@@ -25943,3 +25943,89 @@ Section "New", item "Five color schemes": "Settings → Appearance offers the sa
 color schemes as Spec Surgeon: Warm Clay (the look you know), Blueprint, Graphite & Teal,
 Carbon & Hi-Vis and Linen, a light scheme. The window changes at once and opens in your
 choice from then on; the document stays a white sheet of paper in all five."
+
+## A reached spend limit is never retried — implemented notes (2026-11-09)
+
+Owner request (Abraham), from a review of Anthropic's current documentation
+("do 1-3"). Anthropic's errors and rate-limits pages now document how an
+organization's spending stops its requests.
+
+### What was there
+
+The tier's monthly spend cap answers every request with HTTP 429
+`rate_limit_error`, no `retry-after`, and on the Messages API
+`error.details.error_code == "enforced_spend_limit_reached"`; the message
+says when access resumes (the first of next month). A spend limit the
+organization set itself answers with HTTP 400 `invalid_request_error`, its
+message starting "You have reached your specified API usage limits" (or
+"... specified workspace API usage limits"). `classify_exception` read the
+cap as `RATE_LIMIT`, so every research area and every Final QC call retried
+it three times with backoff, each attempt retried twice more by the SDK, and
+then failed with `RateLimitError: Error code: 429 - {...}`. The own limit was
+`INVALID_REQUEST` (not retried) with the same raw text. The chat said
+`Anthropic API error (429): Error code: 429 - {...}`, and the harvest said
+"The harvest call failed (RateLimitError)".
+
+### What changed
+
+- `backend/research/retry_policy.py`: `FailureClass.SPEND_LIMIT`
+  (`"spend_limit"`), not retryable; `spend_limit_kind` /
+  `spend_limit_kind_of_error` (the documented code decides alone; the message
+  prefixes only with the matching type or status, and the cap's only without
+  `retry-after`, since the Claude Code workspace's limit is a 429 that carries
+  one); `provider_error_message`; `spend_limit_text` / `spend_limit_message`
+  (one message per kind, Anthropic's words quoted on one line, at most 400
+  characters, and the Console page to change it); `SPEND_LIMIT_TEXT_PREFIX` /
+  `is_spend_limit_text`.
+- Every place a failure became text uses it: research (`_run_dimension`, the
+  coordinator's raised-worker path), Final QC (`_run_streaming_call`, batch
+  submission and read, `_batch_error_facts`, raised lenses), the compliance
+  check, the chat turn (`kind: "spend_limit"`), the condensing summary, the
+  harvest (`code: "spend_limit"`), the AI template pass, the key test and the
+  reference token count. An all-failed research round or Final QC run states
+  it once instead of once per area or lens.
+- Final QC's verifier breaker trips on `SPEND_LIMIT` as it does on a refused
+  request: the first seat that meets the limit stops the phase.
+- The chat's other API errors quote the provider's `error.message` instead of
+  the SDK's rendering of the whole body.
+
+### Deliberately not changed
+
+- The SDK's own retries: it cannot tell the cap from a rate limit, so it
+  retries twice before the app sees the error. Those requests are refused and
+  cost nothing; controlling them would mean a transport hook for one case.
+- No research breaker: each area stops after its one refused attempt, and the
+  staggered launch's followers are released as soon as the lead fails.
+- The pressure ledger's vocabulary: a spend limit is not provider pressure.
+  The agent ends `failed` with `error_kind="spend_limit"`; the run is not
+  starved.
+- Every request byte, the SSE protocol (the `error` frame's optional `kind`
+  already existed), readiness, the QC manifest.
+
+### Evidence
+
+- `tests/test_spend_limit.py` (22): classification of the cap with and
+  without its code, a 429 with `retry-after`, an ordinary 429, both own-limit
+  messages, a 400 that merely quotes the phrase, batch error objects and
+  `_batch_error_facts`; the message's words, quoting and bound; research and
+  Final QC lenses make one request each, sleep no backoff and say it once;
+  the verifier breaker stops after one seat; the chat's frame, `kind` and
+  ledger record; the chat's provider wording for another error; the key test
+  and the harvest.
+- Reversion probes, each restored: removing the `SPEND_LIMIT` check from
+  `classify_exception` failed ten tests; dropping `SPEND_LIMIT` from the
+  breaker predicate failed the breaker test.
+- The auth-error, retry-resume, resource-pressure, streamed-stagger,
+  verifier-v3, harvest, key-management, research-engine, QC, batch
+  verification, compaction-effort and fake-validator files pass (456 with the
+  new file). Ruff is clean.
+- No paid API call was made; a real spend-capped response has not been seen.
+  The shapes are the documentation's.
+
+### Release-note draft (for the release after 1.29.0)
+
+Section "Fixed", item "Spend limits": "When your Anthropic organization
+reaches its monthly spend cap or a spend limit you set, the app now stops at
+once and tells you so, with Anthropic's own words about when access resumes
+and where to raise the limit. Research and Final QC used to retry the cap as
+if it were a passing rate limit and then show a raw error."

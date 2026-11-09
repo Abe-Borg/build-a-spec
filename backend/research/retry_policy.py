@@ -13,9 +13,14 @@ resume-first rule every retry loop in both engines applies (Research/QC cost
 Tier 1, Chunk 5). It lives here, beside the policy it extends, so research,
 streamed Final QC and batched Final QC cannot disagree about when a
 conversation survives a transient failure.
+
+A second (2026-11-09): a reached spend limit is its own class,
+``SPEND_LIMIT``, never retried (see :func:`spend_limit_kind`).
 """
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -38,6 +43,9 @@ class FailureClass(str, Enum):
     PARSE_ERROR = "parse_error"
     PAUSE_TURN = "pause_turn"
     UNKNOWN = "unknown"
+    # The organization reached a spend limit (2026-11-09). Never retried:
+    # the provider refuses every request until access resumes.
+    SPEND_LIMIT = "spend_limit"
 
 
 _RETRYABLE_REALTIME = frozenset(
@@ -67,8 +75,156 @@ _CONNECTION_PATTERNS = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Spend limits (2026-11-09)
+# ---------------------------------------------------------------------------
+#
+# Anthropic's rate-limits page names two ways an organization's spend stops
+# its requests, and neither ends on its own within a run:
+#
+# - the usage tier's monthly cap: HTTP 429 ``rate_limit_error`` with NO
+#   ``retry-after`` header and, on the Messages API,
+#   ``error.details.error_code == "enforced_spend_limit_reached"``; the
+#   message starts "You have reached your API usage limits" and says when
+#   access resumes (the first of next month). Retrying fails until then.
+# - a limit the organization set itself in the Console: HTTP 400
+#   ``invalid_request_error`` whose message starts "You have reached your
+#   specified API usage limits" (or "... specified workspace API usage
+#   limits").
+#
+# As a rate limit the cap was retried (three app attempts, each with the
+# SDK's own two) and then reported as raw SDK text. ``SPEND_LIMIT`` is never
+# retried, and :func:`spend_limit_message` says what happened in words.
+SPEND_LIMIT_CAP = "cap"
+SPEND_LIMIT_OWN = "own"
+SPEND_CAP_ERROR_CODE = "enforced_spend_limit_reached"
+_SPEND_CAP_MESSAGE_PREFIX = "You have reached your API usage limits"
+_OWN_SPEND_LIMIT_MESSAGE_PREFIXES = (
+    "You have reached your specified API usage limits",
+    "You have reached your specified workspace API usage limits",
+)
+# The provider's own words are quoted, bounded and on one line.
+PROVIDER_MESSAGE_MAX_CHARS = 400
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _field(value: object, name: str) -> object:
+    """``value[name]`` for a mapping, ``value.name`` otherwise (SDK objects)."""
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def spend_limit_kind_of_error(
+    error: object, *, status_code: int | None = None, retry_after: bool = False
+) -> str:
+    """``SPEND_LIMIT_CAP``, ``SPEND_LIMIT_OWN`` or ``""`` for an API error object.
+
+    ``error`` is the ``{type, message, details}`` object inside the error
+    envelope (a dict, or an SDK object such as a batch result's). The
+    documented error code decides alone; the message prefixes are the
+    fallback, held to the error's type (or status) so an unrelated error
+    quoting the phrase never matches, and the cap's prefix only without a
+    ``retry-after`` (the cap's 429 never carries one).
+    """
+    if error is None:
+        return ""
+    details = _field(error, "details")
+    if _field(details, "error_code") == SPEND_CAP_ERROR_CODE:
+        return SPEND_LIMIT_CAP
+    message = _field(error, "message")
+    if not isinstance(message, str):
+        return ""
+    error_type = _field(error, "type")
+    if (
+        (status_code == 429 or error_type == "rate_limit_error")
+        and not retry_after
+        and message.startswith(_SPEND_CAP_MESSAGE_PREFIX)
+    ):
+        return SPEND_LIMIT_CAP
+    if (status_code == 400 or error_type == "invalid_request_error") and (
+        message.startswith(_OWN_SPEND_LIMIT_MESSAGE_PREFIXES)
+    ):
+        return SPEND_LIMIT_OWN
+    return ""
+
+
+def _provider_error(exc: BaseException) -> object:
+    """The ``error`` object of an API status error's JSON body, or ``None``."""
+    if not isinstance(exc, APIStatusError):
+        return None
+    return _field(exc.body, "error") if exc.body is not None else None
+
+
+def spend_limit_kind(exc: BaseException) -> str:
+    """``SPEND_LIMIT_CAP``, ``SPEND_LIMIT_OWN`` or ``""`` for an exception."""
+    if not isinstance(exc, APIStatusError):
+        return ""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    retry_after = bool(headers is not None and headers.get("retry-after"))
+    return spend_limit_kind_of_error(
+        _provider_error(exc),
+        status_code=getattr(exc, "status_code", None),
+        retry_after=retry_after,
+    )
+
+
+def provider_error_message(exc: BaseException) -> str:
+    """The provider's own ``error.message``, on one line and bounded; ``""``
+    when the body carries none (the SDK's ``str(exc)`` is the whole body)."""
+    return _one_line(_field(_provider_error(exc), "message"))
+
+
+def _one_line(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = _WHITESPACE_RE.sub(" ", value).strip()
+    if len(text) > PROVIDER_MESSAGE_MAX_CHARS:
+        text = text[: PROVIDER_MESSAGE_MAX_CHARS - 1].rstrip() + "…"
+    return text
+
+
+# Every spend-limit text starts with this, so a surface that kept only the
+# text (a lens status has no failure class) can still tell it apart.
+SPEND_LIMIT_TEXT_PREFIX = "Your Anthropic organization has reached"
+
+
+def spend_limit_text(kind: str, provider_message: object = "") -> str:
+    """The words every surface shows for a reached spend limit."""
+    quoted = _one_line(provider_message)
+    said = f' Anthropic says: "{quoted}"' if quoted else ""
+    if kind == SPEND_LIMIT_CAP:
+        return (
+            f"{SPEND_LIMIT_TEXT_PREFIX} its monthly API spend "
+            "cap, so Anthropic is refusing requests until access resumes."
+            f"{said} To continue sooner, request a higher limit on the "
+            "Claude Console's Limits page."
+        )
+    if kind == SPEND_LIMIT_OWN:
+        return (
+            f"{SPEND_LIMIT_TEXT_PREFIX} the spend limit set for "
+            "it in the Claude Console, so Anthropic is refusing requests "
+            f"until access resumes.{said} To continue sooner, raise or remove "
+            "the limit on the Console's Billing page."
+        )
+    return ""
+
+
+def is_spend_limit_text(text: object) -> bool:
+    """True for a message :func:`spend_limit_text` wrote."""
+    return isinstance(text, str) and text.startswith(SPEND_LIMIT_TEXT_PREFIX)
+
+
+def spend_limit_message(exc: BaseException) -> str:
+    """:func:`spend_limit_text` for an exception; ``""`` when it is not one."""
+    kind = spend_limit_kind(exc)
+    return spend_limit_text(kind, provider_error_message(exc)) if kind else ""
+
+
 def classify_exception(exc: BaseException) -> FailureClass:
     """Classify an exception into a :class:`FailureClass` (typed-SDK-first)."""
+    if spend_limit_kind(exc):
+        return FailureClass.SPEND_LIMIT
     if isinstance(exc, RateLimitError):
         return FailureClass.RATE_LIMIT
     if isinstance(exc, InternalServerError):

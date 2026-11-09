@@ -2568,6 +2568,51 @@ Carbon & Hi-Vis and Linen (the one light chrome) are
 Full record, reversion evidence and the release-note draft are in
 `docs/as-built.md` under the same heading. No paid API call was made.
 
+## A reached spend limit is never retried — implemented notes (2026-11-09)
+
+From the owner's review of Anthropic's current errors and rate-limits pages
+(owner: "do 1-3"). The tier's monthly spend cap is a 429
+`rate_limit_error` with no `retry-after` and, on the Messages API,
+`error.details.error_code == "enforced_spend_limit_reached"`; a limit the
+organization set itself is a 400 whose message starts "You have reached your
+specified [workspace ]API usage limits". Neither ends within a run.
+
+- **One class.** `retry_policy.FailureClass.SPEND_LIMIT` (`"spend_limit"`),
+  not retryable, checked first in `classify_exception` through
+  `spend_limit_kind(exc)` (`SPEND_LIMIT_CAP` / `SPEND_LIMIT_OWN` / `""`).
+  `spend_limit_kind_of_error(error, status_code=, retry_after=)` reads a bare
+  error object (a batch item's): the code decides alone; the message prefixes
+  only with the matching type or status, the cap's only without
+  `retry-after`. It joins `DIMENSION_ERROR_KINDS` automatically.
+- **One message.** `spend_limit_message(exc)` / `spend_limit_text(kind,
+  provider_message)`: what was reached, Anthropic's `error.message` quoted
+  (one line, `PROVIDER_MESSAGE_MAX_CHARS`), where to change it. Every text
+  starts with `SPEND_LIMIT_TEXT_PREFIX` (`is_spend_limit_text`), which is how
+  a lens status (no class) is recognized. Used wherever a failure becomes
+  text: research (both paths), Final QC (streamed calls, batch create, batch
+  read, batch items via `_batch_error_facts`, raised lenses), the compliance
+  check, the chat (SSE `error` with `kind: "spend_limit"`), the condensing
+  summary's error, the harvest (`code: "spend_limit"`), the AI template pass
+  (a `TemplateError`), the key test and the reference token count. The chat's
+  other API errors now quote `provider_error_message(exc)` instead of the
+  SDK's `Error code: N - {body}`.
+- **Stops.** Research and lens fan-outs: one app attempt per area or lens;
+  an all-failed round or run says the message once. Final QC's verifier
+  breaker (`shared_request_failure`) trips on `SPEND_LIMIT` as on a refused
+  request. No research breaker was added: each area's one refused attempt is
+  free and quick.
+- **Ledger.** Not pressure: `RETRY_PRESSURE_KINDS` is unchanged, the agent
+  ends `failed` with `error_kind="spend_limit"` and the run is not starved.
+- **Unchanged.** The SDK's own two retries (it cannot tell the cap from a
+  rate limit), every request byte, ordinary 429 handling, the SSE protocol
+  (the `error` frame's optional `kind` already existed), readiness.
+
+Never retry a spend limit, and never show its raw SDK text. Tests:
+`tests/test_spend_limit.py`; `tests/fakes.py` gains `spend_cap_error`,
+`own_spend_limit_error` and `rate_limit_error_with_body`. Full record,
+reversion evidence and the release-note draft are in `docs/as-built.md` under
+the same heading. No paid API call was made.
+
 ## As-built history
 
 The as-built history, with the same headings, is `docs/as-built.md`.

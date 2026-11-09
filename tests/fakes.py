@@ -1235,6 +1235,70 @@ def auth_error(
     return anthropic.AuthenticationError(message, response=response, body=None)
 
 
+SPEND_CAP_PROVIDER_MESSAGE = (
+    "You have reached your API usage limits: your organization has crossed "
+    "its monthly API usage threshold, set based on your organization's API "
+    "tier. You will regain access on 2026-12-01 at 00:00 UTC."
+)
+OWN_SPEND_LIMIT_PROVIDER_MESSAGE = (
+    "You have reached your specified API usage limits. You will regain "
+    "access on 2026-12-01 at 00:00 UTC."
+)
+
+
+def _status_error_with_body(
+    cls: Any, status: int, error: dict, *, headers: dict | None = None
+) -> Any:
+    """A real SDK status error whose ``body`` is the provider's JSON envelope,
+    the way ``_make_status_error_from_response`` builds one."""
+    import httpx
+
+    body = {"type": "error", "error": error, "request_id": "req_test"}
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(status, request=request, headers=headers or {})
+    return cls(f"Error code: {status} - {body}", response=response, body=body)
+
+
+def spend_cap_error(
+    *, details: bool = True, retry_after: str | None = None
+) -> Any:
+    """The tier spend-cap 429 the rate-limits page documents: a
+    ``rate_limit_error`` with no ``retry-after`` and, on the Messages API,
+    ``details.error_code == "enforced_spend_limit_reached"``."""
+    import anthropic
+
+    error: dict = {"type": "rate_limit_error", "message": SPEND_CAP_PROVIDER_MESSAGE}
+    if details:
+        error["details"] = {"error_code": "enforced_spend_limit_reached"}
+    headers = {"retry-after": retry_after} if retry_after is not None else None
+    return _status_error_with_body(
+        anthropic.RateLimitError, 429, error, headers=headers
+    )
+
+
+def own_spend_limit_error(message: str = OWN_SPEND_LIMIT_PROVIDER_MESSAGE) -> Any:
+    """The 400 a spend limit the organization set itself returns."""
+    import anthropic
+
+    return _status_error_with_body(
+        anthropic.BadRequestError,
+        400,
+        {"type": "invalid_request_error", "message": message},
+    )
+
+
+def rate_limit_error_with_body(message: str = "Number of request tokens has exceeded your per-minute rate limit") -> Any:
+    """An ordinary 429 carrying a provider body (and a ``retry-after``)."""
+    import anthropic
+
+    return _status_error_with_body(
+        anthropic.RateLimitError,
+        429,
+        {"type": "rate_limit_error", "message": message},
+        headers={"retry-after": "3"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: research-shaped responses (web server tools + usage telemetry)
 # ---------------------------------------------------------------------------

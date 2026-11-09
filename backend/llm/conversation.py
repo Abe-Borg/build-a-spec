@@ -244,7 +244,13 @@ from ..project_sections import (
     wrap_project_section_body,
 )
 from ..research.engine import RequirementsProfile
-from ..research.retry_policy import classify_exception, is_retryable_failure_class
+from ..research.retry_policy import (
+    FailureClass,
+    classify_exception,
+    is_retryable_failure_class,
+    provider_error_message,
+    spend_limit_message,
+)
 from ..spec_doc.project import sanitize_project_link
 from ..suggestions import (
     REPLY_CHIPS_TAG_PATTERN,
@@ -5238,6 +5244,8 @@ def _api_error_kind(exc: BaseException) -> str:
     """A closed token for a provider failure — never its message."""
     if isinstance(exc, anthropic.AuthenticationError):
         return "auth_error"
+    if classify_exception(exc) is FailureClass.SPEND_LIMIT:
+        return FailureClass.SPEND_LIMIT.value
     if isinstance(exc, anthropic.RateLimitError):
         return "rate_limited"
     if isinstance(exc, anthropic.APIStatusError):
@@ -5286,7 +5294,8 @@ def _summary_attempt(
     except CompactionError as exc:
         error, kind = str(exc), exc.code
     except Exception as exc:  # noqa: BLE001 - a failed summary never fails a turn
-        error, kind = f"{type(exc).__name__}: {exc}", _api_error_kind(exc)
+        error = spend_limit_message(exc) or f"{type(exc).__name__}: {exc}"
+        kind = _api_error_kind(exc)
     _trace_compaction(
         phase="summary",
         trigger=inputs.trigger,
@@ -6364,11 +6373,22 @@ def stream_user_turn(
     except anthropic.APIStatusError as exc:
         # Provider pressure, for the ledger: the chat has no app-level retry
         # loop, so a 429/529/5xx that reached here outlasted the SDK's own
-        # retries and failed the turn outright.
+        # retries and failed the turn outright. A reached spend limit is not
+        # pressure: it is recorded as its own failure class.
         _record_turn_api_failure(turn_pressure, exc)
+        spend_limit = spend_limit_message(exc)
+        if spend_limit:
+            yield {
+                "type": "error",
+                "message": spend_limit,
+                "kind": FailureClass.SPEND_LIMIT.value,
+            }
+            return
+        # The provider's own words, not the SDK's "Error code: N - {body}".
+        detail = provider_error_message(exc) or exc.message
         yield {
             "type": "error",
-            "message": f"Anthropic API error ({exc.status_code}): {exc.message}",
+            "message": f"Anthropic API error ({exc.status_code}): {detail}",
         }
         return
     except anthropic.APIConnectionError as exc:

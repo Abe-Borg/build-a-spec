@@ -136,6 +136,7 @@ from .llm.client import (
     reset_client_cache,
 )
 from .llm.compaction import compaction_payload
+from .research.retry_policy import FailureClass, spend_limit_message
 from .llm.conversation import (
     SessionState,
     effective_discipline,
@@ -3447,6 +3448,13 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
             response = stream.get_final_message()
     except MissingApiKeyError:
         raise
+    except anthropic.APIStatusError as exc:
+        # A reached spend limit says so in words; any other failure keeps
+        # its old path.
+        spend_limit = spend_limit_message(exc)
+        if spend_limit:
+            raise TemplateError(spend_limit) from exc
+        raise
     session.usage.add("template", getattr(response, "usage", None), count_turn=True)
     # A declined turn returns a normal 200 with no tool block at all, so
     # without this it reads as "the model returned malformed content" — the
@@ -4051,7 +4059,9 @@ def create_app(
             _trace_capture.app_event(
                 "key", action="test", ok=False, status=exc.status_code
             )
-            return JSONResponse({"ok": False, "error": exc.message})
+            return JSONResponse(
+                {"ok": False, "error": spend_limit_message(exc) or exc.message}
+            )
         except anthropic.APIConnectionError:
             _trace_capture.app_event(
                 "key", action="test", ok=False, status="connection"
@@ -6191,6 +6201,17 @@ def create_app(
                 "auth_error", AUTH_ERROR_MESSAGE, status_code=502
             )
         except anthropic.APIError as exc:
+            spend_limit = spend_limit_message(exc)
+            if spend_limit:
+                _trace_capture.app_event(
+                    "harvest",
+                    action="preview",
+                    ok=False,
+                    error_kind=FailureClass.SPEND_LIMIT.value,
+                )
+                return _harvest_refusal(
+                    FailureClass.SPEND_LIMIT.value, spend_limit, status_code=502
+                )
             _trace_capture.app_event(
                 "harvest", action="preview", ok=False, error_kind="provider_error"
             )
@@ -6449,7 +6470,8 @@ def create_app(
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "Could not count the document with Anthropic's token counter: "
+                    "error": spend_limit_message(exc)
+                    or "Could not count the document with Anthropic's token counter: "
                     + str(exc),
                 },
                 status_code=502,

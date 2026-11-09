@@ -117,7 +117,11 @@ from ..research.retry_policy import (
     classify_exception,
     compute_backoff_seconds,
     is_retryable_failure_class,
+    is_spend_limit_text,
     retry_mode,
+    spend_limit_kind_of_error,
+    spend_limit_message,
+    spend_limit_text,
 )
 from ..research.schema import (
     build_web_fetch_tool,
@@ -5671,7 +5675,8 @@ def _run_streaming_call(
                     message = (
                         AUTH_ERROR_MESSAGE
                         if is_authentication_error(exc)
-                        else f"{type(exc).__name__}: {exc}"
+                        else spend_limit_message(exc)
+                        or f"{type(exc).__name__}: {exc}"
                     )
                     return done(_CallResult(
                         None,
@@ -7475,7 +7480,8 @@ def _verifier_outcome(
     )
     if result.payload is None:
         shared_request_failure = (
-            result.failure_class == FailureClass.INVALID_REQUEST.value
+            result.failure_class
+            in (FailureClass.INVALID_REQUEST.value, FailureClass.SPEND_LIMIT.value)
             and not result.responses
             and not result.billed
         )
@@ -7616,6 +7622,11 @@ def _batch_error_facts(error: Any) -> tuple[FailureClass, str]:
     failure_class = _BATCH_ERROR_CLASSES.get(raw_type, FailureClass.UNKNOWN)
     if raw_type == "authentication_error":
         return failure_class, AUTH_ERROR_MESSAGE
+    # A batch item carries no headers, so the cap's message prefix is read
+    # as the no-``retry-after`` 429 it always is.
+    spend_kind = spend_limit_kind_of_error(inner)
+    if spend_kind:
+        return FailureClass.SPEND_LIMIT, spend_limit_text(spend_kind, message)
     return failure_class, message or f"Batch request failed ({raw_type or 'unknown'})."
 
 
@@ -8576,7 +8587,7 @@ def _run_batch_calls(
             message = (
                 AUTH_ERROR_MESSAGE
                 if is_authentication_error(exc)
-                else f"{type(exc).__name__}: {exc}"
+                else spend_limit_message(exc) or f"{type(exc).__name__}: {exc}"
             )
             # A refused submission failed every seat in the round at once.
             retryable = is_retryable_failure_class(failure_class)
@@ -8927,7 +8938,7 @@ def _consume_batch_results(
         return _BatchReadOutcome(
             answered=answered,
             unassigned=unassigned,
-            error=f"{type(exc).__name__}: {exc}",
+            error=spend_limit_message(exc) or f"{type(exc).__name__}: {exc}",
             failure_class=classify_exception(exc).value,
         )
     return _BatchReadOutcome(answered=answered, unassigned=unassigned)
@@ -10078,7 +10089,8 @@ def _run_final_qc(
                         error=(
                             AUTH_ERROR_MESSAGE
                             if is_authentication_error(exc)
-                            else f"{type(exc).__name__}: {exc}"
+                            else spend_limit_message(exc)
+                            or f"{type(exc).__name__}: {exc}"
                         ),
                     ),
                 )
@@ -10147,6 +10159,11 @@ def _run_final_qc(
         auth_error = bool(failed_lenses) and all(
             s.error == AUTH_ERROR_MESSAGE for s in failed_lenses
         )
+        if failed_lenses and all(
+            is_spend_limit_text(s.error) for s in failed_lenses
+        ):
+            # One account limit stopped every lens: say it once.
+            errors = failed_lenses[0].error
         api_request_count = sum(
             status.api_request_count for status in lens_statuses
         )

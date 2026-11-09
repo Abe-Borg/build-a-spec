@@ -3381,11 +3381,11 @@ class _ChatRequestInputs:
     module: SpecModule
     model: str
     max_tokens: int
-    # The effort every round of this turn is sent at (the 5.5 prompting
-    # upgrade, P55-3): decided ONCE, at turn start, by :func:`turn_effort`
-    # and captured with the rest, so a round can never re-decide it — a
-    # change of top-level effort mid-turn would invalidate the messages
-    # cache the turn's own continuation rounds read.
+    # The TOP-LEVEL effort every round of this turn is sent at (the 5.5
+    # prompting upgrade, P55-3): decided ONCE, at turn start, by
+    # :func:`split_turn_effort` and captured with the rest, so a round can
+    # never re-decide it — a change of top-level effort mid-turn would
+    # invalidate the messages cache the turn's own continuation rounds read.
     effort: str
     # How this turn's view is cut (compaction plan Phase 3): None sends the
     # whole history. Fixed for the whole turn — chosen before round 0 — so
@@ -3395,6 +3395,10 @@ class _ChatRequestInputs:
     # PROJECT CONTEXT and frozen with it, so no round re-reads the session
     # for it. "" sends no project block.
     project_block: str = ""
+    # The level an effort-only system message raises this turn to, placed
+    # right before the turn's first message in every round's request; ""
+    # sends none (2026-11-09; see :func:`split_turn_effort`).
+    message_effort: str = ""
 
 
 # The server-owned directives that start a whole-section pass. Only the
@@ -3422,6 +3426,46 @@ def turn_effort(user_text: str) -> str:
     if any(text.startswith(directive) for directive in _DRAFT_PASS_DIRECTIVES):
         return settings.DRAFT_PASS_EFFORT
     return settings.INTERVIEW_EFFORT
+
+
+def split_turn_effort(effort: str, model: str) -> tuple[str, str]:
+    """How a turn at ``effort`` asks for it: ``(top-level, message level)``.
+
+    The top-level effort is part of the messages cache's key, so a turn sent
+    at another level than the turns before it cannot read the conversation
+    they cached; a whole-section pass at ``DRAFT_PASS_EFFORT`` used to write
+    the whole committed history (and the project block) again for that
+    reason (decision D3 accepted it). Since 2026-11-09 such a turn keeps
+    ``INTERVIEW_EFFORT`` at the top level and raises its own depth with an
+    effort-only system message right before its first message (Anthropic's
+    per-message effort, beta ``settings.PER_MESSAGE_EFFORT_BETA``), so the
+    cached prefix in front of it is read. D3 declined the message because it
+    would enter saved history; it does not: it is inserted into each
+    round's request (:func:`_build_chat_request`) and never into the turn's
+    messages, the way the PROJECT CONTEXT is stripped at commit — and commit
+    already rewrites the conversation from that point on, so leaving it out
+    of history costs no cache.
+
+    ``(effort, "")`` — today's top-level request — for a turn at the
+    interview's own level, on a model Anthropic does not document the
+    feature for, without adaptive thinking, or once the provider has refused
+    the message (the latch condensing shares).
+    """
+    base = settings.INTERVIEW_EFFORT
+    if effort == base:
+        return effort, ""
+    if model not in settings.PER_MESSAGE_EFFORT_MODELS:
+        return effort, ""
+    if _thinking_param().get("type") != "adaptive":
+        return effort, ""
+    if not per_message_effort_available():
+        return effort, ""
+    return base, effort
+
+
+def _effort_message(effort: str) -> dict[str, Any]:
+    """An effort-only system message: no content, one ``output_config``."""
+    return {"role": "system", "content": [], "output_config": {"effort": effort}}
 
 
 def _request_view(
@@ -3473,6 +3517,32 @@ def _build_chat_request(
     # and a condensed view drops the pages its oldest turns fetched; either
     # leaves a citation pointing at a document the request no longer holds.
     messages = repair_document_citations(sanitize_messages_for_resend(raw))
+    # Read BEFORE the effort message goes in: inserting it builds a new list,
+    # which is not an edit of the conversation (it binds no thinking block),
+    # so it must never ask for ``drop_block``.
+    harness_edited = messages is not raw
+    boundary = _committed_history_boundary(len(view), len(raw), len(messages))
+    effort = inputs.effort
+    effort_message = False
+    if inputs.message_effort:
+        if len(messages) == len(raw):
+            # Right before the turn's first message, the same index every
+            # round: after the committed history (and so after the boundary
+            # breakpoint this turn reads), before everything the turn adds.
+            # Inserted before the breakpoints and the project block, so the
+            # boundary index is untouched; on an empty history the project
+            # block takes a leading user message of its own.
+            messages = [
+                *messages[: len(view)],
+                _effort_message(inputs.message_effort),
+                *messages[len(view):],
+            ]
+            effort_message = True
+        else:
+            # The sanitizer changed the message count (it never does): no
+            # safe place for the message, so the turn's depth goes back to
+            # the top level, as before.
+            effort = inputs.message_effort
     kwargs: dict[str, Any] = {
         "model": inputs.model,
         "max_tokens": inputs.max_tokens,
@@ -3480,9 +3550,7 @@ def _build_chat_request(
         "messages": _with_project_block(
             _with_cache_breakpoints(
                 messages,
-                committed_boundary=_committed_history_boundary(
-                    len(view), len(raw), len(messages)
-                ),
+                committed_boundary=boundary,
                 cache_ttl=settings.CHAT_CACHE_TTL,
                 tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
             ),
@@ -3490,14 +3558,18 @@ def _build_chat_request(
         ),
         "tools": _chat_tools(),
         "thinking": _thinking_param(),
-        "output_config": {"effort": inputs.effort},
+        "output_config": {"effort": effort},
     }
+    if effort_message:
+        kwargs["extra_headers"] = with_beta_header(
+            None, settings.PER_MESSAGE_EFFORT_BETA
+        )
     if container_id:
         # Top level only — never inside system, tools, or messages. A
         # pending code-execution-called server tool can only be resumed
         # inside the container it started in.
         kwargs["container"] = container_id
-    if messages is not raw:
+    if harness_edited:
         # The harness edited the conversation before sending it (the 5.5
         # prompting upgrade, P55-6): the resend sanitizer elided a fetched
         # PDF over the page limit, or dropped an unpaired server-tool call,
@@ -4831,7 +4903,10 @@ def _without_reasons(applied: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # provider refused a summary request BECAUSE of that message, read on every
 # summary after it, cleared only by an app restart (and by the test
 # conftest). A refusal is a 400, which is not billed; the summary is resent
-# without the message, at the chat's depth, as it ran before.
+# without the message, at the chat's depth, as it ran before. Since
+# 2026-11-09 a whole-section pass raises its depth the same way
+# (:func:`split_turn_effort`) and shares the latch: refused, it is resent
+# with its depth at the top level, as every pass ran before.
 
 # How often a summary written while the user waits (the backstop) refreshes
 # its "Condensing earlier conversation…" status, and how long the backstop
@@ -4860,14 +4935,16 @@ _per_message_effort_refusal = ""
 
 
 def per_message_effort_available() -> bool:
-    """False once the provider has refused the summary's effort message."""
+    """False once the provider has refused an effort-only message (a
+    summary's or a whole-section pass's: one latch for both)."""
     with _per_message_effort_lock:
         return not _per_message_effort_refusal
 
 
 def _refuse_per_message_effort(detail: str) -> None:
-    """Switch the summary's own effort off until the app restarts; one
-    WARNING, once."""
+    """Switch the per-message effort off until the app restarts — for the
+    condensing summary and the whole-section passes alike; one WARNING,
+    once."""
     global _per_message_effort_refusal
     detail = " ".join(str(detail).split())[:200] or "refused"
     with _per_message_effort_lock:
@@ -4875,8 +4952,10 @@ def _refuse_per_message_effort(detail: str) -> None:
             return
         _per_message_effort_refusal = detail
     _log.warning(
-        "Condensing summaries run at the chat's effort until the app "
-        "restarts: the provider refused the per-message effort (%s).",
+        "The per-message effort is off until the app restarts (condensing "
+        "summaries run at the chat's effort; whole-section passes set "
+        "theirs at the top level, re-writing the cached conversation once "
+        "each): the provider refused it (%s).",
         detail,
     )
 
@@ -4911,11 +4990,24 @@ def _summary_effort_message(
 
 
 def _carries_summary_effort(request: Mapping[str, Any]) -> bool:
+    """True when ``request`` carries an effort-only system message (a
+    summary's or, since 2026-11-09, a whole-section pass's)."""
     return any(
         isinstance(message, Mapping)
         and message.get("role") == "system"
         and "output_config" in message
         for message in request.get("messages") or ()
+    )
+
+
+def _is_effort_message_refusal(
+    exc: BaseException, request: Mapping[str, Any]
+) -> bool:
+    """A 400 that refuses ``request``'s effort-only message, and nothing else."""
+    return (
+        _carries_summary_effort(request)
+        and not _PROMPT_TOO_LONG.search(str(exc))
+        and bool(_PER_MESSAGE_EFFORT_REJECTION.search(str(exc)))
     )
 
 
@@ -5162,11 +5254,7 @@ def _open_summary_stream(
         manager, stream = _enter_stream(client, request)
         return manager, stream, request
     except anthropic.BadRequestError as exc:
-        if (
-            not _carries_summary_effort(request)
-            or _PROMPT_TOO_LONG.search(str(exc))
-            or not _PER_MESSAGE_EFFORT_REJECTION.search(str(exc))
-        ):
+        if not _is_effort_message_refusal(exc, request):
             raise
         _refuse_per_message_effort(str(exc))
     request = _build_compaction_request(inputs, per_message_effort=False)
@@ -5767,8 +5855,14 @@ def stream_user_turn(
         yield {"type": "error", "message": "Empty message."}
         return
     # Decided once, here, and never again this turn (P55-3): every round's
-    # request carries it, and the turn's trace records it.
+    # request carries it, and the turn's trace records it. How it is asked
+    # for is decided with it (2026-11-09): a level above the interview's
+    # rides an effort-only message, so the top-level effort — and with it
+    # the cached conversation — stays the interview's.
     effort = turn_effort(user_text)
+    top_effort, message_effort = split_turn_effort(
+        effort, model or settings.INTERVIEW_MODEL
+    )
 
     # The PROJECT CONTEXT and the cached project block render once, at turn
     # start: mid-turn document changes reach the model through tool results,
@@ -5877,9 +5971,10 @@ def stream_user_turn(
             module=session.module,
             model=model or settings.INTERVIEW_MODEL,
             max_tokens=max_tokens or settings.INTERVIEW_MAX_TOKENS,
-            effort=effort,
+            effort=top_effort,
             view_spec=turn_view.spec if turn_view is not None else None,
             project_block=project_block,
+            message_effort=message_effort,
         )
 
     def close_for_between_round_stop() -> None:
@@ -6057,10 +6152,36 @@ def stream_user_turn(
                 break
             round_started = time.perf_counter()
             try:
-                with turn_pressure.requesting():
-                    manager, stream = _enter_stream(
-                        client, request, trace_handle
-                    )
+                try:
+                    with turn_pressure.requesting():
+                        manager, stream = _enter_stream(
+                            client, request, trace_handle
+                        )
+                except anthropic.BadRequestError as exc:
+                    if not _is_effort_message_refusal(exc, request):
+                        raise
+                    # The provider refused the effort-only message (a 400,
+                    # not billed): switch it off for the process, as
+                    # condensing does, and send this turn's depth at the top
+                    # level for the rest of the turn — the request every
+                    # whole-section pass sent before, cache rewrite included.
+                    _refuse_per_message_effort(str(exc))
+                    top_effort, message_effort = effort, ""
+                    with session.owned_model_turn_guard(
+                        turn_token,
+                        generation,
+                    ) as owns_turn:
+                        if not owns_turn:
+                            raise _SessionInvalidated(
+                                "The session was reset while this turn was "
+                                "streaming; the turn was discarded."
+                            ) from exc
+                        inputs = capture_request_inputs()
+                    request = _build_chat_request(inputs, container_id)
+                    with turn_pressure.requesting():
+                        manager, stream = _enter_stream(
+                            client, request, trace_handle
+                        )
             except anthropic.BadRequestError as exc:
                 # The estimate let through a request the provider counts as
                 # too long (a conversation of dense, token-heavy content).

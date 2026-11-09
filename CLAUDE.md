@@ -419,7 +419,9 @@ already resolved and does nothing). 409 when nothing is running.
   default `medium`; research runs `RESEARCH_EFFORT`, default `medium`.
   Sonnet 5.5 recalibrated its effort scale; Anthropic's migration guidance
   starts multistep tool use at `medium`. Whole-section drafting/adaptation
-  still uses `DRAFT_PASS_EFFORT`, default `high`. The chat runs
+  still uses `DRAFT_PASS_EFFORT`, default `high` (sent in an effort-only
+  message since 2026-11-09, so the top level stays `INTERVIEW_EFFORT`; see
+  "Whole-section passes raise their effort per message"). The chat runs
   `INTERVIEW_MODEL`: Claude Opus 5.5 since 2026-10-13 (a trial; Sonnet 5.5
   before, and research stays on Sonnet 5.5) — see "The chat runs on Claude
   Opus 5.5" below.
@@ -2613,6 +2615,54 @@ Never retry a spend limit, and never show its raw SDK text. Tests:
 `own_spend_limit_error` and `rate_limit_error_with_body`. Full record,
 reversion evidence and the release-note draft are in `docs/as-built.md` under
 the same heading. No paid API call was made.
+
+## Whole-section passes raise their effort per message — implemented notes (2026-11-09)
+
+Owner: "do 1-3", which revisits decision D3 (P55-3). A ready full-draft or
+adapt pass runs at `DRAFT_PASS_EFFORT`; sent as the TOP-LEVEL effort, it
+changed the messages cache's key, so the pass wrote the committed history
+and the project block again instead of reading them. D3 declined the
+per-message effort because the message would enter saved history.
+
+- **The split.** `conversation.split_turn_effort(effort, model)` →
+  `(top-level, message level)`: `(INTERVIEW_EFFORT, effort)` when the turn's
+  effort differs from the interview's, the model is in
+  `PER_MESSAGE_EFFORT_MODELS`, thinking is adaptive and the latch is armed;
+  `(effort, "")` (the old request) otherwise. Decided once at turn start
+  beside `turn_effort`; `_ChatRequestInputs.effort` is the top level and
+  `message_effort` the message's level.
+- **The message never enters history.** `_build_chat_request` inserts
+  `_effort_message(level)` (`role: system`, `content: []`,
+  `output_config.effort`) at `len(view)` — after the committed history and
+  its boundary breakpoint, before the turn's first message — in every
+  round's request, before the breakpoints and the project block are placed
+  (on an empty history the project block takes a leading user message of its
+  own), plus the `PER_MESSAGE_EFFORT_BETA` header. `new_messages` never holds
+  it, so commit, the transcript, the pairing guard, the harvest and recall
+  are untouched. Commit already rewrites from that point (strip-at-commit),
+  so leaving it out of history costs no cache. If the sanitizer ever changed
+  the message count, the level goes back to the top level instead.
+- **Not an edit.** `harness_edited` is read before the insertion: the new
+  list must never trigger `with_drop_block` (caught by the byte-identity
+  test while building this).
+- **Refusal.** `_is_effort_message_refusal(exc, request)` (shared with
+  `_open_summary_stream`): a 400 naming the message switches the shared
+  latch off (`_refuse_per_message_effort`, one WARNING naming both users) and
+  the round resends once with the level at the top level; the rest of the
+  turn and later passes send the old request. Any other 400 keeps its path.
+- **Unchanged.** The depth of every round, `turn_effort`, the trace's
+  `effort` (the turn's level), the stable prompt, tools, every ordinary
+  turn's bytes, the summary fork (which now reads the prefix a pass wrote,
+  since the pass's top-level effort is the interview's), and the turn after
+  a long pass still overrunning the 20-position lookback.
+
+Never send a whole-section pass's depth as its top-level effort while the
+message is available, and never put the effort message into `new_messages`
+or history. Tests: `tests/test_draft_pass_effort_message.py`;
+`tests/test_prompt55_effort.py` reads each request's effective level
+(`summary_effort`). Full record, reversion evidence and the release-note
+draft are in `docs/as-built.md` under the same heading. No paid API call was
+made; the saving is modelled, not measured.
 
 ## The SDK lock moves to 2.6.0 — implemented notes (2026-11-09)
 

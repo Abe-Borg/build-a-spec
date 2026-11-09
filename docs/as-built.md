@@ -15618,7 +15618,8 @@ revert matrix; this section is the why and the traps.
   puts the level on the turn's `prompt_refs` event — decided at turn start,
   so recorded there rather than per round. A level name, never text, and
   the key contains no "token", so redaction leaves it alone.
-- **The cache consequence is accepted, not avoided (decision D3).** The
+- **The cache consequence is accepted, not avoided (decision D3).** (Superseded
+  2026-11-09: see "Whole-section passes raise their effort per message".) The
   boosted turn's first request re-writes the messages cache instead of
   reading it, and so does the ordinary turn after it; the system and tools
   prefix is unaffected. These passes normally run early in a session, while
@@ -26092,3 +26093,89 @@ The two wheels, file by file where the app depends on them:
 Not user-visible; no entry needed. If one is wanted, under "Under the hood":
 "Updated the Anthropic SDK to 2.6.0, which adds thread-safety fixes for the
 app's parallel research and review calls."
+
+## Whole-section passes raise their effort per message — implemented notes (2026-11-09)
+
+Owner request (Abraham), the third of the three changes from the review of
+Anthropic's current documentation; it revisits decision D3 of P55-3, with
+the owner's go-ahead.
+
+### What was there
+
+A ready full-draft or adapt-imported pass ran every round at
+`DRAFT_PASS_EFFORT` (`high`) as the request's top-level effort; ordinary
+turns ran at `INTERVIEW_EFFORT` (`medium`). Anthropic's prompt-caching
+reference lists an effort change among the changes that invalidate the
+messages cache, so the pass's first request wrote the committed history and
+the project block (the research profile, up to about 100k tokens) again at
+the 1-hour rate instead of reading them: at Opus 5.5's $8 against $0.20 per
+million, roughly $0.40–1.20 a pass at 50k–150k tokens. D3 accepted that
+because the per-message effort (beta `mid-conversation-output-config-2026-07-01`)
+would put a `role: "system"` message into saved history, which every history
+consumer would have to learn. Conversation condensing has used the same
+message since 2026-10-08, with a process-wide refusal latch.
+
+### What changed
+
+- `conversation.split_turn_effort(effort, model)`: a turn whose effort is
+  the interview's, a model outside `PER_MESSAGE_EFFORT_MODELS`, thinking that
+  is not adaptive, or a refused feature keeps the old top-level request;
+  otherwise the top level is `INTERVIEW_EFFORT` and the turn's level rides an
+  effort-only message. Decided once at turn start; `_ChatRequestInputs` gains
+  `message_effort`.
+- `_build_chat_request` inserts the message at `len(view)` in every round's
+  request (right after the committed history, so after the boundary
+  breakpoint the turn reads; right before the turn's first message, so it
+  applies to the whole turn), before the breakpoints and project block are
+  placed, with the beta header. It is never in `new_messages`, so nothing is
+  committed and no history consumer changes. Commit already rewrites the
+  conversation from that point (the PROJECT CONTEXT strip), so leaving the
+  message out of history costs no cache.
+- `harness_edited` is read before the insertion, so the new list never
+  triggers `with_drop_block`. The first version of this change did, which the
+  byte-identity test caught: the pass would have sent a different `thinking`
+  config from every ordinary turn.
+- `_is_effort_message_refusal` is shared by the summary and the chat. A
+  refused message switches the one latch off (one WARNING naming both
+  users), and the chat round resends once with the level at the top level.
+- The P55-3 tests read each request's effective level (`summary_effort`).
+
+### Deliberately not changed
+
+The depth of every round, `turn_effort`, the trace's `effort`, the stable
+prompt, the tools, ordinary turns, the condensing request, readiness, the
+SSE protocol and the QC manifest. The turn after a long pass still re-writes
+the cache, because the pass adds more positions than a breakpoint looks back
+over (the documented 20-position lookback; a known limitation).
+
+### Evidence
+
+- `tests/test_draft_pass_effort_message.py` (11): the split for each case;
+  a pass's request equal to an ordinary turn's in model, system, tools,
+  thinking, top-level effort and every history message with its breakpoint,
+  then the message, then the turn; the empty-history shape (project block,
+  message, turn); an edited conversation carrying both betas; end to end,
+  both rounds of a pass with the message at index 2 and no `drop_block`, no
+  system message in history, the next turn's request without it; a refusal
+  resending the refused request without the message and then sending the old
+  request for the rest of that pass and the next, with one warning; another
+  400 not read as a refusal; the boost switched off sending no message.
+  Every request passes the fake API's shape oracle.
+- Reversion probes, each restored: `split_turn_effort` always returning the
+  old request failed 6 tests; removing the refusal fallback failed 1; testing
+  `messages is not raw` after the insertion (the `drop_block` bug) failed 2.
+- Every test file that drives the chat request (57 files, 1425 tests) passes;
+  Ruff is clean.
+- No paid API call was made. Whether the provider reads the cached prefix
+  in front of the message (and whether the beta header alone touches the
+  cache key) is documented, not measured here: the first request of a pass
+  should show `cache_read_input_tokens` near the size of the conversation in
+  Developer tools.
+
+### Release-note draft (for the release after 1.29.0)
+
+Section "Improved", item "Whole-section passes cost less": "Draft full
+section and Adapt imported draft now reuse the cached copy of your
+conversation instead of paying to cache it again, while still thinking at
+the higher level they always did. On a long conversation with research
+findings this saves up to about a dollar per pass."

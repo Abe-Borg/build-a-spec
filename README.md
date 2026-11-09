@@ -270,12 +270,16 @@ window on Windows is the owner's to check.
 
 ## Current Status — the app runs on Anthropic's Python SDK 2.x (API version 2026-10-21)
 
-(2026-10-26. docs/as-built.md's "The SDK is anthropic 2.x, on API version
-2026-10-21" is the record; not yet in a release.)
+(2026-10-26, shipped in 1.29.0. docs/as-built.md's "The SDK is anthropic
+2.x, on API version 2026-10-21" is the record.)
 
 The `anthropic` package moved from 1.17.0 to 2.3.0 (`requirements.in`
-accepts `>=2.0,<3`). SDK 2.x talks to the Claude API on API version
-`2026-10-21`, and nothing about how you use the app changes:
+accepts `>=2.0,<3`), and on 2026-11-09 the lock moved on to 2.6.0 (same
+dependencies, same API version; it adds thread-safety fixes for the parallel
+research and Final QC calls and its own class for the spend-cap error — see
+"The SDK lock moves to 2.6.0" in docs/as-built.md). SDK 2.x talks to the
+Claude API on API version `2026-10-21`, and nothing about how you use the
+app changes:
 
 - **No request changed.** The new version refuses `temperature`, `top_p`
   and `top_k`, a document placed directly in one of Claude's own messages,
@@ -3449,6 +3453,70 @@ failing.
   failure cannot be staged on demand; the value is in removing the worst
   case.
 
+### A whole-section pass reads the conversation's cache
+
+Draft full section and Adapt imported draft think one level harder than an
+ordinary chat turn (`BUILD_A_SPEC_DRAFT_PASS_EFFORT`, `high`, against the
+interview's `medium`). The effort level is part of what Anthropic's cache of
+the conversation is keyed on, so a pass used to pay to cache the whole
+conversation (and the project background with its research findings) again
+instead of reading the copy the turns before it had cached: about $0.40–1.20
+a pass on Opus 5.5 at 50k–150k tokens, at $8 per million to write against
+$0.20 per million to read.
+
+Now the pass keeps the ordinary effort at the top of each request and raises
+its own depth with an effort-only message just before the pass (Anthropic's
+per-message effort, the same feature conversation condensing already uses).
+Everything in front of that message is byte for byte what the ordinary turns
+sent, so the pass reads it. The message is added to each request, never to
+the saved conversation, so nothing that reads the conversation changes, and
+the turn after the pass sends the same kind of request as always.
+
+- **The depth is the same:** every round of a pass still runs at `high`.
+- **If Anthropic ever refuses the message**, the app resends that request
+  the old way at once, switches the message off until restart (for
+  condensing too, which shares the switch) and writes one warning to the
+  activity log. On a model that does not support it (for example Sonnet 5,
+  if you set the chat model to it) the pass uses the old request.
+- **What it does not fix:** the turn after a long pass still re-writes the
+  conversation's cache, because the pass adds more steps than a cache
+  breakpoint looks back over (a known limitation, unchanged).
+- The saving is modelled from the published prices and has not been measured
+  on a live run.
+
+### A reached spend limit stops at once and says so
+
+Anthropic stops an organization's requests when its spending reaches a
+limit, and lets them through again only on a date: the first of next month
+for the usage tier's monthly cap, or whenever a limit you set yourself in the
+Claude Console resets. The app used to read the monthly cap as an ordinary
+rate limit, so research and Final QC waited and retried it (three attempts,
+each with the SDK's own two retries) before failing with the SDK's raw
+`Error code: 429 - {...}` text. A limit you set yourself was not retried, but
+its message was just as raw.
+
+Now both are recognized from what Anthropic's rate-limits page documents (the
+cap's `enforced_spend_limit_reached` error code, or its message on a 429 with
+no `retry-after`; the "You have reached your specified … API usage limits"
+message on a 400) and never retried by the app. The chat, research, Final QC,
+the compliance check, the fact harvest, the AI template pass, the key test
+and the document token count all show one message instead: what was reached,
+Anthropic's own words (which say when access resumes), and where to change
+it (the Console's Limits page for the cap, its Billing page for your own
+limit).
+
+- **Research:** each area stops after its first refused request; when every
+  area stopped on the limit, the round's error says it once.
+- **Final QC:** each lens stops after its first refused request, and the
+  first reviewer that meets the limit stops the review phase, as a refused
+  request already did — the rest are recorded, never sent.
+- **Not changed:** the SDK still retries the cap twice on its own before the
+  app sees it (it cannot tell the cap from a rate limit); those requests are
+  refused and cost nothing. An ordinary rate limit is retried exactly as
+  before, and so is a 429 that carries `retry-after`.
+- **Developer tools:** a failure stopped by the limit reads `spend_limit`,
+  never `rate_limit`, and is not counted as provider pressure.
+
 ### The cost self-checks watch both savings (Tier 1 finish)
 
 Chunks 3 and 4 are on by default without the measured run they were waiting
@@ -5181,7 +5249,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The model's context window: the context gauge's denominator (the header's "142k / 1M" pill) and what the chat's backstop measures a request against — past 85% of it the oldest turns are condensed before sending. Pair it with a model override whose window differs; set lower, conversations are condensed earlier. |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `medium` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`); the conversation-condensing summary sends it as its top-level effort too, so it reads the chat's cache, and thinks at `BUILD_A_SPEC_COMPACTION_EFFORT`. Lowered from `high` on 2026-09-29 for Sonnet 5.5, whose effort levels are recalibrated from Sonnet 5's; kept at `medium` when the chat moved to Opus 5.5 on 2026-10-13 (Opus 5.5's own default, which its maker says matches or exceeds Opus 5 at `high`). |
-| `BUILD_A_SPEC_DRAFT_PASS_EFFORT` | `high` | Adaptive-thinking effort for every round of a whole-section pass — **Draft full section** and **Adapt imported draft** (the ready passes only; the turn that first asks for the section, project type or country runs at the interview effort). One level above the interview because these are the app's longest multistep turns, and the Sonnet 5.5 guide moves longer, harder tool work from `medium` to `high` (the 5.5 prompting upgrade, P55-3). The effort is decided once per turn, from the server's own directive, and recorded in the turn's trace (`prompt_refs` → `effort`). A top-level effort change means that turn and the next one re-write the conversation's cache instead of reading it; these passes normally run early, while the conversation is short. Set it equal to `BUILD_A_SPEC_INTERVIEW_EFFORT` to switch the boost off. In PowerShell: `$env:BUILD_A_SPEC_DRAFT_PASS_EFFORT = "medium"`; in Command Prompt: `set BUILD_A_SPEC_DRAFT_PASS_EFFORT=medium`. |
+| `BUILD_A_SPEC_DRAFT_PASS_EFFORT` | `high` | Adaptive-thinking effort for every round of a whole-section pass — **Draft full section** and **Adapt imported draft** (the ready passes only; the turn that first asks for the section, project type or country runs at the interview effort). One level above the interview because these are the app's longest multistep turns, and the Sonnet 5.5 guide moves longer, harder tool work from `medium` to `high` (the 5.5 prompting upgrade, P55-3). The effort is decided once per turn, from the server's own directive, and recorded in the turn's trace (`prompt_refs` → `effort`). Since 2026-11-09 the pass keeps the interview's effort at the top level and raises its own with an effort-only message (Anthropic's per-message effort) placed just before the pass in each request, so it reads the conversation's cache instead of writing it again; the message never enters the saved conversation. On a model without the feature, or once Anthropic has refused it (the app then switches it off until restart and resends the pass the old way), the effort goes back to the top level, which re-writes the cache once. Set it equal to `BUILD_A_SPEC_INTERVIEW_EFFORT` to switch the boost off. In PowerShell: `$env:BUILD_A_SPEC_DRAFT_PASS_EFFORT = "medium"`; in Command Prompt: `set BUILD_A_SPEC_DRAFT_PASS_EFFORT=medium`. |
 | `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
 | `BUILD_A_SPEC_HARVEST_MODEL` | `claude-haiku-5-5` | Model for the Project facts panel's one-shot fact extraction, independent of the interview model. Haiku uses strict output schemas and automatic tool selection to preserve adaptive thinking; forcing its tool would suppress all thinking. Set `BUILD_A_SPEC_HARVEST_MODEL=claude-sonnet-5-5` to select Sonnet for this call. |
 | `BUILD_A_SPEC_HARVEST_EFFORT` | `high` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). `high` since 2026-10-08 (`medium` before): Haiku 5.5's guide puts strict instruction following at `high`, and at Haiku's prices the extra thinking costs cents. In PowerShell: `$env:BUILD_A_SPEC_HARVEST_EFFORT = "medium"`; in Command Prompt: `set BUILD_A_SPEC_HARVEST_EFFORT=medium`. |

@@ -87,7 +87,11 @@ def _parse_sse(body: str) -> list[dict]:
 
 
 def _efforts(requests: list[dict]) -> list[str]:
-    return [request["output_config"]["effort"] for request in requests]
+    """The depth each request asks for: its effort-only message's level when
+    it carries one (a whole-section pass since 2026-11-09, which keeps the
+    interview's effort at the top level — pinned in
+    ``tests/test_draft_pass_effort_message.py``), else its top-level effort."""
+    return [conversation.summary_effort(request) for request in requests]
 
 
 def _three_round_turn() -> list:

@@ -15618,7 +15618,8 @@ revert matrix; this section is the why and the traps.
   puts the level on the turn's `prompt_refs` event — decided at turn start,
   so recorded there rather than per round. A level name, never text, and
   the key contains no "token", so redaction leaves it alone.
-- **The cache consequence is accepted, not avoided (decision D3).** The
+- **The cache consequence is accepted, not avoided (decision D3).** (Superseded
+  2026-11-09: see "Whole-section passes raise their effort per message".) The
   boosted turn's first request re-writes the messages cache instead of
   reading it, and so does the ordinary turn after it; the system and tools
   prefix is unaffected. These passes normally run early in a session, while
@@ -25943,3 +25944,238 @@ Section "New", item "Five color schemes": "Settings → Appearance offers the sa
 color schemes as Spec Surgeon: Warm Clay (the look you know), Blueprint, Graphite & Teal,
 Carbon & Hi-Vis and Linen, a light scheme. The window changes at once and opens in your
 choice from then on; the document stays a white sheet of paper in all five."
+
+## A reached spend limit is never retried — implemented notes (2026-11-09)
+
+Owner request (Abraham), from a review of Anthropic's current documentation
+("do 1-3"). Anthropic's errors and rate-limits pages now document how an
+organization's spending stops its requests.
+
+### What was there
+
+The tier's monthly spend cap answers every request with HTTP 429
+`rate_limit_error`, no `retry-after`, and on the Messages API
+`error.details.error_code == "enforced_spend_limit_reached"`; the message
+says when access resumes (the first of next month). A spend limit the
+organization set itself answers with HTTP 400 `invalid_request_error`, its
+message starting "You have reached your specified API usage limits" (or
+"... specified workspace API usage limits"). `classify_exception` read the
+cap as `RATE_LIMIT`, so every research area and every Final QC call retried
+it three times with backoff, each attempt retried twice more by the SDK, and
+then failed with `RateLimitError: Error code: 429 - {...}`. The own limit was
+`INVALID_REQUEST` (not retried) with the same raw text. The chat said
+`Anthropic API error (429): Error code: 429 - {...}`, and the harvest said
+"The harvest call failed (RateLimitError)".
+
+### What changed
+
+- `backend/research/retry_policy.py`: `FailureClass.SPEND_LIMIT`
+  (`"spend_limit"`), not retryable; `spend_limit_kind` /
+  `spend_limit_kind_of_error` (the documented code decides alone; the message
+  prefixes only with the matching type or status, and the cap's only without
+  `retry-after`, since the Claude Code workspace's limit is a 429 that carries
+  one); `provider_error_message`; `spend_limit_text` / `spend_limit_message`
+  (one message per kind, Anthropic's words quoted on one line, at most 400
+  characters, and the Console page to change it); `SPEND_LIMIT_TEXT_PREFIX` /
+  `is_spend_limit_text`.
+- Every place a failure became text uses it: research (`_run_dimension`, the
+  coordinator's raised-worker path), Final QC (`_run_streaming_call`, batch
+  submission and read, `_batch_error_facts`, raised lenses), the compliance
+  check, the chat turn (`kind: "spend_limit"`), the condensing summary, the
+  harvest (`code: "spend_limit"`), the AI template pass, the key test and the
+  reference token count. An all-failed research round or Final QC run states
+  it once instead of once per area or lens.
+- Final QC's verifier breaker trips on `SPEND_LIMIT` as it does on a refused
+  request: the first seat that meets the limit stops the phase.
+- The chat's other API errors quote the provider's `error.message` instead of
+  the SDK's rendering of the whole body.
+
+### Deliberately not changed
+
+- The SDK's own retries: it cannot tell the cap from a rate limit, so it
+  retries twice before the app sees the error. Those requests are refused and
+  cost nothing; controlling them would mean a transport hook for one case.
+- No research breaker: each area stops after its one refused attempt, and the
+  staggered launch's followers are released as soon as the lead fails.
+- The pressure ledger's vocabulary: a spend limit is not provider pressure.
+  The agent ends `failed` with `error_kind="spend_limit"`; the run is not
+  starved.
+- Every request byte, the SSE protocol (the `error` frame's optional `kind`
+  already existed), readiness, the QC manifest.
+
+### Evidence
+
+- `tests/test_spend_limit.py` (22): classification of the cap with and
+  without its code, a 429 with `retry-after`, an ordinary 429, both own-limit
+  messages, a 400 that merely quotes the phrase, batch error objects and
+  `_batch_error_facts`; the message's words, quoting and bound; research and
+  Final QC lenses make one request each, sleep no backoff and say it once;
+  the verifier breaker stops after one seat; the chat's frame, `kind` and
+  ledger record; the chat's provider wording for another error; the key test
+  and the harvest.
+- Reversion probes, each restored: removing the `SPEND_LIMIT` check from
+  `classify_exception` failed ten tests; dropping `SPEND_LIMIT` from the
+  breaker predicate failed the breaker test.
+- The auth-error, retry-resume, resource-pressure, streamed-stagger,
+  verifier-v3, harvest, key-management, research-engine, QC, batch
+  verification, compaction-effort and fake-validator files pass (456 with the
+  new file). Ruff is clean.
+- No paid API call was made; a real spend-capped response has not been seen.
+  The shapes are the documentation's.
+
+### Release-note draft (for the release after 1.29.0)
+
+Section "Fixed", item "Spend limits": "When your Anthropic organization
+reaches its monthly spend cap or a spend limit you set, the app now stops at
+once and tells you so, with Anthropic's own words about when access resumes
+and where to raise the limit. Research and Final QC used to retry the cap as
+if it were a passing rate limit and then show a raw error."
+
+## The SDK lock moves to 2.6.0 — implemented notes (2026-11-09)
+
+Owner request (Abraham), the second of the three changes from the review of
+Anthropic's current documentation. PyPI's newest `anthropic` is 2.6.0; the
+lock pinned 2.3.0.
+
+### What changed
+
+`requirements.txt`: `anthropic==2.3.0` → `2.6.0`, from
+`uv pip compile requirements.in --universal --python-version 3.11 -o
+requirements.txt --upgrade-package anthropic`. No other line moved: 2.6.0's
+required dependencies (`anyio`, `docstring-parser`, `httpx2`, `jiter`,
+`opentelemetry-api`, `pydantic`, `sniffio`, `typing-extensions`, with the same
+ranges) are 2.3.0's. `requirements.in`, the build lock and the third-party
+license overrides needed nothing (the wheel ships the same `LICENSE` and
+`LICENSE-MIT`). Comments that named 2.3.0 in `settings.py`,
+`resource_pressure.py` and CLAUDE.md now name 2.6.0.
+
+### What was read before the bump
+
+The two wheels, file by file where the app depends on them:
+
+- `_constants.py` (API version `2026-10-21`, default retries and timeouts):
+  identical. `_streaming.py`, `lib/streaming/_types.py`: identical.
+  `lib/streaming/_messages.py`: one comment removed.
+- `_base_client.py`: `_should_retry` unchanged (408, 409, 429, 5xx, and
+  `x-should-retry`), the "Retrying request to %s in %f seconds" log line
+  unchanged; status errors now come from `_error_classes.make_status_error`,
+  and OpenTelemetry spans get two more arguments.
+- `_error_classes.py` (new): a subclass per documented `(status,
+  error_code)`. The spend cap raises `EnforcedSpendLimitReachedError(
+  RateLimitError)`; thread errors, compaction errors and organization errors
+  have their own. `APIStatusError` gains `api_message`, `error_code` and
+  `details`. Every exception name the app and its tests use is still
+  exported.
+- `_models.py`: building a lazily built model is serialized under a lock for
+  pydantic before 2.14, and `RootModel[...]` is cached per type; both are
+  thread-safety fixes, which the parallel research and Final QC threads use.
+- New, unused here: the message-thread helper, Admin API analytics, RBAC and
+  spend-limit endpoints.
+
+### Evidence
+
+- On 2.6.0: the requirements-lock, API-version, resource-pressure (which
+  reads the retry line from the installed SDK), third-party-notices (the npm
+  half skips without `node_modules`), spend-limit, auth-error and
+  fake-validator files pass (232), and so do the app, research-engine, QC,
+  batch-verification, retry-resume, compaction-effort, harvest,
+  streamed-stagger, live-reasoning, templates and compliance files (333).
+- `tests/test_spend_limit.py::test_the_error_the_installed_sdk_raises_is_recognized`
+  sends a count-tokens request through a real client over a `MockTransport`
+  that answers with the documented spend-cap and own-limit bodies: on 2.6.0
+  the cap arrives as `EnforcedSpendLimitReachedError` and is still
+  `SPEND_LIMIT`, with the same words.
+- No paid API call was made. The Windows build was not run in this session;
+  CI and the release build check the notices.
+
+### Release-note draft (for the release after 1.29.0)
+
+Not user-visible; no entry needed. If one is wanted, under "Under the hood":
+"Updated the Anthropic SDK to 2.6.0, which adds thread-safety fixes for the
+app's parallel research and review calls."
+
+## Whole-section passes raise their effort per message — implemented notes (2026-11-09)
+
+Owner request (Abraham), the third of the three changes from the review of
+Anthropic's current documentation; it revisits decision D3 of P55-3, with
+the owner's go-ahead.
+
+### What was there
+
+A ready full-draft or adapt-imported pass ran every round at
+`DRAFT_PASS_EFFORT` (`high`) as the request's top-level effort; ordinary
+turns ran at `INTERVIEW_EFFORT` (`medium`). Anthropic's prompt-caching
+reference lists an effort change among the changes that invalidate the
+messages cache, so the pass's first request wrote the committed history and
+the project block (the research profile, up to about 100k tokens) again at
+the 1-hour rate instead of reading them: at Opus 5.5's $8 against $0.20 per
+million, roughly $0.40–1.20 a pass at 50k–150k tokens. D3 accepted that
+because the per-message effort (beta `mid-conversation-output-config-2026-07-01`)
+would put a `role: "system"` message into saved history, which every history
+consumer would have to learn. Conversation condensing has used the same
+message since 2026-10-08, with a process-wide refusal latch.
+
+### What changed
+
+- `conversation.split_turn_effort(effort, model)`: a turn whose effort is
+  the interview's, a model outside `PER_MESSAGE_EFFORT_MODELS`, thinking that
+  is not adaptive, or a refused feature keeps the old top-level request;
+  otherwise the top level is `INTERVIEW_EFFORT` and the turn's level rides an
+  effort-only message. Decided once at turn start; `_ChatRequestInputs` gains
+  `message_effort`.
+- `_build_chat_request` inserts the message at `len(view)` in every round's
+  request (right after the committed history, so after the boundary
+  breakpoint the turn reads; right before the turn's first message, so it
+  applies to the whole turn), before the breakpoints and project block are
+  placed, with the beta header. It is never in `new_messages`, so nothing is
+  committed and no history consumer changes. Commit already rewrites the
+  conversation from that point (the PROJECT CONTEXT strip), so leaving the
+  message out of history costs no cache.
+- `harness_edited` is read before the insertion, so the new list never
+  triggers `with_drop_block`. The first version of this change did, which the
+  byte-identity test caught: the pass would have sent a different `thinking`
+  config from every ordinary turn.
+- `_is_effort_message_refusal` is shared by the summary and the chat. A
+  refused message switches the one latch off (one WARNING naming both
+  users), and the chat round resends once with the level at the top level.
+- The P55-3 tests read each request's effective level (`summary_effort`).
+
+### Deliberately not changed
+
+The depth of every round, `turn_effort`, the trace's `effort`, the stable
+prompt, the tools, ordinary turns, the condensing request, readiness, the
+SSE protocol and the QC manifest. The turn after a long pass still re-writes
+the cache, because the pass adds more positions than a breakpoint looks back
+over (the documented 20-position lookback; a known limitation).
+
+### Evidence
+
+- `tests/test_draft_pass_effort_message.py` (11): the split for each case;
+  a pass's request equal to an ordinary turn's in model, system, tools,
+  thinking, top-level effort and every history message with its breakpoint,
+  then the message, then the turn; the empty-history shape (project block,
+  message, turn); an edited conversation carrying both betas; end to end,
+  both rounds of a pass with the message at index 2 and no `drop_block`, no
+  system message in history, the next turn's request without it; a refusal
+  resending the refused request without the message and then sending the old
+  request for the rest of that pass and the next, with one warning; another
+  400 not read as a refusal; the boost switched off sending no message.
+  Every request passes the fake API's shape oracle.
+- Reversion probes, each restored: `split_turn_effort` always returning the
+  old request failed 6 tests; removing the refusal fallback failed 1; testing
+  `messages is not raw` after the insertion (the `drop_block` bug) failed 2.
+- Every test file that drives the chat request (57 files, 1425 tests) passes;
+  Ruff is clean.
+- No paid API call was made. Whether the provider reads the cached prefix
+  in front of the message (and whether the beta header alone touches the
+  cache key) is documented, not measured here: the first request of a pass
+  should show `cache_read_input_tokens` near the size of the conversation in
+  Developer tools.
+
+### Release-note draft (for the release after 1.29.0)
+
+Section "Improved", item "Whole-section passes cost less": "Draft full
+section and Adapt imported draft now reuse the cached copy of your
+conversation instead of paying to cache it again, while still thinking at
+the higher level they always did. On a long conversation with research
+findings this saves up to about a dollar per pass."

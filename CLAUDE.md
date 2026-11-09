@@ -419,7 +419,9 @@ already resolved and does nothing). 409 when nothing is running.
   default `medium`; research runs `RESEARCH_EFFORT`, default `medium`.
   Sonnet 5.5 recalibrated its effort scale; Anthropic's migration guidance
   starts multistep tool use at `medium`. Whole-section drafting/adaptation
-  still uses `DRAFT_PASS_EFFORT`, default `high`. The chat runs
+  still uses `DRAFT_PASS_EFFORT`, default `high` (sent in an effort-only
+  message since 2026-11-09, so the top level stays `INTERVIEW_EFFORT`; see
+  "Whole-section passes raise their effort per message"). The chat runs
   `INTERVIEW_MODEL`: Claude Opus 5.5 since 2026-10-13 (a trial; Sonnet 5.5
   before, and research stays on Sonnet 5.5) — see "The chat runs on Claude
   Opus 5.5" below.
@@ -1064,7 +1066,7 @@ invisible everywhere. Now they can.
 - **The SDK's own retries are counted.** `SDK_MAX_RETRIES` retries happen
   inside the SDK before the app sees a failure. An observer handler on the
   `anthropic._base_client` logger counts its INFO line ("Retrying request
-  to %s in %f seconds", unchanged from SDK 1.11.0 through 2.3.0) against
+  to %s in %f seconds", unchanged from SDK 1.11.0 through 2.6.0) against
   the thread's agent in flight (`started()` on a worker thread,
   `requesting()` around the chat's stream open, since a generator's frames
   hop threads) or as unattributed. The snapshot discloses `attached` and
@@ -2486,8 +2488,9 @@ API call was made.
 ## The SDK is anthropic 2.x, on API version 2026-10-21 — implemented notes (2026-10-26)
 
 The SDK-upgrade review's recommendation (owner: "handle it"), as its own PR.
-`requirements.in` accepts `anthropic>=2.0,<3`; the regenerated lock pins
-2.3.0, and that is the only line that moved (2.x adds no dependency). 2.0.0
+`requirements.in` accepts `anthropic>=2.0,<3`; the regenerated lock pinned
+2.3.0, and that is the only line that moved (2.x adds no dependency); it
+pins 2.6.0 since 2026-11-09 (see "The SDK lock moves to 2.6.0"). 2.0.0
 is the first Python SDK release that sends `anthropic-version: 2026-10-21`;
 the app sets no version of its own.
 
@@ -2566,6 +2569,127 @@ Carbon & Hi-Vis and Linen (the one light chrome) are
   it alone. Capability `session.appearance`, in the `developer-tools` step.
 
 Full record, reversion evidence and the release-note draft are in
+`docs/as-built.md` under the same heading. No paid API call was made.
+
+## A reached spend limit is never retried — implemented notes (2026-11-09)
+
+From the owner's review of Anthropic's current errors and rate-limits pages
+(owner: "do 1-3"). The tier's monthly spend cap is a 429
+`rate_limit_error` with no `retry-after` and, on the Messages API,
+`error.details.error_code == "enforced_spend_limit_reached"`; a limit the
+organization set itself is a 400 whose message starts "You have reached your
+specified [workspace ]API usage limits". Neither ends within a run.
+
+- **One class.** `retry_policy.FailureClass.SPEND_LIMIT` (`"spend_limit"`),
+  not retryable, checked first in `classify_exception` through
+  `spend_limit_kind(exc)` (`SPEND_LIMIT_CAP` / `SPEND_LIMIT_OWN` / `""`).
+  `spend_limit_kind_of_error(error, status_code=, retry_after=)` reads a bare
+  error object (a batch item's): the code decides alone; the message prefixes
+  only with the matching type or status, the cap's only without
+  `retry-after`. It joins `DIMENSION_ERROR_KINDS` automatically.
+- **One message.** `spend_limit_message(exc)` / `spend_limit_text(kind,
+  provider_message)`: what was reached, Anthropic's `error.message` quoted
+  (one line, `PROVIDER_MESSAGE_MAX_CHARS`), where to change it. Every text
+  starts with `SPEND_LIMIT_TEXT_PREFIX` (`is_spend_limit_text`), which is how
+  a lens status (no class) is recognized. Used wherever a failure becomes
+  text: research (both paths), Final QC (streamed calls, batch create, batch
+  read, batch items via `_batch_error_facts`, raised lenses), the compliance
+  check, the chat (SSE `error` with `kind: "spend_limit"`), the condensing
+  summary's error, the harvest (`code: "spend_limit"`), the AI template pass
+  (a `TemplateError`), the key test and the reference token count. The chat's
+  other API errors now quote `provider_error_message(exc)` instead of the
+  SDK's `Error code: N - {body}`.
+- **Stops.** Research and lens fan-outs: one app attempt per area or lens;
+  an all-failed round or run says the message once. Final QC's verifier
+  breaker (`shared_request_failure`) trips on `SPEND_LIMIT` as on a refused
+  request. No research breaker was added: each area's one refused attempt is
+  free and quick.
+- **Ledger.** Not pressure: `RETRY_PRESSURE_KINDS` is unchanged, the agent
+  ends `failed` with `error_kind="spend_limit"` and the run is not starved.
+- **Unchanged.** The SDK's own two retries (it cannot tell the cap from a
+  rate limit), every request byte, ordinary 429 handling, the SSE protocol
+  (the `error` frame's optional `kind` already existed), readiness.
+
+Never retry a spend limit, and never show its raw SDK text. Tests:
+`tests/test_spend_limit.py`; `tests/fakes.py` gains `spend_cap_error`,
+`own_spend_limit_error` and `rate_limit_error_with_body`. Full record,
+reversion evidence and the release-note draft are in `docs/as-built.md` under
+the same heading. No paid API call was made.
+
+## Whole-section passes raise their effort per message — implemented notes (2026-11-09)
+
+Owner: "do 1-3", which revisits decision D3 (P55-3). A ready full-draft or
+adapt pass runs at `DRAFT_PASS_EFFORT`; sent as the TOP-LEVEL effort, it
+changed the messages cache's key, so the pass wrote the committed history
+and the project block again instead of reading them. D3 declined the
+per-message effort because the message would enter saved history.
+
+- **The split.** `conversation.split_turn_effort(effort, model)` →
+  `(top-level, message level)`: `(INTERVIEW_EFFORT, effort)` when the turn's
+  effort differs from the interview's, the model is in
+  `PER_MESSAGE_EFFORT_MODELS`, thinking is adaptive and the latch is armed;
+  `(effort, "")` (the old request) otherwise. Decided once at turn start
+  beside `turn_effort`; `_ChatRequestInputs.effort` is the top level and
+  `message_effort` the message's level.
+- **The message never enters history.** `_build_chat_request` inserts
+  `_effort_message(level)` (`role: system`, `content: []`,
+  `output_config.effort`) at `len(view)` — after the committed history and
+  its boundary breakpoint, before the turn's first message — in every
+  round's request, before the breakpoints and the project block are placed
+  (on an empty history the project block takes a leading user message of its
+  own), plus the `PER_MESSAGE_EFFORT_BETA` header. `new_messages` never holds
+  it, so commit, the transcript, the pairing guard, the harvest and recall
+  are untouched. Commit already rewrites from that point (strip-at-commit),
+  so leaving it out of history costs no cache. If the sanitizer ever changed
+  the message count, the level goes back to the top level instead.
+- **Not an edit.** `harness_edited` is read before the insertion: the new
+  list must never trigger `with_drop_block` (caught by the byte-identity
+  test while building this).
+- **Refusal.** `_is_effort_message_refusal(exc, request)` (shared with
+  `_open_summary_stream`): a 400 naming the message switches the shared
+  latch off (`_refuse_per_message_effort`, one WARNING naming both users) and
+  the round resends once with the level at the top level; the rest of the
+  turn and later passes send the old request. Any other 400 keeps its path.
+- **Unchanged.** The depth of every round, `turn_effort`, the trace's
+  `effort` (the turn's level), the stable prompt, tools, every ordinary
+  turn's bytes, the summary fork (which now reads the prefix a pass wrote,
+  since the pass's top-level effort is the interview's), and the turn after
+  a long pass still overrunning the 20-position lookback.
+
+Never send a whole-section pass's depth as its top-level effort while the
+message is available, and never put the effort message into `new_messages`
+or history. Tests: `tests/test_draft_pass_effort_message.py`;
+`tests/test_prompt55_effort.py` reads each request's effective level
+(`summary_effort`). Full record, reversion evidence and the release-note
+draft are in `docs/as-built.md` under the same heading. No paid API call was
+made; the saving is modelled, not measured.
+
+## The SDK lock moves to 2.6.0 — implemented notes (2026-11-09)
+
+Owner: "do 1-3". `requirements.txt` pins `anthropic==2.6.0` (was 2.3.0),
+regenerated with `uv pip compile ... --upgrade-package anthropic`; the intent
+(`>=2.0,<3`) and every other line are unchanged, and 2.6.0 declares the same
+dependencies as 2.3.0. Read from the two wheels before the bump:
+
+- **Unchanged where the app leans on it:** `ANTHROPIC_API_VERSION` is still
+  `2026-10-21` and `_constants.py` is byte-identical (the retry and timeout
+  defaults); `_should_retry` still retries 408/409/429/5xx; the "Retrying
+  request to %s in %f seconds" line the pressure ledger counts;
+  `current_message_snapshot`; `lib/streaming/_messages.py` (a comment);
+  every exception class the app or its tests name; the license files.
+- **New, and why it matters here:** status errors are built by
+  `_error_classes.make_status_error`, which raises a subclass per documented
+  `(status, error_code)` — the spend cap is `EnforcedSpendLimitReachedError`,
+  a `RateLimitError` — and every `APIStatusError` gains `api_message`,
+  `error_code` and `details`. The app keeps reading the body
+  (`retry_policy.spend_limit_kind`), so it classifies the same on either
+  release; `tests/test_spend_limit.py` drives a real client over a
+  `MockTransport` to pin that. `_models.py` serializes the build of lazily
+  built models under a lock (pydantic before 2.14), which the parallel
+  research and Final QC threads benefit from.
+- **Unused here:** the message-thread helper and the Admin API additions.
+
+No request byte, setting, route or event changed. Full record in
 `docs/as-built.md` under the same heading. No paid API call was made.
 
 ## As-built history

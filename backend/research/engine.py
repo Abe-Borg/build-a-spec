@@ -102,6 +102,7 @@ from .retry_policy import (
     compute_backoff_seconds,
     is_retryable_failure_class,
     retry_mode,
+    spend_limit_message,
 )
 from .schema import (
     RESEARCH_ACTIONABILITY_VALUES,
@@ -3601,7 +3602,7 @@ def _run_dimension(
                 message = (
                     AUTH_ERROR_MESSAGE
                     if is_authentication_error(exc)
-                    else f"{type(exc).__name__}: {exc}"
+                    else spend_limit_message(exc) or f"{type(exc).__name__}: {exc}"
                 )
                 return _failed(
                     message,
@@ -4187,7 +4188,8 @@ def run_requirements_research(
                         error=(
                             AUTH_ERROR_MESSAGE
                             if is_authentication_error(exc)
-                            else f"{type(exc).__name__}: {exc}"
+                            else spend_limit_message(exc)
+                            or f"{type(exc).__name__}: {exc}"
                         ),
                         error_kind=(
                             DIMENSION_ERROR_AUTH
@@ -4236,6 +4238,12 @@ def run_requirements_research(
         auth_error = bool(failed) and all(
             s.error == AUTH_ERROR_MESSAGE for s in failed
         )
+        if failed and all(
+            s.error_kind == FailureClass.SPEND_LIMIT.value for s in failed
+        ):
+            # One account limit stopped every area: say it once, not once
+            # per area.
+            errors = failed[0].error
         # The round produced no profile, but it did produce a bill: each
         # status already carries what its dimension spent across every
         # attempt, cancelled ones included. Hand it to the caller so the

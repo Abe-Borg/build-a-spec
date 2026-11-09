@@ -38,6 +38,7 @@ from ..research.retry_policy import (
     classify_exception,
     compute_backoff_seconds,
     is_retryable_failure_class,
+    spend_limit_message,
 )
 from ..research.schema import extract_tool_use_block, last_tagged_json_object
 from ..runtime_context import date_context_block
@@ -514,7 +515,7 @@ def run_compliance_audit(
             raise
         except Exception as exc:  # noqa: BLE001 — classified below
             failure_class = classify_exception(exc)
-            last_error = f"{type(exc).__name__}: {exc}"
+            last_error = spend_limit_message(exc) or f"{type(exc).__name__}: {exc}"
             if (
                 not is_retryable_failure_class(failure_class)
                 or attempt == attempts - 1

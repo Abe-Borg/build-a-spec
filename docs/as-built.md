@@ -26179,3 +26179,38 @@ section and Adapt imported draft now reuse the cached copy of your
 conversation instead of paying to cache it again, while still thinking at
 the higher level they always did. On a long conversation with research
 findings this saves up to about a dollar per pass."
+
+## 2026-11-14 — All rights reserved for the author's own code
+
+The owner requested the most restrictive terms and clarified that all use and
+redistribution must require permission. PolyForm Shield allowed non-competing
+use, modification, and redistribution, so it did not meet that requirement.
+Root `LICENSE` and its byte-identical `frontend/LICENSE` now contain the
+Build-a-Spec Proprietary License: no general grant, advance permission in a
+separate written agreement, warranty and liability disclaimers, and a
+professional-review provision for the AI drafting output. It preserves mandatory
+legal and hosting-platform rights, third-party terms, previous license grants,
+and rights in user documents. Accepting the installer is not a grant of use.
+
+README's license and installation summaries, the Help About footer, the
+installer lead-in, and the existing packaging consistency checks now agree.
+Historical release notes remain historical. The existing npm package metadata
+continues to resolve `SEE LICENSE IN LICENSE`; dependency metadata is intact.
+
+Review of the exact installed Python pins and production npm lock found chiefly
+permissive terms, plus certifi's MPL-2.0 and DOMPurify's MPL/Apache choice.
+Khroma omits a lockfile license identifier but ships an MIT license. Certifi's
+source-distribution location for the bundled version and the MPL URL now travel
+in the generated third-party notices. The Windows release runbook records
+remaining release-specific checks: lxml's notices identify LGPL iconv in binary
+wheels, and the actual target artifact determines the resulting obligations.
+PyInstaller's bootloader exception permits proprietary application bundles.
+Copied sibling-project code is documented, but its complete rights chain is
+not independently established by this checkout. The review does not assert that
+every dependency is permissive or that notice collection proves compliance.
+
+Validation: the focused packaging, third-party notices, and documentation
+consistency suite passes (55 tests). The notice collector finds all 224
+production npm package license texts. TypeScript/Vite production build and
+Ruff checks on the touched Python files pass. A Windows installer was not
+built or legally certified in this Linux checkout.

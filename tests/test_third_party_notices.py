@@ -692,6 +692,10 @@ class TestNoticesDocument:
         assert "Tcl" not in text
         assert "Build-a-Spec's own license is in LICENSE.txt" in text
         assert "WebView2 bootstrapper" in text
+        # An executable distribution of MPL-covered files must tell recipients
+        # where to obtain their Source Code Form, at the bundled version.
+        assert "https://pypi.org/project/certifi/2026.10.19/#files" in text
+        assert "https://www.mozilla.org/MPL/2.0/" in text
         for heading, body in (
             ("anyio 4.15.1\nLicense: MIT", "Copyright (c) Alex Gronholm"),
             ("certifi 2026.10.19\nLicense: MPL-2.0", "Mozilla Public License Version 2.0\n\u00a9 text"),

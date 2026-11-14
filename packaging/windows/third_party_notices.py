@@ -741,6 +741,17 @@ def render_notices(components: Sequence[Component]) -> str:
         "runtime from Microsoft under Microsoft's own license terms. The runtime",
         "is not part of Build-a-Spec and is not covered by this file.",
     ]
+    for component in components:
+        if component.kind == "python" and canonical_name(component.name) == "certifi":
+            lines += [
+                "",
+                f"certifi {component.version}: MPL-2.0 source availability",
+                "Source Code Form is available in the source distribution at:",
+                f"https://pypi.org/project/certifi/{component.version}/#files",
+                "The covered files remain under the Mozilla Public License 2.0:",
+                "https://www.mozilla.org/MPL/2.0/",
+                "Build-a-Spec's proprietary terms do not restrict those rights.",
+            ]
     for kind, heading in _GROUPS:
         members = [c for c in components if c.kind == kind]
         if not members:

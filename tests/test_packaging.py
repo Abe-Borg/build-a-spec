@@ -63,10 +63,8 @@ def test_pyinstaller_spec_bundles_the_license():
     """The license notice must travel with every installed copy, not just
     the git checkout — installer.iss bundles dist/BuildASpec wholesale, so
     getting the LICENSE file into the PyInstaller output is what actually
-    ships it. Under PolyForm Shield this is not merely a courtesy: the
-    Notices section obliges anyone passing on any part of the software to
-    pass on these terms, and the Noncompete term only binds a recipient who
-    received them."""
+    ships it. This keeps the applicable proprietary terms available to a
+    recipient, including when a silent install skips the license page."""
     assert (REPO_ROOT / "LICENSE").is_file(), "repo root LICENSE is missing"
     spec = (PKG / "build-a-spec.spec").read_text(encoding="utf-8")
     assert '"LICENSE"' in spec, (
@@ -218,50 +216,47 @@ def test_installer_license_page_names_the_license_in_plain_text():
     assert len(values) == 1, "installer.iss must set LicenseLabel3 exactly once"
     label = values[0]
     assert label.isascii(), "the license page's lead-in must be ASCII"
-    assert "PolyForm Shield License 1.0.0" in label
+    assert "Build-a-Spec Proprietary License" in label
     assert "the agreement below governs" in label
     assert "accept" in label
 
 
 def test_every_surface_states_the_same_license():
-    """Seven of the eight license surfaces, pinned so they cannot drift.
+    """The current license surfaces, pinned so they cannot drift.
 
-    The eighth — the bundled copy in the PyInstaller output — is pinned by
+    The bundled copy in the PyInstaller output is pinned by
     ``test_pyinstaller_spec_bundles_the_license`` above, so between the two
-    tests every surface docs/as-built.md lists is asserted. The installer's license
+    tests the packaged and displayed terms are asserted. The installer's license
     page is the newest: its lead-in names the license here, and
     ``test_installer_requires_accepting_the_license`` pins that the terms it
     shows are LICENSE itself.
 
-    Relicensed MIT -> PolyForm Shield 1.0.0 on 2026-08-28. The one that is
+    Reserved all rights on 2026-11-14, following MIT and PolyForm Shield. The one that is
     easiest to miss is HelpModal's About footer, because it is the only copy
     the *user* ever reads. A stale surface here is a false license claim, so
     this pins all of them rather than trusting a future grep."""
     license_text = (REPO_ROOT / "LICENSE").read_text(encoding="utf-8")
 
-    assert license_text.startswith("# PolyForm Shield License 1.0.0"), (
-        "LICENSE is no longer PolyForm Shield 1.0.0 — if that is deliberate, "
+    assert license_text.startswith("# Build-a-Spec Proprietary License"), (
+        "LICENSE is no longer the Build-a-Spec Proprietary License — if that is deliberate, "
         "update every surface asserted below in the same change"
     )
 
-    # The two notice lines the license itself references must each be ONE
-    # physical line: the Notices section obliges redistributors to carry
-    # "plain-text lines beginning with `Required Notice:`", and a wrapped
-    # continuation line does not begin with that prefix.
-    for prefix in ("Required Notice:", "Licensor Line of Business:"):
-        matches = [ln for ln in license_text.splitlines() if ln.startswith(prefix)]
-        assert len(matches) == 1, f"expected exactly one {prefix!r} line"
-        assert "Abraham Borg" in matches[0] or "Build-a-Spec" in matches[0]
+    assert "Copyright (c) 2026 Abraham Borg. All rights reserved." in license_text
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "PolyForm Shield License 1.0.0" in readme
+    assert "Build-a-Spec Proprietary License" in readme
     assert "MIT License" not in readme
+
+    install_notes = (PKG / "release_install_notes.md").read_text(encoding="utf-8")
+    assert "Build-a-Spec Proprietary License" in install_notes
+    assert "PolyForm Shield" not in install_notes
 
     # The About footer in the shipped UI.
     help_modal = (
         REPO_ROOT / "frontend" / "src" / "components" / "HelpModal.tsx"
     ).read_text(encoding="utf-8")
-    assert "PolyForm Shield License 1.0.0" in help_modal, (
+    assert "Build-a-Spec Proprietary License" in help_modal, (
         "the in-app About footer still claims a different license than LICENSE"
     )
     assert "MIT License" not in help_modal
@@ -269,7 +264,7 @@ def test_every_surface_states_the_same_license():
     # The installer's license page: its lead-in names the license, and the
     # terms under it are LICENSE itself.
     (label,) = _iss_directive("Messages", "LicenseLabel3")
-    assert "PolyForm Shield License 1.0.0" in label, (
+    assert "Build-a-Spec Proprietary License" in label, (
         "the installer's license page names a different license than LICENSE"
     )
     iss = (PKG / "installer.iss").read_text(encoding="utf-8")
@@ -291,12 +286,8 @@ def test_every_surface_states_the_same_license():
     # `SEE LICENSE IN <filename>` resolves relative to the PACKAGE root, so
     # npm tooling and license scanners treating frontend/ as the package look
     # for frontend/LICENSE, not the repo root's. It must therefore exist and
-    # must not drift from the canonical copy. A bare `PolyForm-Shield-1.0.0`
-    # would avoid the duplicate, but that id is NOT in the SPDX list (only
-    # PolyForm-Noncommercial-1.0.0 and PolyForm-Small-Business-1.0.0 are), so
-    # npm warns on it. A checked-in copy is used rather than a symlink because
-    # Windows is the primary platform and symlinks do not survive a default
-    # Windows checkout.
+    # must not drift from the canonical copy. A checked-in copy is used
+    # rather than a symlink because Windows checkouts may not preserve it.
     frontend_license = REPO_ROOT / "frontend" / "LICENSE"
     assert frontend_license.is_file(), (
         "frontend/package.json says `SEE LICENSE IN LICENSE`, so frontend/"

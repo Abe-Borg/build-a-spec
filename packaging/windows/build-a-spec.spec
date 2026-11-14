@@ -116,10 +116,8 @@ datas += [(
     os.path.join("backend", "templates", "curated"),
 )]
 
-# The PolyForm Shield license text — every copy must carry it (the Notices
-# section requires that anyone receiving any part of the software also
-# receives these terms and the `Required Notice:` line, and the Noncompete term
-# only binds a recipient who has them). PyInstaller 6 puts data files in the
+# The Build-a-Spec Proprietary License travels with authorized copies.
+# PyInstaller 6 puts data files in the
 # contents directory, so this copy lands at dist/BuildASpec/_internal/LICENSE;
 # it keeps the terms inside the one-folder build if that folder is passed on
 # by itself. installer.iss also installs LICENSE as {app}\LICENSE.txt, beside

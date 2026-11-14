@@ -964,7 +964,7 @@ function About({
         )}
       </div>
       <div className="space-y-1.5 border-t border-edge pt-4 text-xs text-ink-faint">
-        <p>© 2026 Abraham Borg. Source-available under the PolyForm Shield License 1.0.0.</p>
+        <p>© 2026 Abraham Borg. All rights reserved under the Build-a-Spec Proprietary License. Use requires separate written permission.</p>
         <p className="flex flex-wrap gap-x-4 gap-y-1">
           <a
             href="https://www.linkedin.com/in/abrahamborg/"

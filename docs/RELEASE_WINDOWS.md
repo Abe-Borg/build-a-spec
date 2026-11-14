@@ -208,7 +208,7 @@ invisible to CI and expensive to the user.
       without releasing" above.
 - [ ] **The installer asks for the license first** (v1.21.0). Run the
       dry-run `BuildASpecSetup.exe`: the first page is **License Agreement**.
-      Its lead-in names the PolyForm Shield License 1.0.0, the text below it
+      Its lead-in names the Build-a-Spec Proprietary License, the text below it
       is the repo's `LICENSE` laid out in paragraphs (not one run-on line),
       **I do not accept the agreement** is selected, and **Next** stays
       disabled until you choose **I accept the agreement**. Cancel from
@@ -1338,3 +1338,47 @@ this for you).
 - **Updater says up to date after release**: the release must be
   published and non-prerelease; `latest.json` must be an asset of the
   *latest* release.
+
+
+## License review
+
+The author's own code is governed by the Build-a-Spec Proprietary License:
+all rights reserved, with separate advance written permission required for
+use and redistribution. Accepting the installer does not supply that permission.
+A release must explain that change before users install it, including that
+existing grants for previously licensed copies remain effective. Historical
+release notes describe the terms of those releases, not the current grant.
+
+The notice collector verifies the presence of license texts. It does not
+prove compatibility, ownership, or satisfaction of source and relinking
+obligations. Review the actual Windows artifacts before distributing them:
+
+- Keep third-party copyright notices, full applicable terms, and Apache NOTICE
+  files. The proprietary reservation applies only to rights the author owns.
+- Certifi is MPL-2.0. The generated notices direct recipients to the exact
+  version's PyPI source distribution and the MPL. Verify that source remains
+  available and matches the bundled covered files. If those files are changed,
+  make their corresponding source available under MPL and update the notice;
+  an upstream source link alone would not cover our changes.
+- DOMPurify is offered under MPL-2.0 OR Apache-2.0; use the Apache-2.0 option
+  and preserve its required notices when distributing this application.
+- lxml's wheel LICENSES.txt identifies iconv as LGPL-2.1, alongside other
+  bundled libraries. Inspect the exact Windows wheel and frozen output to
+  determine whether LGPL code ships and whether it is statically or dynamically
+  linked. If it ships, satisfy the applicable source, replacement/relinking,
+  and reverse-engineering rights; include the relevant source and any needed
+  relinking materials or another method the LGPL permits. A license text alone
+  is insufficient. The application's terms expressly preserve those rights.
+- PyInstaller is GPL with a bootloader exception permitting proprietary
+  application bundles. Preserve that exception and its notices. Review any
+  modifications to PyInstaller separately.
+- Copied Spec Critic and Spec Surgeon material is attributed in repository
+  documentation to sibling projects under Abe-Borg. Confirm ownership or a
+  compatible grant for the actual copied revisions and any contributions by
+  others before distribution. This checkout alone does not establish their
+  complete copyright chain.
+
+Do not describe all dependencies as permissive or claim that changing the
+application license revokes previous releases' permissions. This review does
+not certify a Windows build: that build, its native dependencies, and the
+copied revisions must be checked at release time.

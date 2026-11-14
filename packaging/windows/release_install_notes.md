@@ -1,13 +1,17 @@
 ## Install (Windows)
 
+Build-a-Spec now reserves all rights in the author's own code. Obtain advance
+permission in a separate written agreement before use. Installing or accepting
+the terms does not grant permission. Earlier releases retain their original
+licenses; third-party components retain theirs.
+
 1. Download **BuildASpecSetup.exe** below and run it.
 2. The app is not code-signed, so Windows SmartScreen shows
    **"Windows protected your PC"** on first run — click
    **More info → Run anyway**. This is expected; downloads are
    SHA-256-verified against `latest.json` before the in-app
    updater ever launches a future update.
-3. The installer shows the license, the PolyForm Shield License
-   1.0.0, and installs only after you choose **I accept the
+3. The installer shows the license, the Build-a-Spec Proprietary License, and installs only after you choose **I accept the
    agreement**. It asks again on every update.
 4. No Python, Node, or other tooling is required — everything is
    bundled. The installer adds the Microsoft Edge WebView2

@@ -94,7 +94,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; agreement governs. This is a license surface: a relicense changes it with
 ; the others (tests/test_packaging.py pins it). Keep it ASCII, one line;
 ; %n is Inno Setup's line break.
-LicenseLabel3={#MyAppName} is source-available under the PolyForm Shield License 1.0.0. In short: you may use it for any purpose, including commercial work, except to provide a product that competes with {#MyAppName}. This is a summary; the agreement below governs.%n%nYou must accept the agreement before continuing with the installation.
+LicenseLabel3={#MyAppName} is governed by the Build-a-Spec Proprietary License. All rights reserved. Use, modification, and redistribution require advance permission in a separate written agreement from the copyright holder. Installing or accepting these terms does not grant that permission. Third-party components retain their own licenses. This is a summary; the agreement below governs.%n%nYou must accept the agreement before continuing with the installation.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -104,10 +104,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\..\dist\BuildASpec\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; The license terms, installed beside the app. The PyInstaller output carries
 ; a copy too, but PyInstaller 6 puts data files in {app}\_internal, where
-; nobody looks. The license's Notices clause requires that anyone who gets a
-; copy of the software also gets these terms and the Required Notice line,
-; and a silent install (/SILENT, /VERYSILENT) skips the license page, so this
-; copy is how such a recipient gets them. Named .txt so a double-click opens
+; nobody looks. Every authorized distribution must carry its applicable
+; terms, and a silent install (/SILENT, /VERYSILENT) skips the license page,
+; so this copy is how such a recipient gets them. Named .txt so a double-click opens
 ; it in Notepad.
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 ; The license texts of everything the app bundles (the Python interpreter,

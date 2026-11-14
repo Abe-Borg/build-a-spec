@@ -104,6 +104,14 @@ file is the working reference for AI-assisted development sessions.
   tooling is locked the same way (`packaging/windows/build-requirements.in`
   -> `.txt`, compiled with `-c requirements.txt`). Pinned by
   `tests/test_requirements_lock.py`.
+- License (2026-11-14): the author's own code is all-rights-reserved under
+  the Build-a-Spec Proprietary License. All use and redistribution require
+  advance permission in a separate written agreement. Keep root LICENSE,
+  frontend/LICENSE, README's current summary, HelpModal's About footer,
+  installer.iss's LicenseLabel3, and tests/test_packaging.py consistent.
+  Third-party licenses and previous grants remain effective for their
+  covered materials; do not overwrite dependency terms. The Windows release
+  runbook's license review covers source obligations beyond collecting texts.
 - Third-party notices (2026-10-22): the Windows build writes
   `dist/THIRD-PARTY-NOTICES.txt` (`packaging/windows/third_party_notices.py`,
   copied from Spec Critic and adapted) and the installer puts it, and

@@ -1,5 +1,8 @@
 # Build-a-Spec
 
+**All rights reserved. Use and redistribution require advance written permission.**
+See [License](#license).
+
 **v1.29.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 The document toolbar now makes better use of its width in Essentials only
@@ -5132,7 +5135,7 @@ Most users don't need any tooling. Download the latest
 [Releases page](https://github.com/Abe-Borg/build-a-spec/releases/latest)
 and run it — Python, Node, and every dependency are bundled, and the
 installer adds the Edge WebView2 runtime if your machine doesn't already
-have it. The installer shows the license (the PolyForm Shield License 1.0.0;
+have it. The installer shows the license (the Build-a-Spec Proprietary License;
 see [License](#license)) and does not install until you choose **I accept
 the agreement**. It asks again on every update, since each version is
 installed on the terms it ships with. A silent install (`/SILENT`,
@@ -5575,41 +5578,39 @@ Build-a-Spec is an AI-assisted drafting aid, not an authority. Its output is adv
 
 ## License
 
-Source-available under the [PolyForm Shield License 1.0.0](LICENSE).
+Copyright (c) 2026 Abraham Borg. **All rights reserved** under the
+[Build-a-Spec Proprietary License](LICENSE).
 
-**In short:** use it for anything — including commercial work — except building a
-product that competes with Build-a-Spec. A design firm running it to draft
-specifications on billable projects is squarely permitted. Reading, forking,
-modifying and redistributing it are permitted. Selling a rival specification tool
-built on it is not, unless you hold a separate license from the copyright holder.
-The [LICENSE](LICENSE) file governs; this paragraph is a summary, not the terms.
-The Windows installer shows the same terms, read from that file, and installs
-only after you accept them.
+Use, running, copying, modification, and redistribution of the author's own
+code require advance permission in a separate written agreement from the
+copyright holder, including for personal, educational, internal business,
+and commercial purposes. Access to source code or acceptance of the Windows
+installer's terms does not itself grant permission. Contact the copyright
+holder through the [project profile](https://github.com/Abe-Borg) to request
+permission. The [LICENSE](LICENSE) file governs.
 
-This is a *source-available* license rather than an OSI-approved open-source one:
-the Open Source Definition forbids restricting a field of endeavour, and the
-noncompete term does exactly that. Every runtime dependency is permissively
-licensed (MIT, MIT-0, BSD, Apache-2.0, ISC, 0BSD, Unlicense, MPL-2.0, PSF-2.0,
-and Microsoft's BSD-style terms for the WebView2 SDK DLLs pywebview carries),
-and PyInstaller's bootloader exception permits packaging under any license, so
-nothing here is imposed by a dependency.
+The terms include warranty and liability disclaimers and require independent
+professional review of output. They do not claim ownership of user documents
+or impose a new license restriction on generated documents. This is proprietary
+software, not an open-source license. Copies previously released under MIT or
+PolyForm Shield remain subject to the license under which they were received;
+this change does not withdraw those permissions.
 
-Those licenses do ask for one thing: their copyright and license text must
-travel with a binary distribution. The Windows build collects them into
-`THIRD-PARTY-NOTICES.txt`, which the installer puts beside the app: the Python
-interpreter's license (which on python.org's Windows build also carries the
-terms of the libraries it ships), every Python package the PyInstaller
-analysis bundled, PyInstaller itself (its bootloader is the exe), the WebView2
-SDK terms, and every production npm package the user interface is built from.
-`packaging/windows/third_party_notices.py` writes it and **fails the build**
-when any of those texts cannot be found, so an installer missing a license
-cannot ship. Two texts are supplied from upstream source because the
-published package omits them (`packaging/windows/third_party_licenses/`):
-`proxy_tools` 0.1.0 (a pywebview dependency whose wheel and source package
-carry no license file; the text is its repository's `LICENSE.txt`) and the
-WebView2 SDK terms (in pywebview's source package, not its wheel).
+Third-party materials retain their own licenses and rights. Most declared
+dependencies use permissive terms such as MIT, BSD, Apache-2.0, ISC, or PSF-2.0.
+Certifi uses MPL-2.0, which has source-availability obligations for its covered
+files but permits a larger work under different terms. DOMPurify offers
+MPL-2.0 or Apache-2.0. PyInstaller's bootloader exception permits packaging
+proprietary applications. These terms do not let us restrict those components
+or ignore their notices, source obligations, or other conditions.
 
-For a commercial or competing-use license, contact the copyright holder.
+The Windows build collects third-party texts into `THIRD-PARTY-NOTICES.txt`
+and installs it beside `LICENSE.txt`. It includes the interpreter's notices,
+bundled Python packages, PyInstaller, the WebView2 SDK supplement, and production
+npm packages. The build fails if required texts are missing. License text
+collection is not a complete compliance check: bundled native libraries and
+file-level copyleft obligations must also be checked for the actual release.
+See [the release license review](docs/RELEASE_WINDOWS.md#license-review).
 
 Copyright (c) 2026 [Abraham Borg](https://github.com/Abe-Borg) ·
 [LinkedIn](https://www.linkedin.com/in/abrahamborg/)
